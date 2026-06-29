@@ -2167,7 +2167,8 @@ button:disabled {
 }
 
 .landing-private-candles span:nth-child(3) {
-  left: 76%;
+  right: 24px;
+  left: auto;
   top: 86px;
   height: 144px;
 }
@@ -2231,7 +2232,7 @@ button:disabled {
 }
 
 .landing-settlement-candle span {
-  left: 44%;
+  left: 53px;
   top: 38px;
   width: 58px;
   height: 218px;
@@ -2428,6 +2429,10 @@ button:disabled {
     width: min(440px, 100%);
   }
 
+  .landing-proof-path {
+    --proof-line-width: 27px;
+  }
+
   .landing-infrastructure-section .landing-section-copy {
     justify-self: start;
   }
@@ -2589,7 +2594,8 @@ button:disabled {
   }
 
   .landing-private-candles span:nth-child(3) {
-    left: 69%;
+    right: 20px;
+    left: auto;
     top: 54px;
     height: 94px;
   }
@@ -2612,7 +2618,7 @@ button:disabled {
   }
 
   .landing-settlement-candle span {
-    left: 42%;
+    left: 38px;
     top: 24px;
     width: 36px;
     height: 138px;
