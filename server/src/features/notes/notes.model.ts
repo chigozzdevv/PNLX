@@ -7,7 +7,7 @@ import type {
   WithdrawalRecord,
   WithdrawalRequest,
 } from "@merkl/protocol-types";
-import type { OnchainRelayResult, PreparedOnchainAction } from "../../workers/onchain/onchain.model";
+import type { OnchainRelayResult, PreparedOnchainAction } from "@/workers/onchain/onchain.model";
 
 export interface DepositNoteInput {
   commitment: Hex;

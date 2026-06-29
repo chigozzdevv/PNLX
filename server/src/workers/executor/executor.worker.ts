@@ -1,5 +1,5 @@
-import { ExecutorService } from "./executor.service";
-import { FileProtocolStore } from "../../shared/state/persistent-store";
+import { ExecutorService } from "@/workers/executor/executor.service";
+import { FileProtocolStore } from "@/shared/state/persistent-store";
 import { dirname, join } from "node:path";
 
 interface CreateExecutorOptions {

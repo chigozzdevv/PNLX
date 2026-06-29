@@ -1,19 +1,19 @@
 import { contractPublicInputHash, publicField, publicU128 } from "@merkl/proof-system";
-import type { ServerEnv } from "../../config/env";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import type { OnchainRelayResult } from "../../workers/onchain/onchain.model";
-import type { OnchainRelayService } from "../../workers/onchain/onchain.service";
-import type { ProverService } from "../../workers/prover/prover.service";
-import { assertFundingPayment } from "../../shared/protocol/funding";
-import { assertSubmittedRelay } from "../../shared/protocol/onchain-submission";
-import { createPositionCloseAccountEvent } from "../../shared/protocol/account-event-outcomes";
+import type { ServerEnv } from "@/config/env";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { OnchainRelayResult } from "@/workers/onchain/onchain.model";
+import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
+import type { ProverService } from "@/workers/prover/prover.service";
+import { assertFundingPayment } from "@/shared/protocol/funding";
+import { assertSubmittedRelay } from "@/shared/protocol/onchain-submission";
+import { createPositionCloseAccountEvent } from "@/shared/protocol/account-event-outcomes";
 import { PRICE_SCALE } from "@merkl/market-math";
 import type { MarketConfig } from "@merkl/protocol-types";
 import type {
   CreatePositionCloseInput,
   CreatePositionCloseResult,
   CreateProvenPositionCloseInput,
-} from "./position-closes.model";
+} from "@/features/position-closes/position-closes.model";
 
 export class PositionClosesService {
   constructor(

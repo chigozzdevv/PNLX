@@ -1,15 +1,15 @@
 import { fundingIndexDelta } from "@merkl/market-math";
 import type { FundingUpdateRecord, MarketConfig } from "@merkl/protocol-types";
-import type { OnchainRelay, OnchainRelayResult } from "../onchain/onchain.model";
-import type { Prover } from "../prover/prover.model";
-import type { ExecutorService } from "../executor/executor.service";
-import { assertSubmittedRelay } from "../../shared/protocol/onchain-submission";
+import type { OnchainRelay, OnchainRelayResult } from "@/workers/onchain/onchain.model";
+import type { Prover } from "@/workers/prover/prover.model";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import { assertSubmittedRelay } from "@/shared/protocol/onchain-submission";
 import type {
   FundingCycleMarketResult,
   FundingCycleResult,
   FundingEngineConfig,
   RunFundingCycleInput,
-} from "./funding-engine.model";
+} from "@/workers/funding-engine/funding-engine.model";
 
 const DEFAULT_FUNDING_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_PREMIUM_RATE = 0n;

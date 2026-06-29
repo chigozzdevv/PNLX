@@ -1,3 +1,3 @@
-export * from "./executor.model";
-export * from "./executor.service";
-export * from "./executor.worker";
+export * from "@/workers/executor/executor.model";
+export * from "@/workers/executor/executor.service";
+export * from "@/workers/executor/executor.worker";

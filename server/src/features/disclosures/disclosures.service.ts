@@ -1,15 +1,15 @@
 import { contractPublicInputHash, publicField, publicU128 } from "@merkl/proof-system";
-import type { ServerEnv } from "../../config/env";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import type { OnchainRelayResult } from "../../workers/onchain/onchain.model";
-import type { OnchainRelayService } from "../../workers/onchain/onchain.service";
-import type { ProverService } from "../../workers/prover/prover.service";
-import { assertSubmittedRelay } from "../../shared/protocol/onchain-submission";
+import type { ServerEnv } from "@/config/env";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { OnchainRelayResult } from "@/workers/onchain/onchain.model";
+import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
+import type { ProverService } from "@/workers/prover/prover.service";
+import { assertSubmittedRelay } from "@/shared/protocol/onchain-submission";
 import type {
   CreateDisclosureInput,
   CreateDisclosureResult,
   CreateProvenDisclosureInput,
-} from "./disclosures.model";
+} from "@/features/disclosures/disclosures.model";
 
 export class DisclosuresService {
   constructor(

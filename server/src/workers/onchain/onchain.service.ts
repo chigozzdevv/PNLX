@@ -14,7 +14,7 @@ import type {
   ProofMeta,
   WithdrawalRecord,
 } from "@merkl/protocol-types";
-import type { RelayerService } from "../relayer/relayer.service";
+import type { RelayerService } from "@/workers/relayer/relayer.service";
 import type {
   DeploymentRegistry,
   OnchainRelay,
@@ -25,7 +25,7 @@ import type {
   ProofArtifactLocation,
   AssetDepositRelayInput,
   PreparedOnchainAction,
-} from "./onchain.model";
+} from "@/workers/onchain/onchain.model";
 
 type RelayKind =
   | "deposit"

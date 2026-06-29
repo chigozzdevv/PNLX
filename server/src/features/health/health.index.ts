@@ -1,2 +1,2 @@
-export * from "./health.controller";
-export * from "./health.route";
+export * from "@/features/health/health.controller";
+export * from "@/features/health/health.route";

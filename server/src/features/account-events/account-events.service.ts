@@ -1,11 +1,11 @@
-import { assertAuthenticatedOwnerCommitment } from "../../shared/http/auth-context";
-import type { ExecutorService } from "../../workers/executor/executor.service";
+import { assertAuthenticatedOwnerCommitment } from "@/shared/http/auth-context";
+import type { ExecutorService } from "@/workers/executor/executor.service";
 import type {
   CreateAccountEventInput,
   CreateAccountEventResult,
   ListAccountEventsInput,
   ListAccountEventsResult,
-} from "./account-events.model";
+} from "@/features/account-events/account-events.model";
 
 export class AccountEventsService {
   constructor(private readonly executor: ExecutorService) {}

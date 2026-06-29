@@ -1,2 +1,2 @@
-export * from "./threshold-shares.model";
-export * from "./threshold-shares.service";
+export * from "@/workers/threshold-shares/threshold-shares.model";
+export * from "@/workers/threshold-shares/threshold-shares.service";

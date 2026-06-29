@@ -1,5 +1,5 @@
-import { json, readJson } from "../../shared/http/json";
-import { authenticatedAddress } from "../../shared/http/auth-context";
+import { json, readJson } from "@/shared/http/json";
+import { authenticatedAddress } from "@/shared/http/auth-context";
 import {
   parseAssetDepositNote,
   parseDepositNote,
@@ -9,8 +9,8 @@ import {
   parseProvenWithdrawNote,
   parseWithdrawAssetNote,
   parseWithdrawNote,
-} from "./notes.schema";
-import type { NotesService } from "./notes.service";
+} from "@/features/notes/notes.schema";
+import type { NotesService } from "@/features/notes/notes.service";
 
 export class NotesController {
   constructor(private readonly notes: NotesService) {}

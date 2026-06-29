@@ -20,12 +20,12 @@ import type {
   PositionCloseRecord,
   TradeIntent,
 } from "@merkl/protocol-types";
-import { createApp } from "../../server/src/app";
-import { getSupportedPerpAsset, type SupportedPerpAsset } from "../../server/src/config/assets";
-import { loadEnv } from "../../server/src/config/env";
-import { FileProtocolStore } from "../../server/src/shared/state/persistent-store";
-import { ThresholdShareCommittee } from "../../server/src/workers/threshold-shares/threshold-shares.service";
-import { ProverService } from "../../server/src/workers/prover/prover.service";
+import { createApp } from "@/app";
+import { getSupportedPerpAsset, type SupportedPerpAsset } from "@/config/assets";
+import { loadEnv } from "@/config/env";
+import { FileProtocolStore } from "@/shared/state/persistent-store";
+import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
+import { ProverService } from "@/workers/prover/prover.service";
 
 interface Deployment {
   contracts: Record<string, string>;

@@ -11,7 +11,7 @@ import type {
   SignedXdrRelayInput,
   StellarInvokePayload,
   StellarRelayerConfig,
-} from "./relayer.model";
+} from "@/workers/relayer/relayer.model";
 
 export class RelayerService {
   private readonly sent: RelayedTx[] = [];

@@ -1,7 +1,7 @@
-import type { CommitteeSettlementTranscript } from "../threshold-shares/threshold-shares.model";
-import { ThresholdShareCommittee } from "../threshold-shares/threshold-shares.service";
-import { ProofCoordinatorService } from "../proof-coordinator/proof-coordinator.service";
-import type { BlindComputeConfig, BlindComputeSettlementRequest } from "./blind-compute.model";
+import type { CommitteeSettlementTranscript } from "@/workers/threshold-shares/threshold-shares.model";
+import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
+import { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
+import type { BlindComputeConfig, BlindComputeSettlementRequest } from "@/workers/blind-compute/blind-compute.model";
 
 export class BlindComputeService {
   private readonly committee: ThresholdShareCommittee;

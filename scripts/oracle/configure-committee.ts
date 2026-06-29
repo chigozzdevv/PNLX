@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadEnv } from "../../server/src/config/env";
+import { loadEnv } from "@/config/env";
 
 interface Deployment {
   contracts: Record<string, string>;

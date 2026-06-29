@@ -3,9 +3,9 @@ import type {
   CreateProvenConditionalOrderInput,
   ExecuteConditionalCloseInput,
   RegisterConditionalOrderInput,
-} from "./conditional-orders.model";
-import { parsePositionClose } from "../position-closes/position-closes.schema";
-import { parseProofMeta } from "../intents/intents.schema";
+} from "@/features/conditional-orders/conditional-orders.model";
+import { parsePositionClose } from "@/features/position-closes/position-closes.schema";
+import { parseProofMeta } from "@/features/intents/intents.schema";
 
 type ConditionalOrderBody = Record<string, unknown>;
 

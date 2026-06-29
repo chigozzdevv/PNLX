@@ -1,10 +1,10 @@
-import type { Router } from "../../shared/http/router";
-import type { ServerEnv } from "../../config/env";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import type { OnchainRelayService } from "../../workers/onchain/onchain.service";
-import type { ProverService } from "../../workers/prover/prover.service";
-import { LiquidationsController } from "./liquidations.controller";
-import { LiquidationsService } from "./liquidations.service";
+import type { Router } from "@/shared/http/router";
+import type { ServerEnv } from "@/config/env";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
+import type { ProverService } from "@/workers/prover/prover.service";
+import { LiquidationsController } from "@/features/liquidations/liquidations.controller";
+import { LiquidationsService } from "@/features/liquidations/liquidations.service";
 
 export function registerLiquidationsRoute(
   router: Router,

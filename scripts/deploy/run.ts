@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fieldMerkleRoot } from "@merkl/crypto";
 import { circuitKey } from "@merkl/proof-system";
 import type { Hex } from "@merkl/protocol-types";
-import { loadEnv } from "../../server/src/config/env";
+import { loadEnv } from "@/config/env";
 import { createDeployManifest } from "./manifest";
 
 interface Options {

@@ -1,4 +1,4 @@
-import type { ExternalBatchSettlementTranscript } from "../../workers/executor/executor.model";
+import type { ExternalBatchSettlementTranscript } from "@/workers/executor/executor.model";
 
 export interface SettleBatchRequest {
   batchId: string;

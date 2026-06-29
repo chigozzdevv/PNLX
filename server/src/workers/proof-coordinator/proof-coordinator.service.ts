@@ -8,10 +8,10 @@ import {
   type ProofArtifact,
 } from "@merkl/proof-system";
 import type { Hex, ProofMeta } from "@merkl/protocol-types";
-import type { SettlementProof, SettlementProofInput } from "./proof-coordinator.model";
-import { ProofArtifactRegistry, proofKey } from "../../shared/proofs/artifact-registry";
+import type { SettlementProof, SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
+import { ProofArtifactRegistry, proofKey } from "@/shared/proofs/artifact-registry";
 import { join } from "node:path";
-import { matchTranscriptDigest } from "../batch-matcher/match-transcript";
+import { matchTranscriptDigest } from "@/workers/batch-matcher/match-transcript";
 
 const MAX_BATCH_EXECUTIONS = 4;
 const MAX_PUBLIC_ITEMS = MAX_BATCH_EXECUTIONS * 2;

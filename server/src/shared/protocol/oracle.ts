@@ -1,4 +1,4 @@
-import type { ServerEnv } from "../../config/env";
+import type { ServerEnv } from "@/config/env";
 
 export function oracleReadinessIssues(
   env: ServerEnv,

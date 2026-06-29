@@ -1,6 +1,6 @@
-import type { ExecutorService } from "../executor/executor.service";
-import { MatcherService } from "./matcher.service";
-import type { MatcherConfig } from "./matcher.model";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import { MatcherService } from "@/workers/matcher/matcher.service";
+import type { MatcherConfig } from "@/workers/matcher/matcher.model";
 
 export function createMatcher(
   executor: ExecutorService,

@@ -4,27 +4,27 @@ import {
   positionOpeningAccountEventId,
   residualOrderAccountEventDataCommitment,
   residualOrderAccountEventId,
-} from "../../shared/protocol/account-event-binding";
-import { encryptAccountEventPayload } from "../../shared/protocol/account-event-encryption";
-import { batchSettlementPublicInputHash } from "../../shared/protocol/batch-settlement-proof";
-import { externalMatcherTranscriptHash } from "../../shared/protocol/external-matcher-transcript";
-import { matcherAttestationMessage } from "../../shared/protocol/matcher-attestation";
-import type { ProtocolStore } from "../../shared/state/store";
-import type { ExternalBatchSettlementTranscript, ExternalMatcherAttestation } from "../executor/executor.model";
-import type { ThresholdShareCommittee } from "../threshold-shares/threshold-shares.service";
-import { ProofCoordinatorService } from "../proof-coordinator/proof-coordinator.service";
+} from "@/shared/protocol/account-event-binding";
+import { encryptAccountEventPayload } from "@/shared/protocol/account-event-encryption";
+import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
+import { externalMatcherTranscriptHash } from "@/shared/protocol/external-matcher-transcript";
+import { matcherAttestationMessage } from "@/shared/protocol/matcher-attestation";
+import type { ProtocolStore } from "@/shared/state/store";
+import type { ExternalBatchSettlementTranscript, ExternalMatcherAttestation } from "@/workers/executor/executor.model";
+import type { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
+import { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
 import type {
   BlindComputeGateway,
   CreateExternalSettlementInput,
   MatcherAccountEventEncryptor,
   MatcherConfig,
   MatcherSigner,
-} from "./matcher.model";
+} from "@/workers/matcher/matcher.model";
 import type {
   CommitteeSettlementInput,
   CommitteeSettlementTranscript,
   PrivatePositionOpeningEvent,
-} from "../threshold-shares/threshold-shares.model";
+} from "@/workers/threshold-shares/threshold-shares.model";
 
 export class MatcherService {
   private readonly accountEventEncryptor?: MatcherAccountEventEncryptor;

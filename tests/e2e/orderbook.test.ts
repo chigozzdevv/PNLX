@@ -6,13 +6,13 @@ import { commitIntent, hashFields, intentBindingFields } from "@merkl/crypto";
 import { PRICE_SCALE } from "@merkl/market-math";
 import type { BatchSettlement, Hex, IntentValidityRecord, MarketConfig, ProofMeta, TradeIntent } from "@merkl/protocol-types";
 import { createMarginNote } from "@merkl/sdk";
-import { BatchMatcherService } from "../../server/src/workers/batch-matcher/batch-matcher.service";
-import type { MatchResult } from "../../server/src/workers/batch-matcher/batch-matcher.model";
-import { createExecutor } from "../../server/src/workers/executor/executor.worker";
-import type { ExecutorService } from "../../server/src/workers/executor/executor.service";
-import { createIndexer } from "../../server/src/workers/indexer/indexer.worker";
-import type { SettlementProofInput } from "../../server/src/workers/proof-coordinator/proof-coordinator.model";
-import type { RecoveredIntent } from "../../server/src/workers/threshold-shares/threshold-shares.model";
+import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
+import type { MatchResult } from "@/workers/batch-matcher/batch-matcher.model";
+import { createExecutor } from "@/workers/executor/executor.worker";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import { createIndexer } from "@/workers/indexer/indexer.worker";
+import type { SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
+import type { RecoveredIntent } from "@/workers/threshold-shares/threshold-shares.model";
 
 describe("private orderbook residuals", () => {
   test("matches crossed private orders by price-time priority at maker price", () => {

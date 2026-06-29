@@ -1,21 +1,21 @@
-import type { ServerEnv } from "../../config/env";
+import type { ServerEnv } from "@/config/env";
 import type { MarketConfig } from "@merkl/protocol-types";
 import { RATE_SCALE } from "@merkl/market-math";
-import { SUPPORTED_PERP_ASSETS } from "../../config/assets";
-import { assertProtocolAdmin } from "../../shared/http/auth-context";
+import { SUPPORTED_PERP_ASSETS } from "@/config/assets";
+import { assertProtocolAdmin } from "@/shared/http/auth-context";
 import {
   assertOracleAuthorityReady,
   assertOracleReadyForOnchain,
-} from "../../shared/protocol/oracle";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import type { OnchainMarketConfig, OraclePriceRelayInput } from "../../workers/onchain/onchain.model";
-import type { OnchainRelayService } from "../../workers/onchain/onchain.service";
-import type { OracleService } from "../../workers/oracle/oracle.service";
+} from "@/shared/protocol/oracle";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { OnchainMarketConfig, OraclePriceRelayInput } from "@/workers/onchain/onchain.model";
+import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
+import type { OracleService } from "@/workers/oracle/oracle.service";
 import type {
   CreateOracleMarketInput,
   RefreshOracleMarketInput,
   UpdateMarketInput,
-} from "./markets.model";
+} from "@/features/markets/markets.model";
 
 export interface OracleMarketResult {
   market: MarketConfig;

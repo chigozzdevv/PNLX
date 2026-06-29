@@ -22,7 +22,7 @@ import type {
   ResidualOrderRecord,
   WithdrawalRecord,
 } from "@merkl/protocol-types";
-import { ProtocolStore } from "./store";
+import { ProtocolStore } from "@/shared/state/store";
 
 interface ProtocolStoreSnapshot {
   accountEvents: [Hex, AccountEventRecord][];

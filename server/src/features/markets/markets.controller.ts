@@ -1,12 +1,12 @@
-import { authenticatedAddress } from "../../shared/http/auth-context";
-import { json, readJson } from "../../shared/http/json";
-import type { MarketsService } from "./markets.service";
+import { authenticatedAddress } from "@/shared/http/auth-context";
+import { json, readJson } from "@/shared/http/json";
+import type { MarketsService } from "@/features/markets/markets.service";
 import {
   parseMarket,
   parseMarketUpdate,
   parseOracleMarket,
   parseOracleRefresh,
-} from "./markets.schema";
+} from "@/features/markets/markets.schema";
 
 export class MarketsController {
   constructor(private readonly markets: MarketsService) {}

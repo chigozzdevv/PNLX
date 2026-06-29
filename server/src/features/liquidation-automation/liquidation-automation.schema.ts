@@ -1,5 +1,5 @@
-import { parseProvenLiquidation } from "../liquidations/liquidations.schema";
-import type { EnqueueLiquidationJobInput, RunLiquidationAutomationInput } from "./liquidation-automation.model";
+import { parseProvenLiquidation } from "@/features/liquidations/liquidations.schema";
+import type { EnqueueLiquidationJobInput, RunLiquidationAutomationInput } from "@/features/liquidation-automation/liquidation-automation.model";
 
 type Body = Record<string, unknown>;
 

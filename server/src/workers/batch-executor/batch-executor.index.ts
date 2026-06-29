@@ -1,3 +1,3 @@
-export * from "./batch-executor.model";
-export * from "./batch-executor.service";
-export * from "./batch-executor.worker";
+export * from "@/workers/batch-executor/batch-executor.model";
+export * from "@/workers/batch-executor/batch-executor.service";
+export * from "@/workers/batch-executor/batch-executor.worker";

@@ -1,2 +1,2 @@
-export * from "./proof-coordinator.model";
-export * from "./proof-coordinator.service";
+export * from "@/workers/proof-coordinator/proof-coordinator.model";
+export * from "@/workers/proof-coordinator/proof-coordinator.service";

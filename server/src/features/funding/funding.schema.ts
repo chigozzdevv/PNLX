@@ -1,4 +1,4 @@
-import type { AdvanceFundingInput, RunFundingInput } from "./funding.model";
+import type { AdvanceFundingInput, RunFundingInput } from "@/features/funding/funding.model";
 
 type FundingBody = Record<string, unknown>;
 

@@ -1,5 +1,5 @@
 import { commitIntent, intentBindingFields, ownerCommitment } from "@merkl/crypto";
-import { batchSettlementPublicInputHash } from "../../shared/protocol/batch-settlement-proof";
+import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
 import {
   assertPositionOpeningAccountEvent,
   assertResidualOrderAccountEvent,
@@ -7,7 +7,7 @@ import {
   positionOpeningAccountEventId,
   residualOrderAccountEventDataCommitment,
   residualOrderAccountEventId,
-} from "../../shared/protocol/account-event-binding";
+} from "@/shared/protocol/account-event-binding";
 import type {
   AccountEventRecord,
   BatchSettlement,
@@ -20,9 +20,9 @@ import type {
   TradeIntent,
 } from "@merkl/protocol-types";
 import type { ProofArtifact } from "@merkl/proof-system";
-import { ProtocolStore } from "../../shared/state/store";
-import { ThresholdShareCommittee } from "../threshold-shares/threshold-shares.service";
-import { ProofCoordinatorService } from "../proof-coordinator/proof-coordinator.service";
+import { ProtocolStore } from "@/shared/state/store";
+import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
+import { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
 import type {
   ExecutorConfig,
   ExternalBatchSettlementCommitOptions,
@@ -32,7 +32,7 @@ import type {
   SettleBatchInput,
   SubmitIntentInput,
   SubmitSharedIntentInput,
-} from "./executor.model";
+} from "@/workers/executor/executor.model";
 
 export class ExecutorService implements MerklExecutor {
   readonly store: ProtocolStore;

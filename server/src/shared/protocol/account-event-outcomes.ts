@@ -10,8 +10,8 @@ import {
   liquidationAccountEventId,
   positionCloseAccountEventDataCommitment,
   positionCloseAccountEventId,
-} from "./account-event-binding";
-import { encryptAccountEventPayload } from "./account-event-encryption";
+} from "@/shared/protocol/account-event-binding";
+import { encryptAccountEventPayload } from "@/shared/protocol/account-event-encryption";
 
 export function createPositionCloseAccountEvent(
   record: PositionCloseRecord,

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { DeploymentRegistry } from "./onchain.model";
+import type { DeploymentRegistry } from "@/workers/onchain/onchain.model";
 
 export function loadDeploymentRegistry(path: string, root = process.cwd()): DeploymentRegistry | undefined {
   const resolved = path.startsWith("/") ? path : join(root, path);

@@ -1,23 +1,23 @@
 import { commitIntent, digestToFieldHex, intentBindingFields, intentOwnerCommitmentField } from "@merkl/crypto";
 import { contractPublicInputHash, publicField, publicU128 } from "@merkl/proof-system";
 import type { IntentRecord, IntentValidityRecord } from "@merkl/protocol-types";
-import { proofKey } from "../../shared/proofs/artifact-registry";
-import type { ServerEnv } from "../../config/env";
+import { proofKey } from "@/shared/proofs/artifact-registry";
+import type { ServerEnv } from "@/config/env";
 import {
   assertAuthenticatedAccount,
   assertAuthenticatedOwnerCommitment,
-} from "../../shared/http/auth-context";
-import { assertSubmittedRelay } from "../../shared/protocol/onchain-submission";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import type { OnchainRelayResult } from "../../workers/onchain/onchain.model";
-import type { OnchainRelayService } from "../../workers/onchain/onchain.service";
-import type { ProverService } from "../../workers/prover/prover.service";
+} from "@/shared/http/auth-context";
+import { assertSubmittedRelay } from "@/shared/protocol/onchain-submission";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { OnchainRelayResult } from "@/workers/onchain/onchain.model";
+import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
+import type { ProverService } from "@/workers/prover/prover.service";
 import type {
   CreateIntentInput,
   CreateSharedIntentInput,
   ProveAndSubmitIntentInput,
   ProveAndSubmitIntentResult,
-} from "./intents.model";
+} from "@/features/intents/intents.model";
 
 export class IntentsService {
   constructor(

@@ -1,12 +1,12 @@
 import { hashFields } from "@merkl/crypto";
 import type { Hex, LiquidationAutomationJobRecord } from "@merkl/protocol-types";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import type { LiquidationsService } from "../liquidations/liquidations.service";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { LiquidationsService } from "@/features/liquidations/liquidations.service";
 import type {
   EnqueueLiquidationJobInput,
   LiquidationAutomationRunResult,
   RunLiquidationAutomationInput,
-} from "./liquidation-automation.model";
+} from "@/features/liquidation-automation/liquidation-automation.model";
 
 const DEFAULT_INTERVAL_MS = 5_000;
 

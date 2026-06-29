@@ -4,7 +4,7 @@ import type {
   OwnerOrderSnapshot,
   OwnerPositionSnapshot,
   PublicSnapshot,
-} from "../../workers/indexer/indexer.model";
+} from "@/workers/indexer/indexer.model";
 
 export interface PortfolioInput {
   ownerCommitment: Hex;

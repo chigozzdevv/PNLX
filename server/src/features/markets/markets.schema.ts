@@ -4,7 +4,7 @@ import type {
   CreateOracleMarketInput,
   RefreshOracleMarketInput,
   UpdateMarketInput,
-} from "./markets.model";
+} from "@/features/markets/markets.model";
 
 export function parseMarket(input: Record<string, string | number>): CreateMarketInput {
   return {

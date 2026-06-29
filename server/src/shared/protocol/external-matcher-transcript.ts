@@ -1,7 +1,7 @@
 import { hashFields } from "@merkl/crypto";
 import type { Hex } from "@merkl/protocol-types";
-import type { ExternalBatchSettlementTranscript } from "../../workers/executor/executor.model";
-import { batchSettlementPublicInputHash } from "./batch-settlement-proof";
+import type { ExternalBatchSettlementTranscript } from "@/workers/executor/executor.model";
+import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
 
 export function externalMatcherTranscriptHash(
   transcript: Pick<ExternalBatchSettlementTranscript, "accountEvents" | "positionOpenings" | "residualOrders" | "settlement">,

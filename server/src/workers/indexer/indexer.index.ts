@@ -1,3 +1,3 @@
-export * from "./indexer.model";
-export * from "./indexer.service";
-export * from "./indexer.worker";
+export * from "@/workers/indexer/indexer.model";
+export * from "@/workers/indexer/indexer.service";
+export * from "@/workers/indexer/indexer.worker";

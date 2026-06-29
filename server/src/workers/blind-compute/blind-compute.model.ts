@@ -1,4 +1,4 @@
-import type { CommitteeSettlementInput } from "../threshold-shares/threshold-shares.model";
+import type { CommitteeSettlementInput } from "@/workers/threshold-shares/threshold-shares.model";
 
 export interface BlindComputeConfig {
   thresholdShareNodeIds: string[];

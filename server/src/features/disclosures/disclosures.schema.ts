@@ -1,5 +1,5 @@
-import type { CreateDisclosureInput, CreateProvenDisclosureInput } from "./disclosures.model";
-import { parseProofMeta } from "../intents/intents.schema";
+import type { CreateDisclosureInput, CreateProvenDisclosureInput } from "@/features/disclosures/disclosures.model";
+import { parseProofMeta } from "@/features/intents/intents.schema";
 
 export function parseDisclosure(input: Record<string, unknown>): CreateDisclosureInput {
   return {

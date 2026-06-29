@@ -1,7 +1,7 @@
-import { authenticatedAddress } from "../../shared/http/auth-context";
-import { json } from "../../shared/http/json";
-import { parsePortfolioRequest } from "./portfolio.schema";
-import type { PortfolioService } from "./portfolio.service";
+import { authenticatedAddress } from "@/shared/http/auth-context";
+import { json } from "@/shared/http/json";
+import { parsePortfolioRequest } from "@/features/portfolio/portfolio.schema";
+import type { PortfolioService } from "@/features/portfolio/portfolio.service";
 
 export class PortfolioController {
   constructor(private readonly portfolio: PortfolioService) {}

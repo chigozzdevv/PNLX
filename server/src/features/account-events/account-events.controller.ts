@@ -1,7 +1,7 @@
-import { authenticatedAddress } from "../../shared/http/auth-context";
-import { json, readJson } from "../../shared/http/json";
-import type { AccountEventsService } from "./account-events.service";
-import { parseAccountEvent, parseAccountEventList } from "./account-events.schema";
+import { authenticatedAddress } from "@/shared/http/auth-context";
+import { json, readJson } from "@/shared/http/json";
+import type { AccountEventsService } from "@/features/account-events/account-events.service";
+import { parseAccountEvent, parseAccountEventList } from "@/features/account-events/account-events.schema";
 
 export class AccountEventsController {
   constructor(private readonly accountEvents: AccountEventsService) {}

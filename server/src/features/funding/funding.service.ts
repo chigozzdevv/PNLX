@@ -1,9 +1,9 @@
 import type { FundingUpdateRecord } from "@merkl/protocol-types";
-import type { ServerEnv } from "../../config/env";
-import { assertProtocolAdmin } from "../../shared/http/auth-context";
-import { FundingEngineService } from "../../workers/funding-engine/funding-engine.service";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import type { AdvanceFundingInput, RunFundingInput, RunFundingResult } from "./funding.model";
+import type { ServerEnv } from "@/config/env";
+import { assertProtocolAdmin } from "@/shared/http/auth-context";
+import { FundingEngineService } from "@/workers/funding-engine/funding-engine.service";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { AdvanceFundingInput, RunFundingInput, RunFundingResult } from "@/features/funding/funding.model";
 
 export class FundingService {
   constructor(

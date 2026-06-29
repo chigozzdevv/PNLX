@@ -1,4 +1,4 @@
-import type { GetAccountKeyInput, UpsertAccountKeyInput } from "./account-keys.model";
+import type { GetAccountKeyInput, UpsertAccountKeyInput } from "@/features/account-keys/account-keys.model";
 
 type AccountKeyBody = Record<string, unknown>;
 

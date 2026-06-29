@@ -1,5 +1,5 @@
-import type { CreateLiquidationInput, CreateProvenLiquidationInput } from "./liquidations.model";
-import { parseProofMeta } from "../intents/intents.schema";
+import type { CreateLiquidationInput, CreateProvenLiquidationInput } from "@/features/liquidations/liquidations.model";
+import { parseProofMeta } from "@/features/intents/intents.schema";
 
 type LiquidationBody = Record<string, unknown>;
 

@@ -1,4 +1,4 @@
-import type { ProtocolStore } from "../../shared/state/store";
+import type { ProtocolStore } from "@/shared/state/store";
 import type { Hex } from "@merkl/protocol-types";
 import type {
   MarketPublicSnapshot,
@@ -6,7 +6,7 @@ import type {
   OwnerOrderSnapshot,
   OwnerPositionSnapshot,
   PublicSnapshot,
-} from "./indexer.model";
+} from "@/workers/indexer/indexer.model";
 
 export class IndexerService {
   constructor(private readonly store: ProtocolStore) {}

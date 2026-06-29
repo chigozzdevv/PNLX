@@ -1,6 +1,6 @@
-import { json, readJson } from "../../shared/http/json";
-import { parseDisclosure, parseProvenDisclosure } from "./disclosures.schema";
-import type { DisclosuresService } from "./disclosures.service";
+import { json, readJson } from "@/shared/http/json";
+import { parseDisclosure, parseProvenDisclosure } from "@/features/disclosures/disclosures.schema";
+import type { DisclosuresService } from "@/features/disclosures/disclosures.service";
 
 export class DisclosuresController {
   constructor(private readonly disclosures: DisclosuresService) {}

@@ -16,12 +16,12 @@ import { createECDH, generateKeyPairSync, sign } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApp, createAppRuntime } from "../../server/src/app";
-import { encodeStellarPublicKey } from "../../server/src/features/auth/auth.service";
-import { createBlindComputeApp } from "../../server/src/workers/blind-compute/blind-compute.app";
-import { createExecutor } from "../../server/src/workers/executor/executor.worker";
-import { ThresholdShareCommittee } from "../../server/src/workers/threshold-shares/threshold-shares.service";
-import { ProverService } from "../../server/src/workers/prover/prover.service";
+import { createApp, createAppRuntime } from "@/app";
+import { encodeStellarPublicKey } from "@/features/auth/auth.service";
+import { createBlindComputeApp } from "@/workers/blind-compute/blind-compute.app";
+import { createExecutor } from "@/workers/executor/executor.worker";
+import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
+import { ProverService } from "@/workers/prover/prover.service";
 
 process.env.ASSET_CUSTODY_REQUIRED = "false";
 process.env.AUTH_REQUIRED = "false";

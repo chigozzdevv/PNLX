@@ -1,6 +1,6 @@
-import { json, readJson } from "../../shared/http/json";
-import { parsePositionClose, parseProvenPositionClose } from "./position-closes.schema";
-import type { PositionClosesService } from "./position-closes.service";
+import { json, readJson } from "@/shared/http/json";
+import { parsePositionClose, parseProvenPositionClose } from "@/features/position-closes/position-closes.schema";
+import type { PositionClosesService } from "@/features/position-closes/position-closes.service";
 
 export class PositionClosesController {
   constructor(private readonly positionCloses: PositionClosesService) {}

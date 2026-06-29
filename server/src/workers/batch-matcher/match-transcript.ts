@@ -1,6 +1,6 @@
 import { hashFields } from "@merkl/crypto";
 import type { Hex } from "@merkl/protocol-types";
-import type { MatchResult } from "./batch-matcher.model";
+import type { MatchResult } from "@/workers/batch-matcher/batch-matcher.model";
 
 export function matchTranscriptDigest(
   match: Omit<MatchResult, "matchTranscriptDigest">,

@@ -1,8 +1,8 @@
-import { parseDisclosure } from "../disclosures/disclosures.schema";
-import { parseIntentValidityWitness } from "../intents/intents.schema";
-import { parseProofMeta } from "../intents/intents.schema";
-import { parseLiquidation } from "../liquidations/liquidations.schema";
-import type { ProofArtifactRegistrationInput } from "./proofs.model";
+import { parseDisclosure } from "@/features/disclosures/disclosures.schema";
+import { parseIntentValidityWitness } from "@/features/intents/intents.schema";
+import { parseProofMeta } from "@/features/intents/intents.schema";
+import { parseLiquidation } from "@/features/liquidations/liquidations.schema";
+import type { ProofArtifactRegistrationInput } from "@/features/proofs/proofs.model";
 
 export const parseLiquidationProof = parseLiquidation;
 export const parseDisclosureProof = parseDisclosure;

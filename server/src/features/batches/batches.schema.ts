@@ -1,8 +1,8 @@
 import type {
   CommitExternalBatchSettlementRequest,
   SettleBatchRequest,
-} from "./batches.model";
-import { parseProofMeta } from "../intents/intents.schema";
+} from "@/features/batches/batches.model";
+import { parseProofMeta } from "@/features/intents/intents.schema";
 
 type BatchBody = Record<string, unknown>;
 

@@ -1,8 +1,8 @@
 import type { Hex, IntentRecord, MarketConfig, ProofMeta, ResidualOrderRecord } from "@merkl/protocol-types";
-import { json, readJson } from "../../shared/http/json";
-import { Router } from "../../shared/http/router";
-import { BlindComputeService } from "./blind-compute.service";
-import type { BlindComputeConfig, BlindComputeSettlementRequest } from "./blind-compute.model";
+import { json, readJson } from "@/shared/http/json";
+import { Router } from "@/shared/http/router";
+import { BlindComputeService } from "@/workers/blind-compute/blind-compute.service";
+import type { BlindComputeConfig, BlindComputeSettlementRequest } from "@/workers/blind-compute/blind-compute.model";
 
 type Body = Record<string, unknown>;
 

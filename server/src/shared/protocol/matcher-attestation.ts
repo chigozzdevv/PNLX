@@ -1,9 +1,9 @@
 import { createPublicKey, verify as verifySignature } from "node:crypto";
 import type { BatchSettlement } from "@merkl/protocol-types";
-import type { ExternalBatchSettlementTranscript } from "../../workers/executor/executor.model";
-import { decodeStellarPublicKey } from "../../features/auth/auth.service";
-import { batchSettlementPublicInputHash } from "./batch-settlement-proof";
-import { externalMatcherTranscriptHash } from "./external-matcher-transcript";
+import type { ExternalBatchSettlementTranscript } from "@/workers/executor/executor.model";
+import { decodeStellarPublicKey } from "@/features/auth/auth.service";
+import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
+import { externalMatcherTranscriptHash } from "@/shared/protocol/external-matcher-transcript";
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 

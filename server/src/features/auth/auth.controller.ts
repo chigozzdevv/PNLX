@@ -1,7 +1,7 @@
-import { json, readJson } from "../../shared/http/json";
+import { json, readJson } from "@/shared/http/json";
 import { ownerCommitment } from "@merkl/crypto";
-import type { AuthService } from "./auth.service";
-import { parseAuthChallenge, parseAuthSession } from "./auth.schema";
+import type { AuthService } from "@/features/auth/auth.service";
+import { parseAuthChallenge, parseAuthSession } from "@/features/auth/auth.schema";
 
 export class AuthController {
   constructor(private readonly auth: AuthService) {}

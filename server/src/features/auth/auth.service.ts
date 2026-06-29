@@ -13,8 +13,8 @@ import type {
   AuthSession,
   AuthSessionInput,
   AuthSessionResult,
-} from "./auth.model";
-import type { AuthContext } from "../../shared/http/auth-context";
+} from "@/features/auth/auth.model";
+import type { AuthContext } from "@/shared/http/auth-context";
 
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const ED25519_PUBLIC_KEY_VERSION = 6 << 3;

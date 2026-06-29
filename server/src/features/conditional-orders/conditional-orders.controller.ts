@@ -1,11 +1,11 @@
-import { json, readJson } from "../../shared/http/json";
+import { json, readJson } from "@/shared/http/json";
 import {
   parseConditionalOrder,
   parseConditionalOrderRegistration,
   parseExecuteConditionalClose,
   parseProvenConditionalOrder,
-} from "./conditional-orders.schema";
-import type { ConditionalOrdersService } from "./conditional-orders.service";
+} from "@/features/conditional-orders/conditional-orders.schema";
+import type { ConditionalOrdersService } from "@/features/conditional-orders/conditional-orders.service";
 
 export class ConditionalOrdersController {
   constructor(private readonly conditionalOrders: ConditionalOrdersService) {}

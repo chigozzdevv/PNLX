@@ -1,7 +1,7 @@
-import { authenticatedAddress } from "../../shared/http/auth-context";
-import { json, readJson } from "../../shared/http/json";
-import type { FundingService } from "./funding.service";
-import { parseAdvanceFunding, parseRunFunding } from "./funding.schema";
+import { authenticatedAddress } from "@/shared/http/auth-context";
+import { json, readJson } from "@/shared/http/json";
+import type { FundingService } from "@/features/funding/funding.service";
+import { parseAdvanceFunding, parseRunFunding } from "@/features/funding/funding.schema";
 
 export class FundingController {
   constructor(private readonly funding: FundingService) {}

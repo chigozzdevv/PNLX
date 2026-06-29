@@ -1,8 +1,8 @@
 import type {
   CreatePositionCloseInput,
   CreateProvenPositionCloseInput,
-} from "./position-closes.model";
-import { parseProofMeta } from "../intents/intents.schema";
+} from "@/features/position-closes/position-closes.model";
+import { parseProofMeta } from "@/features/intents/intents.schema";
 
 type PositionCloseBody = Record<string, unknown>;
 

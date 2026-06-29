@@ -1,5 +1,5 @@
-import { loadEnv } from "./config/env";
-import { createMatcherApp } from "./workers/matcher/matcher.app";
+import { loadEnv } from "@/config/env";
+import { createMatcherApp } from "@/workers/matcher/matcher.app";
 
 const env = loadEnv();
 const app = createMatcherApp({

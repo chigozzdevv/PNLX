@@ -8,7 +8,7 @@ import type {
   ResidualOrderRecord,
   TradeIntent,
 } from "@merkl/protocol-types";
-import type { NodeShareSet } from "../threshold-shares/threshold-shares.model";
+import type { NodeShareSet } from "@/workers/threshold-shares/threshold-shares.model";
 
 export interface ExecutorConfig {
   matchingBackend?: "threshold-recovery" | "external-blind";

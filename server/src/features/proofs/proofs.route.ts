@@ -1,7 +1,7 @@
-import type { Router } from "../../shared/http/router";
-import type { ProverService } from "../../workers/prover/prover.service";
-import { ProofsController } from "./proofs.controller";
-import { ProofsService } from "./proofs.service";
+import type { Router } from "@/shared/http/router";
+import type { ProverService } from "@/workers/prover/prover.service";
+import { ProofsController } from "@/features/proofs/proofs.controller";
+import { ProofsService } from "@/features/proofs/proofs.service";
 
 export function registerProofsRoute(
   router: Router,

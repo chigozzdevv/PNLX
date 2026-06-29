@@ -1,3 +1,3 @@
-export * from "./funding-engine.model";
-export * from "./funding-engine.service";
-export * from "./funding-engine.worker";
+export * from "@/workers/funding-engine/funding-engine.model";
+export * from "@/workers/funding-engine/funding-engine.service";
+export * from "@/workers/funding-engine/funding-engine.worker";

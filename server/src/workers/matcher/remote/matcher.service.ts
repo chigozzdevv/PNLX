@@ -1,10 +1,10 @@
-import { parseExternalBatchSettlement } from "../../../features/batches/batches.schema";
-import type { ExternalBatchSettlementTranscript } from "../../executor/executor.model";
+import { parseExternalBatchSettlement } from "@/features/batches/batches.schema";
+import type { ExternalBatchSettlementTranscript } from "@/workers/executor/executor.model";
 import type {
   CreateExternalSettlementInput,
   MatcherGateway,
   RemoteMatcherConfig,
-} from "../matcher.model";
+} from "@/workers/matcher/matcher.model";
 
 export class RemoteMatcherClient implements MatcherGateway {
   constructor(private readonly config: RemoteMatcherConfig) {}

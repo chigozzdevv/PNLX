@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_SMOKE_MARKET_SYMBOLS, SUPPORTED_PERP_ASSETS } from "./assets";
+import { DEFAULT_SMOKE_MARKET_SYMBOLS, SUPPORTED_PERP_ASSETS } from "@/config/assets";
 
 export interface ServerEnv {
   authStorePath: string;

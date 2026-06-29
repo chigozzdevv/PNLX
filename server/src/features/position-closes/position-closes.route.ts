@@ -1,10 +1,10 @@
-import type { Router } from "../../shared/http/router";
-import type { ServerEnv } from "../../config/env";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import type { OnchainRelayService } from "../../workers/onchain/onchain.service";
-import type { ProverService } from "../../workers/prover/prover.service";
-import { PositionClosesController } from "./position-closes.controller";
-import { PositionClosesService } from "./position-closes.service";
+import type { Router } from "@/shared/http/router";
+import type { ServerEnv } from "@/config/env";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
+import type { ProverService } from "@/workers/prover/prover.service";
+import { PositionClosesController } from "@/features/position-closes/position-closes.controller";
+import { PositionClosesService } from "@/features/position-closes/position-closes.service";
 
 export function registerPositionClosesRoute(
   router: Router,

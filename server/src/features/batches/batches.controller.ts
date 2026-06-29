@@ -1,7 +1,7 @@
-import { json, readJson } from "../../shared/http/json";
-import { authenticatedAddress } from "../../shared/http/auth-context";
-import type { BatchesService } from "./batches.service";
-import { parseExternalBatchSettlement, parseSettleBatch } from "./batches.schema";
+import { json, readJson } from "@/shared/http/json";
+import { authenticatedAddress } from "@/shared/http/auth-context";
+import type { BatchesService } from "@/features/batches/batches.service";
+import { parseExternalBatchSettlement, parseSettleBatch } from "@/features/batches/batches.schema";
 
 export class BatchesController {
   constructor(private readonly batches: BatchesService) {}

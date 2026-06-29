@@ -1,4 +1,4 @@
-import { NilccBlindComputeClient } from "./matcher.service";
+import { NilccBlindComputeClient } from "@/workers/matcher/nilcc/matcher.service";
 
 export interface NilccMatcherOptions {
   computeToken?: string;

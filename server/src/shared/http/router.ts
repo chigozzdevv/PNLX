@@ -1,4 +1,4 @@
-import { setAuthenticatedContext, type AuthContext } from "./auth-context";
+import { setAuthenticatedContext, type AuthContext } from "@/shared/http/auth-context";
 
 export type Handler = (request: Request) => Response | Promise<Response>;
 export type Authenticator =

@@ -1,5 +1,5 @@
 import { loadCircuits, verifierEntry } from "@merkl/proof-system";
-import type { ProverService } from "../../workers/prover/prover.service";
+import type { ProverService } from "@/workers/prover/prover.service";
 import type {
   DisclosureProofRequest,
   DisclosureProofResult,
@@ -9,7 +9,7 @@ import type {
   LiquidationProofResult,
   ProofArtifactRegistrationInput,
   VerifierRegistryItem,
-} from "./proofs.model";
+} from "@/features/proofs/proofs.model";
 
 export class ProofsService {
   constructor(

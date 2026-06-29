@@ -1,14 +1,14 @@
 import { hashFields } from "@merkl/crypto";
 import type { BatchExecutionRunRecord, Hex } from "@merkl/protocol-types";
-import type { OnchainRelay, OnchainRelayResult } from "../onchain/onchain.model";
-import type { ExecutorService } from "../executor/executor.service";
-import type { MatcherGateway } from "../matcher/matcher.model";
+import type { OnchainRelay, OnchainRelayResult } from "@/workers/onchain/onchain.model";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { MatcherGateway } from "@/workers/matcher/matcher.model";
 import type {
   BatchExecutorConfig,
   BatchExecutorMarketResult,
   BatchExecutorRunResult,
   RunBatchExecutorInput,
-} from "./batch-executor.model";
+} from "@/workers/batch-executor/batch-executor.model";
 
 const DEFAULT_BATCH_INTERVAL_MS = 5_000;
 const DEFAULT_BATCH_PREFIX = "auto";

@@ -1,7 +1,7 @@
-import { json, readJson } from "../../shared/http/json";
-import { authenticatedAddress } from "../../shared/http/auth-context";
-import type { RelaysService } from "./relays.service";
-import { parseRelay, parseSignedXdr } from "./relays.schema";
+import { json, readJson } from "@/shared/http/json";
+import { authenticatedAddress } from "@/shared/http/auth-context";
+import type { RelaysService } from "@/features/relays/relays.service";
+import { parseRelay, parseSignedXdr } from "@/features/relays/relays.schema";
 
 export class RelaysController {
   constructor(private readonly relays: RelaysService) {}

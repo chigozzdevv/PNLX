@@ -1,7 +1,7 @@
-import type { Router } from "../../shared/http/router";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import { PortfolioController } from "./portfolio.controller";
-import { PortfolioService } from "./portfolio.service";
+import type { Router } from "@/shared/http/router";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import { PortfolioController } from "@/features/portfolio/portfolio.controller";
+import { PortfolioService } from "@/features/portfolio/portfolio.service";
 
 export function registerPortfolioRoute(router: Router, executor: ExecutorService): void {
   const controller = new PortfolioController(new PortfolioService(executor));

@@ -1,11 +1,11 @@
 import type { BatchSettlement } from "@merkl/protocol-types";
-import { assertProtocolAdmin } from "../../shared/http/auth-context";
-import type { ServerEnv } from "../../config/env";
-import { assertMatcherCommitteeAttestation } from "../../shared/protocol/matcher-attestation";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import type { OnchainRelayService } from "../../workers/onchain/onchain.service";
-import type { OnchainRelayResult } from "../../workers/onchain/onchain.model";
-import type { CommitExternalBatchSettlementRequest, SettleBatchRequest } from "./batches.model";
+import { assertProtocolAdmin } from "@/shared/http/auth-context";
+import type { ServerEnv } from "@/config/env";
+import { assertMatcherCommitteeAttestation } from "@/shared/protocol/matcher-attestation";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
+import type { OnchainRelayResult } from "@/workers/onchain/onchain.model";
+import type { CommitExternalBatchSettlementRequest, SettleBatchRequest } from "@/features/batches/batches.model";
 
 export class BatchesService {
   constructor(

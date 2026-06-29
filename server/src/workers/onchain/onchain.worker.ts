@@ -1,6 +1,6 @@
-import type { RelayerService } from "../relayer/relayer.service";
-import type { OnchainRelayConfig } from "./onchain.model";
-import { OnchainRelayService } from "./onchain.service";
+import type { RelayerService } from "@/workers/relayer/relayer.service";
+import type { OnchainRelayConfig } from "@/workers/onchain/onchain.model";
+import { OnchainRelayService } from "@/workers/onchain/onchain.service";
 
 export function createOnchainRelay(
   relayer: RelayerService,

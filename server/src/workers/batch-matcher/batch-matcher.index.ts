@@ -1,2 +1,2 @@
-export * from "./batch-matcher.model";
-export * from "./batch-matcher.service";
+export * from "@/workers/batch-matcher/batch-matcher.model";
+export * from "@/workers/batch-matcher/batch-matcher.service";

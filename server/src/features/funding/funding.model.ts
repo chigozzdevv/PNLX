@@ -1,5 +1,5 @@
 import type { FundingUpdateRecord } from "@merkl/protocol-types";
-import type { FundingCycleResult } from "../../workers/funding-engine/funding-engine.model";
+import type { FundingCycleResult } from "@/workers/funding-engine/funding-engine.model";
 
 export interface AdvanceFundingInput {
   appliedAt?: number;

@@ -5,11 +5,11 @@ import { circuitKey, loadCircuit } from "@merkl/proof-system";
 import type { Hex, IntentValidityRecord, MarketConfig, ProofMeta, TradeIntent } from "@merkl/protocol-types";
 import { createMarginNote } from "@merkl/sdk";
 import { readFileSync } from "node:fs";
-import { BatchMatcherService } from "../../server/src/workers/batch-matcher/batch-matcher.service";
-import type { RecoveredIntent } from "../../server/src/workers/threshold-shares/threshold-shares.model";
-import { ProofCoordinatorService } from "../../server/src/workers/proof-coordinator/proof-coordinator.service";
-import { ThresholdShareCommittee } from "../../server/src/workers/threshold-shares/threshold-shares.service";
-import { createExecutor } from "../../server/src/workers/executor/executor.worker";
+import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
+import type { RecoveredIntent } from "@/workers/threshold-shares/threshold-shares.model";
+import { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
+import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
+import { createExecutor } from "@/workers/executor/executor.worker";
 
 describe("private batch settlement", () => {
   test("keeps raw match fill handling outside the executor boundary", () => {

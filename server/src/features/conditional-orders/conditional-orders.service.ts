@@ -1,12 +1,12 @@
 import { commitConditionalOrder } from "@merkl/crypto";
 import { contractPublicInputHash, publicField, publicU128 } from "@merkl/proof-system";
-import type { ServerEnv } from "../../config/env";
-import { assertSubmittedRelay } from "../../shared/protocol/onchain-submission";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import type { OnchainRelayResult } from "../../workers/onchain/onchain.model";
-import type { OnchainRelayService } from "../../workers/onchain/onchain.service";
-import type { ProverService } from "../../workers/prover/prover.service";
-import { PositionClosesService } from "../position-closes/position-closes.service";
+import type { ServerEnv } from "@/config/env";
+import { assertSubmittedRelay } from "@/shared/protocol/onchain-submission";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { OnchainRelayResult } from "@/workers/onchain/onchain.model";
+import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
+import type { ProverService } from "@/workers/prover/prover.service";
+import { PositionClosesService } from "@/features/position-closes/position-closes.service";
 import type {
   CreateConditionalOrderInput,
   CreateConditionalOrderResult,
@@ -15,7 +15,7 @@ import type {
   ExecuteConditionalCloseResult,
   RegisterConditionalOrderInput,
   RegisterConditionalOrderResult,
-} from "./conditional-orders.model";
+} from "@/features/conditional-orders/conditional-orders.model";
 
 export class ConditionalOrdersService {
   constructor(

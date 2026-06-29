@@ -1,6 +1,6 @@
-import { json, readJson } from "../../shared/http/json";
-import { parseLiquidation, parseProvenLiquidation } from "./liquidations.schema";
-import type { LiquidationsService } from "./liquidations.service";
+import { json, readJson } from "@/shared/http/json";
+import { parseLiquidation, parseProvenLiquidation } from "@/features/liquidations/liquidations.schema";
+import type { LiquidationsService } from "@/features/liquidations/liquidations.service";
 
 export class LiquidationsController {
   constructor(private readonly liquidations: LiquidationsService) {}

@@ -1,6 +1,6 @@
-import { json } from "../../shared/http/json";
-import { oracleReadinessIssues } from "../../shared/protocol/oracle";
-import type { ServerEnv } from "../../config/env";
+import { json } from "@/shared/http/json";
+import { oracleReadinessIssues } from "@/shared/protocol/oracle";
+import type { ServerEnv } from "@/config/env";
 
 export class HealthController {
   constructor(private readonly env: ServerEnv) {}

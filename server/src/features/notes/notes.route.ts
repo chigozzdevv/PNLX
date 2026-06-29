@@ -1,11 +1,11 @@
-import type { Router } from "../../shared/http/router";
-import type { ServerEnv } from "../../config/env";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import type { OnchainRelayService } from "../../workers/onchain/onchain.service";
-import type { ProverService } from "../../workers/prover/prover.service";
-import type { RelayerService } from "../../workers/relayer/relayer.service";
-import { NotesController } from "./notes.controller";
-import { NotesService } from "./notes.service";
+import type { Router } from "@/shared/http/router";
+import type { ServerEnv } from "@/config/env";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
+import type { ProverService } from "@/workers/prover/prover.service";
+import type { RelayerService } from "@/workers/relayer/relayer.service";
+import { NotesController } from "@/features/notes/notes.controller";
+import { NotesService } from "@/features/notes/notes.service";
 
 export function registerNotesRoute(
   router: Router,

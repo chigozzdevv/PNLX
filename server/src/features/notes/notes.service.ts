@@ -1,11 +1,11 @@
-import { assertAuthenticatedAccount } from "../../shared/http/auth-context";
+import { assertAuthenticatedAccount } from "@/shared/http/auth-context";
 import { contractPublicInputHash, publicField, publicU128 } from "@merkl/proof-system";
 import { hashFields } from "@merkl/crypto";
-import type { ServerEnv } from "../../config/env";
+import type { ServerEnv } from "@/config/env";
 import type { DepositNoteRecord, DepositNoteWitness, Hex, PendingAssetDepositRecord } from "@merkl/protocol-types";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import type { OnchainRelayService } from "../../workers/onchain/onchain.service";
-import type { ProverService } from "../../workers/prover/prover.service";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
+import type { ProverService } from "@/workers/prover/prover.service";
 import type {
   AssetDepositNoteInput,
   AssetDepositNoteResult,
@@ -20,11 +20,11 @@ import type {
   WithdrawNoteResult,
   WithdrawAssetNoteInput,
   WithdrawAssetNoteResult,
-} from "./notes.model";
-import type { OnchainRelayResult } from "../../workers/onchain/onchain.model";
-import { assertSubmittedRelay } from "../../shared/protocol/onchain-submission";
-import type { RelayerService } from "../../workers/relayer/relayer.service";
-import type { RelayedTx } from "../../workers/relayer/relayer.model";
+} from "@/features/notes/notes.model";
+import type { OnchainRelayResult } from "@/workers/onchain/onchain.model";
+import { assertSubmittedRelay } from "@/shared/protocol/onchain-submission";
+import type { RelayerService } from "@/workers/relayer/relayer.service";
+import type { RelayedTx } from "@/workers/relayer/relayer.model";
 
 export class NotesService {
   constructor(

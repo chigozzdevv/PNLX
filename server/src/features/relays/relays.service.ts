@@ -1,7 +1,7 @@
-import type { RelayerService } from "../../workers/relayer/relayer.service";
-import type { ServerEnv } from "../../config/env";
-import { assertProtocolAdmin } from "../../shared/http/auth-context";
-import type { CreateRelayInput, SubmitSignedXdrInput } from "./relays.model";
+import type { RelayerService } from "@/workers/relayer/relayer.service";
+import type { ServerEnv } from "@/config/env";
+import { assertProtocolAdmin } from "@/shared/http/auth-context";
+import type { CreateRelayInput, SubmitSignedXdrInput } from "@/features/relays/relays.model";
 
 export class RelaysService {
   constructor(private readonly relayer: RelayerService, private readonly env: ServerEnv) {}

@@ -1,11 +1,11 @@
 import type { Hex, IntentRecord, ResidualOrderRecord } from "@merkl/protocol-types";
-import type { ExternalBatchSettlementTranscript } from "../executor/executor.model";
+import type { ExternalBatchSettlementTranscript } from "@/workers/executor/executor.model";
 import type {
   CommitteeSettlementInput,
   CommitteeSettlementTranscript,
   PrivatePositionOpeningEvent,
-} from "../threshold-shares/threshold-shares.model";
-import type { ProofCoordinatorService } from "../proof-coordinator/proof-coordinator.service";
+} from "@/workers/threshold-shares/threshold-shares.model";
+import type { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
 
 export type MatcherComputeBackend = "local-threshold" | "remote-blind" | "nilcc";
 

@@ -1,6 +1,6 @@
 import type { Hex } from "@merkl/protocol-types";
-import { parseIntent } from "../intents/intents.schema";
-import type { CancelOrderInput, ReplaceOrderInput } from "./orders.model";
+import { parseIntent } from "@/features/intents/intents.schema";
+import type { CancelOrderInput, ReplaceOrderInput } from "@/features/orders/orders.model";
 
 type OrderBody = Record<string, unknown>;
 

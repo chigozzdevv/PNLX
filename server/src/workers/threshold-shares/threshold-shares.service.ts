@@ -2,9 +2,9 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import type { Hex, IntentRecord, IntentShares, PositionLifecycleRecord, ResidualOrderRecord, TradeIntent } from "@merkl/protocol-types";
 import { decodeSigned, encodeSigned, fieldMerkleRoot, hashFields, recoverSecret, splitSecret } from "@merkl/crypto";
-import { BatchMatcherService } from "../batch-matcher/batch-matcher.service";
-import type { MatchResult } from "../batch-matcher/batch-matcher.model";
-import type { ProofCoordinatorService } from "../proof-coordinator/proof-coordinator.service";
+import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
+import type { MatchResult } from "@/workers/batch-matcher/batch-matcher.model";
+import type { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
 import type {
   CommitteeMatchInput,
   CommitteeSettlementInput,
@@ -12,7 +12,7 @@ import type {
   NodeShareSet,
   RecoveredIntent,
   ThresholdShareConfig,
-} from "./threshold-shares.model";
+} from "@/workers/threshold-shares/threshold-shares.model";
 
 export class ThresholdShareNodeService {
   readonly nodeId: string;

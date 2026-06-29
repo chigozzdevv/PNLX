@@ -2,8 +2,8 @@ import { spawnSync } from "node:child_process";
 import { hashFields } from "@merkl/crypto";
 import { PRICE_SCALE } from "@merkl/market-math";
 import type { Hex } from "@merkl/protocol-types";
-import type { CommandResult } from "../relayer/relayer.model";
-import type { OracleConfig, OracleMarketPriceInput, OraclePrice, PythPriceResponse } from "./oracle.model";
+import type { CommandResult } from "@/workers/relayer/relayer.model";
+import type { OracleConfig, OracleMarketPriceInput, OraclePrice, PythPriceResponse } from "@/workers/oracle/oracle.model";
 
 export class OracleService {
   constructor(private readonly config: OracleConfig) {}

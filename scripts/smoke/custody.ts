@@ -4,9 +4,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCircuitMarginNote } from "@merkl/sdk";
-import { createApp } from "../../server/src/app";
-import { loadEnv, type ServerEnv } from "../../server/src/config/env";
-import { ProverService } from "../../server/src/workers/prover/prover.service";
+import { createApp } from "@/app";
+import { loadEnv, type ServerEnv } from "@/config/env";
+import { ProverService } from "@/workers/prover/prover.service";
 
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const ED25519_SECRET_KEY_VERSION = 18 << 3;
@@ -88,7 +88,7 @@ async function runCustodySmoke(options: CustodySmokeOptions): Promise<Record<str
 
   const source = options.source ?? configured.stellarSource;
   const from = options.from ?? resolveSourceAddress(source, configured);
-  const deployment = await import("../../server/src/workers/onchain/deployment").then((module) =>
+  const deployment = await import("@/workers/onchain/deployment").then((module) =>
     module.loadDeploymentRegistry(configured.stellarDeploymentFile),
   );
   const shieldedPool = deployment.contracts["shielded-pool"];

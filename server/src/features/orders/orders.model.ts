@@ -1,5 +1,5 @@
 import type { Hex, IntentRecord, OrderLifecycleRecord } from "@merkl/protocol-types";
-import type { CreateIntentInput } from "../intents/intents.model";
+import type { CreateIntentInput } from "@/features/intents/intents.model";
 
 export interface CancelOrderInput {
   intentCommitment: Hex;

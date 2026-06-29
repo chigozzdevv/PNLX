@@ -11,8 +11,8 @@ import type {
   PositionLifecycleRecord,
   ProofMeta,
 } from "@merkl/protocol-types";
-import { FileProtocolStore } from "../../server/src/shared/state/persistent-store";
-import { createIndexer } from "../../server/src/workers/indexer/indexer.worker";
+import { FileProtocolStore } from "@/shared/state/persistent-store";
+import { createIndexer } from "@/workers/indexer/indexer.worker";
 
 describe("public and owner indexer", () => {
   test("rebuilds market aggregates and owner order status from the persistent protocol store", () => {

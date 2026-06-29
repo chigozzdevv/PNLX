@@ -1,7 +1,7 @@
-import { authenticatedAddress } from "../../shared/http/auth-context";
-import { json, readJson } from "../../shared/http/json";
-import { parseAccountKey, parseAccountKeyQuery } from "./account-keys.schema";
-import type { AccountKeysService } from "./account-keys.service";
+import { authenticatedAddress } from "@/shared/http/auth-context";
+import { json, readJson } from "@/shared/http/json";
+import { parseAccountKey, parseAccountKeyQuery } from "@/features/account-keys/account-keys.schema";
+import type { AccountKeysService } from "@/features/account-keys/account-keys.service";
 
 export class AccountKeysController {
   constructor(private readonly accountKeys: AccountKeysService) {}

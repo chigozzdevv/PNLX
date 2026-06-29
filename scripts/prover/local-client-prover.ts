@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { ProverService } from "../../server/src/workers/prover/prover.service";
+import { ProverService } from "@/workers/prover/prover.service";
 import type { ProofMeta } from "@merkl/protocol-types";
 import type { ProofArtifact } from "@merkl/proof-system";
 

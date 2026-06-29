@@ -1,5 +1,5 @@
-import type { CreateRelayInput } from "./relays.model";
-import type { SubmitSignedXdrInput } from "./relays.model";
+import type { CreateRelayInput } from "@/features/relays/relays.model";
+import type { SubmitSignedXdrInput } from "@/features/relays/relays.model";
 
 type RelayBody = Record<string, unknown>;
 

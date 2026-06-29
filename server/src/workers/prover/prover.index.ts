@@ -1,3 +1,3 @@
-export * from "./prover.model";
-export * from "./prover.service";
-export * from "./prover.worker";
+export * from "@/workers/prover/prover.model";
+export * from "@/workers/prover/prover.service";
+export * from "@/workers/prover/prover.worker";

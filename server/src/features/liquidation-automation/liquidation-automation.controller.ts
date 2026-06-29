@@ -1,9 +1,9 @@
-import { json, readJson } from "../../shared/http/json";
+import { json, readJson } from "@/shared/http/json";
 import {
   parseEnqueueLiquidationJob,
   parseRunLiquidationAutomation,
-} from "./liquidation-automation.schema";
-import type { LiquidationAutomationService } from "./liquidation-automation.service";
+} from "@/features/liquidation-automation/liquidation-automation.schema";
+import type { LiquidationAutomationService } from "@/features/liquidation-automation/liquidation-automation.service";
 
 export class LiquidationAutomationController {
   constructor(private readonly automation: LiquidationAutomationService) {}

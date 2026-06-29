@@ -1,9 +1,9 @@
-import type { Router } from "../../shared/http/router";
-import type { ServerEnv } from "../../config/env";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import type { FundingEngineService } from "../../workers/funding-engine/funding-engine.service";
-import { FundingController } from "./funding.controller";
-import { FundingService } from "./funding.service";
+import type { Router } from "@/shared/http/router";
+import type { ServerEnv } from "@/config/env";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { FundingEngineService } from "@/workers/funding-engine/funding-engine.service";
+import { FundingController } from "@/features/funding/funding.controller";
+import { FundingService } from "@/features/funding/funding.service";
 
 export function registerFundingRoute(
   router: Router,

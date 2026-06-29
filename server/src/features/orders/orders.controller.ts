@@ -1,7 +1,7 @@
-import { authenticatedAddress } from "../../shared/http/auth-context";
-import { json, readJson } from "../../shared/http/json";
-import { parseCancelOrder, parseReplaceOrder } from "./orders.schema";
-import type { OrdersService } from "./orders.service";
+import { authenticatedAddress } from "@/shared/http/auth-context";
+import { json, readJson } from "@/shared/http/json";
+import { parseCancelOrder, parseReplaceOrder } from "@/features/orders/orders.schema";
+import type { OrdersService } from "@/features/orders/orders.service";
 
 export class OrdersController {
   constructor(private readonly orders: OrdersService) {}

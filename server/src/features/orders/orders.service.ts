@@ -1,16 +1,16 @@
 import { ownerCommitment } from "@merkl/crypto";
 import type { OrderLifecycleRecord } from "@merkl/protocol-types";
-import type { ServerEnv } from "../../config/env";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import type { OnchainRelayService } from "../../workers/onchain/onchain.service";
-import type { ProverService } from "../../workers/prover/prover.service";
-import { IntentsService } from "../intents/intents.service";
+import type { ServerEnv } from "@/config/env";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
+import type { ProverService } from "@/workers/prover/prover.service";
+import { IntentsService } from "@/features/intents/intents.service";
 import type {
   CancelOrderInput,
   CancelOrderResult,
   ReplaceOrderInput,
   ReplaceOrderResult,
-} from "./orders.model";
+} from "@/features/orders/orders.model";
 
 export class OrdersService {
   private readonly intents: IntentsService;

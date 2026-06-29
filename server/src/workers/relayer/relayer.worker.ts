@@ -1,5 +1,5 @@
-import { RelayerService } from "./relayer.service";
-import type { CommandRunner, StellarRelayerConfig } from "./relayer.model";
+import { RelayerService } from "@/workers/relayer/relayer.service";
+import type { CommandRunner, StellarRelayerConfig } from "@/workers/relayer/relayer.model";
 
 interface CreateRelayerOptions {
   config?: StellarRelayerConfig;

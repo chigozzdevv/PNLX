@@ -1,4 +1,4 @@
-import type { PortfolioInput } from "./portfolio.model";
+import type { PortfolioInput } from "@/features/portfolio/portfolio.model";
 
 export function parsePortfolioRequest(request: Request): PortfolioInput {
   const ownerCommitment = new URL(request.url).searchParams.get("ownerCommitment");

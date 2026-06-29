@@ -45,8 +45,8 @@ import type {
   PositionCloseProofInput,
   Prover,
   WithdrawalProofInput,
-} from "./prover.model";
-import { ProofArtifactRegistry, proofKey } from "../../shared/proofs/artifact-registry";
+} from "@/workers/prover/prover.model";
+import { ProofArtifactRegistry, proofKey } from "@/shared/proofs/artifact-registry";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

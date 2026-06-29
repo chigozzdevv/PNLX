@@ -1,7 +1,7 @@
-import { assertAuthenticatedOwnerCommitment } from "../../shared/http/auth-context";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import { createIndexer } from "../../workers/indexer/indexer.worker";
-import type { PortfolioBalancesSnapshot, PortfolioInput, PortfolioSnapshot } from "./portfolio.model";
+import { assertAuthenticatedOwnerCommitment } from "@/shared/http/auth-context";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import { createIndexer } from "@/workers/indexer/indexer.worker";
+import type { PortfolioBalancesSnapshot, PortfolioInput, PortfolioSnapshot } from "@/features/portfolio/portfolio.model";
 
 export class PortfolioService {
   constructor(private readonly executor: ExecutorService) {}

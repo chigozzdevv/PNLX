@@ -13,13 +13,13 @@ import type {
   PositionCloseWitness,
   ProofMeta,
 } from "@merkl/protocol-types";
-import { createExecutor } from "../../server/src/workers/executor/executor.worker";
-import type { ExecutorService } from "../../server/src/workers/executor/executor.service";
-import type { ProverService } from "../../server/src/workers/prover/prover.service";
-import { createProver } from "../../server/src/workers/prover/prover.worker";
-import { ConditionalOrdersService } from "../../server/src/features/conditional-orders/conditional-orders.service";
-import { LiquidationsService } from "../../server/src/features/liquidations/liquidations.service";
-import { PositionClosesService } from "../../server/src/features/position-closes/position-closes.service";
+import { createExecutor } from "@/workers/executor/executor.worker";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { ProverService } from "@/workers/prover/prover.service";
+import { createProver } from "@/workers/prover/prover.worker";
+import { ConditionalOrdersService } from "@/features/conditional-orders/conditional-orders.service";
+import { LiquidationsService } from "@/features/liquidations/liquidations.service";
+import { PositionClosesService } from "@/features/position-closes/position-closes.service";
 
 describe("funding settlement enforcement", () => {
   test("builds a real funding settlement proof artifact", () => {

@@ -1,11 +1,11 @@
-import { json, readJson } from "../../shared/http/json";
+import { json, readJson } from "@/shared/http/json";
 import {
   parseDisclosureProof,
   parseIntentValidityProof,
   parseLiquidationProof,
   parseProofArtifactRegistration,
-} from "./proofs.schema";
-import type { ProofsService } from "./proofs.service";
+} from "@/features/proofs/proofs.schema";
+import type { ProofsService } from "@/features/proofs/proofs.service";
 
 export class ProofsController {
   constructor(private readonly proofs: ProofsService) {}

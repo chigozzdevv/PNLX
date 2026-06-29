@@ -1,14 +1,14 @@
-import { json, readJson } from "../../shared/http/json";
-import { Router } from "../../shared/http/router";
-import { createExecutor } from "../executor/executor.worker";
-import { assertNilccMatcherConfig, createNilccMatcherCompute } from "./nilcc/matcher.app";
-import { RemoteBlindComputeClient } from "./remote-compute/matcher.service";
-import { createMatcher } from "./matcher.worker";
+import { json, readJson } from "@/shared/http/json";
+import { Router } from "@/shared/http/router";
+import { createExecutor } from "@/workers/executor/executor.worker";
+import { assertNilccMatcherConfig, createNilccMatcherCompute } from "@/workers/matcher/nilcc/matcher.app";
+import { RemoteBlindComputeClient } from "@/workers/matcher/remote-compute/matcher.service";
+import { createMatcher } from "@/workers/matcher/matcher.worker";
 import type {
   BlindComputeGateway,
   CreateExternalSettlementInput,
   MatcherComputeBackend,
-} from "./matcher.model";
+} from "@/workers/matcher/matcher.model";
 
 export interface MatcherAppOptions {
   computeBackend?: MatcherComputeBackend;

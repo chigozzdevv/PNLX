@@ -1,10 +1,10 @@
-import type { Router } from "../../shared/http/router";
-import type { ServerEnv } from "../../config/env";
-import type { ExecutorService } from "../../workers/executor/executor.service";
-import type { OnchainRelayService } from "../../workers/onchain/onchain.service";
-import type { ProverService } from "../../workers/prover/prover.service";
-import { DisclosuresController } from "./disclosures.controller";
-import { DisclosuresService } from "./disclosures.service";
+import type { Router } from "@/shared/http/router";
+import type { ServerEnv } from "@/config/env";
+import type { ExecutorService } from "@/workers/executor/executor.service";
+import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
+import type { ProverService } from "@/workers/prover/prover.service";
+import { DisclosuresController } from "@/features/disclosures/disclosures.controller";
+import { DisclosuresService } from "@/features/disclosures/disclosures.service";
 
 export function registerDisclosuresRoute(
   router: Router,

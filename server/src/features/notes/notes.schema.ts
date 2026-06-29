@@ -7,8 +7,8 @@ import type {
   ProvenWithdrawNoteInput,
   WithdrawAssetNoteInput,
   WithdrawNoteInput,
-} from "./notes.model";
-import { parseProofMeta } from "../intents/intents.schema";
+} from "@/features/notes/notes.model";
+import { parseProofMeta } from "@/features/intents/intents.schema";
 
 export function parseDepositNote(input: Record<string, string>): DepositNoteInput {
   return {

@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "server/src/*"
+      ]
+    },
+    "skipLibCheck": true,
+    "strict": true
+  },
+  "include": [
+    "server/src/**/*.ts",
+    "scripts/**/*.ts",
+    "tests/**/*.ts"
+  ],
+  "exclude": [
+    "client",
+    "node_modules"
+  ]
+}

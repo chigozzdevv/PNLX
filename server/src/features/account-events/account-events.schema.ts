@@ -1,4 +1,4 @@
-import type { CreateAccountEventInput, ListAccountEventsInput } from "./account-events.model";
+import type { CreateAccountEventInput, ListAccountEventsInput } from "@/features/account-events/account-events.model";
 
 type AccountEventBody = Record<string, unknown>;
 

@@ -1,7 +1,7 @@
-import { json, readJson } from "../../shared/http/json";
-import { authenticatedAddress } from "../../shared/http/auth-context";
-import type { IntentsService } from "./intents.service";
-import { parseIntent, parseProveAndSubmitIntent, parseSharedIntent } from "./intents.schema";
+import { json, readJson } from "@/shared/http/json";
+import { authenticatedAddress } from "@/shared/http/auth-context";
+import type { IntentsService } from "@/features/intents/intents.service";
+import { parseIntent, parseProveAndSubmitIntent, parseSharedIntent } from "@/features/intents/intents.schema";
 
 export class IntentsController {
   constructor(private readonly intents: IntentsService) {}

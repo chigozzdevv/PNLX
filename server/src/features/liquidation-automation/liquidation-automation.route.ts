@@ -1,6 +1,6 @@
-import type { Router } from "../../shared/http/router";
-import { LiquidationAutomationController } from "./liquidation-automation.controller";
-import type { LiquidationAutomationService } from "./liquidation-automation.service";
+import type { Router } from "@/shared/http/router";
+import { LiquidationAutomationController } from "@/features/liquidation-automation/liquidation-automation.controller";
+import type { LiquidationAutomationService } from "@/features/liquidation-automation/liquidation-automation.service";
 
 export function registerLiquidationAutomationRoute(
   router: Router,

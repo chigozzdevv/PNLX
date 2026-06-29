@@ -1,4 +1,4 @@
-import type { OnchainRelayResult } from "../../workers/onchain/onchain.model";
+import type { OnchainRelayResult } from "@/workers/onchain/onchain.model";
 
 export function assertSubmittedRelay(
   result: OnchainRelayResult | undefined,

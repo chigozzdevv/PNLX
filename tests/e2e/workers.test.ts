@@ -18,33 +18,33 @@ import type {
   IntentValidityRecord,
   TradeIntent,
 } from "@merkl/protocol-types";
-import { loadEnv } from "../../server/src/config/env";
-import { BatchesService } from "../../server/src/features/batches/batches.service";
-import { encodeStellarPublicKey } from "../../server/src/features/auth/auth.service";
-import { IntentsService } from "../../server/src/features/intents/intents.service";
-import { MarketsService } from "../../server/src/features/markets/markets.service";
-import { NotesService } from "../../server/src/features/notes/notes.service";
-import { OrdersService } from "../../server/src/features/orders/orders.service";
-import { batchSettlementPublicInputHash } from "../../server/src/shared/protocol/batch-settlement-proof";
+import { loadEnv } from "@/config/env";
+import { BatchesService } from "@/features/batches/batches.service";
+import { encodeStellarPublicKey } from "@/features/auth/auth.service";
+import { IntentsService } from "@/features/intents/intents.service";
+import { MarketsService } from "@/features/markets/markets.service";
+import { NotesService } from "@/features/notes/notes.service";
+import { OrdersService } from "@/features/orders/orders.service";
+import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
 import {
   positionOpeningAccountEventDataCommitment,
   positionOpeningAccountEventId,
-} from "../../server/src/shared/protocol/account-event-binding";
-import { externalMatcherTranscriptHash } from "../../server/src/shared/protocol/external-matcher-transcript";
-import { matcherAttestationMessage } from "../../server/src/shared/protocol/matcher-attestation";
-import { ProtocolStore } from "../../server/src/shared/state/store";
-import { createBatchExecutor } from "../../server/src/workers/batch-executor/batch-executor.worker";
-import { createExecutor } from "../../server/src/workers/executor/executor.worker";
-import { createMatcherApp } from "../../server/src/workers/matcher/matcher.app";
-import { NilccBlindComputeClient } from "../../server/src/workers/matcher/nilcc/matcher.service";
-import { RemoteBlindComputeClient } from "../../server/src/workers/matcher/remote-compute/matcher.service";
-import { RemoteMatcherClient } from "../../server/src/workers/matcher/remote/matcher.service";
-import { createMatcher } from "../../server/src/workers/matcher/matcher.worker";
-import { createFundingEngine } from "../../server/src/workers/funding-engine/funding-engine.worker";
-import { createIndexer } from "../../server/src/workers/indexer/indexer.worker";
-import { createOnchainRelay } from "../../server/src/workers/onchain/onchain.worker";
-import { OracleService } from "../../server/src/workers/oracle/oracle.service";
-import { createRelayer } from "../../server/src/workers/relayer/relayer.worker";
+} from "@/shared/protocol/account-event-binding";
+import { externalMatcherTranscriptHash } from "@/shared/protocol/external-matcher-transcript";
+import { matcherAttestationMessage } from "@/shared/protocol/matcher-attestation";
+import { ProtocolStore } from "@/shared/state/store";
+import { createBatchExecutor } from "@/workers/batch-executor/batch-executor.worker";
+import { createExecutor } from "@/workers/executor/executor.worker";
+import { createMatcherApp } from "@/workers/matcher/matcher.app";
+import { NilccBlindComputeClient } from "@/workers/matcher/nilcc/matcher.service";
+import { RemoteBlindComputeClient } from "@/workers/matcher/remote-compute/matcher.service";
+import { RemoteMatcherClient } from "@/workers/matcher/remote/matcher.service";
+import { createMatcher } from "@/workers/matcher/matcher.worker";
+import { createFundingEngine } from "@/workers/funding-engine/funding-engine.worker";
+import { createIndexer } from "@/workers/indexer/indexer.worker";
+import { createOnchainRelay } from "@/workers/onchain/onchain.worker";
+import { OracleService } from "@/workers/oracle/oracle.service";
+import { createRelayer } from "@/workers/relayer/relayer.worker";
 
 describe("support workers", () => {
   test("defaults production oracle authority to on-chain market pricing", () => {

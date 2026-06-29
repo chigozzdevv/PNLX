@@ -1,4 +1,4 @@
-import type { AuthChallengeInput, AuthSessionInput } from "./auth.model";
+import type { AuthChallengeInput, AuthSessionInput } from "@/features/auth/auth.model";
 
 type AuthBody = Record<string, unknown>;
 

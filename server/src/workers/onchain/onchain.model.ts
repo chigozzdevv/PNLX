@@ -14,7 +14,7 @@ import type {
   ProofMeta,
   WithdrawalRecord,
 } from "@merkl/protocol-types";
-import type { RelayedTx, StellarInvokePayload } from "../relayer/relayer.model";
+import type { RelayedTx, StellarInvokePayload } from "@/workers/relayer/relayer.model";
 
 export interface DeploymentRegistry {
   contracts: Record<string, string>;

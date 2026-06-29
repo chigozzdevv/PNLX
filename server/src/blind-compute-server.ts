@@ -1,5 +1,5 @@
-import { loadEnv } from "./config/env";
-import { createBlindComputeApp } from "./workers/blind-compute/blind-compute.app";
+import { loadEnv } from "@/config/env";
+import { createBlindComputeApp } from "@/workers/blind-compute/blind-compute.app";
 
 const env = loadEnv();
 const app = createBlindComputeApp({

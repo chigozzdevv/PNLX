@@ -1,5 +1,5 @@
 import type { BatchSettlement, Hex, MarketConfig } from "@merkl/protocol-types";
-import type { MatchResult } from "../batch-matcher/batch-matcher.model";
+import type { MatchResult } from "@/workers/batch-matcher/batch-matcher.model";
 
 export interface SettlementProofInput {
   batchId: string;
