@@ -1,0 +1,41 @@
+{
+  "name": "merkl",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "client",
+    "server",
+    "packages/*"
+  ],
+  "dependencies": {
+    "@merkl/crypto": "workspace:*",
+    "@merkl/market-math": "workspace:*",
+    "@merkl/proof-system": "workspace:*",
+    "@merkl/protocol-types": "workspace:*",
+    "@merkl/sdk": "workspace:*",
+    "@merkl/server": "workspace:*"
+  },
+  "scripts": {
+    "build:contracts": "stellar contract build --manifest-path contracts/Cargo.toml --out-dir contracts/target/stellar --locked --optimize=false",
+    "client:dev": "bun run --filter @merkl/client dev",
+    "client:check": "bun run --filter @merkl/client check",
+    "collateral:setup-test-usdc": "bun scripts/collateral/setup-test-usdc.ts",
+    "deploy:dry": "bun scripts/deploy/run.ts --dry-run",
+    "deploy:finalize": "bun scripts/deploy/finalize.ts",
+    "deploy:local": "bun scripts/deploy/run.ts --network local --source merkl-admin --setup-local --build",
+    "manifest:deploy": "bun scripts/deploy/manifest.ts",
+    "matcher:server": "bun server/src/matcher-server.ts",
+    "oracle:configure-committee": "bun scripts/oracle/configure-committee.ts",
+    "prover:client": "bun scripts/prover/local-client-prover.ts",
+    "prove:circuits": "bun scripts/proof/build.ts",
+    "prove:margin": "bun scripts/proof/build.ts margin-check",
+    "smoke:custody": "bun scripts/smoke/custody.ts",
+    "smoke:custody:prepare": "bun scripts/smoke/custody.ts --prepare-only",
+    "smoke:trade": "bun scripts/smoke/trade.ts",
+    "smoke:trade:server": "bun scripts/smoke/trade.ts --server-only",
+    "test": "bun test",
+    "test:e2e": "bun test tests/e2e",
+    "test:server": "bun test server",
+    "test:packages": "bun test packages"
+  }
+}

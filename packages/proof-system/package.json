@@ -1,0 +1,12 @@
+{
+  "name": "@merkl/proof-system",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@merkl/crypto": "workspace:*",
+    "@merkl/protocol-types": "workspace:*"
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "merkl",
+      "dependencies": {
+        "@merkl/crypto": "workspace:*",
+        "@merkl/market-math": "workspace:*",
+        "@merkl/proof-system": "workspace:*",
+        "@merkl/protocol-types": "workspace:*",
+        "@merkl/sdk": "workspace:*",
+        "@merkl/server": "workspace:*",
+      },
+    },
+    "packages/crypto": {
+      "name": "@merkl/crypto",
+      "version": "0.1.0",
+    },
+    "packages/market-math": {
+      "name": "@merkl/market-math",
+      "version": "0.1.0",
+    },
+    "packages/proof-system": {
+      "name": "@merkl/proof-system",
+      "version": "0.1.0",
+      "dependencies": {
+        "@merkl/crypto": "workspace:*",
+        "@merkl/protocol-types": "workspace:*",
+      },
+    },
+    "packages/protocol-types": {
+      "name": "@merkl/protocol-types",
+      "version": "0.1.0",
+    },
+    "packages/sdk": {
+      "name": "@merkl/sdk",
+      "version": "0.1.0",
+    },
+    "server": {
+      "name": "@merkl/server",
+      "version": "0.1.0",
+      "dependencies": {
+        "@merkl/crypto": "workspace:*",
+        "@merkl/market-math": "workspace:*",
+        "@merkl/proof-system": "workspace:*",
+        "@merkl/protocol-types": "workspace:*",
+        "@merkl/sdk": "workspace:*",
+      },
+    },
+  },
+  "packages": {
+    "@merkl/crypto": ["@merkl/crypto@workspace:packages/crypto"],
+
+    "@merkl/market-math": ["@merkl/market-math@workspace:packages/market-math"],
+
+    "@merkl/proof-system": ["@merkl/proof-system@workspace:packages/proof-system"],
+
+    "@merkl/protocol-types": ["@merkl/protocol-types@workspace:packages/protocol-types"],
+
+    "@merkl/sdk": ["@merkl/sdk@workspace:packages/sdk"],
+
+    "@merkl/server": ["@merkl/server@workspace:server"],
+  }
+}
