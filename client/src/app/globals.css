@@ -2085,7 +2085,6 @@ button:disabled {
   grid-template-columns: minmax(480px, 0.95fr) minmax(0, 0.72fr);
   gap: clamp(38px, 5vw, 88px);
   min-height: clamp(540px, 64vh, 680px);
-  padding-inline: clamp(18px, 3vw, 56px);
   padding-top: clamp(54px, 6vw, 82px);
   padding-bottom: clamp(60px, 7vw, 96px);
 }
@@ -2098,14 +2097,14 @@ button:disabled {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: minmax(230px, 0.92fr) 64px minmax(126px, 0.46fr);
-  gap: 10px;
+  grid-template-columns: 360px 48px 122px;
+  gap: 0;
   align-items: center;
-  justify-content: center;
+  justify-content: start;
   justify-self: start;
   min-height: 390px;
   transform: translateY(clamp(-42px, -3vw, -24px));
-  width: min(760px, 100%);
+  width: min(530px, 100%);
 }
 
 .landing-private-candles {
@@ -2421,10 +2420,10 @@ button:disabled {
 
   .landing-proof-candle-visual {
     min-height: 280px;
-    grid-template-columns: minmax(190px, 0.92fr) 58px minmax(100px, 0.46fr);
-    gap: 10px;
+    grid-template-columns: 300px 44px 96px;
+    gap: 0;
     transform: translateY(-14px);
-    width: min(560px, 100%);
+    width: min(440px, 100%);
   }
 
   .landing-infrastructure-section .landing-section-copy {
