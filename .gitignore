@@ -1,0 +1,17 @@
+node_modules/
+.env
+.merkl/
+.cache/
+.next/
+client/.next/
+dist/
+target/
+test_snapshots/
+contracts/**/test_snapshots/
+.DS_Store
+*.log
+*.tsbuildinfo
+package-lock.json
+circuits/**/target/
+circuits/**/proofs/
+circuits/**/witness.gz
