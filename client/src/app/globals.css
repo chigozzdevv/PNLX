@@ -2104,6 +2104,7 @@ button:disabled {
   justify-content: center;
   justify-self: start;
   min-height: 390px;
+  transform: translateY(clamp(-42px, -3vw, -24px));
   width: min(760px, 100%);
 }
 
@@ -2422,6 +2423,7 @@ button:disabled {
     min-height: 280px;
     grid-template-columns: minmax(190px, 0.92fr) 58px minmax(100px, 0.46fr);
     gap: 10px;
+    transform: translateY(-14px);
     width: min(560px, 100%);
   }
 
@@ -2557,6 +2559,7 @@ button:disabled {
     gap: 6px;
     max-width: 360px;
     margin-left: 0;
+    transform: none;
   }
 
   .landing-private-candles {
