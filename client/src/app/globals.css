@@ -2098,14 +2098,14 @@ button:disabled {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: minmax(230px, 0.92fr) 64px minmax(126px, 0.46fr);
-  gap: 10px;
+  grid-template-columns: 330px 52px 118px;
+  gap: 0;
   align-items: center;
-  justify-content: center;
+  justify-content: start;
   justify-self: start;
   min-height: 390px;
   transform: translateY(clamp(-42px, -3vw, -24px));
-  width: min(760px, 100%);
+  width: min(540px, 100%);
 }
 
 .landing-private-candles {
@@ -2421,10 +2421,10 @@ button:disabled {
 
   .landing-proof-candle-visual {
     min-height: 280px;
-    grid-template-columns: minmax(190px, 0.92fr) 58px minmax(100px, 0.46fr);
-    gap: 10px;
+    grid-template-columns: 270px 46px 94px;
+    gap: 0;
     transform: translateY(-14px);
-    width: min(560px, 100%);
+    width: min(430px, 100%);
   }
 
   .landing-infrastructure-section .landing-section-copy {
