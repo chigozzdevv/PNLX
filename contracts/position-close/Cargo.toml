@@ -19,7 +19,7 @@ proof-ledger-interface = { path = "../proof-ledger-interface" }
 conditional-order = { path = "../conditional-order" }
 governance = { path = "../governance" }
 market = { path = "../market" }
-mock-oracle = { path = "../mock-oracle" }
+test-oracle = { path = "../test-oracle" }
 oracle-interface = { path = "../oracle-interface" }
 position-state = { path = "../position-state" }
 proof-ledger = { path = "../proof-ledger" }

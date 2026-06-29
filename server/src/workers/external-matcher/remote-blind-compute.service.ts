@@ -4,7 +4,7 @@ import type {
   CommitteeSettlementInput,
   CommitteeSettlementTranscript,
   PrivatePositionOpeningEvent,
-} from "../mpc-node/mpc-node.model";
+} from "../threshold-shares/threshold-shares.model";
 import type { ProofCoordinatorService } from "../proof-coordinator/proof-coordinator.service";
 import type { BlindComputeGateway, RemoteBlindComputeConfig } from "./external-matcher.model";
 

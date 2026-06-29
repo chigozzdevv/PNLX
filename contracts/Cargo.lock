@@ -214,13 +214,13 @@ dependencies = [
  "intent-registry-interface",
  "market",
  "market-interface",
- "mock-oracle",
  "oracle-interface",
  "position-state",
  "position-state-interface",
  "proof-ledger",
  "proof-ledger-interface",
  "soroban-sdk",
+ "test-oracle",
 ]
 
 [[package]]
@@ -312,11 +312,11 @@ dependencies = [
  "governance-interface",
  "market",
  "market-interface",
- "mock-oracle",
  "oracle-interface",
  "proof-ledger",
  "proof-ledger-interface",
  "soroban-sdk",
+ "test-oracle",
 ]
 
 [[package]]
@@ -726,11 +726,11 @@ dependencies = [
  "governance-interface",
  "market",
  "market-interface",
- "mock-oracle",
  "oracle-interface",
  "proof-ledger",
  "proof-ledger-interface",
  "soroban-sdk",
+ "test-oracle",
 ]
 
 [[package]]
@@ -1016,13 +1016,13 @@ dependencies = [
  "governance-interface",
  "market",
  "market-interface",
- "mock-oracle",
  "oracle-interface",
  "position-state",
  "position-state-interface",
  "proof-ledger",
  "proof-ledger-interface",
  "soroban-sdk",
+ "test-oracle",
 ]
 
 [[package]]
@@ -1049,9 +1049,9 @@ dependencies = [
  "governance",
  "governance-interface",
  "market-interface",
- "mock-oracle",
  "oracle-interface",
  "soroban-sdk",
+ "test-oracle",
 ]
 
 [[package]]
@@ -1066,14 +1066,6 @@ name = "memchr"
 version = "2.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
-
-[[package]]
-name = "mock-oracle"
-version = "0.1.0"
-dependencies = [
- "oracle-interface",
- "soroban-sdk",
-]
 
 [[package]]
 name = "num-bigint"
@@ -1177,13 +1169,13 @@ dependencies = [
  "governance-interface",
  "market",
  "market-interface",
- "mock-oracle",
  "oracle-interface",
  "position-state",
  "position-state-interface",
  "proof-ledger",
  "proof-ledger-interface",
  "soroban-sdk",
+ "test-oracle",
 ]
 
 [[package]]
@@ -1837,6 +1829,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "test-oracle"
+version = "0.1.0"
+dependencies = [
+ "oracle-interface",
+ "soroban-sdk",
 ]
 
 [[package]]

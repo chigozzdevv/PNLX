@@ -3,9 +3,9 @@ import { createBlindComputeApp } from "./workers/blind-compute/blind-compute.app
 
 const env = loadEnv();
 const app = createBlindComputeApp({
-  mpcNodeIds: env.mpcNodeIds,
-  mpcShareStoreDir: env.mpcShareStoreDir || undefined,
-  mpcThreshold: env.mpcThreshold,
+  thresholdShareNodeIds: env.thresholdShareNodeIds,
+  thresholdShareStoreDir: env.thresholdShareStoreDir || undefined,
+  thresholdShareThreshold: env.thresholdShareThreshold,
   token: env.matcherComputeToken || undefined,
 });
 

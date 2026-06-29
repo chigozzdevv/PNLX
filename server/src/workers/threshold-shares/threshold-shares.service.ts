@@ -9,12 +9,12 @@ import type {
   CommitteeMatchInput,
   CommitteeSettlementInput,
   CommitteeSettlementTranscript,
-  MpcConfig,
   NodeShareSet,
   RecoveredIntent,
-} from "./mpc-node.model";
+  ThresholdShareConfig,
+} from "./threshold-shares.model";
 
-export class MpcNodeService {
+export class ThresholdShareNodeService {
   readonly nodeId: string;
   private readonly shares = new Map<Hex, IntentShares>();
 
@@ -54,18 +54,18 @@ export class MpcNodeService {
   }
 }
 
-export class MpcCommittee {
-  readonly nodes: MpcNodeService[];
+export class ThresholdShareCommittee {
+  readonly nodes: ThresholdShareNodeService[];
   readonly threshold: number;
   private readonly matcher = new BatchMatcherService();
 
-  constructor(config: MpcConfig) {
+  constructor(config: ThresholdShareConfig) {
     if (config.threshold > config.nodeIds.length) {
       throw new Error("threshold cannot exceed node count");
     }
     this.threshold = config.threshold;
     this.nodes = config.nodeIds.map((nodeId) =>
-      new MpcNodeService(
+      new ThresholdShareNodeService(
         nodeId,
         config.shareStoreDir ? join(config.shareStoreDir, `${nodeId}.json`) : undefined,
       ),
@@ -182,7 +182,7 @@ export class MpcCommittee {
   distribute(shareSets: NodeShareSet[]): void {
     for (const set of shareSets) {
       const node = this.nodes.find((candidate) => candidate.nodeId === set.nodeId);
-      if (!node) throw new Error("unknown mpc node");
+      if (!node) throw new Error("unknown threshold share node");
       for (const shares of set.shares) node.accept(shares);
     }
   }

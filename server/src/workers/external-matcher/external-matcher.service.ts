@@ -11,7 +11,7 @@ import { externalMatcherTranscriptHash } from "../../shared/protocol/external-ma
 import { matcherAttestationMessage } from "../../shared/protocol/matcher-attestation";
 import type { ProtocolStore } from "../../shared/state/store";
 import type { ExternalBatchSettlementTranscript, ExternalMatcherAttestation } from "../executor/executor.model";
-import type { MpcCommittee } from "../mpc-node/mpc-node.service";
+import type { ThresholdShareCommittee } from "../threshold-shares/threshold-shares.service";
 import { ProofCoordinatorService } from "../proof-coordinator/proof-coordinator.service";
 import type {
   BlindComputeGateway,
@@ -24,7 +24,7 @@ import type {
   CommitteeSettlementInput,
   CommitteeSettlementTranscript,
   PrivatePositionOpeningEvent,
-} from "../mpc-node/mpc-node.model";
+} from "../threshold-shares/threshold-shares.model";
 
 export class ExternalMatcherService {
   private readonly accountEventEncryptor?: ExternalMatcherAccountEventEncryptor;
@@ -33,7 +33,7 @@ export class ExternalMatcherService {
 
   constructor(
     private readonly store: ProtocolStore,
-    committee: MpcCommittee,
+    committee: ThresholdShareCommittee,
     private readonly proofs = new ProofCoordinatorService(),
     config: ExternalMatcherConfig = {},
   ) {
@@ -101,7 +101,7 @@ export class ExternalMatcherService {
 }
 
 class LocalThresholdComputeGateway implements BlindComputeGateway {
-  constructor(private readonly committee: MpcCommittee) {}
+  constructor(private readonly committee: ThresholdShareCommittee) {}
 
   createSettlementTranscript(
     input: CommitteeSettlementInput,

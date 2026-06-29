@@ -6,7 +6,7 @@ import { assertProtocolAdmin } from "../../shared/http/auth-context";
 import {
   assertOracleAuthorityReady,
   assertOracleReadyForOnchain,
-} from "../../shared/protocol/oracle-readiness";
+} from "../../shared/protocol/oracle";
 import type { ExecutorService } from "../../workers/executor/executor.service";
 import type { OnchainMarketConfig, OraclePriceRelayInput } from "../../workers/onchain/onchain.model";
 import type { OnchainRelayService } from "../../workers/onchain/onchain.service";

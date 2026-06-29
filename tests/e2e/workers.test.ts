@@ -727,8 +727,8 @@ describe("support workers", () => {
     }
 
     const matcherApp = createExternalMatcherApp({
-      mpcNodeIds: ["node-a", "node-b", "node-c"],
-      mpcThreshold: 2,
+      thresholdShareNodeIds: ["node-a", "node-b", "node-c"],
+      thresholdShareThreshold: 2,
       storePath,
       token: "matcher-token",
     });

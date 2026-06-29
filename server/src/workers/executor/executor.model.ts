@@ -8,12 +8,12 @@ import type {
   ResidualOrderRecord,
   TradeIntent,
 } from "@merkl/protocol-types";
-import type { NodeShareSet } from "../mpc-node/mpc-node.model";
+import type { NodeShareSet } from "../threshold-shares/threshold-shares.model";
 
 export interface ExecutorConfig {
   matchingBackend?: "threshold-recovery" | "external-blind";
-  mpcNodes: string[];
-  mpcShareStoreDir?: string;
+  thresholdShareNodes: string[];
+  thresholdShareStoreDir?: string;
   privateMatchingRequired?: boolean;
   threshold: number;
 }

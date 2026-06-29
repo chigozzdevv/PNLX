@@ -9,7 +9,7 @@ import type {
   TradeIntent,
 } from "@merkl/protocol-types";
 
-export interface MpcConfig {
+export interface ThresholdShareConfig {
   nodeIds: string[];
   shareStoreDir?: string;
   threshold: number;

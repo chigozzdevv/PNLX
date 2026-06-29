@@ -12,7 +12,7 @@ import { createExecutor } from "../../server/src/workers/executor/executor.worke
 import type { ExecutorService } from "../../server/src/workers/executor/executor.service";
 import { createIndexer } from "../../server/src/workers/indexer/indexer.worker";
 import type { SettlementProofInput } from "../../server/src/workers/proof-coordinator/proof-coordinator.model";
-import type { RecoveredIntent } from "../../server/src/workers/mpc-node/mpc-node.model";
+import type { RecoveredIntent } from "../../server/src/workers/threshold-shares/threshold-shares.model";
 
 describe("private orderbook residuals", () => {
   test("matches crossed private orders by price-time priority at maker price", () => {

@@ -1,5 +1,5 @@
 import type { Fill, Hex, MarketConfig, OrderLifecycleUpdate } from "@merkl/protocol-types";
-import type { RecoveredIntent } from "../mpc-node/mpc-node.model";
+import type { RecoveredIntent } from "../threshold-shares/threshold-shares.model";
 
 export interface MatchInput {
   batchId: string;

@@ -19,7 +19,7 @@ soroban-sdk = { workspace = true }
 governance = { path = "../governance" }
 intent-registry = { path = "../intent-registry" }
 market = { path = "../market" }
-mock-oracle = { path = "../mock-oracle" }
+test-oracle = { path = "../test-oracle" }
 oracle-interface = { path = "../oracle-interface" }
 position-state = { path = "../position-state" }
 proof-ledger = { path = "../proof-ledger" }

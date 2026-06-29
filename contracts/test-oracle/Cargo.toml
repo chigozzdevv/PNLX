@@ -1,11 +1,11 @@
 [package]
-name = "mock-oracle"
+name = "test-oracle"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
-name = "mock_oracle"
+name = "test_oracle"
 
 [dependencies]
 oracle-interface = { path = "../oracle-interface" }

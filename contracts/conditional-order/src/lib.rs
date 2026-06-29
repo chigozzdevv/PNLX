@@ -299,7 +299,7 @@ mod tests {
     use super::{ConditionalOrder, ConditionalOrderClient, ProofMeta};
     use governance::{Governance, GovernanceClient};
     use market::{Market, MarketClient};
-    use mock_oracle::{MockOracle, MockOracleClient};
+    use test_oracle::{TestOracle, TestOracleClient};
     use oracle_interface::OracleAsset;
     use proof_ledger::{ProofLedger, ProofLedgerClient};
     use soroban_sdk::{
@@ -515,8 +515,8 @@ mod tests {
 
     fn setup_market(env: &Env, market_id: &BytesN<32>) -> Address {
         env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
-        let oracle_id = env.register(MockOracle, ());
-        let oracle = MockOracleClient::new(env, &oracle_id);
+        let oracle_id = env.register(TestOracle, ());
+        let oracle = TestOracleClient::new(env, &oracle_id);
         oracle.init(&8);
         oracle.set_price(
             &OracleAsset::Other(Symbol::new(env, "BTC")),

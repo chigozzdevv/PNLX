@@ -57,7 +57,7 @@ server/
       batch-matcher/
       executor/
       indexer/
-      mpc-node/
+      threshold-shares/
       proof-coordinator/
       prover/
       relayer/
@@ -98,8 +98,8 @@ sets a store path.
 Matching backend modes:
 
 - `MATCHING_BACKEND=threshold-recovery` is a local/dev backend. It validates
-  secret shares and creates settlements, but it recovers enough shares inside
-  the server process, so it is not executor-blind.
+  threshold shares and creates settlements, but it recovers enough shares
+  inside the server process, so it is not executor-blind.
 - `MATCHING_BACKEND=external-blind` is the production path. The Merkl API server
   refuses to recover shares for `/batches/settle`; an external MPC/FHE matcher
   posts a proven transcript to `POST /batches/settle-external`.
@@ -231,7 +231,7 @@ contracts/
   intent-registry-interface/
   market-interface/
   oracle-interface/
-  mock-oracle/
+  test-oracle/
 ```
 
 Responsibilities:
@@ -262,7 +262,8 @@ Responsibilities:
   `proof-verifier`.
 - `governance-interface`, `proof-ledger-interface`, `market-interface`, and
   `oracle-interface`: narrow client interfaces used by contracts.
-- `mock-oracle`: test-only SEP-40 oracle used to prove freshness and TWAP logic.
+- `test-oracle`: test-only SEP-40 oracle fixture used to prove freshness and
+  TWAP logic. It is not deployed by the normal manifest.
 
 Proof-consuming contracts are initialized with the governance address, the
 proof-ledger address, and the circuit key they accept. `batch-settlement` is
@@ -371,15 +372,14 @@ Oracle environment:
 - `ORACLE_PUBLISHER_ADDRESSES`: comma-separated Stellar addresses matching
   `ORACLE_PUBLISHER_SOURCES`; these are passed as publisher identities to the
   price-oracle adapter. Required when sources are aliases instead of addresses.
-- `ORACLE_BEAM_FEE_TOKEN`: XRF token contract address used by the market
-  contract to authorize ReflectorBeam invocation fees.
-- `ORACLE_ASSET_TYPE`: `other` for symbols such as `BTC`, or `stellar` for a
-  Stellar asset contract address.
-- `ORACLE_ASSET_SYMBOL` / `ORACLE_ASSET_ADDRESS`: selected oracle asset.
 - `ORACLE_PRICE_SOURCE`: `hermes` fetches Pyth Hermes and optionally publishes
   that value into the configured Soroban oracle adapter. `onchain-market` reads
   the deployed Soroban `market.mark_price(market_id)` as the server-side
   authority for market refreshes.
+- `ORACLE_BEAM_FEE_TOKEN`, `ORACLE_ASSET_TYPE`, `ORACLE_ASSET_SYMBOL`, and
+  `ORACLE_ASSET_ADDRESS` are advanced overrides for ReflectorBeam or custom
+  non-default oracle assets. The default multi-market setup reads per-market
+  asset metadata from `server/src/config/assets.ts`.
 - `ORACLE_PRICE_MAX_AGE_SECONDS`: max ledger-time staleness accepted on-chain.
 - `ORACLE_TWAP_RECORDS`: `1` for spot `lastprice`, greater than `1` for TWAP
   via `prices(asset, records)`.
@@ -468,8 +468,8 @@ Do not put Soroban contracts or Noir circuits in `packages/`.
 user creates shielded margin note
 -> user deposits commitment into shielded pool
 -> user creates private trade intent
--> intent fields are secret-shared to MPC nodes
--> external blind matcher computes a private batch
+-> intent fields are secret-shared for external blind compute
+-> external matcher delegates private batch computation to the configured MPC/FHE/blind provider
 -> matcher/prover binds settlement to circuit and public inputs
 -> proof digest is recorded in the proof ledger
 -> market reads a fresh SEP-40/Reflector price on-chain

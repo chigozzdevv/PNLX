@@ -24,7 +24,7 @@ import { createApp } from "../../server/src/app";
 import { getSupportedPerpAsset, type SupportedPerpAsset } from "../../server/src/config/assets";
 import { loadEnv } from "../../server/src/config/env";
 import { FileProtocolStore } from "../../server/src/shared/state/persistent-store";
-import { MpcCommittee } from "../../server/src/workers/mpc-node/mpc-node.service";
+import { ThresholdShareCommittee } from "../../server/src/workers/threshold-shares/threshold-shares.service";
 import { ProverService } from "../../server/src/workers/prover/prover.service";
 
 interface Deployment {
@@ -72,7 +72,7 @@ configureSmokeEnvironment();
 const env = loadEnv();
 const app = createApp();
 const clientProver = new ProverService();
-const clientCommittee = new MpcCommittee({
+const clientCommittee = new ThresholdShareCommittee({
   nodeIds: ["node-a", "node-b", "node-c"],
   threshold: 2,
 });

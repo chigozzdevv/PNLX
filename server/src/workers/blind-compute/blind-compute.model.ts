@@ -1,9 +1,9 @@
-import type { CommitteeSettlementInput } from "../mpc-node/mpc-node.model";
+import type { CommitteeSettlementInput } from "../threshold-shares/threshold-shares.model";
 
 export interface BlindComputeConfig {
-  mpcNodeIds: string[];
-  mpcShareStoreDir?: string;
-  mpcThreshold: number;
+  thresholdShareNodeIds: string[];
+  thresholdShareStoreDir?: string;
+  thresholdShareThreshold: number;
 }
 
 export interface BlindComputeSettlementRequest extends CommitteeSettlementInput {}

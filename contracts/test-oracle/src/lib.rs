@@ -12,10 +12,10 @@ pub enum DataKey {
 }
 
 #[contract]
-pub struct MockOracle;
+pub struct TestOracle;
 
 #[contractimpl]
-impl MockOracle {
+impl TestOracle {
     pub fn init(env: Env, decimals: u32) {
         env.storage()
             .persistent()

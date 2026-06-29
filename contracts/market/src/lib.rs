@@ -464,7 +464,7 @@ mod tests {
 
     use super::{Market, MarketClient, MarketConfig};
     use governance::{Governance, GovernanceClient};
-    use mock_oracle::{MockOracle, MockOracleClient};
+    use test_oracle::{TestOracle, TestOracleClient};
     use oracle_interface::{OracleAsset, PriceData};
     use soroban_sdk::{
         symbol_short,
@@ -512,8 +512,8 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
         env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
-        let oracle = env.register(MockOracle, ());
-        let oracle_client = MockOracleClient::new(&env, &oracle);
+        let oracle = env.register(TestOracle, ());
+        let oracle_client = TestOracleClient::new(&env, &oracle);
         let asset = OracleAsset::Other(Symbol::new(&env, "BTC"));
         oracle_client.init(&8);
         oracle_client.set_prices(
@@ -744,8 +744,8 @@ mod tests {
     }
 
     fn setup_oracle(env: &Env, price: i128, timestamp: u64) -> Address {
-        let oracle = env.register(MockOracle, ());
-        let client = MockOracleClient::new(env, &oracle);
+        let oracle = env.register(TestOracle, ());
+        let client = TestOracleClient::new(env, &oracle);
         client.init(&8);
         client.set_price(
             &OracleAsset::Other(Symbol::new(env, "BTC")),

@@ -1,5 +1,5 @@
 import { json } from "../../shared/http/json";
-import { oracleReadinessIssues } from "../../shared/protocol/oracle-readiness";
+import { oracleReadinessIssues } from "../../shared/protocol/oracle";
 import type { ServerEnv } from "../../config/env";
 
 export class HealthController {
@@ -77,9 +77,9 @@ export class HealthController {
           configured: Boolean(this.env.matcherComputeUrl),
           url: this.env.matcherComputeUrl ? redactUrl(this.env.matcherComputeUrl) : "",
         },
-        mpc: {
-          nodeIds: this.env.mpcNodeIds,
-          threshold: this.env.mpcThreshold,
+        thresholdShares: {
+          nodeIds: this.env.thresholdShareNodeIds,
+          threshold: this.env.thresholdShareThreshold,
         },
         matcherCommittee: {
           addressCount: this.env.matcherCommitteeAddresses.length,
@@ -192,11 +192,11 @@ function matchingReadinessIssues(env: ServerEnv): string[] {
   ) {
     issues.push("MATCHER_COMMITTEE_ADDRESSES must include at least MATCHER_COMMITTEE_THRESHOLD signers");
   }
-  if (env.mpcThreshold < 2) {
-    issues.push("MPC_THRESHOLD must be at least 2");
+  if (env.thresholdShareThreshold < 2) {
+    issues.push("THRESHOLD_SHARE_THRESHOLD must be at least 2");
   }
-  if (env.mpcNodeIds.length < env.mpcThreshold) {
-    issues.push("MPC_NODE_IDS must include at least MPC_THRESHOLD nodes");
+  if (env.thresholdShareNodeIds.length < env.thresholdShareThreshold) {
+    issues.push("THRESHOLD_SHARE_NODE_IDS must include at least THRESHOLD_SHARE_THRESHOLD nodes");
   }
   return issues;
 }

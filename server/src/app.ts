@@ -54,9 +54,9 @@ export function createAppRuntime(): AppRuntime {
   });
   const executor = createExecutor({
     matchingBackend: env.matchingBackend,
-    mpcNodeIds: env.mpcNodeIds,
-    mpcShareStoreDir: env.mpcShareStoreDir || undefined,
-    mpcThreshold: env.mpcThreshold,
+    thresholdShareNodeIds: env.thresholdShareNodeIds,
+    thresholdShareStoreDir: env.thresholdShareStoreDir || undefined,
+    thresholdShareThreshold: env.thresholdShareThreshold,
     privateMatchingRequired: env.privateMatchingRequired,
     storePath: env.protocolStorePath || undefined,
   });

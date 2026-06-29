@@ -15,5 +15,5 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 governance = { path = "../governance" }
-mock-oracle = { path = "../mock-oracle" }
+test-oracle = { path = "../test-oracle" }
 soroban-sdk = { workspace = true, features = ["testutils"] }

@@ -20,16 +20,22 @@ import { createApp, createAppRuntime } from "../../server/src/app";
 import { encodeStellarPublicKey } from "../../server/src/features/auth/auth.service";
 import { createBlindComputeApp } from "../../server/src/workers/blind-compute/blind-compute.app";
 import { createExecutor } from "../../server/src/workers/executor/executor.worker";
-import { MpcCommittee } from "../../server/src/workers/mpc-node/mpc-node.service";
+import { ThresholdShareCommittee } from "../../server/src/workers/threshold-shares/threshold-shares.service";
 import { ProverService } from "../../server/src/workers/prover/prover.service";
 
 process.env.ASSET_CUSTODY_REQUIRED = "false";
 process.env.AUTH_REQUIRED = "false";
 process.env.COLLATERAL_TOKEN_CONTRACT = "";
 process.env.FUNDING_ENGINE_ENABLED = "false";
+process.env.MATCHER_COMMITTEE_REQUIRED = "false";
+process.env.MATCHER_COMPUTE_BACKEND = "local-threshold";
+process.env.MATCHER_COMPUTE_URL = "";
+process.env.MATCHING_BACKEND = "threshold-recovery";
+process.env.PRIVATE_MATCHING_REQUIRED = "false";
 process.env.SERVER_WITNESS_ROUTES_ENABLED = "true";
 process.env.STELLAR_ONCHAIN_RELAY = "false";
 process.env.STELLAR_RELAYER_MODE = "local";
+process.env.THRESHOLD_SHARE_STORE_DIR = "";
 
 type TestKeyPair = ReturnType<typeof generateKeyPairSync>;
 
@@ -167,7 +173,7 @@ async function proveAndSubmitIntentRequest(
 
 function buildSharedIntent(
   prover: ProverService,
-  committee: MpcCommittee,
+  committee: ThresholdShareCommittee,
   input: {
     batchId: string;
     limitPrice: bigint;
@@ -318,7 +324,7 @@ async function createCloseableLongPositionFixture(
   clientProver: ProverService,
   suffix: string,
 ) {
-  const clientCommittee = new MpcCommittee({
+  const clientCommittee = new ThresholdShareCommittee({
     nodeIds: ["node-a", "node-b", "node-c"],
     threshold: 2,
   });
@@ -672,11 +678,11 @@ describe("server api", () => {
     }
   });
 
-  test("serves remote blind compute settlement transcripts from persisted MPC shares", async () => {
+  test("serves remote blind compute settlement transcripts from persisted threshold shares", async () => {
     const shareDir = mkdtempSync(join(tmpdir(), "merkl-blind-compute-shares-"));
-    const executor = createExecutor({ mpcShareStoreDir: shareDir });
+    const executor = createExecutor({ thresholdShareStoreDir: shareDir });
     const clientProver = new ProverService();
-    const clientCommittee = new MpcCommittee({
+    const clientCommittee = new ThresholdShareCommittee({
       nodeIds: ["node-a", "node-b", "node-c"],
       threshold: 2,
     });
@@ -741,9 +747,9 @@ describe("server api", () => {
     executor.submitSharedIntent(short);
 
     const compute = createBlindComputeApp({
-      mpcNodeIds: ["node-a", "node-b", "node-c"],
-      mpcShareStoreDir: shareDir,
-      mpcThreshold: 2,
+      thresholdShareNodeIds: ["node-a", "node-b", "node-c"],
+      thresholdShareStoreDir: shareDir,
+      thresholdShareThreshold: 2,
       token: "compute-secret",
     });
     const response = await compute.handle(
@@ -2154,7 +2160,7 @@ describe("server api", () => {
     );
 
     const clientProver = new ProverService();
-    const clientCommittee = new MpcCommittee({
+    const clientCommittee = new ThresholdShareCommittee({
       nodeIds: ["node-a", "node-b", "node-c"],
       threshold: 2,
     });

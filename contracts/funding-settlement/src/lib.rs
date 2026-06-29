@@ -299,7 +299,7 @@ mod tests {
     use super::{FundingSettlement, FundingSettlementClient, ProofMeta};
     use governance::{Governance, GovernanceClient};
     use market::{Market, MarketClient};
-    use mock_oracle::{MockOracle, MockOracleClient};
+    use test_oracle::{TestOracle, TestOracleClient};
     use oracle_interface::OracleAsset;
     use proof_ledger::{ProofLedger, ProofLedgerClient};
     use soroban_sdk::{
@@ -508,8 +508,8 @@ mod tests {
         market_id: &BytesN<32>,
         funding_index: i128,
     ) -> Address {
-        let oracle = env.register(MockOracle, ());
-        let oracle_client = MockOracleClient::new(env, &oracle);
+        let oracle = env.register(TestOracle, ());
+        let oracle_client = TestOracleClient::new(env, &oracle);
         oracle_client.init(&8);
         oracle_client.set_price(
             &OracleAsset::Other(Symbol::new(env, "BTC")),

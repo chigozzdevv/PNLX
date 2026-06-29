@@ -8,7 +8,7 @@ import type {
   TradeIntent,
 } from "@merkl/protocol-types";
 import type { CreateIntentInput, CreateSharedIntentInput, ProveAndSubmitIntentInput } from "./intents.model";
-import type { NodeShareSet } from "../../workers/mpc-node/mpc-node.model";
+import type { NodeShareSet } from "../../workers/threshold-shares/threshold-shares.model";
 
 type IntentBody = Record<string, unknown>;
 

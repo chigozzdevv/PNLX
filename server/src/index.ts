@@ -8,7 +8,7 @@ export * from "./workers/executor/executor.index";
 export * from "./workers/external-matcher/external-matcher.index";
 export * from "./workers/funding-engine/funding-engine.index";
 export * from "./workers/indexer/indexer.index";
-export * from "./workers/mpc-node/mpc-node.index";
+export * from "./workers/threshold-shares/threshold-shares.index";
 export * from "./workers/onchain/onchain.index";
 export * from "./workers/prover/prover.index";
 export * from "./workers/proof-coordinator/proof-coordinator.index";

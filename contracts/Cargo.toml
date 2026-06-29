@@ -14,7 +14,7 @@ members = [
   "market-interface",
   "oracle-interface",
   "price-oracle",
-  "mock-oracle",
+  "test-oracle",
   "liquidation",
   "position-close",
   "disclosure-verifier",

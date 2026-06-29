@@ -9,7 +9,7 @@ import { hasInitialMargin, hasMaxLeverage } from "@merkl/market-math";
 import type { Fill, Hex, MarginNote, PositionNote } from "@merkl/protocol-types";
 import type { MatchExecution, MatchInput, MatchResult } from "./batch-matcher.model";
 import { matchTranscriptDigest } from "./match-transcript";
-import type { RecoveredIntent } from "../mpc-node/mpc-node.model";
+import type { RecoveredIntent } from "../threshold-shares/threshold-shares.model";
 
 interface BookOrder {
   allocatedMargin: bigint;

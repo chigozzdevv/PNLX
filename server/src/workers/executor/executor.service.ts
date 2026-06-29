@@ -21,7 +21,7 @@ import type {
 } from "@merkl/protocol-types";
 import type { ProofArtifact } from "@merkl/proof-system";
 import { ProtocolStore } from "../../shared/state/store";
-import { MpcCommittee } from "../mpc-node/mpc-node.service";
+import { ThresholdShareCommittee } from "../threshold-shares/threshold-shares.service";
 import { ProofCoordinatorService } from "../proof-coordinator/proof-coordinator.service";
 import type {
   ExecutorConfig,
@@ -36,7 +36,7 @@ import type {
 
 export class ExecutorService implements MerklExecutor {
   readonly store: ProtocolStore;
-  readonly committee: MpcCommittee;
+  readonly committee: ThresholdShareCommittee;
   private readonly matchingBackend: NonNullable<ExecutorConfig["matchingBackend"]>;
   private readonly proofs = new ProofCoordinatorService();
   private readonly pendingPositionOpenings = new Map<Hex, PositionLifecycleRecord[]>();
@@ -48,9 +48,9 @@ export class ExecutorService implements MerklExecutor {
       throw new Error("private matching requires MATCHING_BACKEND=external-blind");
     }
     this.store = store;
-    this.committee = new MpcCommittee({
-      nodeIds: config.mpcNodes,
-      shareStoreDir: config.mpcShareStoreDir,
+    this.committee = new ThresholdShareCommittee({
+      nodeIds: config.thresholdShareNodes,
+      shareStoreDir: config.thresholdShareStoreDir,
       threshold: config.threshold,
     });
   }

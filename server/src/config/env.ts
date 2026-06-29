@@ -34,9 +34,9 @@ export interface ServerEnv {
   matcherCommitteeRequired: boolean;
   matcherCommitteeThreshold: number;
   marketId: string;
-  mpcNodeIds: string[];
-  mpcShareStoreDir: string;
-  mpcThreshold: number;
+  thresholdShareNodeIds: string[];
+  thresholdShareStoreDir: string;
+  thresholdShareThreshold: number;
   port: number;
   nodeEnv: string;
   oracleAssetAddress: string;
@@ -79,7 +79,7 @@ export interface ServerEnv {
 }
 
 export function loadEnv(): ServerEnv {
-  loadEnvFile();
+  if (process.env.NODE_ENV !== "test") loadEnvFile();
 
   const nodeEnv = process.env.NODE_ENV ?? "development";
   const runtimeDir = value("MERKL_RUNTIME_DIR", ".merkl");
@@ -133,9 +133,9 @@ export function loadEnv(): ServerEnv {
     ),
     matcherCommitteeThreshold: Number(value("MATCHER_COMMITTEE_THRESHOLD", "2")),
     marketId: value("MERKL_MARKET_ID", "btc-usd-perp"),
-    mpcNodeIds: listValue("MPC_NODE_IDS", ["node-a", "node-b", "node-c"], { uppercase: false }),
-    mpcShareStoreDir: value("MPC_SHARE_STORE_DIR", persistentByDefault ? join(runtimeDir, "mpc-shares") : ""),
-    mpcThreshold: Number(value("MPC_THRESHOLD", "2")),
+    thresholdShareNodeIds: listValue("THRESHOLD_SHARE_NODE_IDS", ["node-a", "node-b", "node-c"], { uppercase: false }),
+    thresholdShareStoreDir: value("THRESHOLD_SHARE_STORE_DIR", persistentByDefault ? join(runtimeDir, "threshold-shares") : ""),
+    thresholdShareThreshold: Number(value("THRESHOLD_SHARE_THRESHOLD", "2")),
     port: Number(process.env.PORT ?? 4000),
     nodeEnv,
     oracleAssetAddress: value("ORACLE_ASSET_ADDRESS", ""),

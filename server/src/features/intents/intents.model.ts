@@ -1,5 +1,5 @@
 import type { IntentRecord, IntentValidityRecord, IntentValidityWitness, TradeIntent } from "@merkl/protocol-types";
-import type { NodeShareSet } from "../../workers/mpc-node/mpc-node.model";
+import type { NodeShareSet } from "../../workers/threshold-shares/threshold-shares.model";
 
 export interface CreateIntentInput {
   intent: TradeIntent;

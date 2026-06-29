@@ -6,9 +6,9 @@ import type { Hex, IntentValidityRecord, MarketConfig, ProofMeta, TradeIntent } 
 import { createMarginNote } from "@merkl/sdk";
 import { readFileSync } from "node:fs";
 import { BatchMatcherService } from "../../server/src/workers/batch-matcher/batch-matcher.service";
-import type { RecoveredIntent } from "../../server/src/workers/mpc-node/mpc-node.model";
+import type { RecoveredIntent } from "../../server/src/workers/threshold-shares/threshold-shares.model";
 import { ProofCoordinatorService } from "../../server/src/workers/proof-coordinator/proof-coordinator.service";
-import { MpcCommittee } from "../../server/src/workers/mpc-node/mpc-node.service";
+import { ThresholdShareCommittee } from "../../server/src/workers/threshold-shares/threshold-shares.service";
 import { createExecutor } from "../../server/src/workers/executor/executor.worker";
 
 describe("private batch settlement", () => {
@@ -131,7 +131,7 @@ describe("private batch settlement", () => {
   });
 
   test("does not match plaintext residual fallback without threshold shares", () => {
-    const committee = new MpcCommittee({
+    const committee = new ThresholdShareCommittee({
       nodeIds: ["node-a", "node-b", "node-c"],
       threshold: 2,
     });

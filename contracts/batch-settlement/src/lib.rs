@@ -372,7 +372,7 @@ mod tests {
     use governance::{Governance, GovernanceClient};
     use intent_registry::{IntentRegistry, IntentRegistryClient};
     use market::{Market, MarketClient};
-    use mock_oracle::{MockOracle, MockOracleClient};
+    use test_oracle::{TestOracle, TestOracleClient};
     use oracle_interface::OracleAsset;
     use position_state::{PositionState, PositionStateClient};
     use proof_ledger::{ProofLedger, ProofLedgerClient};
@@ -993,8 +993,8 @@ mod tests {
         active: bool,
     ) -> Address {
         env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
-        let oracle_id = env.register(MockOracle, ());
-        let oracle = MockOracleClient::new(env, &oracle_id);
+        let oracle_id = env.register(TestOracle, ());
+        let oracle = TestOracleClient::new(env, &oracle_id);
         oracle.init(&8);
         oracle.set_price(
             &OracleAsset::Other(Symbol::new(env, "BTC")),
@@ -1031,7 +1031,7 @@ mod tests {
     ) {
         let market = MarketClient::new(env, market_contract);
         let config = market.get(market_id);
-        let oracle = MockOracleClient::new(env, &config.oracle_contract);
+        let oracle = TestOracleClient::new(env, &config.oracle_contract);
         oracle.set_price(
             &OracleAsset::Other(Symbol::new(env, "BTC")),
             &price,

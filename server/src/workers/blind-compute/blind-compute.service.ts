@@ -1,17 +1,17 @@
-import type { CommitteeSettlementTranscript } from "../mpc-node/mpc-node.model";
-import { MpcCommittee } from "../mpc-node/mpc-node.service";
+import type { CommitteeSettlementTranscript } from "../threshold-shares/threshold-shares.model";
+import { ThresholdShareCommittee } from "../threshold-shares/threshold-shares.service";
 import { ProofCoordinatorService } from "../proof-coordinator/proof-coordinator.service";
 import type { BlindComputeConfig, BlindComputeSettlementRequest } from "./blind-compute.model";
 
 export class BlindComputeService {
-  private readonly committee: MpcCommittee;
+  private readonly committee: ThresholdShareCommittee;
   private readonly proofs = new ProofCoordinatorService();
 
   constructor(config: BlindComputeConfig) {
-    this.committee = new MpcCommittee({
-      nodeIds: config.mpcNodeIds,
-      shareStoreDir: config.mpcShareStoreDir,
-      threshold: config.mpcThreshold,
+    this.committee = new ThresholdShareCommittee({
+      nodeIds: config.thresholdShareNodeIds,
+      shareStoreDir: config.thresholdShareStoreDir,
+      threshold: config.thresholdShareThreshold,
     });
   }
 
