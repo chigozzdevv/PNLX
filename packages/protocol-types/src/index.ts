@@ -210,6 +210,23 @@ export interface BatchExecutionRunRecord {
   status: BatchExecutionRunStatus;
 }
 
+export type LiquidationAutomationJobStatus = "pending" | "executed" | "failed" | "stale";
+
+export interface LiquidationAutomationJobRecord {
+  createdAt: number;
+  executedAt?: number;
+  failedAt?: number;
+  jobId: Hex;
+  liquidation: LiquidationRecord;
+  marketId: string;
+  positionCommitment: Hex;
+  positionNullifier: Hex;
+  reason?: string;
+  rewardCommitment: Hex;
+  status: LiquidationAutomationJobStatus;
+  updatedAt: number;
+}
+
 export interface Fill {
   intentCommitment: Hex;
   marketId: string;

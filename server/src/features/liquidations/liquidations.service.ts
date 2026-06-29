@@ -6,6 +6,7 @@ import type { OnchainRelayService } from "../../workers/onchain/onchain.service"
 import type { ProverService } from "../../workers/prover/prover.service";
 import { assertFundingPayment } from "../../shared/protocol/funding";
 import { assertSubmittedRelay } from "../../shared/protocol/onchain-submission";
+import { createLiquidationAccountEvent } from "../../shared/protocol/account-event-outcomes";
 import { PRICE_SCALE, RATE_SCALE } from "@merkl/market-math";
 import type { MarketConfig } from "@merkl/protocol-types";
 import type {
@@ -35,10 +36,12 @@ export class LiquidationsService {
       input.fundingIndex,
     );
     const record = this.prover.proveLiquidation(input);
+    const accountEvent = this.accountEventFor(record);
     const relay = this.onchain?.liquidate(record);
     this.assertSubmittedSettlementRelay(relay);
     this.executor.store.recordProof(record.proof);
     this.executor.store.addLiquidation(record);
+    if (accountEvent) this.executor.store.addAccountEvent(accountEvent);
     return record;
   }
 
@@ -61,10 +64,12 @@ export class LiquidationsService {
         publicField(input.rewardCommitment),
       ]),
     );
+    const accountEvent = this.accountEventFor(input);
     const relay = this.onchain?.liquidate(input);
     this.assertSubmittedSettlementRelay(relay);
     this.executor.store.recordProof(input.proof);
     this.executor.store.addLiquidation(input);
+    if (accountEvent) this.executor.store.addAccountEvent(accountEvent);
     return input;
   }
 
@@ -92,6 +97,14 @@ export class LiquidationsService {
     if (input.positionRoot !== this.executor.store.positionMembershipRoot()) {
       throw new Error("position root is not current");
     }
+  }
+
+  private accountEventFor(record: CreateLiquidationResult) {
+    const position = this.executor.store.positionFor(record.positionCommitment, record.positionNullifier);
+    if (!position) return undefined;
+    const publicKey = this.executor.store.accountEncryptionKey(position.ownerCommitment)?.publicKey;
+    if (!publicKey) return undefined;
+    return createLiquidationAccountEvent(record, position, publicKey);
   }
 }
 

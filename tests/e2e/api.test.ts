@@ -18,6 +18,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp, createAppRuntime } from "../../server/src/app";
 import { encodeStellarPublicKey } from "../../server/src/features/auth/auth.service";
+import { createBlindComputeApp } from "../../server/src/workers/blind-compute/blind-compute.app";
+import { createExecutor } from "../../server/src/workers/executor/executor.worker";
 import { MpcCommittee } from "../../server/src/workers/mpc-node/mpc-node.service";
 import { ProverService } from "../../server/src/workers/prover/prover.service";
 
@@ -668,6 +670,105 @@ describe("server api", () => {
       restoreEnv("MATCHING_BACKEND", previousBackend);
       restoreEnv("EXTERNAL_MATCHER_URL", previousUrl);
     }
+  });
+
+  test("serves remote blind compute settlement transcripts from persisted MPC shares", async () => {
+    const shareDir = mkdtempSync(join(tmpdir(), "merkl-blind-compute-shares-"));
+    const executor = createExecutor({ mpcShareStoreDir: shareDir });
+    const clientProver = new ProverService();
+    const clientCommittee = new MpcCommittee({
+      nodeIds: ["node-a", "node-b", "node-c"],
+      threshold: 2,
+    });
+    const market = {
+      marketId: "btc-usd-perp-blind-compute",
+      oraclePrice: 50_000n * PRICE_SCALE,
+      maxLeverage: 5n,
+      initialMarginRate: 200_000n,
+      maintenanceMarginRate: 100_000n,
+      fundingIndex: 0n,
+    };
+    executor.addMarket(market);
+
+    const longNote = createCircuitMarginNote({
+      assetId: "usdc",
+      amount: 12_000n,
+      owner: "blind-compute-long",
+      spendSecret: "blind-compute-long-spend",
+      rho: "blind-compute-long-rho",
+      blinding: "blind-compute-long-blind",
+    });
+    const shortNote = createCircuitMarginNote({
+      assetId: "usdc",
+      amount: 12_000n,
+      owner: "blind-compute-short",
+      spendSecret: "blind-compute-short-spend",
+      rho: "blind-compute-short-rho",
+      blinding: "blind-compute-short-blind",
+    });
+    const leaves = [longNote.commitment as Hex, shortNote.commitment as Hex];
+    for (const commitment of leaves) executor.deposit(commitment);
+
+    const long = buildSharedIntent(clientProver, clientCommittee, {
+      batchId: "blind-compute-batch",
+      limitPrice: 51_000n * PRICE_SCALE,
+      margin: 12_000n,
+      marketId: market.marketId,
+      membershipProof: fieldMerkleProof(leaves, longNote.commitment as Hex),
+      nonce: "blind-compute-long-intent",
+      note: longNote,
+      owner: "blind-compute-long",
+      salt: "blind-compute-long-salt",
+      side: "long",
+      size: 1n,
+    });
+    const short = buildSharedIntent(clientProver, clientCommittee, {
+      batchId: "blind-compute-batch",
+      limitPrice: 49_000n * PRICE_SCALE,
+      margin: 12_000n,
+      marketId: market.marketId,
+      membershipProof: fieldMerkleProof(leaves, shortNote.commitment as Hex),
+      nonce: "blind-compute-short-intent",
+      note: shortNote,
+      owner: "blind-compute-short",
+      salt: "blind-compute-short-salt",
+      side: "short",
+      size: 1n,
+    });
+    executor.store.recordProof(long.validity.proof);
+    executor.store.recordProof(short.validity.proof);
+    executor.submitSharedIntent(long);
+    executor.submitSharedIntent(short);
+
+    const compute = createBlindComputeApp({
+      mpcNodeIds: ["node-a", "node-b", "node-c"],
+      mpcShareStoreDir: shareDir,
+      mpcThreshold: 2,
+      token: "compute-secret",
+    });
+    const response = await compute.handle(
+      new Request("http://compute.local/compute/settlement", {
+        method: "POST",
+        body: body({
+          batchId: "blind-compute-batch",
+          market,
+          oldRoot: executor.store.positionMembershipRoot(),
+          positionCommitments: [],
+          records: [long.record, short.record],
+          residuals: [],
+        }),
+        headers: {
+          authorization: "Bearer compute-secret",
+          "content-type": "application/json",
+        },
+      }),
+    );
+    expect(response.status).toBe(201);
+    const transcript = (await response.json()) as Record<string, Record<string, unknown>>;
+    expect(transcript.settlement.fillCount).toBe(2);
+    expect(transcript.settlement.proof).toMatchObject({ circuitId: "batch-match" });
+    expect(transcript.positionOpenings as unknown[]).toHaveLength(2);
+    expect(JSON.stringify(transcript)).not.toContain("blind-compute-long-spend");
   });
 
   test("requires on-chain market oracle authority when production oracle mode is enabled", async () => {
@@ -2300,6 +2401,18 @@ describe("server api", () => {
       fee: 10n,
     });
     const owner = ownerCommitment(`${suffix}-long-owner`);
+    const accountKeyResponse = await app.handle(
+      new Request("http://merkl.local/account-keys", {
+        method: "POST",
+        body: body({
+          algorithm: "ecdh-p256-aes-gcm",
+          ownerCommitment: owner,
+          publicKey: rawP256PublicKey(),
+        }),
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    expect(accountKeyResponse.status).toBe(201);
     const closedPosition = createCircuitPositionNote({
       marketId: fixture.market.marketId,
       side: "long",
@@ -2381,6 +2494,104 @@ describe("server api", () => {
     expect(manualText).toContain(circuitKey("position-close"));
     expect(manualText).not.toContain(`${suffix}-long-owner`);
     expect(manualText).not.toContain(closeSettlement.newMargin.toString());
+
+    const eventsResponse = await app.handle(
+      new Request(`http://merkl.local/account-events?ownerCommitment=${owner}`),
+    );
+    expect(eventsResponse.status).toBe(200);
+    const eventsResult = (await eventsResponse.json()) as Record<string, unknown>;
+    const accountEvents = eventsResult.accountEvents as Record<string, string>[];
+    expect(accountEvents).toHaveLength(1);
+    expect(accountEvents[0].ciphertext.startsWith("merkl-account-event-v1:")).toBe(true);
+    expect(JSON.stringify(accountEvents)).not.toContain(`${suffix}-long-owner`);
+    expect(JSON.stringify(accountEvents)).not.toContain(closeSettlement.newMargin.toString());
+  });
+
+  test("executes queued proven liquidations and emits encrypted account events", async () => {
+    const app = createApp();
+    const clientProver = new ProverService();
+    const suffix = "liquidation-automation";
+    const fixture = await createCloseableLongPositionFixture(app, clientProver, suffix);
+    const owner = ownerCommitment(`${suffix}-long-owner`);
+    const accountKeyResponse = await app.handle(
+      new Request("http://merkl.local/account-keys", {
+        method: "POST",
+        body: body({
+          algorithm: "ecdh-p256-aes-gcm",
+          ownerCommitment: owner,
+          publicKey: rawP256PublicKey(),
+        }),
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    expect(accountKeyResponse.status).toBe(201);
+
+    const liquidationMarkPrice = 40_000n * PRICE_SCALE;
+    const marketUpdateResponse = await app.handle(
+      new Request("http://merkl.local/markets/update", {
+        method: "POST",
+        body: body({ ...fixture.market, oraclePrice: liquidationMarkPrice }),
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    expect(marketUpdateResponse.status).toBeLessThan(300);
+
+    const provenLiquidation = clientProver.proveLiquidation({
+      marketId: fixture.market.marketId,
+      positionCommitment: fixture.longPosition.position.commitment as Hex,
+      positionNullifier: fixture.longPosition.position.positionNullifier as Hex,
+      positionRoot: fixture.longPosition.membershipProof.root as Hex,
+      rewardCommitment: hashFields("reward", [suffix]),
+      side: "long",
+      size: 1n,
+      entryPrice: 51_000n * PRICE_SCALE,
+      markPrice: liquidationMarkPrice,
+      margin: 12_000n,
+      fundingPayment: 0n,
+      fundingIndex: 0n,
+      maintenanceRate: fixture.market.maintenanceMarginRate,
+      marketDigest: fixture.longPosition.position.marketDigest,
+      ownerDigest: fixture.longPosition.position.ownerDigest,
+      rhoDigest: fixture.longPosition.position.rhoDigest,
+      blinding: fixture.longPosition.position.blinding,
+      spendSecretDigest: fixture.longPosition.position.spendSecretDigest,
+      pathIndices: fixture.longPosition.membershipProof.indices as boolean[],
+      pathSiblings: fixture.longPosition.membershipProof.siblings as Hex[],
+    });
+
+    const enqueueResponse = await app.handle(
+      new Request("http://merkl.local/liquidation-automation/jobs", {
+        method: "POST",
+        body: body({ liquidation: provenLiquidation }),
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    expect(enqueueResponse.status).toBe(201);
+
+    const runResponse = await app.handle(
+      new Request("http://merkl.local/liquidation-automation/run", {
+        method: "POST",
+        body: body({ marketId: fixture.market.marketId }),
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    expect(runResponse.status).toBe(201);
+    const run = (await runResponse.json()) as Record<string, unknown>;
+    const jobs = run.jobs as Record<string, Record<string, unknown>>[];
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].status).toBe("executed");
+    expect((jobs[0].job as Record<string, unknown>).status).toBe("executed");
+
+    const eventsResponse = await app.handle(
+      new Request(`http://merkl.local/account-events?ownerCommitment=${owner}`),
+    );
+    expect(eventsResponse.status).toBe(200);
+    const eventsResult = (await eventsResponse.json()) as Record<string, unknown>;
+    const accountEvents = eventsResult.accountEvents as Record<string, string>[];
+    expect(accountEvents).toHaveLength(1);
+    expect(accountEvents[0].ciphertext.startsWith("merkl-account-event-v1:")).toBe(true);
+    expect(JSON.stringify(accountEvents)).not.toContain(`${suffix}-long-owner`);
+    expect(JSON.stringify(accountEvents)).not.toContain("entryPrice");
   });
 
   test("creates privacy-preserving proof records", async () => {

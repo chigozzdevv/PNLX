@@ -19,6 +19,7 @@
     "build:contracts": "stellar contract build --manifest-path contracts/Cargo.toml --out-dir contracts/target/stellar --locked --optimize=false",
     "client:dev": "bun run --filter @merkl/client dev",
     "client:check": "bun run --filter @merkl/client check",
+    "compute:server": "bun server/src/blind-compute-server.ts",
     "collateral:setup-test-usdc": "bun scripts/collateral/setup-test-usdc.ts",
     "deploy:dry": "bun scripts/deploy/run.ts --dry-run",
     "deploy:finalize": "bun scripts/deploy/finalize.ts",

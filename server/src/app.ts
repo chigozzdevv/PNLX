@@ -7,6 +7,7 @@ import { registerDisclosuresRoute } from "./features/disclosures/disclosures.rou
 import { registerFundingRoute } from "./features/funding/funding.route";
 import { registerHealthRoute } from "./features/health/health.route";
 import { registerIntentsRoute } from "./features/intents/intents.route";
+import { registerLiquidationAutomationRoute } from "./features/liquidation-automation/liquidation-automation.route";
 import { registerLiquidationsRoute } from "./features/liquidations/liquidations.route";
 import { registerMarketsRoute } from "./features/markets/markets.route";
 import { registerNotesRoute } from "./features/notes/notes.route";
@@ -18,6 +19,8 @@ import { registerRelaysRoute } from "./features/relays/relays.route";
 import { loadEnv } from "./config/env";
 import { Router } from "./shared/http/router";
 import { AuthService } from "./features/auth/auth.service";
+import { LiquidationAutomationService } from "./features/liquidation-automation/liquidation-automation.service";
+import { LiquidationsService } from "./features/liquidations/liquidations.service";
 import { createExecutor } from "./workers/executor/executor.worker";
 import { createBatchExecutor } from "./workers/batch-executor/batch-executor.worker";
 import type { BatchExecutorService } from "./workers/batch-executor/batch-executor.service";
@@ -34,6 +37,7 @@ import { createRelayer } from "./workers/relayer/relayer.worker";
 export interface AppRuntime {
   batchExecutor: BatchExecutorService;
   fundingEngine: FundingEngineService;
+  liquidationAutomation: LiquidationAutomationService;
   router: Router;
 }
 
@@ -51,6 +55,7 @@ export function createAppRuntime(): AppRuntime {
   const executor = createExecutor({
     matchingBackend: env.matchingBackend,
     mpcNodeIds: env.mpcNodeIds,
+    mpcShareStoreDir: env.mpcShareStoreDir || undefined,
     mpcThreshold: env.mpcThreshold,
     privateMatchingRequired: env.privateMatchingRequired,
     storePath: env.protocolStorePath || undefined,
@@ -117,6 +122,10 @@ export function createAppRuntime(): AppRuntime {
     },
     onchain,
   );
+  const liquidations = new LiquidationsService(executor, prover, onchain, env);
+  const liquidationAutomation = new LiquidationAutomationService(executor, liquidations, {
+    intervalMs: env.liquidationAutomationIntervalMs,
+  });
 
   registerAuthRoute(router, auth);
   registerHealthRoute(router, env);
@@ -140,6 +149,7 @@ export function createAppRuntime(): AppRuntime {
   registerLiquidationsRoute(router, executor, prover, env, onchain, {
     witnessRoutesEnabled: env.serverWitnessRoutesEnabled,
   });
+  registerLiquidationAutomationRoute(router, liquidationAutomation);
   registerConditionalOrdersRoute(router, executor, prover, env, onchain, {
     witnessRoutesEnabled: env.serverWitnessRoutesEnabled,
   });
@@ -156,6 +166,9 @@ export function createAppRuntime(): AppRuntime {
   if (env.batchExecutorEnabled) {
     batchExecutor.start();
   }
+  if (env.liquidationAutomationEnabled) {
+    liquidationAutomation.start();
+  }
 
-  return { batchExecutor, fundingEngine, router };
+  return { batchExecutor, fundingEngine, liquidationAutomation, router };
 }

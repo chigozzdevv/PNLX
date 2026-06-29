@@ -11,6 +11,7 @@ import type {
   FundingUpdateRecord,
   Hex,
   IntentRecord,
+  LiquidationAutomationJobRecord,
   LiquidationRecord,
   MarketConfig,
   OrderLifecycleRecord,
@@ -32,6 +33,7 @@ interface ProtocolStoreSnapshot {
   disclosures: [Hex, DisclosureRecord][];
   fundingUpdates: [string, FundingUpdateRecord][];
   intents: [string, IntentRecord][];
+  liquidationAutomationJobs: [Hex, LiquidationAutomationJobRecord][];
   liquidations: [Hex, LiquidationRecord][];
   marginCommitments: Hex[];
   markets: [string, MarketConfig][];
@@ -80,6 +82,14 @@ export class FileProtocolStore extends ProtocolStore {
 
   override addFundingUpdate(record: FundingUpdateRecord): void {
     this.persist(() => super.addFundingUpdate(record));
+  }
+
+  override addLiquidationAutomationJob(record: LiquidationAutomationJobRecord): void {
+    this.persist(() => super.addLiquidationAutomationJob(record));
+  }
+
+  override updateLiquidationAutomationJob(record: LiquidationAutomationJobRecord): void {
+    this.persist(() => super.updateLiquidationAutomationJob(record));
   }
 
   override addBatchExecutionRun(record: BatchExecutionRunRecord): void {
@@ -187,6 +197,7 @@ export class FileProtocolStore extends ProtocolStore {
     this.positionCloses.clear();
     this.disclosures.clear();
     this.fundingUpdates.clear();
+    this.liquidationAutomationJobs.clear();
     this.batchExecutionRuns.clear();
     this.withdrawals.clear();
     this.proofs.clear();
@@ -227,6 +238,9 @@ export class FileProtocolStore extends ProtocolStore {
     for (const [key, value] of snapshot.positionCloses) this.positionCloses.set(key, value);
     for (const [key, value] of snapshot.disclosures) this.disclosures.set(key, value);
     for (const [key, value] of snapshot.fundingUpdates ?? []) this.fundingUpdates.set(key, value);
+    for (const [key, value] of snapshot.liquidationAutomationJobs ?? []) {
+      this.liquidationAutomationJobs.set(key, value);
+    }
     for (const [key, value] of snapshot.batchExecutionRuns ?? []) this.batchExecutionRuns.set(key, value);
     for (const [key, value] of snapshot.withdrawals) this.withdrawals.set(key, value);
     for (const value of snapshot.proofs) this.proofs.add(value);
@@ -240,6 +254,7 @@ export class FileProtocolStore extends ProtocolStore {
       conditionalOrders: [...this.conditionalOrders.entries()],
       disclosures: [...this.disclosures.entries()],
       fundingUpdates: [...this.fundingUpdates.entries()],
+      liquidationAutomationJobs: [...this.liquidationAutomationJobs.entries()],
       batchExecutionRuns: [...this.batchExecutionRuns.entries()],
       intents: [...this.intents.entries()],
       liquidations: [...this.liquidations.entries()],

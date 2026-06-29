@@ -1,7 +1,18 @@
 import { hashFields } from "@merkl/crypto";
-import type { AccountEventRecord, Hex, PositionLifecycleRecord, ResidualOrderRecord } from "@merkl/protocol-types";
+import type {
+  AccountEventRecord,
+  Hex,
+  LiquidationRecord,
+  PositionCloseRecord,
+  PositionLifecycleRecord,
+  ResidualOrderRecord,
+} from "@merkl/protocol-types";
 
-export type AccountEventBindingKind = "position-opening" | "residual-order";
+export type AccountEventBindingKind =
+  | "liquidation"
+  | "position-close"
+  | "position-opening"
+  | "residual-order";
 
 export function positionOpeningAccountEventDataCommitment(
   opening: Pick<PositionLifecycleRecord, "ownerCommitment" | "positionCommitment" | "settlementDigest">,
@@ -53,6 +64,56 @@ export function residualOrderAccountEventId(
   ]);
 }
 
+export function positionCloseAccountEventDataCommitment(
+  record: Pick<PositionCloseRecord, "closeCommitment" | "positionCommitment" | "positionNullifier">,
+  ownerCommitment: Hex,
+  ciphertext: string,
+): Hex {
+  return hashFields("account-event-data:position-close", [
+    record.closeCommitment,
+    record.positionCommitment,
+    record.positionNullifier,
+    ownerCommitment,
+    ciphertext,
+  ]);
+}
+
+export function positionCloseAccountEventId(
+  record: Pick<PositionCloseRecord, "closeCommitment" | "positionNullifier">,
+  dataCommitment: Hex,
+): Hex {
+  return hashFields("account-event:position-close", [
+    record.closeCommitment,
+    record.positionNullifier,
+    dataCommitment,
+  ]);
+}
+
+export function liquidationAccountEventDataCommitment(
+  record: Pick<LiquidationRecord, "positionCommitment" | "positionNullifier" | "rewardCommitment">,
+  ownerCommitment: Hex,
+  ciphertext: string,
+): Hex {
+  return hashFields("account-event-data:liquidation", [
+    record.positionCommitment,
+    record.positionNullifier,
+    record.rewardCommitment,
+    ownerCommitment,
+    ciphertext,
+  ]);
+}
+
+export function liquidationAccountEventId(
+  record: Pick<LiquidationRecord, "positionNullifier" | "rewardCommitment">,
+  dataCommitment: Hex,
+): Hex {
+  return hashFields("account-event:liquidation", [
+    record.positionNullifier,
+    record.rewardCommitment,
+    dataCommitment,
+  ]);
+}
+
 export function assertPositionOpeningAccountEvent(
   opening: Pick<PositionLifecycleRecord, "ownerCommitment" | "positionCommitment" | "settlementDigest">,
   event: AccountEventRecord,
@@ -83,5 +144,39 @@ export function assertResidualOrderAccountEvent(
   }
   if (event.eventId !== residualOrderAccountEventId(residual, settlementDigest, dataCommitment)) {
     throw new Error("residual account event id mismatch");
+  }
+}
+
+export function assertPositionCloseAccountEvent(
+  record: Pick<PositionCloseRecord, "closeCommitment" | "positionCommitment" | "positionNullifier">,
+  ownerCommitment: Hex,
+  event: AccountEventRecord,
+): void {
+  if (event.ownerCommitment !== ownerCommitment) {
+    throw new Error("position close account event owner mismatch");
+  }
+  const dataCommitment = positionCloseAccountEventDataCommitment(record, ownerCommitment, event.ciphertext);
+  if (event.dataCommitment !== dataCommitment) {
+    throw new Error("position close account event data commitment mismatch");
+  }
+  if (event.eventId !== positionCloseAccountEventId(record, dataCommitment)) {
+    throw new Error("position close account event id mismatch");
+  }
+}
+
+export function assertLiquidationAccountEvent(
+  record: Pick<LiquidationRecord, "positionCommitment" | "positionNullifier" | "rewardCommitment">,
+  ownerCommitment: Hex,
+  event: AccountEventRecord,
+): void {
+  if (event.ownerCommitment !== ownerCommitment) {
+    throw new Error("liquidation account event owner mismatch");
+  }
+  const dataCommitment = liquidationAccountEventDataCommitment(record, ownerCommitment, event.ciphertext);
+  if (event.dataCommitment !== dataCommitment) {
+    throw new Error("liquidation account event data commitment mismatch");
+  }
+  if (event.eventId !== liquidationAccountEventId(record, dataCommitment)) {
+    throw new Error("liquidation account event id mismatch");
   }
 }

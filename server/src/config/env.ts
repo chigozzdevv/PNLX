@@ -19,11 +19,14 @@ export interface ServerEnv {
   fundingMaxDelta?: bigint;
   fundingPremiumRate: bigint;
   intentRegistryOnchainRequired: boolean;
+  liquidationAutomationEnabled: boolean;
+  liquidationAutomationIntervalMs: number;
   matchingBackend: "threshold-recovery" | "external-blind";
   externalMatcherUrl: string;
   externalMatcherToken: string;
   matcherApiToken: string;
   matcherComputeBackend: "local-threshold" | "remote-blind";
+  matcherComputePort: number;
   matcherComputeToken: string;
   matcherComputeUrl: string;
   matcherPort: number;
@@ -32,6 +35,7 @@ export interface ServerEnv {
   matcherCommitteeThreshold: number;
   marketId: string;
   mpcNodeIds: string[];
+  mpcShareStoreDir: string;
   mpcThreshold: number;
   port: number;
   nodeEnv: string;
@@ -109,6 +113,8 @@ export function loadEnv(): ServerEnv {
     fundingMaxDelta: optionalBigInt("FUNDING_MAX_DELTA"),
     fundingPremiumRate: BigInt(value("FUNDING_PREMIUM_RATE", "0")),
     intentRegistryOnchainRequired: booleanValue("INTENT_REGISTRY_ONCHAIN_REQUIRED", nodeEnv === "production"),
+    liquidationAutomationEnabled: booleanValue("LIQUIDATION_AUTOMATION_ENABLED", persistentByDefault),
+    liquidationAutomationIntervalMs: Number(value("LIQUIDATION_AUTOMATION_INTERVAL_MS", "5000")),
     matchingBackend: matchingBackend(value("MATCHING_BACKEND", nodeEnv === "production" ? "external-blind" : "threshold-recovery")),
     externalMatcherUrl: value("EXTERNAL_MATCHER_URL", ""),
     externalMatcherToken: value("EXTERNAL_MATCHER_TOKEN", ""),
@@ -116,6 +122,7 @@ export function loadEnv(): ServerEnv {
     matcherComputeBackend: matcherComputeBackend(
       value("MATCHER_COMPUTE_BACKEND", nodeEnv === "production" ? "remote-blind" : "local-threshold"),
     ),
+    matcherComputePort: Number(value("MATCHER_COMPUTE_PORT", "4103")),
     matcherComputeToken: value("MATCHER_COMPUTE_TOKEN", ""),
     matcherComputeUrl: value("MATCHER_COMPUTE_URL", ""),
     matcherPort: Number(value("MATCHER_PORT", "4102")),
@@ -127,6 +134,7 @@ export function loadEnv(): ServerEnv {
     matcherCommitteeThreshold: Number(value("MATCHER_COMMITTEE_THRESHOLD", "2")),
     marketId: value("MERKL_MARKET_ID", "btc-usd-perp"),
     mpcNodeIds: listValue("MPC_NODE_IDS", ["node-a", "node-b", "node-c"], { uppercase: false }),
+    mpcShareStoreDir: value("MPC_SHARE_STORE_DIR", persistentByDefault ? join(runtimeDir, "mpc-shares") : ""),
     mpcThreshold: Number(value("MPC_THRESHOLD", "2")),
     port: Number(process.env.PORT ?? 4000),
     nodeEnv,

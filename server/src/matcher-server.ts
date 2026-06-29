@@ -7,6 +7,7 @@ const app = createExternalMatcherApp({
   computeToken: env.matcherComputeToken || undefined,
   computeUrl: env.matcherComputeUrl || undefined,
   mpcNodeIds: env.mpcNodeIds,
+  mpcShareStoreDir: env.mpcShareStoreDir || undefined,
   mpcThreshold: env.mpcThreshold,
   privateMatchingRequired: env.privateMatchingRequired,
   storePath: env.protocolStorePath || undefined,

@@ -14,6 +14,7 @@ export interface ExternalMatcherAppOptions {
   computeToken?: string;
   computeUrl?: string;
   mpcNodeIds?: string[];
+  mpcShareStoreDir?: string;
   mpcThreshold?: number;
   privateMatchingRequired?: boolean;
   signerConfig?: Parameters<typeof createExternalMatcher>[1];
@@ -34,6 +35,7 @@ export function createExternalMatcherApp(options: ExternalMatcherAppOptions = {}
   const executor = createExecutor({
     matchingBackend: "external-blind",
     mpcNodeIds: options.mpcNodeIds,
+    mpcShareStoreDir: options.mpcShareStoreDir,
     mpcThreshold: options.mpcThreshold,
     privateMatchingRequired: true,
     storePath: options.storePath,

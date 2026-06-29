@@ -6,6 +6,7 @@ import type { OnchainRelayService } from "../../workers/onchain/onchain.service"
 import type { ProverService } from "../../workers/prover/prover.service";
 import { assertFundingPayment } from "../../shared/protocol/funding";
 import { assertSubmittedRelay } from "../../shared/protocol/onchain-submission";
+import { createPositionCloseAccountEvent } from "../../shared/protocol/account-event-outcomes";
 import { PRICE_SCALE } from "@merkl/market-math";
 import type { MarketConfig } from "@merkl/protocol-types";
 import type {
@@ -50,18 +51,22 @@ export class PositionClosesService {
   }
 
   commit(record: CreatePositionCloseResult): CreatePositionCloseResult {
+    const accountEvent = this.accountEventFor(record);
     const relay = this.onchain?.settlePositionClose(record);
     this.assertSubmittedSettlementRelay(relay, "settle");
     this.executor.store.recordProof(record.proof);
     this.executor.store.addPositionClose(record);
+    if (accountEvent) this.executor.store.addAccountEvent(accountEvent);
     return record;
   }
 
   commitManual(record: CreatePositionCloseResult): CreatePositionCloseResult {
+    const accountEvent = this.accountEventFor(record);
     const relay = this.onchain?.settleManualPositionClose(record);
     this.assertSubmittedSettlementRelay(relay, "settle_manual");
     this.executor.store.recordProof(record.proof);
     this.executor.store.addManualPositionClose(record);
+    if (accountEvent) this.executor.store.addAccountEvent(accountEvent);
     return record;
   }
 
@@ -143,6 +148,14 @@ export class PositionClosesService {
       throw new Error("settlements require on-chain relay");
     }
     assertSubmittedRelay(result, functionName);
+  }
+
+  private accountEventFor(record: CreatePositionCloseResult) {
+    const position = this.executor.store.positionFor(record.positionCommitment, record.positionNullifier);
+    if (!position) return undefined;
+    const publicKey = this.executor.store.accountEncryptionKey(position.ownerCommitment)?.publicKey;
+    if (!publicKey) return undefined;
+    return createPositionCloseAccountEvent(record, position, publicKey);
   }
 }
 

@@ -9,6 +9,7 @@ import type {
   FundingUpdateRecord,
   Hex,
   IntentRecord,
+  LiquidationAutomationJobRecord,
   LiquidationRecord,
   MarketConfig,
   OrderLifecycleRecord,
@@ -37,6 +38,7 @@ export class ProtocolStore {
   readonly positionCloses = new Map<Hex, PositionCloseRecord>();
   readonly disclosures = new Map<Hex, DisclosureRecord>();
   readonly fundingUpdates = new Map<string, FundingUpdateRecord>();
+  readonly liquidationAutomationJobs = new Map<Hex, LiquidationAutomationJobRecord>();
   readonly batchExecutionRuns = new Map<Hex, BatchExecutionRunRecord>();
   readonly withdrawals = new Map<Hex, WithdrawalRecord>();
   readonly accountEvents = new Map<Hex, AccountEventRecord>();
@@ -128,6 +130,20 @@ export class ProtocolStore {
     const key = `${record.marketId}:${record.appliedAt}:${record.newFundingIndex}`;
     if (this.fundingUpdates.has(key)) throw new Error("funding update already exists");
     this.fundingUpdates.set(key, record);
+  }
+
+  addLiquidationAutomationJob(record: LiquidationAutomationJobRecord): void {
+    if (this.liquidationAutomationJobs.has(record.jobId)) {
+      throw new Error("liquidation automation job already exists");
+    }
+    this.liquidationAutomationJobs.set(record.jobId, record);
+  }
+
+  updateLiquidationAutomationJob(record: LiquidationAutomationJobRecord): void {
+    if (!this.liquidationAutomationJobs.has(record.jobId)) {
+      throw new Error("liquidation automation job not found");
+    }
+    this.liquidationAutomationJobs.set(record.jobId, record);
   }
 
   addBatchExecutionRun(record: BatchExecutionRunRecord): void {
@@ -397,6 +413,10 @@ export class ProtocolStore {
     return [...this.positionLifecycle.values()]
       .filter((position) => position.ownerCommitment === ownerCommitment)
       .sort((a, b) => a.openedAt - b.openedAt || a.positionCommitment.localeCompare(b.positionCommitment));
+  }
+
+  positionFor(positionCommitment: Hex, positionNullifier: Hex): PositionLifecycleRecord | undefined {
+    return this.findPosition(positionCommitment, positionNullifier);
   }
 
   private validatePositionOpenings(
