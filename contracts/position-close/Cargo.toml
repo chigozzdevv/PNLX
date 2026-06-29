@@ -1,0 +1,26 @@
+[package]
+name = "position-close"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+conditional-order-interface = { path = "../conditional-order-interface" }
+governance-interface = { path = "../governance-interface" }
+market-interface = { path = "../market-interface" }
+position-state-interface = { path = "../position-state-interface" }
+proof-ledger-interface = { path = "../proof-ledger-interface" }
+
+[dev-dependencies]
+conditional-order = { path = "../conditional-order" }
+governance = { path = "../governance" }
+market = { path = "../market" }
+mock-oracle = { path = "../mock-oracle" }
+oracle-interface = { path = "../oracle-interface" }
+position-state = { path = "../position-state" }
+proof-ledger = { path = "../proof-ledger" }
+soroban-sdk = { workspace = true, features = ["testutils"] }

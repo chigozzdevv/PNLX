@@ -1,0 +1,17 @@
+note_amount = 10000
+withdraw_amount = 4000
+root = "0xe886eb0652a3330412447"
+nullifier = 1351
+token_digest = 2
+recipient_digest = 13
+change_commitment = 145875806
+asset_digest = 2
+owner_digest = 3
+rho_digest = 4
+blinding = 5
+spend_secret_digest = 6
+path_siblings = [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781]
+path_indices = [false, false, false, false, false, false, false, false]
+change_rho_digest = 7
+change_blinding = 8
+zero_value = 0

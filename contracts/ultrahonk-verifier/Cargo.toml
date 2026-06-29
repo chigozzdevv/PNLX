@@ -1,0 +1,12 @@
+[package]
+name = "ultrahonk-verifier"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+soroban-sdk = { workspace = true, features = ["alloc"] }
+
+[features]
+default = []
+std = []
+trace = []

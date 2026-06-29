@@ -1,0 +1,6 @@
+[package]
+name = "deposit_note"
+type = "bin"
+authors = ["Merkl"]
+
+[dependencies]

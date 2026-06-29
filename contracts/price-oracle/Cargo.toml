@@ -1,0 +1,15 @@
+[package]
+name = "price-oracle"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "price_oracle"
+
+[dependencies]
+oracle-interface = { path = "../oracle-interface" }
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }

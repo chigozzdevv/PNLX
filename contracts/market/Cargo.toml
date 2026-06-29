@@ -1,0 +1,19 @@
+[package]
+name = "market"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "market"
+
+[dependencies]
+governance-interface = { path = "../governance-interface" }
+market-interface = { path = "../market-interface" }
+oracle-interface = { path = "../oracle-interface" }
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+governance = { path = "../governance" }
+mock-oracle = { path = "../mock-oracle" }
+soroban-sdk = { workspace = true, features = ["testutils"] }

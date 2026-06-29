@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+  "shielded-pool",
+  "intent-registry",
+  "intent-registry-interface",
+  "conditional-order",
+  "conditional-order-interface",
+  "funding-settlement",
+  "position-state",
+  "position-state-interface",
+  "batch-settlement",
+  "market",
+  "market-interface",
+  "oracle-interface",
+  "price-oracle",
+  "mock-oracle",
+  "liquidation",
+  "position-close",
+  "disclosure-verifier",
+  "governance",
+  "governance-interface",
+  "proof-ledger",
+  "proof-ledger-interface",
+  "ultrahonk-verifier",
+  "proof-verifier"
+]
+
+[workspace.dependencies]
+soroban-sdk = "26.1.0"
+
+[profile.release]
+overflow-checks = true

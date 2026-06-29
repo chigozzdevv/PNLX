@@ -1,0 +1,6 @@
+[package]
+name = "conditional_close"
+type = "bin"
+authors = ["Merkl"]
+
+[dependencies]

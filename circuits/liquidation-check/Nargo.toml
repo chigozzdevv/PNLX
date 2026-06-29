@@ -1,0 +1,6 @@
+[package]
+name = "liquidation_check"
+type = "bin"
+authors = ["Merkl"]
+
+[dependencies]

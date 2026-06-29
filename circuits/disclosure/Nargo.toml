@@ -1,0 +1,6 @@
+[package]
+name = "disclosure"
+type = "bin"
+authors = ["Merkl"]
+
+[dependencies]

@@ -1,0 +1,6 @@
+[package]
+name = "position_close"
+type = "bin"
+authors = ["Merkl"]
+
+[dependencies]

@@ -1,0 +1,11 @@
+is_long = true
+is_take_profit = true
+reduce_only = true
+market_digest = 10
+trigger_price = 55000000000
+mark_price = 56000000000
+size = 1
+position_nullifier = 12
+close_commitment = "0x00000000000000000000000000000000000000000000000001cb65105310394f"
+salt_digest = 14
+zero_value = 0

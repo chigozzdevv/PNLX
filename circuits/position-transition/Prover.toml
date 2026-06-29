@@ -1,0 +1,7 @@
+old_margin = 10000
+added_margin = 2000
+fee = 100
+new_margin = 11900
+old_commitment = 44
+new_commitment = 45
+zero_commitment = 0

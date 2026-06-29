@@ -1,0 +1,10 @@
+[package]
+name = "governance-interface"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "governance_interface"
+
+[dependencies]
+soroban-sdk = { workspace = true }

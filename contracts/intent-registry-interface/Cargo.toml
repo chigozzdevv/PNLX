@@ -1,0 +1,11 @@
+[package]
+name = "intent-registry-interface"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib"]
+name = "intent_registry_interface"
+
+[dependencies]
+soroban-sdk = { workspace = true }

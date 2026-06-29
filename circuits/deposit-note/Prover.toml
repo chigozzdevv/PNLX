@@ -1,0 +1,7 @@
+amount = 10000
+token_digest = 2
+commitment = 202573530
+owner_digest = 3
+rho_digest = 4
+blinding = 5
+zero_commitment = 0

@@ -1,0 +1,11 @@
+[package]
+name = "conditional-order-interface"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib"]
+name = "conditional_order_interface"
+
+[dependencies]
+soroban-sdk = { workspace = true }

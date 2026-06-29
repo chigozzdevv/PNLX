@@ -1,0 +1,12 @@
+market_id = 9
+old_index_abs = 1000
+old_index_is_negative = false
+new_index_abs = 1500
+new_index_is_negative = false
+mark_price = 5000000000000
+premium_rate_abs = 10000
+premium_rate_is_negative = false
+elapsed_ms = 3600000
+interval_ms = 3600000
+max_delta = 0
+max_delta_enabled = 0

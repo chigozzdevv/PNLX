@@ -1,0 +1,18 @@
+[package]
+name = "disclosure-verifier"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "disclosure_verifier"
+
+[dependencies]
+governance-interface = { path = "../governance-interface" }
+proof-ledger-interface = { path = "../proof-ledger-interface" }
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+governance = { path = "../governance" }
+proof-ledger = { path = "../proof-ledger" }
+soroban-sdk = { workspace = true, features = ["testutils"] }

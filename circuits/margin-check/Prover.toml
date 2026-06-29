@@ -1,0 +1,7 @@
+size = 1
+price = 5000000000000
+margin = 12000
+initial_rate = 200000
+max_leverage = 5
+price_scale = 100000000
+rate_scale = 1000000

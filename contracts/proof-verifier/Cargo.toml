@@ -1,0 +1,18 @@
+[package]
+name = "proof-verifier"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+governance-interface = { path = "../governance-interface" }
+proof-ledger-interface = { path = "../proof-ledger-interface" }
+soroban-sdk = { workspace = true, features = ["alloc"] }
+ultrahonk-verifier = { path = "../ultrahonk-verifier", default-features = false }
+
+[dev-dependencies]
+governance = { path = "../governance" }
+proof-ledger = { path = "../proof-ledger" }
+soroban-sdk = { workspace = true, features = ["testutils", "alloc"] }
