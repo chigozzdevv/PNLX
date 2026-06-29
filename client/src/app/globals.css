@@ -2174,6 +2174,8 @@ button:disabled {
 
 .landing-proof-path {
   --proof-lane-y: 50%;
+  --proof-lock-gap: 26px;
+  --proof-line-width: 18px;
   position: relative;
   min-height: 292px;
   color: rgba(255, 255, 255, 0.88);
@@ -2184,7 +2186,7 @@ button:disabled {
 .landing-proof-path::after {
   position: absolute;
   top: var(--proof-lane-y);
-  width: 16px;
+  width: var(--proof-line-width);
   height: 1px;
   background: rgba(255, 255, 255, 0.46);
   content: "";
@@ -2192,12 +2194,12 @@ button:disabled {
 }
 
 .landing-proof-path::before {
-  right: calc(50% + 22px);
+  right: calc(50% + var(--proof-lock-gap));
   background: linear-gradient(90deg, rgba(255, 213, 194, 0), rgba(255, 255, 255, 0.46));
 }
 
 .landing-proof-path::after {
-  left: calc(50% + 22px);
+  left: calc(50% + var(--proof-lock-gap));
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.46), rgba(255, 213, 194, 0));
 }
 
@@ -2593,21 +2595,10 @@ button:disabled {
   }
 
   .landing-proof-path {
+    --proof-lock-gap: 21px;
+    --proof-line-width: 12px;
     min-height: 188px;
     transform: translateX(-8px);
-  }
-
-  .landing-proof-path::before,
-  .landing-proof-path::after {
-    width: 10px;
-  }
-
-  .landing-proof-path::before {
-    right: calc(50% + 19px);
-  }
-
-  .landing-proof-path::after {
-    left: calc(50% + 19px);
   }
 
   .landing-proof-lock {
