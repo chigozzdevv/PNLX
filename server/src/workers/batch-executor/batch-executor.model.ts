@@ -1,0 +1,24 @@
+import type { BatchExecutionRunRecord } from "@merkl/protocol-types";
+
+export interface BatchExecutorConfig {
+  batchIdPrefix?: string;
+  intervalMs: number;
+  settlementsOnchainRequired?: boolean;
+}
+
+export interface RunBatchExecutorInput {
+  batchIdPrefix?: string;
+  marketId?: string;
+  now?: number;
+}
+
+export interface BatchExecutorMarketResult {
+  marketId: string;
+  record: BatchExecutionRunRecord;
+}
+
+export interface BatchExecutorRunResult {
+  completedAt: number;
+  results: BatchExecutorMarketResult[];
+  startedAt: number;
+}
