@@ -7,7 +7,7 @@ import type {
 } from "../threshold-shares/threshold-shares.model";
 import type { ProofCoordinatorService } from "../proof-coordinator/proof-coordinator.service";
 
-export type MatcherComputeBackend = "local-threshold" | "remote-blind";
+export type MatcherComputeBackend = "local-threshold" | "remote-blind" | "nilcc";
 
 export interface ExternalMatcherSigner {
   address: string;
@@ -65,4 +65,14 @@ export interface RemoteExternalMatcherConfig {
 export interface RemoteBlindComputeConfig {
   token?: string;
   url: string;
+}
+
+export interface NilccBlindComputeConfig {
+  attestationContains: string[];
+  attestationReportSha256?: string;
+  attestationReportUrl?: string;
+  attestationRequired: boolean;
+  attestationToken?: string;
+  token?: string;
+  workloadUrl: string;
 }

@@ -25,7 +25,7 @@ export interface ServerEnv {
   externalMatcherUrl: string;
   externalMatcherToken: string;
   matcherApiToken: string;
-  matcherComputeBackend: "local-threshold" | "remote-blind";
+  matcherComputeBackend: "local-threshold" | "remote-blind" | "nilcc";
   matcherComputePort: number;
   matcherComputeToken: string;
   matcherComputeUrl: string;
@@ -37,6 +37,12 @@ export interface ServerEnv {
   thresholdShareNodeIds: string[];
   thresholdShareStoreDir: string;
   thresholdShareThreshold: number;
+  nilccAttestationContains: string[];
+  nilccAttestationReportSha256: string;
+  nilccAttestationReportUrl: string;
+  nilccAttestationRequired: boolean;
+  nilccAttestationToken: string;
+  nilccWorkloadUrl: string;
   port: number;
   nodeEnv: string;
   oracleAssetAddress: string;
@@ -136,6 +142,12 @@ export function loadEnv(): ServerEnv {
     thresholdShareNodeIds: listValue("THRESHOLD_SHARE_NODE_IDS", ["node-a", "node-b", "node-c"], { uppercase: false }),
     thresholdShareStoreDir: value("THRESHOLD_SHARE_STORE_DIR", persistentByDefault ? join(runtimeDir, "threshold-shares") : ""),
     thresholdShareThreshold: Number(value("THRESHOLD_SHARE_THRESHOLD", "2")),
+    nilccAttestationContains: listValue("NILCC_ATTESTATION_CONTAINS", [], { uppercase: false }),
+    nilccAttestationReportSha256: value("NILCC_ATTESTATION_REPORT_SHA256", ""),
+    nilccAttestationReportUrl: value("NILCC_ATTESTATION_REPORT_URL", ""),
+    nilccAttestationRequired: booleanValue("NILCC_ATTESTATION_REQUIRED", true),
+    nilccAttestationToken: value("NILCC_ATTESTATION_TOKEN", ""),
+    nilccWorkloadUrl: value("NILCC_WORKLOAD_URL", ""),
     port: Number(process.env.PORT ?? 4000),
     nodeEnv,
     oracleAssetAddress: value("ORACLE_ASSET_ADDRESS", ""),
@@ -248,8 +260,8 @@ function matchingBackend(value: string): ServerEnv["matchingBackend"] {
 }
 
 function matcherComputeBackend(value: string): ServerEnv["matcherComputeBackend"] {
-  if (value === "local-threshold" || value === "remote-blind") return value;
-  throw new Error("MATCHER_COMPUTE_BACKEND must be local-threshold or remote-blind");
+  if (value === "local-threshold" || value === "remote-blind" || value === "nilcc") return value;
+  throw new Error("MATCHER_COMPUTE_BACKEND must be local-threshold, remote-blind, or nilcc");
 }
 
 function oraclePriceSource(value: string): "hermes" | "onchain-market" {

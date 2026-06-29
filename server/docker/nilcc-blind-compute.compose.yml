@@ -1,0 +1,18 @@
+services:
+  merkl-blind-compute:
+    image: ${MERKL_BLIND_COMPUTE_IMAGE}
+    ports:
+      - "4103:4103"
+    environment:
+      NODE_ENV: production
+      MATCHER_COMPUTE_PORT: "4103"
+      MATCHER_COMPUTE_TOKEN: ${MATCHER_COMPUTE_TOKEN}
+      MERKL_RUNTIME_DIR: /var/lib/merkl
+      THRESHOLD_SHARE_NODE_IDS: ${THRESHOLD_SHARE_NODE_IDS}
+      THRESHOLD_SHARE_THRESHOLD: ${THRESHOLD_SHARE_THRESHOLD}
+      THRESHOLD_SHARE_STORE_DIR: /var/lib/merkl/threshold-shares
+    volumes:
+      - merkl-blind-compute:/var/lib/merkl
+
+volumes:
+  merkl-blind-compute:

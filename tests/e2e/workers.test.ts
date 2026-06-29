@@ -36,6 +36,7 @@ import { ProtocolStore } from "../../server/src/shared/state/store";
 import { createBatchExecutor } from "../../server/src/workers/batch-executor/batch-executor.worker";
 import { createExecutor } from "../../server/src/workers/executor/executor.worker";
 import { createExternalMatcherApp } from "../../server/src/workers/external-matcher/external-matcher.app";
+import { NilccBlindComputeClient } from "../../server/src/workers/external-matcher/nilcc-blind-compute.service";
 import { RemoteBlindComputeClient } from "../../server/src/workers/external-matcher/remote-blind-compute.service";
 import { RemoteExternalMatcherClient } from "../../server/src/workers/external-matcher/remote-external-matcher.service";
 import { createExternalMatcher } from "../../server/src/workers/external-matcher/external-matcher.worker";
@@ -78,6 +79,30 @@ describe("support workers", () => {
     } finally {
       restoreEnv("ORACLE_PUBLISHER_SOURCES", previousSources);
       restoreEnv("ORACLE_PUBLISHER_ADDRESSES", previousAddresses);
+    }
+  });
+
+  test("parses nilCC blind compute provider configuration", () => {
+    const previousBackend = process.env.MATCHER_COMPUTE_BACKEND;
+    const previousWorkload = process.env.NILCC_WORKLOAD_URL;
+    const previousContains = process.env.NILCC_ATTESTATION_CONTAINS;
+    const previousHash = process.env.NILCC_ATTESTATION_REPORT_SHA256;
+    process.env.MATCHER_COMPUTE_BACKEND = "nilcc";
+    process.env.NILCC_WORKLOAD_URL = "https://nilcc.merkl.local";
+    process.env.NILCC_ATTESTATION_CONTAINS = "merkl-blind-compute-v1,sev-snp";
+    process.env.NILCC_ATTESTATION_REPORT_SHA256 = "0xabc123";
+
+    try {
+      const env = loadEnv();
+      expect(env.matcherComputeBackend).toBe("nilcc");
+      expect(env.nilccWorkloadUrl).toBe("https://nilcc.merkl.local");
+      expect(env.nilccAttestationContains).toEqual(["merkl-blind-compute-v1", "sev-snp"]);
+      expect(env.nilccAttestationReportSha256).toBe("0xabc123");
+    } finally {
+      restoreEnv("MATCHER_COMPUTE_BACKEND", previousBackend);
+      restoreEnv("NILCC_WORKLOAD_URL", previousWorkload);
+      restoreEnv("NILCC_ATTESTATION_CONTAINS", previousContains);
+      restoreEnv("NILCC_ATTESTATION_REPORT_SHA256", previousHash);
     }
   });
 
@@ -678,13 +703,82 @@ describe("support workers", () => {
     }
   });
 
-  test("private matcher app requires remote blind compute backend", () => {
+  test("nilCC blind compute client verifies workload attestation before compute", async () => {
+    const fixture = externalBatchFixture("nilcc-blind-compute-client");
+    const computeTranscript = committeeTranscript(fixture);
+    const calls: string[] = [];
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = (async (url, init) => {
+      calls.push(String(url));
+      if (String(url) === "https://nilcc.merkl.local/nilcc/api/v2/report") {
+        expect(init?.method).toBe("GET");
+        expect((init?.headers as Record<string, string>).authorization).toBe("Bearer attest-secret");
+        return new Response("measurement:merkl-blind-compute-v1", { status: 200 });
+      }
+
+      expect(String(url)).toBe("https://nilcc.merkl.local/compute/settlement");
+      expect(init?.method).toBe("POST");
+      expect((init?.headers as Record<string, string>).authorization).toBe("Bearer compute-secret");
+      return new Response(body(computeTranscript), {
+        headers: { "content-type": "application/json" },
+        status: 201,
+      });
+    }) as typeof fetch;
+
+    try {
+      const client = new NilccBlindComputeClient({
+        attestationContains: ["merkl-blind-compute-v1"],
+        attestationRequired: true,
+        attestationToken: "attest-secret",
+        token: "compute-secret",
+        workloadUrl: "https://nilcc.merkl.local",
+      });
+      const transcript = await client.createSettlementTranscript({
+        batchId: fixture.settlement.batchId,
+        market: fixture.executor.store.markets.get(fixture.settlement.marketId)!,
+        oldRoot: fixture.executor.store.positionMembershipRoot(),
+        positionCommitments: [],
+        records: [],
+        residuals: [],
+      }, {} as never);
+
+      expect(transcript.settlement.settlementDigest).toBe(fixture.settlement.settlementDigest);
+      expect(calls).toEqual([
+        "https://nilcc.merkl.local/nilcc/api/v2/report",
+        "https://nilcc.merkl.local/compute/settlement",
+      ]);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+
+  test("nilCC blind compute client rejects unpinned attestations", async () => {
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response("measurement:other-workload", { status: 200 })) as typeof fetch;
+
+    try {
+      const client = new NilccBlindComputeClient({
+        attestationContains: ["merkl-blind-compute-v1"],
+        attestationRequired: true,
+        workloadUrl: "https://nilcc.merkl.local",
+      });
+
+      await expect(client.createSettlementTranscript({} as never, {} as never)).rejects.toThrow(
+        "nilCC attestation report does not match pinned workload identity",
+      );
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+
+  test("private matcher app requires remote or nilCC blind compute backend", () => {
     expect(() =>
       createExternalMatcherApp({
         computeBackend: "local-threshold",
         privateMatchingRequired: true,
       }),
-    ).toThrow("MATCHER_COMPUTE_BACKEND=remote-blind is required for private matcher service");
+    ).toThrow("MATCHER_COMPUTE_BACKEND=remote-blind or nilcc is required for private matcher service");
 
     expect(() =>
       createExternalMatcherApp({
@@ -692,6 +786,21 @@ describe("support workers", () => {
         privateMatchingRequired: true,
       }),
     ).toThrow("MATCHER_COMPUTE_URL is required for remote blind matcher compute");
+
+    expect(() =>
+      createExternalMatcherApp({
+        computeBackend: "nilcc",
+        privateMatchingRequired: true,
+      }),
+    ).toThrow("NILCC_WORKLOAD_URL is required for nilCC blind compute");
+
+    expect(() =>
+      createExternalMatcherApp({
+        computeBackend: "nilcc",
+        nilccWorkloadUrl: "https://nilcc.merkl.local",
+        privateMatchingRequired: true,
+      }),
+    ).toThrow("NILCC_ATTESTATION_REPORT_SHA256 or NILCC_ATTESTATION_CONTAINS is required for nilCC blind compute");
   });
 
   test("external matcher app produces transcripts from a separate persisted matcher process view", async () => {

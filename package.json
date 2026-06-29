@@ -24,6 +24,7 @@
     "deploy:dry": "bun scripts/deploy/run.ts --dry-run",
     "deploy:finalize": "bun scripts/deploy/finalize.ts",
     "deploy:local": "bun scripts/deploy/run.ts --network local --source merkl-admin --setup-local --build",
+    "docker:blind-compute": "docker build -f server/docker/blind-compute.Dockerfile -t merkl/blind-compute:local .",
     "manifest:deploy": "bun scripts/deploy/manifest.ts",
     "matcher:server": "bun server/src/matcher-server.ts",
     "oracle:configure-committee": "bun scripts/oracle/configure-committee.ts",

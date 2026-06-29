@@ -115,12 +115,15 @@ Matching backend modes:
 - The matcher service has its own compute backend boundary. Use
   `MATCHER_COMPUTE_BACKEND=remote-blind` plus `MATCHER_COMPUTE_URL` to delegate
   private matching computation to an isolated MPC/FHE/blind-compute service at
-  `POST /compute/settlement`. `MATCHER_COMPUTE_BACKEND=local-threshold` is only
-  for development and tests because it recovers threshold shares inside the
-  matcher process.
+  `POST /compute/settlement`. Use `MATCHER_COMPUTE_BACKEND=nilcc` plus
+  `NILCC_WORKLOAD_URL` to call the Merkl blind-compute workload running inside
+  Nillion nilCC confidential compute. `MATCHER_COMPUTE_BACKEND=local-threshold`
+  is only for development and tests because it recovers threshold shares inside
+  the matcher process.
 - When `PRIVATE_MATCHING_REQUIRED=true`, `bun run matcher:server` refuses to
-  start unless `MATCHER_COMPUTE_BACKEND=remote-blind` and `MATCHER_COMPUTE_URL`
-  are configured.
+  start unless `MATCHER_COMPUTE_BACKEND` is `remote-blind` or `nilcc`. In nilCC
+  mode it also requires `NILCC_WORKLOAD_URL` and an attestation pin through
+  `NILCC_ATTESTATION_REPORT_SHA256` or `NILCC_ATTESTATION_CONTAINS`.
 - `PRIVATE_MATCHING_REQUIRED=true` makes startup reject `threshold-recovery`.
   Health also reports matching readiness under `GET /health`.
 - `MATCHER_COMMITTEE_REQUIRED=true` makes external settlement ingestion require
@@ -128,6 +131,13 @@ Matching backend modes:
   input hash. Defaults to `PRIVATE_MATCHING_REQUIRED`.
 - `MATCHER_COMMITTEE_ADDRESSES` and `MATCHER_COMMITTEE_THRESHOLD` configure the
   authorized external matcher/executor committee.
+- The nilCC workload image is built from
+  `server/docker/blind-compute.Dockerfile`; run
+  `bun run docker:blind-compute` for a local image tag. The compose payload for
+  nilCC is `server/docker/nilcc-blind-compute.compose.yml`; set
+  `MERKL_BLIND_COMPUTE_IMAGE`, `MATCHER_COMPUTE_TOKEN`,
+  `THRESHOLD_SHARE_NODE_IDS`, and `THRESHOLD_SHARE_THRESHOLD` before submitting
+  it to nilCC.
 - External settlement transcripts are checked against current roots, active
   order commitments, spent nullifiers, new position commitments, owner
   commitments, residual order records, encrypted owner account events, and the

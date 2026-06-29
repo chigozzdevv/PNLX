@@ -77,6 +77,15 @@ export class HealthController {
           configured: Boolean(this.env.matcherComputeUrl),
           url: this.env.matcherComputeUrl ? redactUrl(this.env.matcherComputeUrl) : "",
         },
+        nilcc: {
+          attestationPinned: Boolean(
+            this.env.nilccAttestationReportSha256 ||
+              this.env.nilccAttestationContains.length > 0,
+          ),
+          attestationRequired: this.env.nilccAttestationRequired,
+          configured: Boolean(this.env.nilccWorkloadUrl),
+          workloadUrl: this.env.nilccWorkloadUrl ? redactUrl(this.env.nilccWorkloadUrl) : "",
+        },
         thresholdShares: {
           nodeIds: this.env.thresholdShareNodeIds,
           threshold: this.env.thresholdShareThreshold,
@@ -177,11 +186,23 @@ function matchingReadinessIssues(env: ServerEnv): string[] {
   if (env.matchingBackend === "external-blind" && env.privateMatchingRequired && !env.externalMatcherUrl) {
     issues.push("EXTERNAL_MATCHER_URL is required for private external matching");
   }
-  if (env.privateMatchingRequired && env.matcherComputeBackend !== "remote-blind") {
-    issues.push("MATCHER_COMPUTE_BACKEND=remote-blind is required for private matcher service");
+  if (env.privateMatchingRequired && env.matcherComputeBackend === "local-threshold") {
+    issues.push("MATCHER_COMPUTE_BACKEND=remote-blind or nilcc is required for private matcher service");
   }
   if (env.privateMatchingRequired && env.matcherComputeBackend === "remote-blind" && !env.matcherComputeUrl) {
     issues.push("MATCHER_COMPUTE_URL is required for remote blind matcher compute");
+  }
+  if (env.privateMatchingRequired && env.matcherComputeBackend === "nilcc" && !env.nilccWorkloadUrl) {
+    issues.push("NILCC_WORKLOAD_URL is required for nilCC blind compute");
+  }
+  if (
+    env.privateMatchingRequired &&
+    env.matcherComputeBackend === "nilcc" &&
+    env.nilccAttestationRequired &&
+    !env.nilccAttestationReportSha256 &&
+    env.nilccAttestationContains.length === 0
+  ) {
+    issues.push("NILCC_ATTESTATION_REPORT_SHA256 or NILCC_ATTESTATION_CONTAINS is required for nilCC blind compute");
   }
   if (env.matcherCommitteeRequired && env.matcherCommitteeThreshold < 1) {
     issues.push("MATCHER_COMMITTEE_THRESHOLD must be at least 1");

@@ -1,0 +1,11 @@
+.git
+.cache
+.merkl
+node_modules
+client/.next
+client/node_modules
+server/node_modules
+packages/*/node_modules
+contracts/target
+deployments
+.env
