@@ -2082,11 +2082,15 @@ button:disabled {
 
 .landing-infrastructure-section {
   align-items: start;
-  grid-template-columns: minmax(0, 0.9fr) minmax(340px, 0.7fr);
+  grid-template-columns: minmax(340px, 0.74fr) minmax(0, 0.9fr);
   gap: clamp(48px, 9vw, 150px);
   min-height: clamp(540px, 64vh, 680px);
   padding-top: clamp(54px, 6vw, 82px);
   padding-bottom: clamp(60px, 7vw, 96px);
+}
+
+.landing-infrastructure-section .landing-section-copy {
+  justify-self: end;
 }
 
 .landing-proof-candle-visual {
@@ -2099,8 +2103,7 @@ button:disabled {
   justify-content: center;
   min-height: 390px;
   max-width: 560px;
-  margin-left: auto;
-  transform: translateX(clamp(16px, 2.2vw, 40px));
+  margin-right: auto;
 }
 
 .landing-private-candles {
@@ -2418,7 +2421,10 @@ button:disabled {
     min-height: 280px;
     grid-template-columns: minmax(190px, 0.92fr) 58px minmax(100px, 0.46fr);
     gap: 10px;
-    transform: none;
+  }
+
+  .landing-infrastructure-section .landing-section-copy {
+    justify-self: start;
   }
 }
 

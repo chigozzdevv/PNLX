@@ -1,14 +1,6 @@
 export function LandingInfrastructureSection() {
   return (
     <section className="landing-dark-section landing-infrastructure-section">
-      <div className="landing-section-copy">
-        <h2>Match privately. Settle with proof.</h2>
-        <span>
-          Merkl keeps side, size, margin, and account state away from the public pre-trade path, then publishes
-          proof-bound state updates for verification.
-        </span>
-      </div>
-
       <div className="landing-proof-candle-visual" aria-hidden="true">
         <div className="landing-private-candles">
           <span />
@@ -33,6 +25,14 @@ export function LandingInfrastructureSection() {
         <div className="landing-settlement-candle">
           <span />
         </div>
+      </div>
+
+      <div className="landing-section-copy">
+        <h2>Match privately. Settle with proof.</h2>
+        <span>
+          Merkl keeps side, size, margin, and account state away from the public pre-trade path, then publishes
+          proof-bound state updates for verification.
+        </span>
       </div>
     </section>
   );
