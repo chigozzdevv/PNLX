@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import type {
   CommitteeSettlementInput,
   CommitteeSettlementTranscript,
-} from "../threshold-shares/threshold-shares.model";
-import type { ProofCoordinatorService } from "../proof-coordinator/proof-coordinator.service";
-import type { BlindComputeGateway, NilccBlindComputeConfig } from "./external-matcher.model";
-import { RemoteBlindComputeClient } from "./remote-blind-compute.service";
+} from "../../threshold-shares/threshold-shares.model";
+import type { ProofCoordinatorService } from "../../proof-coordinator/proof-coordinator.service";
+import type { BlindComputeGateway, NilccBlindComputeConfig } from "../matcher.model";
+import { RemoteBlindComputeClient } from "../remote-compute/matcher.service";
 
 export class NilccBlindComputeClient implements BlindComputeGateway {
   private attestationChecked = false;

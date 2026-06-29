@@ -1,13 +1,13 @@
-import { parseExternalBatchSettlement } from "../../features/batches/batches.schema";
-import type { ExternalBatchSettlementTranscript } from "../executor/executor.model";
+import { parseExternalBatchSettlement } from "../../../features/batches/batches.schema";
+import type { ExternalBatchSettlementTranscript } from "../../executor/executor.model";
 import type {
   CreateExternalSettlementInput,
-  ExternalMatcherGateway,
-  RemoteExternalMatcherConfig,
-} from "./external-matcher.model";
+  MatcherGateway,
+  RemoteMatcherConfig,
+} from "../matcher.model";
 
-export class RemoteExternalMatcherClient implements ExternalMatcherGateway {
-  constructor(private readonly config: RemoteExternalMatcherConfig) {}
+export class RemoteMatcherClient implements MatcherGateway {
+  constructor(private readonly config: RemoteMatcherConfig) {}
 
   async createSettlementTranscript(
     input: CreateExternalSettlementInput,
@@ -26,7 +26,7 @@ export class RemoteExternalMatcherClient implements ExternalMatcherGateway {
       const message =
         typeof body.error === "string"
           ? body.error
-          : `remote external matcher failed with ${response.status}`;
+          : `remote matcher service failed with ${response.status}`;
       throw new Error(message);
     }
     return parseExternalBatchSettlement(body);

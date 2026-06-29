@@ -1,12 +1,12 @@
 import type { Hex } from "@merkl/protocol-types";
-import { parseProofMeta } from "../../features/intents/intents.schema";
+import { parseProofMeta } from "../../../features/intents/intents.schema";
 import type {
   CommitteeSettlementInput,
   CommitteeSettlementTranscript,
   PrivatePositionOpeningEvent,
-} from "../threshold-shares/threshold-shares.model";
-import type { ProofCoordinatorService } from "../proof-coordinator/proof-coordinator.service";
-import type { BlindComputeGateway, RemoteBlindComputeConfig } from "./external-matcher.model";
+} from "../../threshold-shares/threshold-shares.model";
+import type { ProofCoordinatorService } from "../../proof-coordinator/proof-coordinator.service";
+import type { BlindComputeGateway, RemoteBlindComputeConfig } from "../matcher.model";
 
 type ComputeBody = Record<string, unknown>;
 

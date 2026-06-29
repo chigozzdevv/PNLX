@@ -621,16 +621,18 @@ describe("server api", () => {
     }
   });
 
-  test("reports matcher committee readiness for private external matching", async () => {
+  test("reports matcher committee readiness for private matcher service", async () => {
     const previousRequired = process.env.PRIVATE_MATCHING_REQUIRED;
     const previousBackend = process.env.MATCHING_BACKEND;
     const previousCommitteeRequired = process.env.MATCHER_COMMITTEE_REQUIRED;
     const previousCommittee = process.env.MATCHER_COMMITTEE_ADDRESSES;
     const previousThreshold = process.env.MATCHER_COMMITTEE_THRESHOLD;
-    const previousMatcherUrl = process.env.EXTERNAL_MATCHER_URL;
+    const previousMatcherUrl = process.env.MATCHER_SERVICE_URL;
+    const previousLegacyMatcherUrl = process.env.EXTERNAL_MATCHER_URL;
     process.env.PRIVATE_MATCHING_REQUIRED = "true";
     process.env.MATCHING_BACKEND = "external-blind";
-    process.env.EXTERNAL_MATCHER_URL = "https://matcher.merkl.local";
+    process.env.MATCHER_SERVICE_URL = "https://matcher.merkl.local";
+    delete process.env.EXTERNAL_MATCHER_URL;
     process.env.MATCHER_COMMITTEE_REQUIRED = "true";
     process.env.MATCHER_COMMITTEE_ADDRESSES = "";
     process.env.MATCHER_COMMITTEE_THRESHOLD = "2";
@@ -655,26 +657,30 @@ describe("server api", () => {
       restoreEnv("MATCHER_COMMITTEE_REQUIRED", previousCommitteeRequired);
       restoreEnv("MATCHER_COMMITTEE_ADDRESSES", previousCommittee);
       restoreEnv("MATCHER_COMMITTEE_THRESHOLD", previousThreshold);
-      restoreEnv("EXTERNAL_MATCHER_URL", previousMatcherUrl);
+      restoreEnv("MATCHER_SERVICE_URL", previousMatcherUrl);
+      restoreEnv("EXTERNAL_MATCHER_URL", previousLegacyMatcherUrl);
     }
   });
 
-  test("fails closed when private external matching lacks a remote matcher", () => {
+  test("fails closed when private matching lacks a matcher service", () => {
     const previousPrivate = process.env.PRIVATE_MATCHING_REQUIRED;
     const previousBackend = process.env.MATCHING_BACKEND;
-    const previousUrl = process.env.EXTERNAL_MATCHER_URL;
+    const previousUrl = process.env.MATCHER_SERVICE_URL;
+    const previousLegacyUrl = process.env.EXTERNAL_MATCHER_URL;
     process.env.PRIVATE_MATCHING_REQUIRED = "true";
     process.env.MATCHING_BACKEND = "external-blind";
-    process.env.EXTERNAL_MATCHER_URL = "";
+    process.env.MATCHER_SERVICE_URL = "";
+    delete process.env.EXTERNAL_MATCHER_URL;
 
     try {
       expect(() => createAppRuntime()).toThrow(
-        "EXTERNAL_MATCHER_URL is required for private external matching",
+        "MATCHER_SERVICE_URL is required for private matcher service",
       );
     } finally {
       restoreEnv("PRIVATE_MATCHING_REQUIRED", previousPrivate);
       restoreEnv("MATCHING_BACKEND", previousBackend);
-      restoreEnv("EXTERNAL_MATCHER_URL", previousUrl);
+      restoreEnv("MATCHER_SERVICE_URL", previousUrl);
+      restoreEnv("EXTERNAL_MATCHER_URL", previousLegacyUrl);
     }
   });
 

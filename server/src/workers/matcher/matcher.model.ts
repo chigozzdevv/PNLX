@@ -9,15 +9,15 @@ import type { ProofCoordinatorService } from "../proof-coordinator/proof-coordin
 
 export type MatcherComputeBackend = "local-threshold" | "remote-blind" | "nilcc";
 
-export interface ExternalMatcherSigner {
+export interface MatcherSigner {
   address: string;
   sign(message: string): string;
 }
 
-export interface ExternalMatcherConfig {
-  accountEventEncryptor?: ExternalMatcherAccountEventEncryptor;
+export interface MatcherConfig {
+  accountEventEncryptor?: MatcherAccountEventEncryptor;
   compute?: BlindComputeGateway;
-  signers?: ExternalMatcherSigner[];
+  signers?: MatcherSigner[];
 }
 
 export interface BlindComputeGateway {
@@ -27,11 +27,11 @@ export interface BlindComputeGateway {
   ): CommitteeSettlementTranscript | Promise<CommitteeSettlementTranscript>;
 }
 
-export type ExternalMatcherAccountEventEncryptor = (
-  payload: ExternalMatcherAccountEventPayload,
+export type MatcherAccountEventEncryptor = (
+  payload: MatcherAccountEventPayload,
 ) => string;
 
-export type ExternalMatcherAccountEventPayload =
+export type MatcherAccountEventPayload =
   | {
       kind: "position-opening";
       opening: PrivatePositionOpeningEvent;
@@ -51,13 +51,13 @@ export interface CreateExternalSettlementInput {
   positionCommitments?: Hex[];
 }
 
-export interface ExternalMatcherGateway {
+export interface MatcherGateway {
   createSettlementTranscript(
     input: CreateExternalSettlementInput,
   ): ExternalBatchSettlementTranscript | Promise<ExternalBatchSettlementTranscript>;
 }
 
-export interface RemoteExternalMatcherConfig {
+export interface RemoteMatcherConfig {
   token?: string;
   url: string;
 }

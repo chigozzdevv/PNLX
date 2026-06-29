@@ -35,11 +35,11 @@ import { matcherAttestationMessage } from "../../server/src/shared/protocol/matc
 import { ProtocolStore } from "../../server/src/shared/state/store";
 import { createBatchExecutor } from "../../server/src/workers/batch-executor/batch-executor.worker";
 import { createExecutor } from "../../server/src/workers/executor/executor.worker";
-import { createExternalMatcherApp } from "../../server/src/workers/external-matcher/external-matcher.app";
-import { NilccBlindComputeClient } from "../../server/src/workers/external-matcher/nilcc-blind-compute.service";
-import { RemoteBlindComputeClient } from "../../server/src/workers/external-matcher/remote-blind-compute.service";
-import { RemoteExternalMatcherClient } from "../../server/src/workers/external-matcher/remote-external-matcher.service";
-import { createExternalMatcher } from "../../server/src/workers/external-matcher/external-matcher.worker";
+import { createMatcherApp } from "../../server/src/workers/matcher/matcher.app";
+import { NilccBlindComputeClient } from "../../server/src/workers/matcher/nilcc/matcher.service";
+import { RemoteBlindComputeClient } from "../../server/src/workers/matcher/remote-compute/matcher.service";
+import { RemoteMatcherClient } from "../../server/src/workers/matcher/remote/matcher.service";
+import { createMatcher } from "../../server/src/workers/matcher/matcher.worker";
 import { createFundingEngine } from "../../server/src/workers/funding-engine/funding-engine.worker";
 import { createIndexer } from "../../server/src/workers/indexer/indexer.worker";
 import { createOnchainRelay } from "../../server/src/workers/onchain/onchain.worker";
@@ -79,6 +79,34 @@ describe("support workers", () => {
     } finally {
       restoreEnv("ORACLE_PUBLISHER_SOURCES", previousSources);
       restoreEnv("ORACLE_PUBLISHER_ADDRESSES", previousAddresses);
+    }
+  });
+
+  test("prefers matcher service env names while accepting legacy aliases", () => {
+    const previousServiceUrl = process.env.MATCHER_SERVICE_URL;
+    const previousServiceToken = process.env.MATCHER_SERVICE_TOKEN;
+    const previousLegacyUrl = process.env.EXTERNAL_MATCHER_URL;
+    const previousLegacyToken = process.env.EXTERNAL_MATCHER_TOKEN;
+
+    try {
+      delete process.env.MATCHER_SERVICE_URL;
+      delete process.env.MATCHER_SERVICE_TOKEN;
+      process.env.EXTERNAL_MATCHER_URL = "https://legacy-matcher.merkl.local";
+      process.env.EXTERNAL_MATCHER_TOKEN = "legacy-token";
+      const legacyEnv = loadEnv();
+      expect(legacyEnv.matcherServiceUrl).toBe("https://legacy-matcher.merkl.local");
+      expect(legacyEnv.matcherServiceToken).toBe("legacy-token");
+
+      process.env.MATCHER_SERVICE_URL = "https://matcher.merkl.local";
+      process.env.MATCHER_SERVICE_TOKEN = "service-token";
+      const preferredEnv = loadEnv();
+      expect(preferredEnv.matcherServiceUrl).toBe("https://matcher.merkl.local");
+      expect(preferredEnv.matcherServiceToken).toBe("service-token");
+    } finally {
+      restoreEnv("MATCHER_SERVICE_URL", previousServiceUrl);
+      restoreEnv("MATCHER_SERVICE_TOKEN", previousServiceToken);
+      restoreEnv("EXTERNAL_MATCHER_URL", previousLegacyUrl);
+      restoreEnv("EXTERNAL_MATCHER_TOKEN", previousLegacyToken);
     }
   });
 
@@ -524,7 +552,7 @@ describe("support workers", () => {
       limitPrice: 49_500n * PRICE_SCALE,
       marketId: market.marketId,
     }));
-    const matcher = createExternalMatcher(executor, {
+    const matcher = createMatcher(executor, {
       accountEventEncryptor: (payload) => `base64:test-encrypted:${payload.kind}`,
       signers: [
         {
@@ -608,7 +636,7 @@ describe("support workers", () => {
         updatedAt: now,
       });
     }
-    const matcher = createExternalMatcher(executor, {
+    const matcher = createMatcher(executor, {
       signers: [
         {
           address: signer.address,
@@ -630,8 +658,8 @@ describe("support workers", () => {
     expect(transcript.attestation?.transcriptHash).toBe(externalMatcherTranscriptHash(transcript));
   });
 
-  test("remote external matcher client requests a separate matcher service", async () => {
-    const fixture = externalBatchFixture("remote-external-client");
+  test("remote matcher client requests a separate matcher service", async () => {
+    const fixture = externalBatchFixture("remote-matcher-client");
     const previousFetch = globalThis.fetch;
     globalThis.fetch = (async (url, init) => {
       expect(String(url)).toBe("https://matcher.merkl.local/match/settlement");
@@ -649,7 +677,7 @@ describe("support workers", () => {
     }) as typeof fetch;
 
     try {
-      const client = new RemoteExternalMatcherClient({
+      const client = new RemoteMatcherClient({
         token: "remote-secret",
         url: "https://matcher.merkl.local",
       });
@@ -774,28 +802,28 @@ describe("support workers", () => {
 
   test("private matcher app requires remote or nilCC blind compute backend", () => {
     expect(() =>
-      createExternalMatcherApp({
+      createMatcherApp({
         computeBackend: "local-threshold",
         privateMatchingRequired: true,
       }),
     ).toThrow("MATCHER_COMPUTE_BACKEND=remote-blind or nilcc is required for private matcher service");
 
     expect(() =>
-      createExternalMatcherApp({
+      createMatcherApp({
         computeBackend: "remote-blind",
         privateMatchingRequired: true,
       }),
     ).toThrow("MATCHER_COMPUTE_URL is required for remote blind matcher compute");
 
     expect(() =>
-      createExternalMatcherApp({
+      createMatcherApp({
         computeBackend: "nilcc",
         privateMatchingRequired: true,
       }),
     ).toThrow("NILCC_WORKLOAD_URL is required for nilCC blind compute");
 
     expect(() =>
-      createExternalMatcherApp({
+      createMatcherApp({
         computeBackend: "nilcc",
         nilccWorkloadUrl: "https://nilcc.merkl.local",
         privateMatchingRequired: true,
@@ -803,7 +831,7 @@ describe("support workers", () => {
     ).toThrow("NILCC_ATTESTATION_REPORT_SHA256 or NILCC_ATTESTATION_CONTAINS is required for nilCC blind compute");
   });
 
-  test("external matcher app produces transcripts from a separate persisted matcher process view", async () => {
+  test("matcher app produces transcripts from a separate persisted matcher process view", async () => {
     const storePath = join(mkdtempSync(join(tmpdir(), "merkl-remote-matcher-")), "protocol-store.json");
     const executor = createExecutor({ matchingBackend: "external-blind", storePath });
     const market = {
@@ -835,7 +863,7 @@ describe("support workers", () => {
       });
     }
 
-    const matcherApp = createExternalMatcherApp({
+    const matcherApp = createMatcherApp({
       thresholdShareNodeIds: ["node-a", "node-b", "node-c"],
       thresholdShareThreshold: 2,
       storePath,
@@ -923,7 +951,7 @@ describe("support workers", () => {
     }) as typeof fetch;
 
     try {
-      const matcherApp = createExternalMatcherApp({
+      const matcherApp = createMatcherApp({
         computeBackend: "remote-blind",
         computeToken: "compute-token",
         computeUrl: "https://compute.merkl.local",
@@ -955,7 +983,7 @@ describe("support workers", () => {
     }
   });
 
-  test("batch executor automatically settles crossed private orders through external matcher", async () => {
+  test("batch executor automatically settles crossed private orders through matcher service", async () => {
     const executor = createExecutor({ matchingBackend: "external-blind" });
     const market = {
       marketId: "btc-usd-perp",
@@ -986,7 +1014,7 @@ describe("support workers", () => {
         updatedAt: now,
       });
     }
-    const matcher = createExternalMatcher(executor);
+    const matcher = createMatcher(executor);
     const batchExecutor = createBatchExecutor(
       executor,
       matcher,
@@ -1053,7 +1081,7 @@ describe("support workers", () => {
     });
     const batchExecutor = createBatchExecutor(
       executor,
-      createExternalMatcher(executor),
+      createMatcher(executor),
       {
         batchIdPrefix: "runner",
         intervalMs: 1000,

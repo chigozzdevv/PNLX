@@ -16,26 +16,26 @@ import { ProofCoordinatorService } from "../proof-coordinator/proof-coordinator.
 import type {
   BlindComputeGateway,
   CreateExternalSettlementInput,
-  ExternalMatcherAccountEventEncryptor,
-  ExternalMatcherConfig,
-  ExternalMatcherSigner,
-} from "./external-matcher.model";
+  MatcherAccountEventEncryptor,
+  MatcherConfig,
+  MatcherSigner,
+} from "./matcher.model";
 import type {
   CommitteeSettlementInput,
   CommitteeSettlementTranscript,
   PrivatePositionOpeningEvent,
 } from "../threshold-shares/threshold-shares.model";
 
-export class ExternalMatcherService {
-  private readonly accountEventEncryptor?: ExternalMatcherAccountEventEncryptor;
+export class MatcherService {
+  private readonly accountEventEncryptor?: MatcherAccountEventEncryptor;
   private readonly compute: BlindComputeGateway;
-  private readonly signers: ExternalMatcherSigner[];
+  private readonly signers: MatcherSigner[];
 
   constructor(
     private readonly store: ProtocolStore,
     committee: ThresholdShareCommittee,
     private readonly proofs = new ProofCoordinatorService(),
-    config: ExternalMatcherConfig = {},
+    config: MatcherConfig = {},
   ) {
     this.accountEventEncryptor = config.accountEventEncryptor;
     this.compute = config.compute ?? new LocalThresholdComputeGateway(committee);
@@ -116,7 +116,7 @@ function createAccountEvents(
   positionEvents: PrivatePositionOpeningEvent[],
   residualOrders: ResidualOrderRecord[] | undefined,
   settlementDigest: `0x${string}`,
-  encryptor: ExternalMatcherAccountEventEncryptor | undefined,
+  encryptor: MatcherAccountEventEncryptor | undefined,
   keyForOwner: (ownerCommitment: `0x${string}`) => string | undefined,
 ): AccountEventRecord[] {
   const requiredCount = positionOpenings.length + (residualOrders?.length ?? 0);
@@ -158,9 +158,9 @@ function createAccountEvents(
 }
 
 function encryptAccountEvent(
-  payload: Parameters<ExternalMatcherAccountEventEncryptor>[0],
+  payload: Parameters<MatcherAccountEventEncryptor>[0],
   ownerCommitment: `0x${string}`,
-  encryptor: ExternalMatcherAccountEventEncryptor | undefined,
+  encryptor: MatcherAccountEventEncryptor | undefined,
   keyForOwner: (ownerCommitment: `0x${string}`) => string | undefined,
 ): string {
   if (encryptor) return encryptor(payload);
@@ -171,7 +171,7 @@ function encryptAccountEvent(
 
 export function createMatcherAttestation(
   transcript: ExternalBatchSettlementTranscript,
-  signers: ExternalMatcherSigner[],
+  signers: MatcherSigner[],
 ): ExternalMatcherAttestation {
   if (signers.length === 0) {
     throw new Error("external matcher attestation requires at least one signer");

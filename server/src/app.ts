@@ -24,8 +24,8 @@ import { LiquidationsService } from "./features/liquidations/liquidations.servic
 import { createExecutor } from "./workers/executor/executor.worker";
 import { createBatchExecutor } from "./workers/batch-executor/batch-executor.worker";
 import type { BatchExecutorService } from "./workers/batch-executor/batch-executor.service";
-import { createExternalMatcher } from "./workers/external-matcher/external-matcher.worker";
-import { RemoteExternalMatcherClient } from "./workers/external-matcher/remote-external-matcher.service";
+import { createMatcher } from "./workers/matcher/matcher.worker";
+import { RemoteMatcherClient } from "./workers/matcher/remote/matcher.service";
 import { createFundingEngine } from "./workers/funding-engine/funding-engine.worker";
 import type { FundingEngineService } from "./workers/funding-engine/funding-engine.service";
 import { OracleService } from "./workers/oracle/oracle.service";
@@ -103,18 +103,18 @@ export function createAppRuntime(): AppRuntime {
     prover,
     onchain,
   );
-  if (env.privateMatchingRequired && env.matchingBackend === "external-blind" && !env.externalMatcherUrl) {
-    throw new Error("EXTERNAL_MATCHER_URL is required for private external matching");
+  if (env.privateMatchingRequired && env.matchingBackend === "external-blind" && !env.matcherServiceUrl) {
+    throw new Error("MATCHER_SERVICE_URL is required for private matcher service");
   }
-  const externalMatcher = env.externalMatcherUrl
-    ? new RemoteExternalMatcherClient({
-        token: env.externalMatcherToken || undefined,
-        url: env.externalMatcherUrl,
+  const matcher = env.matcherServiceUrl
+    ? new RemoteMatcherClient({
+        token: env.matcherServiceToken || undefined,
+        url: env.matcherServiceUrl,
       })
-    : createExternalMatcher(executor);
+    : createMatcher(executor);
   const batchExecutor = createBatchExecutor(
     executor,
-    externalMatcher,
+    matcher,
     {
       batchIdPrefix: env.batchExecutorPrefix,
       intervalMs: env.batchExecutorIntervalMs,

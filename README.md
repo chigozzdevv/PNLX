@@ -5,7 +5,7 @@ identity, margin, positions, order intent, entry price, liquidation threshold,
 TP/SL strategy, and account state private by default while exposing public
 market aggregates needed for a healthy perps venue.
 
-The selected production design uses external blind matching plus ZK proof
+The selected production design uses separated blind matching plus ZK proof
 binding: traders secret-share intents to an executor/MPC/FHE committee, the
 committee computes private fills and state transitions outside the Merkl API
 server, and Soroban contracts accept only proof metadata bound to circuit key,
@@ -55,6 +55,10 @@ server/
       state/
     workers/
       batch-matcher/
+      matcher/
+        nilcc/
+        remote/
+        remote-compute/
       executor/
       indexer/
       threshold-shares/
@@ -103,14 +107,14 @@ Matching backend modes:
 - `MATCHING_BACKEND=external-blind` is the production path. The Merkl API server
   refuses to recover shares for `/batches/settle`; an external MPC/FHE matcher
   posts a proven transcript to `POST /batches/settle-external`.
-- `EXTERNAL_MATCHER_URL` points the API/batch executor at the separate matcher
+- `MATCHER_SERVICE_URL` points the API/batch executor at the separate matcher
   service. When `PRIVATE_MATCHING_REQUIRED=true` and `MATCHING_BACKEND=external-blind`,
   the API refuses to start without this URL, so private deployments cannot
   silently fall back to in-process matching.
 - Run the matcher process with `bun run matcher:server`. It exposes
   `POST /match/settlement`, reads the persisted protocol/share state, and
-  returns the external settlement transcript. Use `MATCHER_PORT` and
-  `MATCHER_API_TOKEN` for the matcher service, and `EXTERNAL_MATCHER_TOKEN` for
+  returns the settlement transcript. Use `MATCHER_PORT` and
+  `MATCHER_API_TOKEN` for the matcher service, and `MATCHER_SERVICE_TOKEN` for
   the API client bearer token.
 - The matcher service has its own compute backend boundary. Use
   `MATCHER_COMPUTE_BACKEND=remote-blind` plus `MATCHER_COMPUTE_URL` to delegate
@@ -130,7 +134,7 @@ Matching backend modes:
   threshold Ed25519/Stellar-address signatures over the batch settlement public
   input hash. Defaults to `PRIVATE_MATCHING_REQUIRED`.
 - `MATCHER_COMMITTEE_ADDRESSES` and `MATCHER_COMMITTEE_THRESHOLD` configure the
-  authorized external matcher/executor committee.
+  authorized matcher/executor committee.
 - The nilCC workload image is built from
   `server/docker/blind-compute.Dockerfile`; run
   `bun run docker:blind-compute` for a local image tag. The compose payload for
@@ -145,7 +149,7 @@ Matching backend modes:
   sign both the public-input hash and a full transcript hash covering indexed
   position/residual records plus the encrypted account event commitments.
 - `BATCH_EXECUTOR_ENABLED=true` starts the automated batch executor. It scans
-  markets with open private orders, asks the external matcher to create a
+  markets with open private orders, asks the matcher service to create a
   settlement transcript, relays settlement on-chain when configured, commits
   only after the proof/finality rule is satisfied, and writes a durable
   `BatchExecutionRunRecord` for settled, skipped, and failed attempts.
@@ -479,7 +483,7 @@ user creates shielded margin note
 -> user deposits commitment into shielded pool
 -> user creates private trade intent
 -> intent fields are secret-shared for external blind compute
--> external matcher delegates private batch computation to the configured MPC/FHE/blind provider
+-> matcher delegates private batch computation to the configured MPC/FHE/blind provider
 -> matcher/prover binds settlement to circuit and public inputs
 -> proof digest is recorded in the proof ledger
 -> market reads a fresh SEP-40/Reflector price on-chain

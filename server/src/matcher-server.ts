@@ -1,8 +1,8 @@
 import { loadEnv } from "./config/env";
-import { createExternalMatcherApp } from "./workers/external-matcher/external-matcher.app";
+import { createMatcherApp } from "./workers/matcher/matcher.app";
 
 const env = loadEnv();
-const app = createExternalMatcherApp({
+const app = createMatcherApp({
   computeBackend: env.matcherComputeBackend,
   computeToken: env.matcherComputeToken || undefined,
   computeUrl: env.matcherComputeUrl || undefined,
@@ -26,4 +26,4 @@ Bun.serve({
   fetch: (request) => app.handle(request),
 });
 
-console.log(`merkl external matcher listening on ${port}`);
+console.log(`merkl matcher listening on ${port}`);

@@ -2,7 +2,7 @@ import { hashFields } from "@merkl/crypto";
 import type { BatchExecutionRunRecord, Hex } from "@merkl/protocol-types";
 import type { OnchainRelay, OnchainRelayResult } from "../onchain/onchain.model";
 import type { ExecutorService } from "../executor/executor.service";
-import type { ExternalMatcherGateway } from "../external-matcher/external-matcher.model";
+import type { MatcherGateway } from "../matcher/matcher.model";
 import type {
   BatchExecutorConfig,
   BatchExecutorMarketResult,
@@ -18,7 +18,7 @@ export class BatchExecutorService {
 
   constructor(
     private readonly executor: ExecutorService,
-    private readonly matcher: ExternalMatcherGateway,
+    private readonly matcher: MatcherGateway,
     private readonly config: BatchExecutorConfig = {
       intervalMs: DEFAULT_BATCH_INTERVAL_MS,
     },

@@ -68,9 +68,9 @@ export class HealthController {
       },
       matching: {
         backend: this.env.matchingBackend,
-        externalMatcher: {
-          configured: Boolean(this.env.externalMatcherUrl),
-          url: this.env.externalMatcherUrl ? redactUrl(this.env.externalMatcherUrl) : "",
+        matcherService: {
+          configured: Boolean(this.env.matcherServiceUrl),
+          url: this.env.matcherServiceUrl ? redactUrl(this.env.matcherServiceUrl) : "",
         },
         compute: {
           backend: this.env.matcherComputeBackend,
@@ -183,8 +183,8 @@ function matchingReadinessIssues(env: ServerEnv): string[] {
   if (env.matchingBackend === "threshold-recovery") {
     issues.push("MATCHING_BACKEND=threshold-recovery is not executor-blind");
   }
-  if (env.matchingBackend === "external-blind" && env.privateMatchingRequired && !env.externalMatcherUrl) {
-    issues.push("EXTERNAL_MATCHER_URL is required for private external matching");
+  if (env.matchingBackend === "external-blind" && env.privateMatchingRequired && !env.matcherServiceUrl) {
+    issues.push("MATCHER_SERVICE_URL is required for private matcher service");
   }
   if (env.privateMatchingRequired && env.matcherComputeBackend === "local-threshold") {
     issues.push("MATCHER_COMPUTE_BACKEND=remote-blind or nilcc is required for private matcher service");

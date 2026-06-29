@@ -5,7 +5,7 @@ export * from "./workers/batch-matcher/batch-matcher.index";
 export * from "./workers/blind-compute/blind-compute.index";
 export * from "./workers/batch-executor/batch-executor.index";
 export * from "./workers/executor/executor.index";
-export * from "./workers/external-matcher/external-matcher.index";
+export * from "./workers/matcher/matcher.index";
 export * from "./workers/funding-engine/funding-engine.index";
 export * from "./workers/indexer/indexer.index";
 export * from "./workers/threshold-shares/threshold-shares.index";

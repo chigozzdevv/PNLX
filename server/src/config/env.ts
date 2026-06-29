@@ -22,8 +22,8 @@ export interface ServerEnv {
   liquidationAutomationEnabled: boolean;
   liquidationAutomationIntervalMs: number;
   matchingBackend: "threshold-recovery" | "external-blind";
-  externalMatcherUrl: string;
-  externalMatcherToken: string;
+  matcherServiceUrl: string;
+  matcherServiceToken: string;
   matcherApiToken: string;
   matcherComputeBackend: "local-threshold" | "remote-blind" | "nilcc";
   matcherComputePort: number;
@@ -122,8 +122,8 @@ export function loadEnv(): ServerEnv {
     liquidationAutomationEnabled: booleanValue("LIQUIDATION_AUTOMATION_ENABLED", persistentByDefault),
     liquidationAutomationIntervalMs: Number(value("LIQUIDATION_AUTOMATION_INTERVAL_MS", "5000")),
     matchingBackend: matchingBackend(value("MATCHING_BACKEND", nodeEnv === "production" ? "external-blind" : "threshold-recovery")),
-    externalMatcherUrl: value("EXTERNAL_MATCHER_URL", ""),
-    externalMatcherToken: value("EXTERNAL_MATCHER_TOKEN", ""),
+    matcherServiceUrl: value("MATCHER_SERVICE_URL", value("EXTERNAL_MATCHER_URL", "")),
+    matcherServiceToken: value("MATCHER_SERVICE_TOKEN", value("EXTERNAL_MATCHER_TOKEN", "")),
     matcherApiToken: value("MATCHER_API_TOKEN", ""),
     matcherComputeBackend: matcherComputeBackend(
       value("MATCHER_COMPUTE_BACKEND", nodeEnv === "production" ? "remote-blind" : "local-threshold"),

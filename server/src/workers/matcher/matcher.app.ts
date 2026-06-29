@@ -1,16 +1,16 @@
 import { json, readJson } from "../../shared/http/json";
 import { Router } from "../../shared/http/router";
 import { createExecutor } from "../executor/executor.worker";
-import { NilccBlindComputeClient } from "./nilcc-blind-compute.service";
-import { RemoteBlindComputeClient } from "./remote-blind-compute.service";
-import { createExternalMatcher } from "./external-matcher.worker";
+import { assertNilccMatcherConfig, createNilccMatcherCompute } from "./nilcc/matcher.app";
+import { RemoteBlindComputeClient } from "./remote-compute/matcher.service";
+import { createMatcher } from "./matcher.worker";
 import type {
   BlindComputeGateway,
   CreateExternalSettlementInput,
   MatcherComputeBackend,
-} from "./external-matcher.model";
+} from "./matcher.model";
 
-export interface ExternalMatcherAppOptions {
+export interface MatcherAppOptions {
   computeBackend?: MatcherComputeBackend;
   computeToken?: string;
   computeUrl?: string;
@@ -24,12 +24,12 @@ export interface ExternalMatcherAppOptions {
   thresholdShareStoreDir?: string;
   thresholdShareThreshold?: number;
   privateMatchingRequired?: boolean;
-  signerConfig?: Parameters<typeof createExternalMatcher>[1];
+  signerConfig?: Parameters<typeof createMatcher>[1];
   storePath?: string;
   token?: string;
 }
 
-export function createExternalMatcherApp(options: ExternalMatcherAppOptions = {}): Router {
+export function createMatcherApp(options: MatcherAppOptions = {}): Router {
   const computeBackend = options.computeBackend ?? "local-threshold";
   if (options.privateMatchingRequired && computeBackend === "local-threshold") {
     throw new Error("MATCHER_COMPUTE_BACKEND=remote-blind or nilcc is required for private matcher service");
@@ -38,7 +38,7 @@ export function createExternalMatcherApp(options: ExternalMatcherAppOptions = {}
     throw new Error("MATCHER_COMPUTE_URL is required for remote blind matcher compute");
   }
   if (computeBackend === "nilcc") {
-    assertNilccConfig(options);
+    assertNilccMatcherConfig(options);
   }
 
   const router = new Router();
@@ -50,7 +50,7 @@ export function createExternalMatcherApp(options: ExternalMatcherAppOptions = {}
     privateMatchingRequired: true,
     storePath: options.storePath,
   });
-  const matcher = createExternalMatcher(executor, {
+  const matcher = createMatcher(executor, {
     ...options.signerConfig,
     compute: options.signerConfig?.compute ?? computeFor(options, computeBackend),
   });
@@ -65,38 +65,17 @@ export function createExternalMatcherApp(options: ExternalMatcherAppOptions = {}
 }
 
 function computeFor(
-  options: ExternalMatcherAppOptions,
+  options: MatcherAppOptions,
   backend: MatcherComputeBackend,
 ): BlindComputeGateway | undefined {
   if (backend === "local-threshold") return undefined;
   if (backend === "nilcc") {
-    return new NilccBlindComputeClient({
-      attestationContains: options.nilccAttestationContains ?? [],
-      attestationReportSha256: options.nilccAttestationReportSha256,
-      attestationReportUrl: options.nilccAttestationReportUrl,
-      attestationRequired: options.nilccAttestationRequired ?? true,
-      attestationToken: options.nilccAttestationToken,
-      token: options.computeToken,
-      workloadUrl: options.nilccWorkloadUrl ?? "",
-    });
+    return createNilccMatcherCompute(options);
   }
   return new RemoteBlindComputeClient({
     token: options.computeToken,
     url: options.computeUrl ?? "",
   });
-}
-
-function assertNilccConfig(options: ExternalMatcherAppOptions): void {
-  if (!options.nilccWorkloadUrl) {
-    throw new Error("NILCC_WORKLOAD_URL is required for nilCC blind compute");
-  }
-  if (
-    (options.nilccAttestationRequired ?? true) &&
-    !options.nilccAttestationReportSha256 &&
-    (options.nilccAttestationContains ?? []).length === 0
-  ) {
-    throw new Error("NILCC_ATTESTATION_REPORT_SHA256 or NILCC_ATTESTATION_CONTAINS is required for nilCC blind compute");
-  }
 }
 
 function assertMatcherAuth(request: Request, token: string | undefined): void {
