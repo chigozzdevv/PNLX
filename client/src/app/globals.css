@@ -2082,8 +2082,8 @@ button:disabled {
 
 .landing-infrastructure-section {
   align-items: start;
-  grid-template-columns: minmax(480px, 0.95fr) minmax(0, 0.72fr);
-  gap: clamp(38px, 5vw, 88px);
+  grid-template-columns: minmax(480px, 0.9fr) minmax(0, 0.78fr);
+  gap: clamp(32px, 3.75vw, 56px);
   min-height: clamp(540px, 64vh, 680px);
   padding-top: clamp(54px, 6vw, 82px);
   padding-bottom: clamp(60px, 7vw, 96px);
