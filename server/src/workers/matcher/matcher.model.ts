@@ -24,8 +24,12 @@ export interface MatcherProviderGateway {
   createSettlementTranscript(
     input: CommitteeSettlementInput,
     proofs: ProofCoordinatorService,
-  ): CommitteeSettlementTranscript | Promise<CommitteeSettlementTranscript>;
+  ): MatcherProviderTranscript | Promise<MatcherProviderTranscript>;
 }
+
+export type MatcherProviderTranscript =
+  | CommitteeSettlementTranscript
+  | ExternalBatchSettlementTranscript;
 
 export type MatcherAccountEventEncryptor = (
   payload: MatcherAccountEventPayload,

@@ -1,10 +1,17 @@
+import { parseExternalBatchSettlement } from "@/features/batches/batches.schema";
 import type {
   CommitteeSettlementInput,
-  CommitteeSettlementTranscript,
 } from "@/workers/threshold-shares/threshold-shares.model";
 import type { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
-import type { MatcherProviderGateway, MpspdzMatcherProviderConfig } from "@/workers/matcher/matcher.model";
-import { parseCommitteeSettlementTranscript } from "@/workers/matcher/custom/matcher.service";
+import type {
+  MatcherProviderGateway,
+  MatcherProviderTranscript,
+  MpspdzMatcherProviderConfig,
+} from "@/workers/matcher/matcher.model";
+import {
+  hasEncryptedAccountEvents,
+  parseCommitteeSettlementTranscript,
+} from "@/workers/matcher/custom/matcher.service";
 
 type ComputeBody = Record<string, unknown>;
 
@@ -14,7 +21,7 @@ export class MpspdzMatcherProviderClient implements MatcherProviderGateway {
   async createSettlementTranscript(
     input: CommitteeSettlementInput,
     _proofs: ProofCoordinatorService,
-  ): Promise<CommitteeSettlementTranscript> {
+  ): Promise<MatcherProviderTranscript> {
     const response = await fetch(mpspdzCoordinatorUrl(this.config.coordinatorUrl), {
       body: JSON.stringify({
         ...input,
@@ -40,7 +47,9 @@ export class MpspdzMatcherProviderClient implements MatcherProviderGateway {
           : `MP-SPDZ matcher provider failed with ${response.status}`;
       throw new Error(message);
     }
-    return parseCommitteeSettlementTranscript(body);
+    return hasEncryptedAccountEvents(body)
+      ? parseExternalBatchSettlement(body)
+      : parseCommitteeSettlementTranscript(body);
   }
 }
 

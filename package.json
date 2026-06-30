@@ -28,7 +28,7 @@
     "docker:mpspdz-party": "docker build -f server/docker/mpspdz-party.Dockerfile -t merkl/mpspdz-party:local .",
     "manifest:deploy": "bun scripts/deploy/manifest.ts",
     "matcher:server": "bun server/src/matcher-server.ts",
-    "mpspdz:local": "docker compose -f server/docker/mpspdz-local.compose.yml up --abort-on-container-exit",
+    "mpspdz:local": "docker compose -f server/docker/mpspdz-local.compose.yml up",
     "mpspdz:local:down": "docker compose -f server/docker/mpspdz-local.compose.yml down --volumes",
     "oracle:configure-committee": "bun scripts/oracle/configure-committee.ts",
     "prover:client": "bun scripts/prover/local-client-prover.ts",

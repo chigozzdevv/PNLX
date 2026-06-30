@@ -13,7 +13,7 @@ if [ -n "${MPSPDZ_HOSTS:-}" ]; then
 fi
 
 if [ "${MPSPDZ_INTERACTIVE:-0}" = "1" ]; then
-  exec ./replicated-ring-party.x -I "${MPSPDZ_PARTY_ID}" "${MPSPDZ_PROGRAM}"
+  exec ./replicated-ring-party.x --ip-file-name Player-Data/hosts -I "${MPSPDZ_PARTY_ID}" "${MPSPDZ_PROGRAM}"
 fi
 
-exec ./replicated-ring-party.x "${MPSPDZ_PARTY_ID}" "${MPSPDZ_PROGRAM}"
+exec ./replicated-ring-party.x --ip-file-name Player-Data/hosts "${MPSPDZ_PARTY_ID}" "${MPSPDZ_PROGRAM}"

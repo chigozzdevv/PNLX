@@ -1,5 +1,6 @@
 from Compiler.types import sint
 
+program.use_split(3)
 
 # First executable matching kernel for MP-SPDZ integration.
 # Inputs are fixed-point integers with the same price/size scaling used by Merkl.

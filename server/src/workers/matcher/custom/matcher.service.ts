@@ -1,4 +1,5 @@
 import type { Hex } from "@merkl/protocol-types";
+import { parseExternalBatchSettlement } from "@/features/batches/batches.schema";
 import { parseProofMeta } from "@/features/intents/intents.schema";
 import type {
   CommitteeSettlementInput,
@@ -6,7 +7,11 @@ import type {
   PrivatePositionOpeningEvent,
 } from "@/workers/threshold-shares/threshold-shares.model";
 import type { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
-import type { MatcherProviderGateway, CustomMatcherProviderConfig } from "@/workers/matcher/matcher.model";
+import type {
+  MatcherProviderGateway,
+  CustomMatcherProviderConfig,
+  MatcherProviderTranscript,
+} from "@/workers/matcher/matcher.model";
 
 type ComputeBody = Record<string, unknown>;
 
@@ -16,7 +21,7 @@ export class CustomMatcherProviderClient implements MatcherProviderGateway {
   async createSettlementTranscript(
     input: CommitteeSettlementInput,
     _proofs: ProofCoordinatorService,
-  ): Promise<CommitteeSettlementTranscript> {
+  ): Promise<MatcherProviderTranscript> {
     const response = await fetch(providerUrl(this.config.url), {
       body: JSON.stringify(input, bigintReplacer),
       headers: {
@@ -34,8 +39,14 @@ export class CustomMatcherProviderClient implements MatcherProviderGateway {
           : `custom matcher provider failed with ${response.status}`;
       throw new Error(message);
     }
-    return parseCommitteeSettlementTranscript(body);
+    return hasEncryptedAccountEvents(body)
+      ? parseExternalBatchSettlement(body)
+      : parseCommitteeSettlementTranscript(body);
   }
+}
+
+export function hasEncryptedAccountEvents(input: ComputeBody): boolean {
+  return Array.isArray(input.accountEvents);
 }
 
 export function parseCommitteeSettlementTranscript(input: ComputeBody): CommitteeSettlementTranscript {

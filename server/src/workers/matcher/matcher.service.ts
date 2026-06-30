@@ -1,4 +1,10 @@
-import type { AccountEventRecord, IntentRecord, PositionLifecycleRecord, ResidualOrderRecord } from "@merkl/protocol-types";
+import type {
+  AccountEncryptionKeyRecord,
+  AccountEventRecord,
+  IntentRecord,
+  PositionLifecycleRecord,
+  ResidualOrderRecord,
+} from "@merkl/protocol-types";
 import {
   positionOpeningAccountEventDataCommitment,
   positionOpeningAccountEventId,
@@ -18,6 +24,7 @@ import type {
   CreateExternalSettlementInput,
   MatcherAccountEventEncryptor,
   MatcherConfig,
+  MatcherProviderTranscript,
   MatcherSigner,
 } from "@/workers/matcher/matcher.model";
 import type {
@@ -55,6 +62,7 @@ export class MatcherService {
     }
 
     const computeInput: CommitteeSettlementInput = {
+      accountEncryptionKeys: accountEncryptionKeysFor(this.store, records, residuals),
       batchId: input.batchId,
       market,
       oldRoot: input.oldRoot ?? this.store.positionMembershipRoot(),
@@ -64,8 +72,19 @@ export class MatcherService {
     };
     const transcript = this.provider.createSettlementTranscript(computeInput, this.proofs);
     return isPromiseLike(transcript)
-      ? transcript.then((value) => this.finalizeTranscript(value))
-      : this.finalizeTranscript(transcript);
+      ? transcript.then((value) => this.finalizeProviderTranscript(value))
+      : this.finalizeProviderTranscript(transcript);
+  }
+
+  private finalizeProviderTranscript(
+    transcript: MatcherProviderTranscript,
+  ): ExternalBatchSettlementTranscript {
+    if (isExternalBatchSettlementTranscript(transcript)) {
+      return this.signers.length > 0
+        ? this.attest(transcript, this.signers)
+        : transcript;
+    }
+    return this.finalizeTranscript(transcript);
   }
 
   private finalizeTranscript(transcript: CommitteeSettlementTranscript): ExternalBatchSettlementTranscript {
@@ -213,6 +232,26 @@ function activeResiduals(
     .map((order) => ({ ...order, batchId }));
 }
 
+function accountEncryptionKeysFor(
+  store: ProtocolStore,
+  records: IntentRecord[],
+  residuals: ResidualOrderRecord[],
+): AccountEncryptionKeyRecord[] {
+  const owners = new Set([
+    ...records.map((record) => record.ownerCommitment),
+    ...residuals.map((residual) => residual.ownerCommitment),
+  ]);
+  return [...owners]
+    .map((ownerCommitment) => store.accountEncryptionKey(ownerCommitment))
+    .filter((record): record is AccountEncryptionKeyRecord => Boolean(record));
+}
+
 function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
   return Boolean(value && typeof (value as Promise<T>).then === "function");
+}
+
+function isExternalBatchSettlementTranscript(
+  transcript: MatcherProviderTranscript,
+): transcript is ExternalBatchSettlementTranscript {
+  return "accountEvents" in transcript;
 }

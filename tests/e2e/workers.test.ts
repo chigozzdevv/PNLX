@@ -1123,14 +1123,16 @@ describe("support workers", () => {
       spentNullifiers: [long.noteNullifier, short.noteNullifier],
       store: executor.store,
     });
-    const computeTranscript = committeeTranscript({
-      executor,
-      positionOpenings: [
-        positionOpening(settlement, long, settlement.newCommitments[0]),
-        positionOpening(settlement, short, settlement.newCommitments[1]),
-      ],
+    const positionOpenings = [
+      positionOpening(settlement, long, settlement.newCommitments[0]),
+      positionOpening(settlement, short, settlement.newCommitments[1]),
+    ];
+    const computeTranscript = {
+      accountEvents: accountEventsForOpenings(positionOpenings),
+      positionOpenings,
+      residualOrders: [],
       settlement,
-    });
+    };
     const previousFetch = globalThis.fetch;
     globalThis.fetch = (async (url, init) => {
       expect(String(url)).toBe("https://mpspdz.merkl.local/compute/settlement");
@@ -1140,6 +1142,7 @@ describe("support workers", () => {
       const requestBody = JSON.parse(String(init?.body));
       expect(requestBody.records).toHaveLength(2);
       expect(requestBody.mpspdz.partyUrls).toHaveLength(3);
+      expect(requestBody.accountEncryptionKeys).toHaveLength(2);
       return new Response(body(computeTranscript), {
         headers: { "content-type": "application/json" },
         status: 201,
@@ -1178,6 +1181,7 @@ describe("support workers", () => {
       expect(response.status).toBe(201);
       const transcript = (await response.json()) as Record<string, unknown>;
       expect((transcript.accountEvents as unknown[])).toHaveLength(2);
+      expect(transcript).not.toHaveProperty("positionEvents");
       expect(JSON.stringify(transcript.accountEvents)).not.toContain("positionNullifier");
       expect((transcript.settlement as Record<string, unknown>).settlementDigest).toBe(settlement.settlementDigest);
     } finally {

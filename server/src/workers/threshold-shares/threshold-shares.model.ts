@@ -1,5 +1,6 @@
 import type {
   BatchSettlement,
+  AccountEncryptionKeyRecord,
   Hex,
   IntentRecord,
   IntentShares,
@@ -45,6 +46,7 @@ export interface CommitteeMatchInput {
 }
 
 export interface CommitteeSettlementInput extends CommitteeMatchInput {
+  accountEncryptionKeys?: AccountEncryptionKeyRecord[];
   oldRoot: Hex;
   positionCommitments: Hex[];
 }
