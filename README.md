@@ -56,6 +56,7 @@ server/
     workers/
       batch-matcher/
       matcher/
+        mpspdz/
         nilcc/
         remote/
         custom/
@@ -117,17 +118,23 @@ Matching backend modes:
   `MATCHER_API_TOKEN` for the matcher service, and `MATCHER_SERVICE_TOKEN` for
   the API client bearer token.
 - The matcher service delegates private settlement creation to a matcher
-  provider. Use `MATCHER_PROVIDER=nilcc` plus `NILCC_WORKLOAD_URL` to run
-  Merkl's matcher provider workload inside Nillion nilCC confidential compute.
-  Use `MATCHER_PROVIDER=custom` plus `MATCHER_PROVIDER_URL` for any provider
-  adapter that implements `POST /compute/settlement`, including Arcium,
-  MP-SPDZ, FHE, or a committee-operated service. `MATCHER_PROVIDER=embedded`
-  is only the in-process harness; readiness rejects it when private matching is
-  required.
+  provider. Use `MATCHER_PROVIDER=mpspdz` with
+  `MPSPDZ_COORDINATOR_URL`, `MPSPDZ_PARTY_URLS`, and `MPSPDZ_PROTOCOL` for the
+  cheap self-hosted MPC path. Local Docker can run three parties on one machine
+  for integration, then the same party topology can move to three independent
+  VPS/operators for actual operator privacy.
+- Use `MATCHER_PROVIDER=nilcc` plus `NILCC_WORKLOAD_URL` only when using
+  Nillion nilCC confidential compute. Use `MATCHER_PROVIDER=custom` plus
+  `MATCHER_PROVIDER_URL` for another provider adapter that implements
+  `POST /compute/settlement`, including Arcium, FHE, or a committee-operated
+  service. `MATCHER_PROVIDER=embedded` is only the in-process harness;
+  readiness rejects it when private matching is required.
 - When `PRIVATE_MATCHING_REQUIRED=true`, `bun run matcher:server` refuses to
-  start unless `MATCHER_PROVIDER` is `custom` or `nilcc`. In nilCC
-  mode it also requires `NILCC_WORKLOAD_URL` and an attestation pin through
-  `NILCC_ATTESTATION_REPORT_SHA256` or `NILCC_ATTESTATION_CONTAINS`.
+  start unless `MATCHER_PROVIDER` is `custom`, `mpspdz`, or `nilcc`. MP-SPDZ
+  mode requires `MPSPDZ_COORDINATOR_URL` plus at least three
+  `MPSPDZ_PARTY_URLS`; nilCC mode requires `NILCC_WORKLOAD_URL` and an
+  attestation pin through `NILCC_ATTESTATION_REPORT_SHA256` or
+  `NILCC_ATTESTATION_CONTAINS`.
 - `PRIVATE_MATCHING_REQUIRED=true` makes startup reject `threshold-recovery`.
   Health also reports matching readiness under `GET /health`.
 - `MATCHER_COMMITTEE_REQUIRED=true` makes external settlement ingestion require
@@ -135,6 +142,11 @@ Matching backend modes:
   input hash. Defaults to `PRIVATE_MATCHING_REQUIRED`.
 - `MATCHER_COMMITTEE_ADDRESSES` and `MATCHER_COMMITTEE_THRESHOLD` configure the
   authorized matcher/executor committee.
+- Build the local MP-SPDZ party image with `bun run docker:mpspdz-party`, then
+  run the three-party integration kernel with `bun run mpspdz:local`. The
+  first included MP-SPDZ program is `server/mpspdz/merkl_batch_match.mpc`,
+  which verifies a basic crossed long/short match inside MP-SPDZ. That is the
+  starting matching kernel, not the full private CLOB.
 - The nilCC matcher provider image is built from
   `server/docker/matcher-provider.Dockerfile`; run
   `bun run docker:matcher-provider` for a local image tag. The compose payload for

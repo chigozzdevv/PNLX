@@ -25,7 +25,7 @@ export interface ServerEnv {
   matcherServiceUrl: string;
   matcherServiceToken: string;
   matcherApiToken: string;
-  matcherProvider: "embedded" | "custom" | "nilcc";
+  matcherProvider: "embedded" | "custom" | "mpspdz" | "nilcc";
   matcherProviderPort: number;
   matcherProviderToken: string;
   matcherProviderUrl: string;
@@ -37,6 +37,9 @@ export interface ServerEnv {
   thresholdShareNodeIds: string[];
   thresholdShareStoreDir: string;
   thresholdShareThreshold: number;
+  mpspdzCoordinatorUrl: string;
+  mpspdzPartyUrls: string[];
+  mpspdzProtocol: string;
   nilccAttestationContains: string[];
   nilccAttestationReportSha256: string;
   nilccAttestationReportUrl: string;
@@ -126,7 +129,7 @@ export function loadEnv(): ServerEnv {
     matcherServiceToken: value("MATCHER_SERVICE_TOKEN", value("EXTERNAL_MATCHER_TOKEN", "")),
     matcherApiToken: value("MATCHER_API_TOKEN", ""),
     matcherProvider: matcherProvider(
-      value("MATCHER_PROVIDER", nodeEnv === "production" ? "nilcc" : "embedded"),
+      value("MATCHER_PROVIDER", nodeEnv === "production" ? "mpspdz" : "embedded"),
     ),
     matcherProviderPort: Number(value("MATCHER_PROVIDER_PORT", "4103")),
     matcherProviderToken: value("MATCHER_PROVIDER_TOKEN", ""),
@@ -142,6 +145,9 @@ export function loadEnv(): ServerEnv {
     thresholdShareNodeIds: listValue("THRESHOLD_SHARE_NODE_IDS", ["node-a", "node-b", "node-c"], { uppercase: false }),
     thresholdShareStoreDir: value("THRESHOLD_SHARE_STORE_DIR", persistentByDefault ? join(runtimeDir, "threshold-shares") : ""),
     thresholdShareThreshold: Number(value("THRESHOLD_SHARE_THRESHOLD", "2")),
+    mpspdzCoordinatorUrl: value("MPSPDZ_COORDINATOR_URL", ""),
+    mpspdzPartyUrls: listValue("MPSPDZ_PARTY_URLS", [], { uppercase: false }),
+    mpspdzProtocol: value("MPSPDZ_PROTOCOL", "replicated-ring"),
     nilccAttestationContains: listValue("NILCC_ATTESTATION_CONTAINS", [], { uppercase: false }),
     nilccAttestationReportSha256: value("NILCC_ATTESTATION_REPORT_SHA256", ""),
     nilccAttestationReportUrl: value("NILCC_ATTESTATION_REPORT_URL", ""),
@@ -260,8 +266,8 @@ function matchingBackend(value: string): ServerEnv["matchingBackend"] {
 }
 
 function matcherProvider(value: string): ServerEnv["matcherProvider"] {
-  if (value === "embedded" || value === "custom" || value === "nilcc") return value;
-  throw new Error("MATCHER_PROVIDER must be embedded, custom, or nilcc");
+  if (value === "embedded" || value === "custom" || value === "mpspdz" || value === "nilcc") return value;
+  throw new Error("MATCHER_PROVIDER must be embedded, custom, mpspdz, or nilcc");
 }
 
 function oraclePriceSource(value: string): "hermes" | "onchain-market" {

@@ -3,6 +3,7 @@ import { Router } from "@/shared/http/router";
 import { createExecutor } from "@/workers/executor/executor.worker";
 import { assertNilccMatcherConfig, createNilccMatcherProvider } from "@/workers/matcher/nilcc/matcher.app";
 import { CustomMatcherProviderClient } from "@/workers/matcher/custom/matcher.service";
+import { assertMpspdzMatcherConfig, createMpspdzMatcherProvider } from "@/workers/matcher/mpspdz/matcher.app";
 import { createMatcher } from "@/workers/matcher/matcher.worker";
 import type {
   MatcherProviderGateway,
@@ -14,6 +15,9 @@ export interface MatcherAppOptions {
   provider?: MatcherProvider;
   providerToken?: string;
   providerUrl?: string;
+  mpspdzCoordinatorUrl?: string;
+  mpspdzPartyUrls?: string[];
+  mpspdzProtocol?: string;
   nilccAttestationContains?: string[];
   nilccAttestationReportSha256?: string;
   nilccAttestationReportUrl?: string;
@@ -32,10 +36,13 @@ export interface MatcherAppOptions {
 export function createMatcherApp(options: MatcherAppOptions = {}): Router {
   const provider = options.provider ?? "embedded";
   if (options.privateMatchingRequired && provider === "embedded") {
-    throw new Error("MATCHER_PROVIDER=custom or nilcc is required for private matcher service");
+    throw new Error("MATCHER_PROVIDER=custom, mpspdz, or nilcc is required for private matcher service");
   }
   if (provider === "custom" && !options.providerUrl) {
     throw new Error("MATCHER_PROVIDER_URL is required for custom matcher provider");
+  }
+  if (provider === "mpspdz") {
+    assertMpspdzMatcherConfig(options);
   }
   if (provider === "nilcc") {
     assertNilccMatcherConfig(options);
@@ -69,6 +76,9 @@ function providerFor(
   backend: MatcherProvider,
 ): MatcherProviderGateway | undefined {
   if (backend === "embedded") return undefined;
+  if (backend === "mpspdz") {
+    return createMpspdzMatcherProvider(options);
+  }
   if (backend === "nilcc") {
     return createNilccMatcherProvider(options);
   }

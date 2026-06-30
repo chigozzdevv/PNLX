@@ -74,8 +74,13 @@ export class HealthController {
         },
         provider: {
           backend: this.env.matcherProvider,
-          configured: Boolean(this.env.matcherProviderUrl),
+          configured: matcherProviderConfigured(this.env),
           url: this.env.matcherProviderUrl ? redactUrl(this.env.matcherProviderUrl) : "",
+          mpspdz: {
+            coordinatorUrl: this.env.mpspdzCoordinatorUrl ? redactUrl(this.env.mpspdzCoordinatorUrl) : "",
+            partyCount: this.env.mpspdzPartyUrls.length,
+            protocol: this.env.mpspdzProtocol,
+          },
         },
         nilcc: {
           attestationPinned: Boolean(
@@ -187,10 +192,16 @@ function matchingReadinessIssues(env: ServerEnv): string[] {
     issues.push("MATCHER_SERVICE_URL is required for private matcher service");
   }
   if (env.privateMatchingRequired && env.matcherProvider === "embedded") {
-    issues.push("MATCHER_PROVIDER=custom or nilcc is required for private matcher service");
+    issues.push("MATCHER_PROVIDER=custom, mpspdz, or nilcc is required for private matcher service");
   }
   if (env.privateMatchingRequired && env.matcherProvider === "custom" && !env.matcherProviderUrl) {
     issues.push("MATCHER_PROVIDER_URL is required for custom matcher provider");
+  }
+  if (env.privateMatchingRequired && env.matcherProvider === "mpspdz" && !env.mpspdzCoordinatorUrl) {
+    issues.push("MPSPDZ_COORDINATOR_URL is required for MP-SPDZ matcher provider");
+  }
+  if (env.privateMatchingRequired && env.matcherProvider === "mpspdz" && env.mpspdzPartyUrls.length < 3) {
+    issues.push("MPSPDZ_PARTY_URLS must include at least 3 party URLs for MP-SPDZ matcher provider");
   }
   if (env.privateMatchingRequired && env.matcherProvider === "nilcc" && !env.nilccWorkloadUrl) {
     issues.push("NILCC_WORKLOAD_URL is required for nilCC matcher provider");
@@ -220,6 +231,15 @@ function matchingReadinessIssues(env: ServerEnv): string[] {
     issues.push("THRESHOLD_SHARE_NODE_IDS must include at least THRESHOLD_SHARE_THRESHOLD nodes");
   }
   return issues;
+}
+
+function matcherProviderConfigured(env: ServerEnv): boolean {
+  if (env.matcherProvider === "custom") return Boolean(env.matcherProviderUrl);
+  if (env.matcherProvider === "mpspdz") {
+    return Boolean(env.mpspdzCoordinatorUrl) && env.mpspdzPartyUrls.length >= 3;
+  }
+  if (env.matcherProvider === "nilcc") return Boolean(env.nilccWorkloadUrl);
+  return false;
 }
 
 function redactUrl(value: string): string {

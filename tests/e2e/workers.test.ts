@@ -38,6 +38,7 @@ import { createExecutor } from "@/workers/executor/executor.worker";
 import { createMatcherApp } from "@/workers/matcher/matcher.app";
 import { NilccMatcherProviderClient } from "@/workers/matcher/nilcc/matcher.service";
 import { CustomMatcherProviderClient } from "@/workers/matcher/custom/matcher.service";
+import { MpspdzMatcherProviderClient } from "@/workers/matcher/mpspdz/matcher.service";
 import { RemoteMatcherClient } from "@/workers/matcher/remote/matcher.service";
 import { createMatcher } from "@/workers/matcher/matcher.worker";
 import { createFundingEngine } from "@/workers/funding-engine/funding-engine.worker";
@@ -131,6 +132,34 @@ describe("support workers", () => {
       restoreEnv("NILCC_WORKLOAD_URL", previousWorkload);
       restoreEnv("NILCC_ATTESTATION_CONTAINS", previousContains);
       restoreEnv("NILCC_ATTESTATION_REPORT_SHA256", previousHash);
+    }
+  });
+
+  test("parses MP-SPDZ matcher provider configuration", () => {
+    const previousBackend = process.env.MATCHER_PROVIDER;
+    const previousCoordinator = process.env.MPSPDZ_COORDINATOR_URL;
+    const previousParties = process.env.MPSPDZ_PARTY_URLS;
+    const previousProtocol = process.env.MPSPDZ_PROTOCOL;
+    process.env.MATCHER_PROVIDER = "mpspdz";
+    process.env.MPSPDZ_COORDINATOR_URL = "https://mpspdz.merkl.local";
+    process.env.MPSPDZ_PARTY_URLS = "https://party-0.merkl.local,https://party-1.merkl.local,https://party-2.merkl.local";
+    process.env.MPSPDZ_PROTOCOL = "replicated-ring";
+
+    try {
+      const env = loadEnv();
+      expect(env.matcherProvider).toBe("mpspdz");
+      expect(env.mpspdzCoordinatorUrl).toBe("https://mpspdz.merkl.local");
+      expect(env.mpspdzPartyUrls).toEqual([
+        "https://party-0.merkl.local",
+        "https://party-1.merkl.local",
+        "https://party-2.merkl.local",
+      ]);
+      expect(env.mpspdzProtocol).toBe("replicated-ring");
+    } finally {
+      restoreEnv("MATCHER_PROVIDER", previousBackend);
+      restoreEnv("MPSPDZ_COORDINATOR_URL", previousCoordinator);
+      restoreEnv("MPSPDZ_PARTY_URLS", previousParties);
+      restoreEnv("MPSPDZ_PROTOCOL", previousProtocol);
     }
   });
 
@@ -731,6 +760,59 @@ describe("support workers", () => {
     }
   });
 
+  test("MP-SPDZ matcher provider client requests coordinator with party metadata", async () => {
+    const fixture = externalBatchFixture("mpspdz-compute-client");
+    const computeTranscript = committeeTranscript(fixture);
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = (async (url, init) => {
+      expect(String(url)).toBe("https://mpspdz.merkl.local/compute/settlement");
+      expect(init?.method).toBe("POST");
+      const headers = init?.headers as Record<string, string>;
+      expect(headers.authorization).toBe("Bearer mpspdz-secret");
+      expect(headers["x-merkl-mpspdz-party-count"]).toBe("3");
+      expect(headers["x-merkl-mpspdz-protocol"]).toBe("replicated-ring");
+      const requestBody = JSON.parse(String(init?.body));
+      expect(requestBody.mpspdz.protocol).toBe("replicated-ring");
+      expect(requestBody.mpspdz.partyUrls).toEqual([
+        "https://party-0.merkl.local",
+        "https://party-1.merkl.local",
+        "https://party-2.merkl.local",
+      ]);
+      expect(requestBody.market.oraclePrice).toBe((50_000n * PRICE_SCALE).toString());
+      return new Response(body(computeTranscript), {
+        headers: { "content-type": "application/json" },
+        status: 201,
+      });
+    }) as typeof fetch;
+
+    try {
+      const client = new MpspdzMatcherProviderClient({
+        coordinatorUrl: "https://mpspdz.merkl.local",
+        partyUrls: [
+          "https://party-0.merkl.local",
+          "https://party-1.merkl.local",
+          "https://party-2.merkl.local",
+        ],
+        protocol: "replicated-ring",
+        token: "mpspdz-secret",
+      });
+      const transcript = await client.createSettlementTranscript({
+        batchId: fixture.settlement.batchId,
+        market: fixture.executor.store.markets.get(fixture.settlement.marketId)!,
+        oldRoot: fixture.executor.store.positionMembershipRoot(),
+        positionCommitments: [],
+        records: [],
+        residuals: [],
+      }, {} as never);
+
+      expect(transcript.settlement.settlementDigest).toBe(fixture.settlement.settlementDigest);
+      expect(transcript.positionEvents).toHaveLength(2);
+      expect(transcript.positionEvents[0].margin).toBe(10_000n);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+
   test("nilCC matcher provider client verifies workload attestation before settlement", async () => {
     const fixture = externalBatchFixture("nilcc-matcher-provider-client");
     const computeTranscript = committeeTranscript(fixture);
@@ -806,7 +888,7 @@ describe("support workers", () => {
         provider: "embedded",
         privateMatchingRequired: true,
       }),
-    ).toThrow("MATCHER_PROVIDER=custom or nilcc is required for private matcher service");
+    ).toThrow("MATCHER_PROVIDER=custom, mpspdz, or nilcc is required for private matcher service");
 
     expect(() =>
       createMatcherApp({
@@ -814,6 +896,22 @@ describe("support workers", () => {
         privateMatchingRequired: true,
       }),
     ).toThrow("MATCHER_PROVIDER_URL is required for custom matcher provider");
+
+    expect(() =>
+      createMatcherApp({
+        provider: "mpspdz",
+        privateMatchingRequired: true,
+      }),
+    ).toThrow("MPSPDZ_COORDINATOR_URL is required for MP-SPDZ matcher provider");
+
+    expect(() =>
+      createMatcherApp({
+        provider: "mpspdz",
+        mpspdzCoordinatorUrl: "https://mpspdz.merkl.local",
+        mpspdzPartyUrls: ["https://party-0.merkl.local", "https://party-1.merkl.local"],
+        privateMatchingRequired: true,
+      }),
+    ).toThrow("MPSPDZ_PARTY_URLS must include at least 3 party URLs for MP-SPDZ matcher provider");
 
     expect(() =>
       createMatcherApp({
@@ -963,6 +1061,110 @@ describe("support workers", () => {
         new Request("http://matcher.local/match/settlement", {
           body: body({
             batchId: "custom-batch",
+            marketId: market.marketId,
+          }),
+          headers: {
+            authorization: "Bearer matcher-token",
+            "content-type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      expect(response.status).toBe(201);
+      const transcript = (await response.json()) as Record<string, unknown>;
+      expect((transcript.accountEvents as unknown[])).toHaveLength(2);
+      expect(JSON.stringify(transcript.accountEvents)).not.toContain("positionNullifier");
+      expect((transcript.settlement as Record<string, unknown>).settlementDigest).toBe(settlement.settlementDigest);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+
+  test("private matcher app delegates settlement compute to MP-SPDZ matcher provider", async () => {
+    const storePath = join(mkdtempSync(join(tmpdir(), "merkl-mpspdz-")), "protocol-store.json");
+    const executor = createExecutor({ matchingBackend: "external-blind", storePath });
+    const market = {
+      marketId: "btc-usd-perp",
+      oraclePrice: 50_000n * PRICE_SCALE,
+      maxLeverage: 10n,
+      initialMarginRate: 100_000n,
+      maintenanceMarginRate: 50_000n,
+      fundingIndex: 0n,
+    };
+    executor.addMarket(market);
+    const long = intentRecord("mpspdz-long", market.marketId, executor.store.marginMembershipRoot());
+    const short = intentRecord("mpspdz-short", market.marketId, executor.store.marginMembershipRoot());
+    executor.store.recordProof(long.proof);
+    executor.store.recordProof(short.proof);
+    executor.store.addIntent(long);
+    executor.store.addIntent(short);
+    for (const record of [long, short]) {
+      executor.store.upsertAccountEncryptionKey({
+        algorithm: "ecdh-p256-aes-gcm",
+        createdAt: 1,
+        ownerCommitment: record.ownerCommitment,
+        publicKey: rawP256PublicKey(),
+        updatedAt: 1,
+      });
+    }
+    const settlement = externalSettlement({
+      batchId: "mpspdz-batch",
+      marketId: market.marketId,
+      oldRoot: executor.store.positionMembershipRoot(),
+      newCommitments: [
+        hashFields("position", ["mpspdz-long"]),
+        hashFields("position", ["mpspdz-short"]),
+      ],
+      orderUpdates: [
+        { intentCommitment: long.intentCommitment, status: "filled" as const },
+        { intentCommitment: short.intentCommitment, status: "filled" as const },
+      ],
+      spentNullifiers: [long.noteNullifier, short.noteNullifier],
+      store: executor.store,
+    });
+    const computeTranscript = committeeTranscript({
+      executor,
+      positionOpenings: [
+        positionOpening(settlement, long, settlement.newCommitments[0]),
+        positionOpening(settlement, short, settlement.newCommitments[1]),
+      ],
+      settlement,
+    });
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = (async (url, init) => {
+      expect(String(url)).toBe("https://mpspdz.merkl.local/compute/settlement");
+      const headers = init?.headers as Record<string, string>;
+      expect(headers.authorization).toBe("Bearer mpspdz-token");
+      expect(headers["x-merkl-mpspdz-party-count"]).toBe("3");
+      const requestBody = JSON.parse(String(init?.body));
+      expect(requestBody.records).toHaveLength(2);
+      expect(requestBody.mpspdz.partyUrls).toHaveLength(3);
+      return new Response(body(computeTranscript), {
+        headers: { "content-type": "application/json" },
+        status: 201,
+      });
+    }) as typeof fetch;
+
+    try {
+      const matcherApp = createMatcherApp({
+        provider: "mpspdz",
+        providerToken: "mpspdz-token",
+        mpspdzCoordinatorUrl: "https://mpspdz.merkl.local",
+        mpspdzPartyUrls: [
+          "https://party-0.merkl.local",
+          "https://party-1.merkl.local",
+          "https://party-2.merkl.local",
+        ],
+        mpspdzProtocol: "replicated-ring",
+        privateMatchingRequired: true,
+        storePath,
+        token: "matcher-token",
+      });
+      const response = await matcherApp.handle(
+        new Request("http://matcher.local/match/settlement", {
+          body: body({
+            batchId: "mpspdz-batch",
             marketId: market.marketId,
           }),
           headers: {

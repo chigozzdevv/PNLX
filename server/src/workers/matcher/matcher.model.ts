@@ -7,7 +7,7 @@ import type {
 } from "@/workers/threshold-shares/threshold-shares.model";
 import type { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
 
-export type MatcherProvider = "embedded" | "custom" | "nilcc";
+export type MatcherProvider = "embedded" | "custom" | "mpspdz" | "nilcc";
 
 export interface MatcherSigner {
   address: string;
@@ -75,4 +75,11 @@ export interface NilccMatcherProviderConfig {
   attestationToken?: string;
   token?: string;
   workloadUrl: string;
+}
+
+export interface MpspdzMatcherProviderConfig {
+  coordinatorUrl: string;
+  partyUrls: string[];
+  protocol: string;
+  token?: string;
 }
