@@ -1,13 +1,13 @@
 import type { CommitteeSettlementTranscript } from "@/workers/threshold-shares/threshold-shares.model";
 import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
 import { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
-import type { BlindComputeConfig, BlindComputeSettlementRequest } from "@/workers/blind-compute/blind-compute.model";
+import type { MatcherProviderConfig, MatcherProviderSettlementRequest } from "@/workers/matcher-provider/matcher-provider.model";
 
-export class BlindComputeService {
+export class MatcherProviderService {
   private readonly committee: ThresholdShareCommittee;
   private readonly proofs = new ProofCoordinatorService();
 
-  constructor(config: BlindComputeConfig) {
+  constructor(config: MatcherProviderConfig) {
     this.committee = new ThresholdShareCommittee({
       nodeIds: config.thresholdShareNodeIds,
       shareStoreDir: config.thresholdShareStoreDir,
@@ -15,7 +15,7 @@ export class BlindComputeService {
     });
   }
 
-  createSettlementTranscript(input: BlindComputeSettlementRequest): CommitteeSettlementTranscript {
+  createSettlementTranscript(input: MatcherProviderSettlementRequest): CommitteeSettlementTranscript {
     return this.committee.createSettlementTranscript(input, this.proofs);
   }
 }

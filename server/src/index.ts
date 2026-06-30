@@ -2,7 +2,7 @@ export * from "@/shared/state/store";
 export * from "@/features/account-keys/account-keys.index";
 export * from "@/features/liquidation-automation/liquidation-automation.index";
 export * from "@/workers/batch-matcher/batch-matcher.index";
-export * from "@/workers/blind-compute/blind-compute.index";
+export * from "@/workers/matcher-provider/matcher-provider.index";
 export * from "@/workers/batch-executor/batch-executor.index";
 export * from "@/workers/executor/executor.index";
 export * from "@/workers/matcher/matcher.index";

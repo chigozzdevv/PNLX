@@ -4,15 +4,15 @@ import type {
   CommitteeSettlementTranscript,
 } from "@/workers/threshold-shares/threshold-shares.model";
 import type { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
-import type { BlindComputeGateway, NilccBlindComputeConfig } from "@/workers/matcher/matcher.model";
-import { RemoteBlindComputeClient } from "@/workers/matcher/remote-compute/matcher.service";
+import type { MatcherProviderGateway, NilccMatcherProviderConfig } from "@/workers/matcher/matcher.model";
+import { CustomMatcherProviderClient } from "@/workers/matcher/custom/matcher.service";
 
-export class NilccBlindComputeClient implements BlindComputeGateway {
+export class NilccMatcherProviderClient implements MatcherProviderGateway {
   private attestationChecked = false;
-  private readonly remote: RemoteBlindComputeClient;
+  private readonly remote: CustomMatcherProviderClient;
 
-  constructor(private readonly config: NilccBlindComputeConfig) {
-    this.remote = new RemoteBlindComputeClient({
+  constructor(private readonly config: NilccMatcherProviderConfig) {
+    this.remote = new CustomMatcherProviderClient({
       token: config.token,
       url: config.workloadUrl,
     });
@@ -59,7 +59,7 @@ export class NilccBlindComputeClient implements BlindComputeGateway {
   }
 }
 
-function attestationReportUrl(config: NilccBlindComputeConfig): string {
+function attestationReportUrl(config: NilccMatcherProviderConfig): string {
   if (config.attestationReportUrl) return config.attestationReportUrl;
   return new URL("/nilcc/api/v2/report", config.workloadUrl).toString();
 }

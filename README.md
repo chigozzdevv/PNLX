@@ -58,7 +58,7 @@ server/
       matcher/
         nilcc/
         remote/
-        remote-compute/
+        custom/
       executor/
       indexer/
       threshold-shares/
@@ -101,9 +101,9 @@ sets a store path.
 
 Matching backend modes:
 
-- `MATCHING_BACKEND=threshold-recovery` is a local/dev backend. It validates
-  threshold shares and creates settlements, but it recovers enough shares
-  inside the server process, so it is not executor-blind.
+- `MATCHING_BACKEND=threshold-recovery` is the embedded recovery path. It
+  validates threshold shares and creates settlements inside the API process, so
+  it is not executor-blind and must not be used for private deployments.
 - `MATCHING_BACKEND=external-blind` is the production path. The Merkl API server
   refuses to recover shares for `/batches/settle`; an external MPC/FHE matcher
   posts a proven transcript to `POST /batches/settle-external`.
@@ -116,16 +116,16 @@ Matching backend modes:
   returns the settlement transcript. Use `MATCHER_PORT` and
   `MATCHER_API_TOKEN` for the matcher service, and `MATCHER_SERVICE_TOKEN` for
   the API client bearer token.
-- The matcher service has its own compute backend boundary. Use
-  `MATCHER_COMPUTE_BACKEND=remote-blind` plus `MATCHER_COMPUTE_URL` to delegate
-  private matching computation to an isolated MPC/FHE/blind-compute service at
-  `POST /compute/settlement`. Use `MATCHER_COMPUTE_BACKEND=nilcc` plus
-  `NILCC_WORKLOAD_URL` to call the Merkl blind-compute workload running inside
-  Nillion nilCC confidential compute. `MATCHER_COMPUTE_BACKEND=local-threshold`
-  is only for development and tests because it recovers threshold shares inside
-  the matcher process.
+- The matcher service delegates private settlement creation to a matcher
+  provider. Use `MATCHER_PROVIDER=nilcc` plus `NILCC_WORKLOAD_URL` to run
+  Merkl's matcher provider workload inside Nillion nilCC confidential compute.
+  Use `MATCHER_PROVIDER=custom` plus `MATCHER_PROVIDER_URL` for any provider
+  adapter that implements `POST /compute/settlement`, including Arcium,
+  MP-SPDZ, FHE, or a committee-operated service. `MATCHER_PROVIDER=embedded`
+  is only the in-process harness; readiness rejects it when private matching is
+  required.
 - When `PRIVATE_MATCHING_REQUIRED=true`, `bun run matcher:server` refuses to
-  start unless `MATCHER_COMPUTE_BACKEND` is `remote-blind` or `nilcc`. In nilCC
+  start unless `MATCHER_PROVIDER` is `custom` or `nilcc`. In nilCC
   mode it also requires `NILCC_WORKLOAD_URL` and an attestation pin through
   `NILCC_ATTESTATION_REPORT_SHA256` or `NILCC_ATTESTATION_CONTAINS`.
 - `PRIVATE_MATCHING_REQUIRED=true` makes startup reject `threshold-recovery`.
@@ -135,11 +135,11 @@ Matching backend modes:
   input hash. Defaults to `PRIVATE_MATCHING_REQUIRED`.
 - `MATCHER_COMMITTEE_ADDRESSES` and `MATCHER_COMMITTEE_THRESHOLD` configure the
   authorized matcher/executor committee.
-- The nilCC workload image is built from
-  `server/docker/blind-compute.Dockerfile`; run
-  `bun run docker:blind-compute` for a local image tag. The compose payload for
-  nilCC is `server/docker/nilcc-blind-compute.compose.yml`; set
-  `MERKL_BLIND_COMPUTE_IMAGE`, `MATCHER_COMPUTE_TOKEN`,
+- The nilCC matcher provider image is built from
+  `server/docker/matcher-provider.Dockerfile`; run
+  `bun run docker:matcher-provider` for a local image tag. The compose payload for
+  nilCC is `server/docker/nilcc-matcher-provider.compose.yml`; set
+  `MERKL_MATCHER_PROVIDER_IMAGE`, `MATCHER_PROVIDER_TOKEN`,
   `THRESHOLD_SHARE_NODE_IDS`, and `THRESHOLD_SHARE_THRESHOLD` before submitting
   it to nilCC.
 - External settlement transcripts are checked against current roots, active
@@ -482,8 +482,8 @@ Do not put Soroban contracts or Noir circuits in `packages/`.
 user creates shielded margin note
 -> user deposits commitment into shielded pool
 -> user creates private trade intent
--> intent fields are secret-shared for external blind compute
--> matcher delegates private batch computation to the configured MPC/FHE/blind provider
+-> intent fields are secret-shared for external matcher provider
+-> matcher delegates private batch computation to the configured MPC/FHE/confidential provider
 -> matcher/prover binds settlement to circuit and public inputs
 -> proof digest is recorded in the proof ledger
 -> market reads a fresh SEP-40/Reflector price on-chain

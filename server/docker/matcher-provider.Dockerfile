@@ -10,8 +10,8 @@ COPY server ./server
 RUN bun install --frozen-lockfile
 
 ENV NODE_ENV=production
-ENV MATCHER_COMPUTE_PORT=4103
+ENV MATCHER_PROVIDER_PORT=4103
 
 EXPOSE 4103
 
-CMD ["bun", "server/src/blind-compute-server.ts"]
+CMD ["bun", "server/src/matcher-provider-server.ts"]

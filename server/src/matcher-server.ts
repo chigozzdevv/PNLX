@@ -3,9 +3,9 @@ import { createMatcherApp } from "@/workers/matcher/matcher.app";
 
 const env = loadEnv();
 const app = createMatcherApp({
-  computeBackend: env.matcherComputeBackend,
-  computeToken: env.matcherComputeToken || undefined,
-  computeUrl: env.matcherComputeUrl || undefined,
+  provider: env.matcherProvider,
+  providerToken: env.matcherProviderToken || undefined,
+  providerUrl: env.matcherProviderUrl || undefined,
   nilccAttestationContains: env.nilccAttestationContains,
   nilccAttestationReportSha256: env.nilccAttestationReportSha256 || undefined,
   nilccAttestationReportUrl: env.nilccAttestationReportUrl || undefined,

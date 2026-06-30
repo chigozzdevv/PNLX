@@ -7,7 +7,7 @@ import type {
 } from "@/workers/threshold-shares/threshold-shares.model";
 import type { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
 
-export type MatcherComputeBackend = "local-threshold" | "remote-blind" | "nilcc";
+export type MatcherProvider = "embedded" | "custom" | "nilcc";
 
 export interface MatcherSigner {
   address: string;
@@ -16,11 +16,11 @@ export interface MatcherSigner {
 
 export interface MatcherConfig {
   accountEventEncryptor?: MatcherAccountEventEncryptor;
-  compute?: BlindComputeGateway;
+  provider?: MatcherProviderGateway;
   signers?: MatcherSigner[];
 }
 
-export interface BlindComputeGateway {
+export interface MatcherProviderGateway {
   createSettlementTranscript(
     input: CommitteeSettlementInput,
     proofs: ProofCoordinatorService,
@@ -62,12 +62,12 @@ export interface RemoteMatcherConfig {
   url: string;
 }
 
-export interface RemoteBlindComputeConfig {
+export interface CustomMatcherProviderConfig {
   token?: string;
   url: string;
 }
 
-export interface NilccBlindComputeConfig {
+export interface NilccMatcherProviderConfig {
   attestationContains: string[];
   attestationReportSha256?: string;
   attestationReportUrl?: string;

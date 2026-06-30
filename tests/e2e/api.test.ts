@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp, createAppRuntime } from "@/app";
 import { encodeStellarPublicKey } from "@/features/auth/auth.service";
-import { createBlindComputeApp } from "@/workers/blind-compute/blind-compute.app";
+import { createMatcherProviderApp } from "@/workers/matcher-provider/matcher-provider.app";
 import { createExecutor } from "@/workers/executor/executor.worker";
 import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
 import { ProverService } from "@/workers/prover/prover.service";
@@ -28,8 +28,8 @@ process.env.AUTH_REQUIRED = "false";
 process.env.COLLATERAL_TOKEN_CONTRACT = "";
 process.env.FUNDING_ENGINE_ENABLED = "false";
 process.env.MATCHER_COMMITTEE_REQUIRED = "false";
-process.env.MATCHER_COMPUTE_BACKEND = "local-threshold";
-process.env.MATCHER_COMPUTE_URL = "";
+process.env.MATCHER_PROVIDER = "embedded";
+process.env.MATCHER_PROVIDER_URL = "";
 process.env.MATCHING_BACKEND = "threshold-recovery";
 process.env.PRIVATE_MATCHING_REQUIRED = "false";
 process.env.SERVER_WITNESS_ROUTES_ENABLED = "true";
@@ -684,8 +684,8 @@ describe("server api", () => {
     }
   });
 
-  test("serves remote blind compute settlement transcripts from persisted threshold shares", async () => {
-    const shareDir = mkdtempSync(join(tmpdir(), "merkl-blind-compute-shares-"));
+  test("serves custom matcher provider settlement transcripts from persisted threshold shares", async () => {
+    const shareDir = mkdtempSync(join(tmpdir(), "merkl-matcher-provider-shares-"));
     const executor = createExecutor({ thresholdShareStoreDir: shareDir });
     const clientProver = new ProverService();
     const clientCommittee = new ThresholdShareCommittee({
@@ -693,7 +693,7 @@ describe("server api", () => {
       threshold: 2,
     });
     const market = {
-      marketId: "btc-usd-perp-blind-compute",
+      marketId: "btc-usd-perp-matcher-provider",
       oraclePrice: 50_000n * PRICE_SCALE,
       maxLeverage: 5n,
       initialMarginRate: 200_000n,
@@ -705,45 +705,45 @@ describe("server api", () => {
     const longNote = createCircuitMarginNote({
       assetId: "usdc",
       amount: 12_000n,
-      owner: "blind-compute-long",
-      spendSecret: "blind-compute-long-spend",
-      rho: "blind-compute-long-rho",
-      blinding: "blind-compute-long-blind",
+      owner: "matcher-provider-long",
+      spendSecret: "matcher-provider-long-spend",
+      rho: "matcher-provider-long-rho",
+      blinding: "matcher-provider-long-blind",
     });
     const shortNote = createCircuitMarginNote({
       assetId: "usdc",
       amount: 12_000n,
-      owner: "blind-compute-short",
-      spendSecret: "blind-compute-short-spend",
-      rho: "blind-compute-short-rho",
-      blinding: "blind-compute-short-blind",
+      owner: "matcher-provider-short",
+      spendSecret: "matcher-provider-short-spend",
+      rho: "matcher-provider-short-rho",
+      blinding: "matcher-provider-short-blind",
     });
     const leaves = [longNote.commitment as Hex, shortNote.commitment as Hex];
     for (const commitment of leaves) executor.deposit(commitment);
 
     const long = buildSharedIntent(clientProver, clientCommittee, {
-      batchId: "blind-compute-batch",
+      batchId: "matcher-provider-batch",
       limitPrice: 51_000n * PRICE_SCALE,
       margin: 12_000n,
       marketId: market.marketId,
       membershipProof: fieldMerkleProof(leaves, longNote.commitment as Hex),
-      nonce: "blind-compute-long-intent",
+      nonce: "matcher-provider-long-intent",
       note: longNote,
-      owner: "blind-compute-long",
-      salt: "blind-compute-long-salt",
+      owner: "matcher-provider-long",
+      salt: "matcher-provider-long-salt",
       side: "long",
       size: 1n,
     });
     const short = buildSharedIntent(clientProver, clientCommittee, {
-      batchId: "blind-compute-batch",
+      batchId: "matcher-provider-batch",
       limitPrice: 49_000n * PRICE_SCALE,
       margin: 12_000n,
       marketId: market.marketId,
       membershipProof: fieldMerkleProof(leaves, shortNote.commitment as Hex),
-      nonce: "blind-compute-short-intent",
+      nonce: "matcher-provider-short-intent",
       note: shortNote,
-      owner: "blind-compute-short",
-      salt: "blind-compute-short-salt",
+      owner: "matcher-provider-short",
+      salt: "matcher-provider-short-salt",
       side: "short",
       size: 1n,
     });
@@ -752,17 +752,17 @@ describe("server api", () => {
     executor.submitSharedIntent(long);
     executor.submitSharedIntent(short);
 
-    const compute = createBlindComputeApp({
+    const provider = createMatcherProviderApp({
       thresholdShareNodeIds: ["node-a", "node-b", "node-c"],
       thresholdShareStoreDir: shareDir,
       thresholdShareThreshold: 2,
-      token: "compute-secret",
+      token: "provider-secret",
     });
-    const response = await compute.handle(
-      new Request("http://compute.local/compute/settlement", {
+    const response = await provider.handle(
+      new Request("http://provider.local/compute/settlement", {
         method: "POST",
         body: body({
-          batchId: "blind-compute-batch",
+          batchId: "matcher-provider-batch",
           market,
           oldRoot: executor.store.positionMembershipRoot(),
           positionCommitments: [],
@@ -770,7 +770,7 @@ describe("server api", () => {
           residuals: [],
         }),
         headers: {
-          authorization: "Bearer compute-secret",
+          authorization: "Bearer provider-secret",
           "content-type": "application/json",
         },
       }),
@@ -780,7 +780,7 @@ describe("server api", () => {
     expect(transcript.settlement.fillCount).toBe(2);
     expect(transcript.settlement.proof).toMatchObject({ circuitId: "batch-match" });
     expect(transcript.positionOpenings as unknown[]).toHaveLength(2);
-    expect(JSON.stringify(transcript)).not.toContain("blind-compute-long-spend");
+    expect(JSON.stringify(transcript)).not.toContain("matcher-provider-long-spend");
   });
 
   test("requires on-chain market oracle authority when production oracle mode is enabled", async () => {

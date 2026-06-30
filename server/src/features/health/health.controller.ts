@@ -72,10 +72,10 @@ export class HealthController {
           configured: Boolean(this.env.matcherServiceUrl),
           url: this.env.matcherServiceUrl ? redactUrl(this.env.matcherServiceUrl) : "",
         },
-        compute: {
-          backend: this.env.matcherComputeBackend,
-          configured: Boolean(this.env.matcherComputeUrl),
-          url: this.env.matcherComputeUrl ? redactUrl(this.env.matcherComputeUrl) : "",
+        provider: {
+          backend: this.env.matcherProvider,
+          configured: Boolean(this.env.matcherProviderUrl),
+          url: this.env.matcherProviderUrl ? redactUrl(this.env.matcherProviderUrl) : "",
         },
         nilcc: {
           attestationPinned: Boolean(
@@ -186,23 +186,23 @@ function matchingReadinessIssues(env: ServerEnv): string[] {
   if (env.matchingBackend === "external-blind" && env.privateMatchingRequired && !env.matcherServiceUrl) {
     issues.push("MATCHER_SERVICE_URL is required for private matcher service");
   }
-  if (env.privateMatchingRequired && env.matcherComputeBackend === "local-threshold") {
-    issues.push("MATCHER_COMPUTE_BACKEND=remote-blind or nilcc is required for private matcher service");
+  if (env.privateMatchingRequired && env.matcherProvider === "embedded") {
+    issues.push("MATCHER_PROVIDER=custom or nilcc is required for private matcher service");
   }
-  if (env.privateMatchingRequired && env.matcherComputeBackend === "remote-blind" && !env.matcherComputeUrl) {
-    issues.push("MATCHER_COMPUTE_URL is required for remote blind matcher compute");
+  if (env.privateMatchingRequired && env.matcherProvider === "custom" && !env.matcherProviderUrl) {
+    issues.push("MATCHER_PROVIDER_URL is required for custom matcher provider");
   }
-  if (env.privateMatchingRequired && env.matcherComputeBackend === "nilcc" && !env.nilccWorkloadUrl) {
-    issues.push("NILCC_WORKLOAD_URL is required for nilCC blind compute");
+  if (env.privateMatchingRequired && env.matcherProvider === "nilcc" && !env.nilccWorkloadUrl) {
+    issues.push("NILCC_WORKLOAD_URL is required for nilCC matcher provider");
   }
   if (
     env.privateMatchingRequired &&
-    env.matcherComputeBackend === "nilcc" &&
+    env.matcherProvider === "nilcc" &&
     env.nilccAttestationRequired &&
     !env.nilccAttestationReportSha256 &&
     env.nilccAttestationContains.length === 0
   ) {
-    issues.push("NILCC_ATTESTATION_REPORT_SHA256 or NILCC_ATTESTATION_CONTAINS is required for nilCC blind compute");
+    issues.push("NILCC_ATTESTATION_REPORT_SHA256 or NILCC_ATTESTATION_CONTAINS is required for nilCC matcher provider");
   }
   if (env.matcherCommitteeRequired && env.matcherCommitteeThreshold < 1) {
     issues.push("MATCHER_COMMITTEE_THRESHOLD must be at least 1");

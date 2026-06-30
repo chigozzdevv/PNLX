@@ -1,19 +1,19 @@
 import { json, readJson } from "@/shared/http/json";
 import { Router } from "@/shared/http/router";
 import { createExecutor } from "@/workers/executor/executor.worker";
-import { assertNilccMatcherConfig, createNilccMatcherCompute } from "@/workers/matcher/nilcc/matcher.app";
-import { RemoteBlindComputeClient } from "@/workers/matcher/remote-compute/matcher.service";
+import { assertNilccMatcherConfig, createNilccMatcherProvider } from "@/workers/matcher/nilcc/matcher.app";
+import { CustomMatcherProviderClient } from "@/workers/matcher/custom/matcher.service";
 import { createMatcher } from "@/workers/matcher/matcher.worker";
 import type {
-  BlindComputeGateway,
+  MatcherProviderGateway,
   CreateExternalSettlementInput,
-  MatcherComputeBackend,
+  MatcherProvider,
 } from "@/workers/matcher/matcher.model";
 
 export interface MatcherAppOptions {
-  computeBackend?: MatcherComputeBackend;
-  computeToken?: string;
-  computeUrl?: string;
+  provider?: MatcherProvider;
+  providerToken?: string;
+  providerUrl?: string;
   nilccAttestationContains?: string[];
   nilccAttestationReportSha256?: string;
   nilccAttestationReportUrl?: string;
@@ -30,14 +30,14 @@ export interface MatcherAppOptions {
 }
 
 export function createMatcherApp(options: MatcherAppOptions = {}): Router {
-  const computeBackend = options.computeBackend ?? "local-threshold";
-  if (options.privateMatchingRequired && computeBackend === "local-threshold") {
-    throw new Error("MATCHER_COMPUTE_BACKEND=remote-blind or nilcc is required for private matcher service");
+  const provider = options.provider ?? "embedded";
+  if (options.privateMatchingRequired && provider === "embedded") {
+    throw new Error("MATCHER_PROVIDER=custom or nilcc is required for private matcher service");
   }
-  if (computeBackend === "remote-blind" && !options.computeUrl) {
-    throw new Error("MATCHER_COMPUTE_URL is required for remote blind matcher compute");
+  if (provider === "custom" && !options.providerUrl) {
+    throw new Error("MATCHER_PROVIDER_URL is required for custom matcher provider");
   }
-  if (computeBackend === "nilcc") {
+  if (provider === "nilcc") {
     assertNilccMatcherConfig(options);
   }
 
@@ -52,7 +52,7 @@ export function createMatcherApp(options: MatcherAppOptions = {}): Router {
   });
   const matcher = createMatcher(executor, {
     ...options.signerConfig,
-    compute: options.signerConfig?.compute ?? computeFor(options, computeBackend),
+    provider: options.signerConfig?.provider ?? providerFor(options, provider),
   });
 
   router.add("POST", "/match/settlement", async (request) => {
@@ -64,17 +64,17 @@ export function createMatcherApp(options: MatcherAppOptions = {}): Router {
   return router;
 }
 
-function computeFor(
+function providerFor(
   options: MatcherAppOptions,
-  backend: MatcherComputeBackend,
-): BlindComputeGateway | undefined {
-  if (backend === "local-threshold") return undefined;
+  backend: MatcherProvider,
+): MatcherProviderGateway | undefined {
+  if (backend === "embedded") return undefined;
   if (backend === "nilcc") {
-    return createNilccMatcherCompute(options);
+    return createNilccMatcherProvider(options);
   }
-  return new RemoteBlindComputeClient({
-    token: options.computeToken,
-    url: options.computeUrl ?? "",
+  return new CustomMatcherProviderClient({
+    token: options.providerToken,
+    url: options.providerUrl ?? "",
   });
 }
 

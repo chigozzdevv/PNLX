@@ -25,10 +25,10 @@ export interface ServerEnv {
   matcherServiceUrl: string;
   matcherServiceToken: string;
   matcherApiToken: string;
-  matcherComputeBackend: "local-threshold" | "remote-blind" | "nilcc";
-  matcherComputePort: number;
-  matcherComputeToken: string;
-  matcherComputeUrl: string;
+  matcherProvider: "embedded" | "custom" | "nilcc";
+  matcherProviderPort: number;
+  matcherProviderToken: string;
+  matcherProviderUrl: string;
   matcherPort: number;
   matcherCommitteeAddresses: string[];
   matcherCommitteeRequired: boolean;
@@ -125,12 +125,12 @@ export function loadEnv(): ServerEnv {
     matcherServiceUrl: value("MATCHER_SERVICE_URL", value("EXTERNAL_MATCHER_URL", "")),
     matcherServiceToken: value("MATCHER_SERVICE_TOKEN", value("EXTERNAL_MATCHER_TOKEN", "")),
     matcherApiToken: value("MATCHER_API_TOKEN", ""),
-    matcherComputeBackend: matcherComputeBackend(
-      value("MATCHER_COMPUTE_BACKEND", nodeEnv === "production" ? "remote-blind" : "local-threshold"),
+    matcherProvider: matcherProvider(
+      value("MATCHER_PROVIDER", nodeEnv === "production" ? "custom" : "embedded"),
     ),
-    matcherComputePort: Number(value("MATCHER_COMPUTE_PORT", "4103")),
-    matcherComputeToken: value("MATCHER_COMPUTE_TOKEN", ""),
-    matcherComputeUrl: value("MATCHER_COMPUTE_URL", ""),
+    matcherProviderPort: Number(value("MATCHER_PROVIDER_PORT", "4103")),
+    matcherProviderToken: value("MATCHER_PROVIDER_TOKEN", ""),
+    matcherProviderUrl: value("MATCHER_PROVIDER_URL", ""),
     matcherPort: Number(value("MATCHER_PORT", "4102")),
     matcherCommitteeAddresses: listValue("MATCHER_COMMITTEE_ADDRESSES", []),
     matcherCommitteeRequired: booleanValue(
@@ -259,9 +259,9 @@ function matchingBackend(value: string): ServerEnv["matchingBackend"] {
   throw new Error("MATCHING_BACKEND must be threshold-recovery or external-blind");
 }
 
-function matcherComputeBackend(value: string): ServerEnv["matcherComputeBackend"] {
-  if (value === "local-threshold" || value === "remote-blind" || value === "nilcc") return value;
-  throw new Error("MATCHER_COMPUTE_BACKEND must be local-threshold, remote-blind, or nilcc");
+function matcherProvider(value: string): ServerEnv["matcherProvider"] {
+  if (value === "embedded" || value === "custom" || value === "nilcc") return value;
+  throw new Error("MATCHER_PROVIDER must be embedded, custom, or nilcc");
 }
 
 function oraclePriceSource(value: string): "hermes" | "onchain-market" {

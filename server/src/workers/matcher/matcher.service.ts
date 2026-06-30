@@ -14,7 +14,7 @@ import type { ExternalBatchSettlementTranscript, ExternalMatcherAttestation } fr
 import type { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
 import { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
 import type {
-  BlindComputeGateway,
+  MatcherProviderGateway,
   CreateExternalSettlementInput,
   MatcherAccountEventEncryptor,
   MatcherConfig,
@@ -28,7 +28,7 @@ import type {
 
 export class MatcherService {
   private readonly accountEventEncryptor?: MatcherAccountEventEncryptor;
-  private readonly compute: BlindComputeGateway;
+  private readonly provider: MatcherProviderGateway;
   private readonly signers: MatcherSigner[];
 
   constructor(
@@ -38,7 +38,7 @@ export class MatcherService {
     config: MatcherConfig = {},
   ) {
     this.accountEventEncryptor = config.accountEventEncryptor;
-    this.compute = config.compute ?? new LocalThresholdComputeGateway(committee);
+    this.provider = config.provider ?? new EmbeddedMatcherProviderGateway(committee);
     this.signers = config.signers ?? [];
   }
 
@@ -62,7 +62,7 @@ export class MatcherService {
       records,
       residuals,
     };
-    const transcript = this.compute.createSettlementTranscript(computeInput, this.proofs);
+    const transcript = this.provider.createSettlementTranscript(computeInput, this.proofs);
     return isPromiseLike(transcript)
       ? transcript.then((value) => this.finalizeTranscript(value))
       : this.finalizeTranscript(transcript);
@@ -100,7 +100,7 @@ export class MatcherService {
   }
 }
 
-class LocalThresholdComputeGateway implements BlindComputeGateway {
+class EmbeddedMatcherProviderGateway implements MatcherProviderGateway {
   constructor(private readonly committee: ThresholdShareCommittee) {}
 
   createSettlementTranscript(

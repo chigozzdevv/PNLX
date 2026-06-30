@@ -36,8 +36,8 @@ import { ProtocolStore } from "@/shared/state/store";
 import { createBatchExecutor } from "@/workers/batch-executor/batch-executor.worker";
 import { createExecutor } from "@/workers/executor/executor.worker";
 import { createMatcherApp } from "@/workers/matcher/matcher.app";
-import { NilccBlindComputeClient } from "@/workers/matcher/nilcc/matcher.service";
-import { RemoteBlindComputeClient } from "@/workers/matcher/remote-compute/matcher.service";
+import { NilccMatcherProviderClient } from "@/workers/matcher/nilcc/matcher.service";
+import { CustomMatcherProviderClient } from "@/workers/matcher/custom/matcher.service";
 import { RemoteMatcherClient } from "@/workers/matcher/remote/matcher.service";
 import { createMatcher } from "@/workers/matcher/matcher.worker";
 import { createFundingEngine } from "@/workers/funding-engine/funding-engine.worker";
@@ -110,24 +110,24 @@ describe("support workers", () => {
     }
   });
 
-  test("parses nilCC blind compute provider configuration", () => {
-    const previousBackend = process.env.MATCHER_COMPUTE_BACKEND;
+  test("parses nilCC matcher provider configuration", () => {
+    const previousBackend = process.env.MATCHER_PROVIDER;
     const previousWorkload = process.env.NILCC_WORKLOAD_URL;
     const previousContains = process.env.NILCC_ATTESTATION_CONTAINS;
     const previousHash = process.env.NILCC_ATTESTATION_REPORT_SHA256;
-    process.env.MATCHER_COMPUTE_BACKEND = "nilcc";
+    process.env.MATCHER_PROVIDER = "nilcc";
     process.env.NILCC_WORKLOAD_URL = "https://nilcc.merkl.local";
-    process.env.NILCC_ATTESTATION_CONTAINS = "merkl-blind-compute-v1,sev-snp";
+    process.env.NILCC_ATTESTATION_CONTAINS = "merkl-matcher-provider-v1,sev-snp";
     process.env.NILCC_ATTESTATION_REPORT_SHA256 = "0xabc123";
 
     try {
       const env = loadEnv();
-      expect(env.matcherComputeBackend).toBe("nilcc");
+      expect(env.matcherProvider).toBe("nilcc");
       expect(env.nilccWorkloadUrl).toBe("https://nilcc.merkl.local");
-      expect(env.nilccAttestationContains).toEqual(["merkl-blind-compute-v1", "sev-snp"]);
+      expect(env.nilccAttestationContains).toEqual(["merkl-matcher-provider-v1", "sev-snp"]);
       expect(env.nilccAttestationReportSha256).toBe("0xabc123");
     } finally {
-      restoreEnv("MATCHER_COMPUTE_BACKEND", previousBackend);
+      restoreEnv("MATCHER_PROVIDER", previousBackend);
       restoreEnv("NILCC_WORKLOAD_URL", previousWorkload);
       restoreEnv("NILCC_ATTESTATION_CONTAINS", previousContains);
       restoreEnv("NILCC_ATTESTATION_REPORT_SHA256", previousHash);
@@ -693,8 +693,8 @@ describe("support workers", () => {
     }
   });
 
-  test("remote blind compute client requests a separate compute backend", async () => {
-    const fixture = externalBatchFixture("remote-blind-compute-client");
+  test("custom matcher provider client requests a separate provider endpoint", async () => {
+    const fixture = externalBatchFixture("custom-compute-client");
     const computeTranscript = committeeTranscript(fixture);
     const previousFetch = globalThis.fetch;
     globalThis.fetch = (async (url, init) => {
@@ -710,7 +710,7 @@ describe("support workers", () => {
     }) as typeof fetch;
 
     try {
-      const client = new RemoteBlindComputeClient({
+      const client = new CustomMatcherProviderClient({
         token: "compute-secret",
         url: "https://compute.merkl.local",
       });
@@ -731,8 +731,8 @@ describe("support workers", () => {
     }
   });
 
-  test("nilCC blind compute client verifies workload attestation before compute", async () => {
-    const fixture = externalBatchFixture("nilcc-blind-compute-client");
+  test("nilCC matcher provider client verifies workload attestation before settlement", async () => {
+    const fixture = externalBatchFixture("nilcc-matcher-provider-client");
     const computeTranscript = committeeTranscript(fixture);
     const calls: string[] = [];
     const previousFetch = globalThis.fetch;
@@ -741,7 +741,7 @@ describe("support workers", () => {
       if (String(url) === "https://nilcc.merkl.local/nilcc/api/v2/report") {
         expect(init?.method).toBe("GET");
         expect((init?.headers as Record<string, string>).authorization).toBe("Bearer attest-secret");
-        return new Response("measurement:merkl-blind-compute-v1", { status: 200 });
+        return new Response("measurement:merkl-matcher-provider-v1", { status: 200 });
       }
 
       expect(String(url)).toBe("https://nilcc.merkl.local/compute/settlement");
@@ -754,8 +754,8 @@ describe("support workers", () => {
     }) as typeof fetch;
 
     try {
-      const client = new NilccBlindComputeClient({
-        attestationContains: ["merkl-blind-compute-v1"],
+      const client = new NilccMatcherProviderClient({
+        attestationContains: ["merkl-matcher-provider-v1"],
         attestationRequired: true,
         attestationToken: "attest-secret",
         token: "compute-secret",
@@ -780,14 +780,14 @@ describe("support workers", () => {
     }
   });
 
-  test("nilCC blind compute client rejects unpinned attestations", async () => {
+  test("nilCC matcher provider client rejects unpinned attestations", async () => {
     const previousFetch = globalThis.fetch;
     globalThis.fetch = (async () =>
       new Response("measurement:other-workload", { status: 200 })) as typeof fetch;
 
     try {
-      const client = new NilccBlindComputeClient({
-        attestationContains: ["merkl-blind-compute-v1"],
+      const client = new NilccMatcherProviderClient({
+        attestationContains: ["merkl-matcher-provider-v1"],
         attestationRequired: true,
         workloadUrl: "https://nilcc.merkl.local",
       });
@@ -800,35 +800,35 @@ describe("support workers", () => {
     }
   });
 
-  test("private matcher app requires remote or nilCC blind compute backend", () => {
+  test("private matcher app requires a deployable matcher provider", () => {
     expect(() =>
       createMatcherApp({
-        computeBackend: "local-threshold",
+        provider: "embedded",
         privateMatchingRequired: true,
       }),
-    ).toThrow("MATCHER_COMPUTE_BACKEND=remote-blind or nilcc is required for private matcher service");
+    ).toThrow("MATCHER_PROVIDER=custom or nilcc is required for private matcher service");
 
     expect(() =>
       createMatcherApp({
-        computeBackend: "remote-blind",
+        provider: "custom",
         privateMatchingRequired: true,
       }),
-    ).toThrow("MATCHER_COMPUTE_URL is required for remote blind matcher compute");
+    ).toThrow("MATCHER_PROVIDER_URL is required for custom matcher provider");
 
     expect(() =>
       createMatcherApp({
-        computeBackend: "nilcc",
+        provider: "nilcc",
         privateMatchingRequired: true,
       }),
-    ).toThrow("NILCC_WORKLOAD_URL is required for nilCC blind compute");
+    ).toThrow("NILCC_WORKLOAD_URL is required for nilCC matcher provider");
 
     expect(() =>
       createMatcherApp({
-        computeBackend: "nilcc",
+        provider: "nilcc",
         nilccWorkloadUrl: "https://nilcc.merkl.local",
         privateMatchingRequired: true,
       }),
-    ).toThrow("NILCC_ATTESTATION_REPORT_SHA256 or NILCC_ATTESTATION_CONTAINS is required for nilCC blind compute");
+    ).toThrow("NILCC_ATTESTATION_REPORT_SHA256 or NILCC_ATTESTATION_CONTAINS is required for nilCC matcher provider");
   });
 
   test("matcher app produces transcripts from a separate persisted matcher process view", async () => {
@@ -888,8 +888,8 @@ describe("support workers", () => {
     expect(JSON.stringify(transcript.accountEvents)).not.toContain("positionNullifier");
   });
 
-  test("private matcher app delegates settlement compute to remote blind backend", async () => {
-    const storePath = join(mkdtempSync(join(tmpdir(), "merkl-remote-compute-")), "protocol-store.json");
+  test("private matcher app delegates settlement compute to custom matcher provider", async () => {
+    const storePath = join(mkdtempSync(join(tmpdir(), "merkl-custom-")), "protocol-store.json");
     const executor = createExecutor({ matchingBackend: "external-blind", storePath });
     const market = {
       marketId: "btc-usd-perp",
@@ -900,8 +900,8 @@ describe("support workers", () => {
       fundingIndex: 0n,
     };
     executor.addMarket(market);
-    const long = intentRecord("remote-compute-long", market.marketId, executor.store.marginMembershipRoot());
-    const short = intentRecord("remote-compute-short", market.marketId, executor.store.marginMembershipRoot());
+    const long = intentRecord("custom-long", market.marketId, executor.store.marginMembershipRoot());
+    const short = intentRecord("custom-short", market.marketId, executor.store.marginMembershipRoot());
     executor.store.recordProof(long.proof);
     executor.store.recordProof(short.proof);
     executor.store.addIntent(long);
@@ -916,12 +916,12 @@ describe("support workers", () => {
       });
     }
     const settlement = externalSettlement({
-      batchId: "remote-compute-batch",
+      batchId: "custom-batch",
       marketId: market.marketId,
       oldRoot: executor.store.positionMembershipRoot(),
       newCommitments: [
-        hashFields("position", ["remote-compute-long"]),
-        hashFields("position", ["remote-compute-short"]),
+        hashFields("position", ["custom-long"]),
+        hashFields("position", ["custom-short"]),
       ],
       orderUpdates: [
         { intentCommitment: long.intentCommitment, status: "filled" as const },
@@ -952,9 +952,9 @@ describe("support workers", () => {
 
     try {
       const matcherApp = createMatcherApp({
-        computeBackend: "remote-blind",
-        computeToken: "compute-token",
-        computeUrl: "https://compute.merkl.local",
+        provider: "custom",
+        providerToken: "compute-token",
+        providerUrl: "https://compute.merkl.local",
         privateMatchingRequired: true,
         storePath,
         token: "matcher-token",
@@ -962,7 +962,7 @@ describe("support workers", () => {
       const response = await matcherApp.handle(
         new Request("http://matcher.local/match/settlement", {
           body: body({
-            batchId: "remote-compute-batch",
+            batchId: "custom-batch",
             marketId: market.marketId,
           }),
           headers: {

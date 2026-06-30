@@ -6,18 +6,18 @@ import type {
   PrivatePositionOpeningEvent,
 } from "@/workers/threshold-shares/threshold-shares.model";
 import type { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
-import type { BlindComputeGateway, RemoteBlindComputeConfig } from "@/workers/matcher/matcher.model";
+import type { MatcherProviderGateway, CustomMatcherProviderConfig } from "@/workers/matcher/matcher.model";
 
 type ComputeBody = Record<string, unknown>;
 
-export class RemoteBlindComputeClient implements BlindComputeGateway {
-  constructor(private readonly config: RemoteBlindComputeConfig) {}
+export class CustomMatcherProviderClient implements MatcherProviderGateway {
+  constructor(private readonly config: CustomMatcherProviderConfig) {}
 
   async createSettlementTranscript(
     input: CommitteeSettlementInput,
     _proofs: ProofCoordinatorService,
   ): Promise<CommitteeSettlementTranscript> {
-    const response = await fetch(computeUrl(this.config.url), {
+    const response = await fetch(providerUrl(this.config.url), {
       body: JSON.stringify(input, bigintReplacer),
       headers: {
         "content-type": "application/json",
@@ -31,7 +31,7 @@ export class RemoteBlindComputeClient implements BlindComputeGateway {
       const message =
         typeof body.error === "string"
           ? body.error
-          : `remote blind compute failed with ${response.status}`;
+          : `custom matcher provider failed with ${response.status}`;
       throw new Error(message);
     }
     return parseCommitteeSettlementTranscript(body);
@@ -165,7 +165,7 @@ function requiredObject(value: unknown, field: string): ComputeBody {
   return value as ComputeBody;
 }
 
-function computeUrl(base: string): string {
+function providerUrl(base: string): string {
   return new URL("/compute/settlement", base).toString();
 }
 

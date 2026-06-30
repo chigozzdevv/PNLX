@@ -1,29 +1,29 @@
 import type { Hex, IntentRecord, MarketConfig, ProofMeta, ResidualOrderRecord } from "@merkl/protocol-types";
 import { json, readJson } from "@/shared/http/json";
 import { Router } from "@/shared/http/router";
-import { BlindComputeService } from "@/workers/blind-compute/blind-compute.service";
-import type { BlindComputeConfig, BlindComputeSettlementRequest } from "@/workers/blind-compute/blind-compute.model";
+import { MatcherProviderService } from "@/workers/matcher-provider/matcher-provider.service";
+import type { MatcherProviderConfig, MatcherProviderSettlementRequest } from "@/workers/matcher-provider/matcher-provider.model";
 
 type Body = Record<string, unknown>;
 
-export interface BlindComputeAppOptions extends BlindComputeConfig {
+export interface MatcherProviderAppOptions extends MatcherProviderConfig {
   token?: string;
 }
 
-export function createBlindComputeApp(options: BlindComputeAppOptions): Router {
+export function createMatcherProviderApp(options: MatcherProviderAppOptions): Router {
   const router = new Router();
-  const compute = new BlindComputeService(options);
+  const provider = new MatcherProviderService(options);
 
   router.add("POST", "/compute/settlement", async (request) => {
-    assertComputeAuth(request, options.token);
+    assertProviderAuth(request, options.token);
     const body = await readJson<Body>(request);
-    return json(compute.createSettlementTranscript(parseSettlementRequest(body)), 201);
+    return json(provider.createSettlementTranscript(parseSettlementRequest(body)), 201);
   }, { public: true });
 
   return router;
 }
 
-export function parseSettlementRequest(input: Body): BlindComputeSettlementRequest {
+export function parseSettlementRequest(input: Body): MatcherProviderSettlementRequest {
   return {
     batchId: String(input.batchId),
     market: parseMarket(requiredObject(input.market, "market")),
@@ -121,10 +121,10 @@ function requiredObject(value: unknown, field: string): Body {
   return value as Body;
 }
 
-function assertComputeAuth(request: Request, token: string | undefined): void {
+function assertProviderAuth(request: Request, token: string | undefined): void {
   if (!token) return;
   const header = request.headers.get("authorization") ?? "";
   if (header !== `Bearer ${token}`) {
-    throw new Error("invalid blind compute api token");
+    throw new Error("invalid matcher provider api token");
   }
 }
