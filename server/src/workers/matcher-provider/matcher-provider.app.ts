@@ -1,4 +1,11 @@
-import type { Hex, IntentRecord, MarketConfig, ProofMeta, ResidualOrderRecord } from "@merkl/protocol-types";
+import type {
+  AccountEncryptionKeyRecord,
+  Hex,
+  IntentRecord,
+  MarketConfig,
+  ProofMeta,
+  ResidualOrderRecord,
+} from "@merkl/protocol-types";
 import { json, readJson } from "@/shared/http/json";
 import { Router } from "@/shared/http/router";
 import { MatcherProviderService } from "@/workers/matcher-provider/matcher-provider.service";
@@ -26,12 +33,30 @@ export function createMatcherProviderApp(options: MatcherProviderAppOptions): Ro
 export function parseSettlementRequest(input: Body): MatcherProviderSettlementRequest {
   return {
     batchId: String(input.batchId),
+    accountEncryptionKeys: parseAccountEncryptionKeys(input.accountEncryptionKeys),
     market: parseMarket(requiredObject(input.market, "market")),
     oldRoot: hex(input.oldRoot, "oldRoot"),
     positionCommitments: parseHexArray(input.positionCommitments, "positionCommitments"),
     records: parseIntentRecords(input.records),
     residuals: parseResidualOrders(input.residuals),
   };
+}
+
+function parseAccountEncryptionKeys(value: unknown): AccountEncryptionKeyRecord[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("accountEncryptionKeys must be an array");
+  return value.map((entry) => {
+    const body = requiredObject(entry, "account encryption key");
+    const algorithm = String(body.algorithm);
+    if (algorithm !== "ecdh-p256-aes-gcm") throw new Error("unsupported account encryption key algorithm");
+    return {
+      algorithm,
+      createdAt: Number(body.createdAt),
+      ownerCommitment: hex(body.ownerCommitment, "ownerCommitment"),
+      publicKey: String(body.publicKey),
+      updatedAt: Number(body.updatedAt),
+    };
+  });
 }
 
 function parseMarket(input: Body): MarketConfig {

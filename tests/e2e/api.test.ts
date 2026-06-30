@@ -762,6 +762,22 @@ describe("server api", () => {
       new Request("http://provider.local/compute/settlement", {
         method: "POST",
         body: body({
+          accountEncryptionKeys: [
+            {
+              algorithm: "ecdh-p256-aes-gcm",
+              createdAt: 1,
+              ownerCommitment: long.record.ownerCommitment,
+              publicKey: rawP256PublicKey(),
+              updatedAt: 1,
+            },
+            {
+              algorithm: "ecdh-p256-aes-gcm",
+              createdAt: 1,
+              ownerCommitment: short.record.ownerCommitment,
+              publicKey: rawP256PublicKey(),
+              updatedAt: 1,
+            },
+          ],
           batchId: "matcher-provider-batch",
           market,
           oldRoot: executor.store.positionMembershipRoot(),
@@ -776,9 +792,13 @@ describe("server api", () => {
       }),
     );
     expect(response.status).toBe(201);
-    const transcript = (await response.json()) as Record<string, Record<string, unknown>>;
-    expect(transcript.settlement.fillCount).toBe(2);
-    expect(transcript.settlement.proof).toMatchObject({ circuitId: "batch-match" });
+    const transcript = (await response.json()) as Record<string, unknown>;
+    expect(transcript).not.toHaveProperty("positionEvents");
+    expect((transcript.accountEvents as unknown[])).toHaveLength(2);
+    expect(JSON.stringify(transcript.accountEvents)).not.toContain("positionNullifier");
+    const settlement = transcript.settlement as Record<string, unknown>;
+    expect(settlement.fillCount).toBe(2);
+    expect(settlement.proof).toMatchObject({ circuitId: "batch-match" });
     expect(transcript.positionOpenings as unknown[]).toHaveLength(2);
     expect(JSON.stringify(transcript)).not.toContain("matcher-provider-long-spend");
   });

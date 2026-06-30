@@ -6,12 +6,9 @@ import type {
   ResidualOrderRecord,
 } from "@merkl/protocol-types";
 import {
-  positionOpeningAccountEventDataCommitment,
-  positionOpeningAccountEventId,
-  residualOrderAccountEventDataCommitment,
-  residualOrderAccountEventId,
-} from "@/shared/protocol/account-event-binding";
-import { encryptAccountEventPayload } from "@/shared/protocol/account-event-encryption";
+  createPositionOpeningAccountEvent,
+  createResidualOrderAccountEvent,
+} from "@/shared/protocol/account-event-outcomes";
 import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
 import { externalMatcherTranscriptHash } from "@/shared/protocol/external-matcher-transcript";
 import { matcherAttestationMessage } from "@/shared/protocol/matcher-attestation";
@@ -147,45 +144,22 @@ function createAccountEvents(
         (event) => event.positionCommitment === opening.positionCommitment,
       );
       if (!positionEvent) throw new Error("position account event payload is required");
-      const ciphertext = encryptAccountEvent(
-        { kind: "position-opening", opening: positionEvent },
-        opening.ownerCommitment,
+      return createPositionOpeningAccountEvent(
+        opening,
+        positionEvent,
+        keyForOwner(opening.ownerCommitment),
         encryptor,
-        keyForOwner,
       );
-      const dataCommitment = positionOpeningAccountEventDataCommitment(opening, ciphertext);
-      return {
-        ciphertext,
-        createdAt: opening.openedAt,
-        dataCommitment,
-        eventId: positionOpeningAccountEventId(opening, dataCommitment),
-        ownerCommitment: opening.ownerCommitment,
-      };
     }),
-    ...(residualOrders ?? []).map((residual) => {
-      const ciphertext = encryptAccountEvent({ kind: "residual-order", residual, settlementDigest }, residual.ownerCommitment, encryptor, keyForOwner);
-      const dataCommitment = residualOrderAccountEventDataCommitment(residual, settlementDigest, ciphertext);
-      return {
-        ciphertext,
-        createdAt: residual.createdAt,
-        dataCommitment,
-        eventId: residualOrderAccountEventId(residual, settlementDigest, dataCommitment),
-        ownerCommitment: residual.ownerCommitment,
-      };
-    }),
+    ...(residualOrders ?? []).map((residual) =>
+      createResidualOrderAccountEvent(
+        residual,
+        settlementDigest,
+        keyForOwner(residual.ownerCommitment),
+        encryptor,
+      )
+    ),
   ];
-}
-
-function encryptAccountEvent(
-  payload: Parameters<MatcherAccountEventEncryptor>[0],
-  ownerCommitment: `0x${string}`,
-  encryptor: MatcherAccountEventEncryptor | undefined,
-  keyForOwner: (ownerCommitment: `0x${string}`) => string | undefined,
-): string {
-  if (encryptor) return encryptor(payload);
-  const publicKey = keyForOwner(ownerCommitment);
-  if (!publicKey) throw new Error("account encryption key not found");
-  return encryptAccountEventPayload(payload, publicKey);
 }
 
 export function createMatcherAttestation(

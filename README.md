@@ -173,6 +173,9 @@ Matching backend modes:
   event id before it will index the batch. This gives the authenticated owner a
   private client-side path to reconstruct position notes for close/TP/SL flows
   without exposing `positionNullifier` in public portfolio snapshots.
+- Provider/coordinator responses from `POST /compute/settlement` return these
+  encrypted account events directly, so plaintext position event payloads do not
+  return to the matcher service in provider mode.
 
 Private dashboard state is backed by encrypted account events:
 
