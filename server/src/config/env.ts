@@ -126,7 +126,7 @@ export function loadEnv(): ServerEnv {
     matcherServiceToken: value("MATCHER_SERVICE_TOKEN", value("EXTERNAL_MATCHER_TOKEN", "")),
     matcherApiToken: value("MATCHER_API_TOKEN", ""),
     matcherProvider: matcherProvider(
-      value("MATCHER_PROVIDER", nodeEnv === "production" ? "custom" : "embedded"),
+      value("MATCHER_PROVIDER", nodeEnv === "production" ? "nilcc" : "embedded"),
     ),
     matcherProviderPort: Number(value("MATCHER_PROVIDER_PORT", "4103")),
     matcherProviderToken: value("MATCHER_PROVIDER_TOKEN", ""),
