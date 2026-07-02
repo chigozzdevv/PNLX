@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { hashFields } from "@merkl/crypto";
+import { hashFields } from "@pnlx/crypto";
 import type {
   CommandResult,
   CommandRunner,
+  ContractReadResult,
   RelayedTx,
   PreparedXdr,
   RelayRequest,
@@ -20,7 +21,7 @@ export class RelayerService {
     private readonly config: StellarRelayerConfig = {
       mode: "local",
       network: "testnet",
-      source: "merkl-testnet",
+      source: "pnlx-testnet",
     },
     private readonly runCommand: CommandRunner = defaultCommandRunner,
     private readonly historyPath?: string,
@@ -37,9 +38,9 @@ export class RelayerService {
       : undefined;
     const sendMode = command ? commandSendMode(command) : undefined;
     if (output && output.status !== 0) {
-      throw new Error(`stellar relay failed: ${output.stderr || output.stdout || output.status}`);
+      throw new Error(`stellar relay failed: ${formatStellarFailure(output)}`);
     }
-    const txHash = output ? parseTxHash(output.stdout) : undefined;
+    const txHash = output ? parseTxHash(commandOutput(output)) : undefined;
     if (command && output?.status === 0 && sendsTransaction(command) && !txHash) {
       throw new Error("stellar relay did not return a transaction hash");
     }
@@ -69,14 +70,20 @@ export class RelayerService {
   submitSignedXdr(input: SignedXdrRelayInput): RelayedTx {
     const payloadDigest = hashFields("signed-xdr-payload", [input.xdr]);
     const command = this.config.mode === "stellar-cli" ? stellarTxSendCommand(this.config, input.xdr) : undefined;
+    const signedTxHash = command
+      ? hashTransactionXdr(this.config, input.xdr, this.runCommand, "signed transaction")
+      : undefined;
+    if (input.expectedTxHash && signedTxHash && input.expectedTxHash !== signedTxHash) {
+      throw new Error("Signed transaction does not match prepared transaction");
+    }
     const output = command ? runCommandWithRetry(this.runCommand, command) : undefined;
     const commandOutputDigest = output
       ? hashFields("relay-command-output", [payloadDigest, output.status ?? "null", output.stdout, output.stderr])
       : undefined;
     if (output && output.status !== 0) {
-      throw new Error(`stellar signed transaction relay failed: ${output.stderr || output.stdout || output.status}`);
+      throw new Error(`Transaction rejected by Stellar: ${formatStellarFailure(output)}`);
     }
-    const txHash = output ? parseTxHash(output.stdout) : undefined;
+    const txHash = output ? parseTxHash(commandOutput(output)) : undefined;
     if (command && output?.status === 0 && !txHash) {
       throw new Error("stellar relay did not return a transaction hash");
     }
@@ -84,7 +91,7 @@ export class RelayerService {
       sleep(3_500);
     }
     const tx: RelayedTx = {
-      command,
+      command: command ? redactSignedXdrCommand(command) : undefined,
       commandOutputDigest,
       commandStatus: output?.status,
       commitment: input.commitment,
@@ -109,6 +116,32 @@ export class RelayerService {
     return stellarInvokeCommand(this.config, request.payload);
   }
 
+  read(request: RelayRequest): ContractReadResult {
+    if (this.config.mode !== "stellar-cli") {
+      throw new Error("stellar-cli relayer mode is required to read contract state");
+    }
+    const payload = parseInvokePayload(request.payload);
+    const command = stellarInvokeCommand(this.config, { ...payload, send: "no" });
+    if (commandSendMode(command) !== "no") {
+      throw new Error("contract reads require --send no");
+    }
+    const output = runCommandWithRetry(this.runCommand, command);
+    const payloadDigest = hashFields("relay-payload", [request.kind, request.payload]);
+    const commandOutputDigest = hashFields(
+      "relay-command-output",
+      [payloadDigest, output.status ?? "null", output.stdout, output.stderr],
+    );
+    if (output.status !== 0) {
+      throw new Error(`stellar contract read failed: ${formatStellarFailure(output)}`);
+    }
+    return {
+      command,
+      commandOutputDigest,
+      commandStatus: output.status,
+      output: commandOutput(output),
+    };
+  }
+
   prepareXdr(request: RelayRequest): PreparedXdr {
     if (this.config.mode !== "stellar-cli") {
       throw new Error("stellar-cli relayer mode is required to build wallet transaction xdr");
@@ -119,19 +152,37 @@ export class RelayerService {
     }
     const output = runCommandWithRetry(this.runCommand, command);
     const payloadDigest = hashFields("relay-payload", [request.kind, request.payload]);
-    const commandOutputDigest = hashFields(
-      "relay-command-output",
-      [payloadDigest, output.status ?? "null", output.stdout, output.stderr],
-    );
     if (output.status !== 0) {
       throw new Error(`stellar transaction build failed: ${output.stderr || output.stdout || output.status}`);
     }
-    const xdr = parseBuiltXdr(output.stdout);
-    if (!xdr) throw new Error("stellar transaction build did not return xdr");
+    const builtXdr = parseBuiltXdr(output.stdout);
+    if (!builtXdr) throw new Error("stellar transaction build did not return xdr");
+    const source = parseInvokePayload(request.payload).source ?? this.config.source;
+    const assembleCommand = stellarTxSimulateCommand(this.config, builtXdr, source);
+    const assembledOutput = runCommandWithRetry(this.runCommand, assembleCommand);
+    const commandOutputDigest = hashFields(
+      "relay-command-output",
+      [
+        payloadDigest,
+        output.status ?? "null",
+        output.stdout,
+        output.stderr,
+        assembledOutput.status ?? "null",
+        assembledOutput.stdout,
+        assembledOutput.stderr,
+      ],
+    );
+    if (assembledOutput.status !== 0) {
+      throw new Error(`stellar transaction simulation failed: ${formatStellarFailure(assembledOutput)}`);
+    }
+    const xdr = parseBuiltXdr(assembledOutput.stdout);
+    if (!xdr) throw new Error("stellar transaction simulation did not return assembled xdr");
+    const txHash = hashTransactionXdr(this.config, xdr, this.runCommand, "prepared transaction");
     return {
       command,
       commandOutputDigest,
       commandStatus: output.status,
+      txHash,
       xdr,
     };
   }
@@ -203,6 +254,32 @@ function stellarTxSendCommand(config: StellarRelayerConfig, xdr: string): string
   ];
 }
 
+function stellarTxHashCommand(config: StellarRelayerConfig, xdr: string): string[] {
+  return [
+    "stellar",
+    "tx",
+    "hash",
+    xdr,
+    "--network",
+    config.network,
+    ...networkArgs(config),
+  ];
+}
+
+function stellarTxSimulateCommand(config: StellarRelayerConfig, xdr: string, source: string): string[] {
+  return [
+    "stellar",
+    "tx",
+    "simulate",
+    xdr,
+    "--source-account",
+    source,
+    "--network",
+    config.network,
+    ...networkArgs(config),
+  ];
+}
+
 function networkArgs(config: StellarRelayerConfig): string[] {
   return [
     ...(config.rpcUrl ? ["--rpc-url", config.rpcUrl] : []),
@@ -255,6 +332,24 @@ function runCommandWithRetry(runCommand: CommandRunner, command: string[]): Comm
   return output;
 }
 
+function hashTransactionXdr(
+  config: StellarRelayerConfig,
+  xdr: string,
+  runCommand: CommandRunner,
+  label: string,
+): `0x${string}` {
+  const command = stellarTxHashCommand(config, xdr);
+  const output = runCommand(command[0], command.slice(1));
+  if (output.status !== 0) {
+    throw new Error(`${label} XDR is malformed: ${formatStellarFailure(output)}`);
+  }
+  const txHash = parseTxHash(commandOutput(output));
+  if (!txHash) {
+    throw new Error(`${label} XDR hash was not returned`);
+  }
+  return txHash;
+}
+
 function isTransientStellarFailure(output: CommandResult): boolean {
   if (output.status === 0) return false;
   const text = `${output.stdout}\n${output.stderr}`.toLowerCase();
@@ -279,9 +374,73 @@ function commandSendMode(command: string[]): "yes" | "no" | undefined {
   return value === "yes" || value === "no" ? value : undefined;
 }
 
+function commandOutput(output: CommandResult): string {
+  return [output.stdout, output.stderr].filter(Boolean).join("\n");
+}
+
+function redactSignedXdrCommand(command: string[]): string[] {
+  const txXdrIndex = command.findIndex((_, index) =>
+    index >= 2 && command[index - 2] === "tx" && command[index - 1] === "send",
+  );
+  if (txXdrIndex < 0) return [...command];
+  return command.map((part, index) => (index === txXdrIndex ? "<signed-xdr-redacted>" : part));
+}
+
+function formatStellarFailure(output: CommandResult): string {
+  const text = commandOutput(output).trim();
+  if (text.includes("Contract, #13") || text.includes("TrustlineMissingError")) {
+    return "USDC trustline is missing for this wallet";
+  }
+  const reason = text.match(/transaction submission failed:\s*([^\n\r]+)/i)?.[1]?.trim() ??
+    text.match(/transaction simulation failed:\s*([^\n\r]+)/i)?.[1]?.trim() ??
+    text.match(/error:\s*([^\n\r]+)/i)?.[1]?.trim();
+  if (reason) return reason;
+  return text || String(output.status ?? "unknown stellar cli failure");
+}
+
 function parseTxHash(output: string): `0x${string}` | undefined {
-  const match = output.match(/\b[0-9a-f]{64}\b/i);
-  return match ? `0x${match[0].toLowerCase()}` : undefined;
+  const fromJson = txHashFromJson(output);
+  if (fromJson) return fromJson;
+
+  const match = output.match(/(?:^|[^0-9a-fA-F])(?:0x)?([0-9a-fA-F]{64})(?:$|[^0-9a-fA-F])/);
+  return match ? `0x${match[1].toLowerCase()}` : undefined;
+}
+
+function txHashFromJson(output: string): `0x${string}` | undefined {
+  const trimmed = output.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return undefined;
+
+  try {
+    return findTxHash(JSON.parse(trimmed));
+  } catch {
+    return undefined;
+  }
+}
+
+function findTxHash(value: unknown): `0x${string}` | undefined {
+  if (typeof value === "string") {
+    const match = value.match(/^(?:0x)?([0-9a-fA-F]{64})$/);
+    return match ? `0x${match[1].toLowerCase()}` : undefined;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findTxHash(item);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (!value || typeof value !== "object") return undefined;
+
+  const record = value as Record<string, unknown>;
+  for (const key of ["hash", "txHash", "transactionHash", "transaction_hash", "id"] as const) {
+    const found = findTxHash(record[key]);
+    if (found) return found;
+  }
+  for (const nested of Object.values(record)) {
+    const found = findTxHash(nested);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 function parseBuiltXdr(output: string): string | undefined {

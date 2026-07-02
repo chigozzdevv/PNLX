@@ -1,4 +1,4 @@
-import type { Hex } from "@merkl/protocol-types";
+import type { Hex } from "@pnlx/protocol-types";
 import { parseIntent } from "@/features/intents/intents.schema";
 import type { CancelOrderInput, ReplaceOrderInput } from "@/features/orders/orders.model";
 

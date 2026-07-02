@@ -19,8 +19,8 @@ import type {
   ProofMeta,
   ResidualOrderRecord,
   WithdrawalRecord,
-} from "@merkl/protocol-types";
-import { EMPTY_ROOT, fieldMerkleProof, fieldMerkleRoot, merkleRoot } from "@merkl/crypto";
+} from "@pnlx/protocol-types";
+import { EMPTY_ROOT, fieldMerkleProof, fieldMerkleRoot, merkleRoot } from "@pnlx/crypto";
 
 export class ProtocolStore {
   readonly marginCommitments = new Set<Hex>();

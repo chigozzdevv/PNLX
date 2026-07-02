@@ -22,6 +22,7 @@ members = [
   "governance-interface",
   "proof-ledger",
   "proof-ledger-interface",
+  "risc0-proof-verifier",
   "ultrahonk-verifier",
   "proof-verifier"
 ]

@@ -1,5 +1,5 @@
 {
-  "name": "merkl",
+  "name": "pnlx",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -8,30 +8,27 @@
     "packages/*"
   ],
   "dependencies": {
-    "@merkl/crypto": "workspace:*",
-    "@merkl/market-math": "workspace:*",
-    "@merkl/proof-system": "workspace:*",
-    "@merkl/protocol-types": "workspace:*",
-    "@merkl/sdk": "workspace:*",
-    "@merkl/server": "workspace:*"
+    "@pnlx/crypto": "workspace:*",
+    "@pnlx/market-math": "workspace:*",
+    "@pnlx/proof-system": "workspace:*",
+    "@pnlx/protocol-types": "workspace:*",
+    "@pnlx/sdk": "workspace:*",
+    "@pnlx/server": "workspace:*"
   },
   "scripts": {
     "build:contracts": "stellar contract build --manifest-path contracts/Cargo.toml --out-dir contracts/target/stellar --locked --optimize=false",
-    "client:dev": "bun run --filter @merkl/client dev",
-    "client:check": "bun run --filter @merkl/client check",
-    "matcher-provider:server": "bun server/src/matcher-provider-server.ts",
+    "build:risc0-verifier-stack": "cd vendor/stellar-risc0-verifier && stellar contract build --optimize",
+    "client:dev": "bun run --filter @pnlx/client dev",
+    "client:check": "bun run --filter @pnlx/client check",
     "collateral:setup-test-usdc": "bun scripts/collateral/setup-test-usdc.ts",
     "deploy:dry": "bun scripts/deploy/run.ts --dry-run",
     "deploy:finalize": "bun scripts/deploy/finalize.ts",
-    "deploy:local": "bun scripts/deploy/run.ts --network local --source merkl-admin --setup-local --build",
-    "docker:matcher-provider": "docker build -f server/docker/matcher-provider.Dockerfile -t merkl/matcher-provider:local .",
-    "docker:mpspdz-party": "docker build -f server/docker/mpspdz-party.Dockerfile -t merkl/mpspdz-party:local .",
+    "deploy:local": "bun scripts/deploy/run.ts --network local --source pnlx-admin --setup-local --build",
     "manifest:deploy": "bun scripts/deploy/manifest.ts",
     "matcher:server": "bun server/src/matcher-server.ts",
-    "mpspdz:local": "docker compose -f server/docker/mpspdz-local.compose.yml up",
-    "mpspdz:local:down": "docker compose -f server/docker/mpspdz-local.compose.yml down --volumes",
     "oracle:configure-committee": "bun scripts/oracle/configure-committee.ts",
     "prover:client": "bun scripts/prover/local-client-prover.ts",
+    "prove:risc0-batch": "RISC0_DEV_MODE=0 cargo run --release --manifest-path risc0/batch-match/host/Cargo.toml --",
     "prove:circuits": "bun scripts/proof/build.ts",
     "prove:margin": "bun scripts/proof/build.ts margin-check",
     "smoke:custody": "bun scripts/smoke/custody.ts",
@@ -42,5 +39,9 @@
     "test:e2e": "bun test tests/e2e",
     "test:server": "bun test server",
     "test:packages": "bun test packages"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "typescript": "^6.0.3"
   }
 }

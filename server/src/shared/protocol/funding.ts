@@ -1,4 +1,4 @@
-import type { Side } from "@merkl/protocol-types";
+import type { Side } from "@pnlx/protocol-types";
 
 export function expectedFundingPayment(
   side: Side,

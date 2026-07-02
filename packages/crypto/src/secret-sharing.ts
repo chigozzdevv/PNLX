@@ -1,4 +1,4 @@
-import type { FieldShare } from "@merkl/protocol-types";
+import type { FieldShare } from "@pnlx/protocol-types";
 import { FIELD_PRIME, hashToField, invert, mod } from "./field";
 
 export function splitSecret(

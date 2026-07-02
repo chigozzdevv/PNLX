@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { circuitKey } from "@merkl/proof-system";
+import { circuitKey } from "@pnlx/proof-system";
 import { commandPlan, parseOptions } from "../../scripts/deploy/run";
 
 describe("deployment runner", () => {
@@ -11,7 +11,7 @@ describe("deployment runner", () => {
       "--source",
       "alice",
       "--alias-prefix",
-      "merkl-test",
+      "pnlx-test",
       "--setup-local",
     ]);
     const commands = commandPlan(options);

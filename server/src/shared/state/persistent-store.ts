@@ -21,7 +21,7 @@ import type {
   ProofMeta,
   ResidualOrderRecord,
   WithdrawalRecord,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 import { ProtocolStore } from "@/shared/state/store";
 
 interface ProtocolStoreSnapshot {
@@ -284,17 +284,17 @@ function parseSnapshot(raw: string): ProtocolStoreSnapshot {
 }
 
 function bigintReplacer(_key: string, value: unknown): unknown {
-  return typeof value === "bigint" ? { __merklBigInt: value.toString() } : value;
+  return typeof value === "bigint" ? { __pnlxBigInt: value.toString() } : value;
 }
 
 function bigintReviver(_key: string, value: unknown): unknown {
   if (
     value &&
     typeof value === "object" &&
-    "__merklBigInt" in value &&
-    typeof (value as { __merklBigInt: unknown }).__merklBigInt === "string"
+    "__pnlxBigInt" in value &&
+    typeof (value as { __pnlxBigInt: unknown }).__pnlxBigInt === "string"
   ) {
-    return BigInt((value as { __merklBigInt: string }).__merklBigInt);
+    return BigInt((value as { __pnlxBigInt: string }).__pnlxBigInt);
   }
   return value;
 }

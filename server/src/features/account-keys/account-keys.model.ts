@@ -1,4 +1,4 @@
-import type { AccountEncryptionKeyRecord, Hex } from "@merkl/protocol-types";
+import type { AccountEncryptionKeyRecord, Hex } from "@pnlx/protocol-types";
 
 export interface UpsertAccountKeyInput {
   algorithm: "ecdh-p256-aes-gcm";

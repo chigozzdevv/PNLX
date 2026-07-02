@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { hashFields } from "@merkl/crypto";
-import type { Hex } from "@merkl/protocol-types";
+import { hashFields } from "@pnlx/crypto";
+import type { Hex } from "@pnlx/protocol-types";
 
 export type CircuitId =
-  | "batch-match"
   | "conditional-close"
   | "deposit-note"
   | "disclosure"
@@ -30,7 +29,6 @@ export interface CircuitMeta extends CircuitDef {
 }
 
 export const CIRCUITS: CircuitDef[] = [
-  { id: "batch-match", packageName: "batch_match", dir: "circuits/batch-match" },
   { id: "conditional-close", packageName: "conditional_close", dir: "circuits/conditional-close" },
   { id: "deposit-note", packageName: "deposit_note", dir: "circuits/deposit-note" },
   { id: "disclosure", packageName: "disclosure", dir: "circuits/disclosure" },

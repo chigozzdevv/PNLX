@@ -4,7 +4,7 @@ import type {
   PositionNote,
   TradeIntent,
   Hex,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 import { hashFields } from "./hash";
 import { digestToFieldHex, fieldHashPair, fieldHex } from "./field-merkle";
 

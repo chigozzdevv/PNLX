@@ -1,8 +1,14 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { circuitKey, loadCircuits, verifierEntry } from "@merkl/proof-system";
-import type { Hex } from "@merkl/protocol-types";
+import { circuitKey, loadCircuits, verifierEntry } from "@pnlx/proof-system";
+import type { Hex } from "@pnlx/protocol-types";
+import {
+  RISC0_BATCH_MATCH_CIRCUIT_HASH,
+  RISC0_BATCH_MATCH_CIRCUIT_ID,
+  RISC0_BATCH_MATCH_CIRCUIT_KEY,
+  RISC0_STELLAR_VERIFIER_HASH,
+} from "@/workers/risc0-matcher/risc0-proof";
 
 const CONTRACTS = [
   ["governance", "governance.wasm"],
@@ -19,6 +25,13 @@ const CONTRACTS = [
   ["position-close", "position_close.wasm"],
   ["disclosure-verifier", "disclosure_verifier.wasm"],
   ["proof-verifier", "proof_verifier.wasm"],
+  ["risc0-proof-verifier", "risc0_proof_verifier.wasm"],
+] as const;
+
+const RISC0_VERIFIER_STACK_CONTRACTS = [
+  ["risc0-router", "risc0_router"],
+  ["risc0-groth16-verifier", "groth16_verifier"],
+  ["risc0-emergency-stop", "emergency_stop"],
 ] as const;
 
 interface ManifestOptions {
@@ -46,8 +59,25 @@ export function createDeployManifest(root = process.cwd(), options: ManifestOpti
       wasmHash: existsSync(path) ? hashFile(path) : `0x${"0".repeat(64)}`,
     };
   });
+  const risc0VerifierStackDir = join(
+    root,
+    "vendor/stellar-risc0-verifier/target/wasm32v1-none/release",
+  );
+  const risc0VerifierStack = RISC0_VERIFIER_STACK_CONTRACTS.map(([name, wasmName]) => {
+    const optimizedPath = join(risc0VerifierStackDir, `${wasmName}.optimized.wasm`);
+    const releasePath = join(risc0VerifierStackDir, `${wasmName}.wasm`);
+    const path = existsSync(optimizedPath) ? optimizedPath : releasePath;
+    if (!existsSync(path) && requireContracts) throw new Error(`missing RISC0 verifier stack wasm: ${path}`);
 
-  const verifiers = Array.from(loadCircuits(root).values()).map((circuit) => {
+    return {
+      name,
+      file: `${wasmName}.wasm`,
+      path,
+      wasmHash: existsSync(path) ? hashFile(path) : `0x${"0".repeat(64)}`,
+    };
+  });
+
+  const noirVerifiers = Array.from(loadCircuits(root).values()).map((circuit) => {
     const entry = verifierEntry(circuit);
     const vkPath = join(root, circuit.dir, "target/bb/vk");
     if (requireVerifierKeys && !existsSync(vkPath)) {
@@ -65,10 +95,24 @@ export function createDeployManifest(root = process.cwd(), options: ManifestOpti
       vkPath,
     };
   });
+  const verifiers = [
+    ...noirVerifiers,
+    {
+      circuitHash: RISC0_BATCH_MATCH_CIRCUIT_HASH,
+      circuitId: RISC0_BATCH_MATCH_CIRCUIT_ID,
+      circuitKey: RISC0_BATCH_MATCH_CIRCUIT_KEY,
+      verifierAuthority: `${RISC0_BATCH_MATCH_CIRCUIT_ID}-risc0-verifier`,
+      verifierContract: "risc0-proof-verifier",
+      verifierHash: RISC0_STELLAR_VERIFIER_HASH,
+      verifierSource: "risc0-router",
+      vkPath: "",
+    },
+  ];
 
   return {
     generatedBy: "scripts/deploy/manifest.ts",
     contracts,
+    risc0VerifierStack,
     verifiers,
     initPlan: [
       { contract: "governance", method: "init", args: ["admin"] },
@@ -110,7 +154,7 @@ export function createDeployManifest(root = process.cwd(), options: ManifestOpti
           "market",
           "position-state",
           "intent-registry",
-          circuitKey("batch-match"),
+          RISC0_BATCH_MATCH_CIRCUIT_KEY,
         ],
       },
       {

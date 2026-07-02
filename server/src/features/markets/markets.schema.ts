@@ -1,5 +1,7 @@
-import type { Hex } from "@merkl/protocol-types";
+import type { Hex } from "@pnlx/protocol-types";
 import type {
+  MarketCandlesInput,
+  MarketCandleInterval,
   CreateMarketInput,
   CreateOracleMarketInput,
   RefreshOracleMarketInput,
@@ -41,4 +43,29 @@ export function parseOracleRefresh(
     feedId: input.feedId ? (String(input.feedId) as Hex) : undefined,
     marketId: String(input.marketId),
   };
+}
+
+export function parseMarketCandles(request: Request): MarketCandlesInput {
+  const params = new URL(request.url).searchParams;
+  const marketId = params.get("marketId")?.trim();
+  if (!marketId) throw new Error("marketId is required");
+
+  return {
+    interval: parseInterval(params.get("interval") ?? "1m"),
+    limit: parseLimit(params.get("limit") ?? "120"),
+    marketId,
+  };
+}
+
+function parseInterval(value: string): MarketCandleInterval {
+  if (value === "1m" || value === "5m" || value === "15m" || value === "1h" || value === "1d") {
+    return value;
+  }
+  throw new Error("unsupported candle interval");
+}
+
+function parseLimit(value: string): number {
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit < 1) throw new Error("invalid candle limit");
+  return Math.min(limit, 300);
 }

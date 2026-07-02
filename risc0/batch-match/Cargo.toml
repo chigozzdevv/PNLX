@@ -1,0 +1,25 @@
+[workspace]
+members = [
+  "core",
+  "host",
+  "methods",
+  "methods/guest",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "UNLICENSED"
+version = "0.1.0"
+
+[workspace.dependencies]
+anyhow = "1.0"
+hex = "0.4"
+num-bigint = "0.4"
+num-traits = "0.2"
+risc0-build = "3.0.5"
+risc0-ethereum-contracts = "3.0"
+risc0-zkvm = "3.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"

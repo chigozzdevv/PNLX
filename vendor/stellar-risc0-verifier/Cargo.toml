@@ -1,0 +1,65 @@
+[workspace]
+members = [
+        "contracts/interface",
+        "contracts/groth16-verifier",
+        "contracts/risc0-router",
+        "contracts/mock-verifier",
+        "contracts/timelock",
+        "contracts/emergency-stop",
+        "tools/build-utils"
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+repository = "https://github.com/NethermindEth/stellar-risc0-verifier"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+ark-bn254 = "0.5.0"
+ark-ec = "0.5.0"
+ark-ff = "0.5.0"
+soroban-sdk = "25.1.0"
+ark-serialize = "0.5.0"
+hex = "0.4.3"
+serde = "1.0.228"
+serde_json = "1.0.145"
+sha2 = "0.10.9"
+stellar-access = { git = "https://github.com/OpenZeppelin/stellar-contracts", rev = "63167bb" }
+stellar-macros = { git = "https://github.com/OpenZeppelin/stellar-contracts", rev = "63167bb" }
+stellar-governance = { git = "https://github.com/OpenZeppelin/stellar-contracts", rev = "63167bb" }
+stellar-contract-utils = { git = "https://github.com/OpenZeppelin/stellar-contracts", rev = "63167bb" }
+
+build-utils = { path = "tools/build-utils" }
+risc0-interface = { path = "contracts/interface"}
+
+[workspace.lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+arithmetic_side_effects = "deny"
+cast_lossless = "deny"
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_precision_loss = "deny"
+cast_sign_loss = "deny"
+needless_return = "deny"
+panicking_overflow_checks = "deny"
+unwrap_used = "deny"
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true
+
+# For more information about this profile see https://soroban.stellar.org/docs/basic-tutorials/logging#cargotoml-profile
+[profile.release-with-logs]
+inherits = "release"
+debug-assertions = true

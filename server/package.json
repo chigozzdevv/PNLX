@@ -1,15 +1,15 @@
 {
-  "name": "@merkl/server",
+  "name": "@pnlx/server",
   "version": "0.1.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@merkl/crypto": "workspace:*",
-    "@merkl/market-math": "workspace:*",
-    "@merkl/proof-system": "workspace:*",
-    "@merkl/protocol-types": "workspace:*",
-    "@merkl/sdk": "workspace:*"
+    "@pnlx/crypto": "workspace:*",
+    "@pnlx/market-math": "workspace:*",
+    "@pnlx/proof-system": "workspace:*",
+    "@pnlx/protocol-types": "workspace:*",
+    "@pnlx/sdk": "workspace:*"
   }
 }

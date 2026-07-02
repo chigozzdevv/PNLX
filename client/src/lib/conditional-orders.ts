@@ -1,9 +1,9 @@
-import { merklPost } from "@/lib/merkl-api";
+import { pnlxPost } from "@/lib/pnlx-api";
 import { digestToFieldHex, fieldHashPair, randomLabel } from "@/lib/private-note";
 import type { Hex, Side } from "@/types/trading";
 import type { WalletSession } from "@/lib/wallet-auth";
 
-const STRATEGY_KEY = "merkl.private.conditional-strategies";
+const STRATEGY_KEY = "pnlx.private.conditional-strategies";
 
 export interface PrivatePositionOpeningEvent {
   kind: "position-opening";
@@ -117,7 +117,7 @@ async function createRegistration(
     strategy.stopLossCloseCommitment = closeCommitment;
   }
 
-  const response = await merklPost<ConditionalOrderRegistrationResponse>(
+  const response = await pnlxPost<ConditionalOrderRegistrationResponse>(
     "/conditional-orders",
     {
       closeCommitment,

@@ -1,4 +1,4 @@
-import { merklGet } from "@/lib/merkl-api";
+import { pnlxGet } from "@/lib/pnlx-api";
 import type { Hex, ServerProofMeta, Side } from "@/types/trading";
 
 const FIELD_PRIME =
@@ -39,8 +39,9 @@ export interface SharedIntentMpcConfig {
 }
 
 interface SharedIntentHealthResponse {
-  matching: {
-    mpc: SharedIntentMpcConfig;
+  matching?: {
+    mpc?: SharedIntentMpcConfig;
+    thresholdShares?: SharedIntentMpcConfig;
   };
 }
 
@@ -137,9 +138,10 @@ export async function buildSharedIntentPayload(input: {
 }
 
 export async function getSharedIntentMpcConfig(token?: string): Promise<SharedIntentMpcConfig> {
-  const health = await merklGet<SharedIntentHealthResponse>("/health", token);
-  if (!health.matching.mpc.nodeIds.length) throw new Error("MPC nodes are not configured");
-  return health.matching.mpc;
+  const health = await pnlxGet<SharedIntentHealthResponse>("/health", token);
+  const mpc = health.matching?.mpc ?? health.matching?.thresholdShares;
+  if (!mpc?.nodeIds?.length) throw new Error("MPC nodes are not configured");
+  return mpc;
 }
 
 function assertValidityMatches(
@@ -325,7 +327,7 @@ async function ownerCommitment(owner: string): Promise<Hex> {
 }
 
 async function hashFields(domain: string, fields: unknown[]): Promise<Hex> {
-  return `0x${await sha256Hex(`merkl:${domain}:${fields.map(normalize).join("|")}`)}`;
+  return `0x${await sha256Hex(`pnlx:${domain}:${fields.map(normalize).join("|")}`)}`;
 }
 
 function normalize(value: unknown): string {

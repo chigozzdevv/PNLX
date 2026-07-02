@@ -2,10 +2,11 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fieldMerkleRoot } from "@merkl/crypto";
-import { circuitKey } from "@merkl/proof-system";
-import type { Hex } from "@merkl/protocol-types";
+import { fieldMerkleRoot } from "@pnlx/crypto";
+import { circuitKey } from "@pnlx/proof-system";
+import type { Hex } from "@pnlx/protocol-types";
 import { loadEnv } from "@/config/env";
+import { RISC0_BATCH_MATCH_CIRCUIT_KEY } from "@/workers/risc0-matcher/risc0-proof";
 import { createDeployManifest } from "./manifest";
 
 interface Options {
@@ -22,9 +23,18 @@ interface Options {
 interface Deployment {
   contracts: Record<string, string>;
   network: string;
+  risc0VerifierStack: Risc0VerifierStackDeployment;
   source: string;
   sourceAddress: string;
   verifiers: Record<string, string>;
+}
+
+interface Risc0VerifierStackDeployment {
+  emergencyStop: string;
+  groth16Verifier: string;
+  owner: string;
+  router: string;
+  selector: string;
 }
 
 const LOCAL_PASSPHRASE = "Standalone Network ; February 2017";
@@ -33,14 +43,14 @@ const INITIAL_POSITION_ROOT = fieldMerkleRoot([]);
 
 export function parseOptions(argv = process.argv.slice(2)): Options {
   return {
-    aliasPrefix: value(argv, "--alias-prefix", "merkl"),
+    aliasPrefix: value(argv, "--alias-prefix", "pnlx"),
     build: flag(argv, "--build"),
     dryRun: flag(argv, "--dry-run"),
     network: value(argv, "--network", "local"),
     out: optionalValue(argv, "--out"),
     setupLocal: flag(argv, "--setup-local"),
     smoke: !flag(argv, "--no-smoke"),
-    source: value(argv, "--source", "merkl-admin"),
+    source: value(argv, "--source", "pnlx-admin"),
   };
 }
 
@@ -56,20 +66,26 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
   if (options.build) {
     commands.push(["bun", "run", "prove:circuits"]);
     commands.push(["bun", "run", "build:contracts"]);
+    commands.push(["bun", "run", "build:risc0-verifier-stack"]);
   }
   if (options.setupLocal) {
     commands.push(...localSetupCommands(options));
   }
+  commands.push(sourceAddress);
+  commands.push(...risc0VerifierStackCommandPlan(options, manifest));
   for (const contract of deployableContracts(manifest)) {
     commands.push(deployCommand(options, contract.path, `${options.aliasPrefix}-${contract.name}`));
   }
   for (const verifier of manifest.verifiers) {
     commands.push(
-      deployCommand(options, proofVerifierPath(manifest), `${options.aliasPrefix}-${verifier.verifierAuthority}`),
+      deployCommand(
+        options,
+        verifierContractPath(manifest, verifier.verifierContract),
+        `${options.aliasPrefix}-${verifier.verifierAuthority}`,
+      ),
     );
   }
 
-  commands.push(sourceAddress);
   commands.push(
     invokeCommand(options, "governance", "init", ["--admin", "$sourceAddress"]),
     invokeCommand(options, "proof-ledger", "init", ["--governance", "$governance"]),
@@ -82,19 +98,13 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
   );
 
   for (const verifier of manifest.verifiers) {
+    const initArgs = verifierInitArgs(verifier, env, {
+      governance: "$governance",
+      proofLedger: "$proof-ledger",
+      router: "$risc0-router",
+    });
     commands.push(
-      invokeCommand(options, verifier.verifierAuthority, "init", [
-        "--governance",
-        "$governance",
-        "--proof_ledger",
-        "$proof-ledger",
-        "--circuit_id",
-        bytes32(verifier.circuitKey),
-        "--verifier_hash",
-        bytes32(verifier.verifierHash),
-        "--vk_bytes-file-path",
-        verifier.vkPath,
-      ]),
+      invokeCommand(options, verifier.verifierAuthority, "init", initArgs),
       invokeCommand(options, "governance", "set_verifier", [
         "--circuit_id",
         bytes32(verifier.circuitKey),
@@ -146,7 +156,7 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
       "--intent_registry",
       "$intent-registry",
       "--circuit_id",
-      bytes32(circuitKey("batch-match")),
+      bytes32(RISC0_BATCH_MATCH_CIRCUIT_KEY),
     ]),
     invokeCommand(options, "liquidation", "init", [
       "--governance",
@@ -232,13 +242,19 @@ export function deploy(options: Options, root = process.cwd()): Deployment {
   if (options.build) {
     run(["bun", "run", "prove:circuits"], options);
     run(["bun", "run", "build:contracts"], options);
+    run(["bun", "run", "build:risc0-verifier-stack"], options);
   }
   const manifest = createDeployManifest(root);
   if (options.setupLocal) {
     setupLocalNetwork(options);
   }
 
+  const env = loadEnv();
   const sourceAddress = resolveSourceAddress(options);
+  const risc0VerifierStack = deployRisc0VerifierStack(options, manifest, sourceAddress);
+  contracts.set("risc0-router", risc0VerifierStack.router);
+  contracts.set("risc0-groth16-verifier", risc0VerifierStack.groth16Verifier);
+  contracts.set("risc0-emergency-stop", risc0VerifierStack.emergencyStop);
   for (const contract of deployableContracts(manifest)) {
     contracts.set(
       contract.name,
@@ -248,7 +264,11 @@ export function deploy(options: Options, root = process.cwd()): Deployment {
   for (const verifier of manifest.verifiers) {
     verifiers.set(
       verifier.verifierAuthority,
-      deployWasm(options, proofVerifierPath(manifest), `${options.aliasPrefix}-${verifier.verifierAuthority}`),
+      deployWasm(
+        options,
+        verifierContractPath(manifest, verifier.verifierContract),
+        `${options.aliasPrefix}-${verifier.verifierAuthority}`,
+      ),
     );
   }
 
@@ -261,23 +281,21 @@ export function deploy(options: Options, root = process.cwd()): Deployment {
     "--admin",
     sourceAddress,
     "--decimals",
-    String(loadEnv().oraclePriceDecimals),
+    String(env.oraclePriceDecimals),
   ]);
 
   for (const verifier of manifest.verifiers) {
     const verifierId = verifiers.get(verifier.verifierAuthority)!;
-    invoke(options, verifierId, "init", [
-      "--governance",
-      contracts.get("governance")!,
-      "--proof_ledger",
-      contracts.get("proof-ledger")!,
-      "--circuit_id",
-      bytes32(verifier.circuitKey),
-      "--verifier_hash",
-      bytes32(verifier.verifierHash),
-      "--vk_bytes-file-path",
-      verifier.vkPath,
-    ]);
+    invoke(
+      options,
+      verifierId,
+      "init",
+      verifierInitArgs(verifier, env, {
+        governance: contracts.get("governance")!,
+        proofLedger: contracts.get("proof-ledger")!,
+        router: risc0VerifierStack.router,
+      }),
+    );
     invoke(options, contracts.get("governance")!, "set_verifier", [
       "--circuit_id",
       bytes32(verifier.circuitKey),
@@ -294,6 +312,7 @@ export function deploy(options: Options, root = process.cwd()): Deployment {
   const deployment: Deployment = {
     contracts: Object.fromEntries(contracts),
     network: options.network,
+    risc0VerifierStack,
     source: options.source,
     sourceAddress,
     verifiers: Object.fromEntries(verifiers),
@@ -345,7 +364,7 @@ function initProofConsumers(options: Options, contracts: Map<string, string>): v
     "--intent_registry",
     contracts.get("intent-registry")!,
     "--circuit_id",
-    bytes32(circuitKey("batch-match")),
+    bytes32(RISC0_BATCH_MATCH_CIRCUIT_KEY),
   ]);
   invoke(options, contracts.get("liquidation")!, "init", [
     "--governance",
@@ -423,6 +442,83 @@ function runSmoke(options: Options, root: string, verifiers: Map<string, string>
   }
 }
 
+function risc0VerifierStackCommandPlan(
+  options: Options,
+  manifest: ReturnType<typeof createDeployManifest>,
+): string[][] {
+  const groth16 = risc0StackContractPath(manifest, "risc0-groth16-verifier");
+  const emergencyStop = risc0StackContractPath(manifest, "risc0-emergency-stop");
+  const router = risc0StackContractPath(manifest, "risc0-router");
+
+  return [
+    deployCommand(options, groth16, `${options.aliasPrefix}-risc0-groth16-verifier`),
+    readCommand(options, "risc0-groth16-verifier", "selector", []),
+    deployCommand(options, emergencyStop, `${options.aliasPrefix}-risc0-emergency-stop`, [
+      "--verifier",
+      "$risc0-groth16-verifier",
+      "--owner",
+      "$sourceAddress",
+    ]),
+    deployCommand(options, router, `${options.aliasPrefix}-risc0-router`, [
+      "--owner",
+      "$sourceAddress",
+    ]),
+    invokeCommand(options, "risc0-router", "add_verifier", [
+      "--selector",
+      "$risc0Selector",
+      "--verifier",
+      "$risc0-emergency-stop",
+    ]),
+  ];
+}
+
+function deployRisc0VerifierStack(
+  options: Options,
+  manifest: ReturnType<typeof createDeployManifest>,
+  sourceAddress: string,
+): Risc0VerifierStackDeployment {
+  const groth16Verifier = deployWasm(
+    options,
+    risc0StackContractPath(manifest, "risc0-groth16-verifier"),
+    `${options.aliasPrefix}-risc0-groth16-verifier`,
+  );
+  const selector = normalizeSelector(read(options, groth16Verifier, "selector", []));
+  const emergencyStop = deployWasm(
+    options,
+    risc0StackContractPath(manifest, "risc0-emergency-stop"),
+    `${options.aliasPrefix}-risc0-emergency-stop`,
+    [
+      "--verifier",
+      groth16Verifier,
+      "--owner",
+      sourceAddress,
+    ],
+  );
+  const router = deployWasm(
+    options,
+    risc0StackContractPath(manifest, "risc0-router"),
+    `${options.aliasPrefix}-risc0-router`,
+    [
+      "--owner",
+      sourceAddress,
+    ],
+  );
+  invoke(options, router, "add_verifier", [
+    "--selector",
+    selector,
+    "--verifier",
+    emergencyStop,
+  ]);
+
+  return {
+    emergencyStop,
+    groth16Verifier,
+    owner: sourceAddress,
+    router,
+    selector,
+  };
+}
+
 function smokeCommands(options: Options, root: string, verifierId = "$withdraw-proof-verifier"): string[][] {
   const dir = join(root, "circuits/withdraw/target/bb");
   const publicInputs = join(dir, "public_inputs");
@@ -448,15 +544,15 @@ function fileHashArg(options: Options, path: string, label: string): string {
   return bytes32(hashFile(path));
 }
 
-function deployWasm(options: Options, wasm: string, alias: string): string {
-  const output = runWithRetry(deployCommand(options, wasm, alias), options, 8, 8000);
+function deployWasm(options: Options, wasm: string, alias: string, constructorArgs: string[] = []): string {
+  const output = runWithRetry(deployCommand(options, wasm, alias, constructorArgs), options, 8, 8000);
   const id = output.match(/\bC[A-Z0-9]{55}\b/)?.[0];
   if (!id) throw new Error(`could not parse contract id for ${alias}`);
   paceNetwork(options);
   return id;
 }
 
-function deployCommand(options: Options, wasm: string, alias: string): string[] {
+function deployCommand(options: Options, wasm: string, alias: string, constructorArgs: string[] = []): string[] {
   return [
     "stellar",
     "contract",
@@ -471,6 +567,7 @@ function deployCommand(options: Options, wasm: string, alias: string): string[] 
     "--alias",
     alias,
     "--auto-sign",
+    ...(constructorArgs.length ? ["--", ...constructorArgs] : []),
   ];
 }
 
@@ -478,6 +575,10 @@ function invoke(options: Options, id: string, method: string, args: string[]): s
   const output = runWithRetry(invokeCommand(options, id, method, args), options, 4, 6000);
   paceNetwork(options);
   return output;
+}
+
+function read(options: Options, id: string, method: string, args: string[]): string {
+  return runWithRetry(readCommand(options, id, method, args), options, 4, 6000);
 }
 
 function invokeCommand(options: Options, id: string, method: string, args: string[]): string[] {
@@ -495,6 +596,26 @@ function invokeCommand(options: Options, id: string, method: string, args: strin
     "--send",
     "yes",
     "--auto-sign",
+    "--",
+    method,
+    ...args,
+  ];
+}
+
+function readCommand(options: Options, id: string, method: string, args: string[]): string[] {
+  return [
+    "stellar",
+    "contract",
+    "invoke",
+    "--id",
+    id,
+    "--source",
+    options.source,
+    "--network",
+    options.network,
+    ...networkArgs(),
+    "--send",
+    "no",
     "--",
     method,
     ...args,
@@ -616,14 +737,70 @@ function isCommand(command: string[], ...prefix: string[]): boolean {
   return prefix.every((part, index) => command[index] === part);
 }
 
-function proofVerifierPath(manifest: ReturnType<typeof createDeployManifest>): string {
-  const contract = manifest.contracts.find((item) => item.name === "proof-verifier");
-  if (!contract) throw new Error("missing proof-verifier contract artifact");
+function verifierContractPath(manifest: ReturnType<typeof createDeployManifest>, contractName: string): string {
+  const contract = manifest.contracts.find((item) => item.name === contractName);
+  if (!contract) throw new Error(`missing ${contractName} contract artifact`);
+  return contract.path;
+}
+
+function risc0StackContractPath(
+  manifest: ReturnType<typeof createDeployManifest>,
+  contractName: string,
+): string {
+  const contract = manifest.risc0VerifierStack.find((item) => item.name === contractName);
+  if (!contract) throw new Error(`missing ${contractName} RISC0 verifier stack artifact`);
   return contract.path;
 }
 
 function deployableContracts(manifest: ReturnType<typeof createDeployManifest>) {
-  return manifest.contracts.filter((contract) => contract.name !== "proof-verifier");
+  return manifest.contracts.filter((contract) =>
+    contract.name !== "proof-verifier" && contract.name !== "risc0-proof-verifier"
+  );
+}
+
+function verifierInitArgs(
+  verifier: ReturnType<typeof createDeployManifest>["verifiers"][number],
+  env: ReturnType<typeof loadEnv>,
+  ids: { governance: string; proofLedger: string; router: string },
+): string[] {
+  const base = [
+    "--governance",
+    ids.governance,
+    "--proof_ledger",
+    ids.proofLedger,
+  ];
+
+  if (verifier.verifierContract === "risc0-proof-verifier") {
+    const router = ids.router;
+    if (!router) throw new Error("RISC0 router deployment is required for RISC0 verifier deployment");
+    return [
+      ...base,
+      "--router",
+      router,
+      "--circuit_id",
+      bytes32(verifier.circuitKey),
+      "--verifier_hash",
+      bytes32(verifier.verifierHash),
+    ];
+  }
+
+  return [
+    ...base,
+    "--circuit_id",
+    bytes32(verifier.circuitKey),
+    "--verifier_hash",
+    bytes32(verifier.verifierHash),
+    "--vk_bytes-file-path",
+    verifier.vkPath,
+  ];
+}
+
+function normalizeSelector(output: string): string {
+  const selector = output.trim().split(/\r?\n/).at(-1)?.replace(/^"|"$/g, "") ?? "";
+  if (!/^[0-9a-fA-F]{8}$/.test(selector)) {
+    throw new Error(`could not parse RISC0 Groth16 verifier selector from output: ${output}`);
+  }
+  return selector.toLowerCase();
 }
 
 function hashFile(path: string): Hex {

@@ -1,0 +1,17 @@
+[package]
+name = "build-utils"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+sha2 = { workspace = true }
+ark-ec = { workspace = true }
+ark-serialize = { workspace = true }
+ark-bn254 = { workspace = true }
+ark-ff = { workspace = true }
+
+[dev-dependencies]
+hex = { workspace = true }
+

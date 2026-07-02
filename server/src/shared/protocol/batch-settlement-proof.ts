@@ -1,6 +1,6 @@
-import { hashFields } from "@merkl/crypto";
-import { contractPublicInputHash, publicField, publicU128, type ContractPublicInput } from "@merkl/proof-system";
-import type { BatchSettlement, Hex } from "@merkl/protocol-types";
+import { hashFields } from "@pnlx/crypto";
+import { contractPublicInputHash, publicField, publicU128, type ContractPublicInput } from "@pnlx/proof-system";
+import type { BatchSettlement, Hex } from "@pnlx/protocol-types";
 
 const MAX_PUBLIC_ITEMS = 8;
 

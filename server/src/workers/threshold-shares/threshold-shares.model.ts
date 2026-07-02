@@ -8,7 +8,7 @@ import type {
   PositionLifecycleRecord,
   ResidualOrderRecord,
   TradeIntent,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 
 export interface ThresholdShareConfig {
   nodeIds: string[];

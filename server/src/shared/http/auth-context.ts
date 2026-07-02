@@ -1,5 +1,5 @@
-import { ownerCommitment } from "@merkl/crypto";
-import type { Hex } from "@merkl/protocol-types";
+import { ownerCommitment } from "@pnlx/crypto";
+import type { Hex } from "@pnlx/protocol-types";
 
 const authenticatedAddresses = new WeakMap<Request, string>();
 const authenticatedContexts = new WeakMap<Request, AuthContext>();

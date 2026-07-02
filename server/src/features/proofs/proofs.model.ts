@@ -7,7 +7,7 @@ import type {
   LiquidationRecord,
   LiquidationWitness,
   ProofMeta,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 
 export type LiquidationProofRequest = LiquidationWitness;
 export type DisclosureProofRequest = DisclosureInput;

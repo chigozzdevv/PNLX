@@ -1,4 +1,4 @@
-import type { Hex } from "@merkl/protocol-types";
+import type { Hex } from "@pnlx/protocol-types";
 import { hashFields } from "./hash";
 
 export const EMPTY_ROOT = hashFields("merkle-empty", []);

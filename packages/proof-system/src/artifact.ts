@@ -2,13 +2,13 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Hex } from "@merkl/protocol-types";
+import type { Hex } from "@pnlx/protocol-types";
 import type { CircuitId } from "./circuits";
 import { loadCircuit } from "./circuits";
 import { circuitKey } from "./contract";
 
 export interface ProofArtifact {
-  circuitId: CircuitId;
+  circuitId: string;
   circuitKey: Hex;
   bytecodeHash: Hex;
   witnessHash: Hex;
@@ -82,8 +82,8 @@ export function buildProofArtifact(
   const vkPath = join(bbDir, "vk");
   const proverDir = join(target, "provers");
   const proverPath = join(proverDir, `${name}.toml`);
-  const cacheDir = join(root, ".merkl", "proof-cache");
-  const proofHome = join(root, ".merkl", "proof-home");
+  const cacheDir = join(root, ".pnlx", "proof-cache");
+  const proofHome = join(root, ".pnlx", "proof-home");
   const proofEnv = {
     ...process.env,
     HOME: proofHome,

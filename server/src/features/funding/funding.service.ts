@@ -1,4 +1,4 @@
-import type { FundingUpdateRecord } from "@merkl/protocol-types";
+import type { FundingUpdateRecord } from "@pnlx/protocol-types";
 import type { ServerEnv } from "@/config/env";
 import { assertProtocolAdmin } from "@/shared/http/auth-context";
 import { FundingEngineService } from "@/workers/funding-engine/funding-engine.service";

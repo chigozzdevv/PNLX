@@ -1,4 +1,4 @@
-import type { FundingUpdateRecord } from "@merkl/protocol-types";
+import type { FundingUpdateRecord } from "@pnlx/protocol-types";
 
 export interface FundingEngineConfig {
   intervalMs: number;

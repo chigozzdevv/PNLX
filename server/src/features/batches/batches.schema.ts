@@ -20,7 +20,6 @@ export function parseExternalBatchSettlement(input: BatchBody): CommitExternalBa
   const settlement = requiredObject(input.settlement, "settlement");
   return {
     accountEvents: parseAccountEvents(input.accountEvents),
-    attestation: parseAttestation(input.attestation),
     settlement: {
       batchId: String(settlement.batchId),
       marketId: String(settlement.marketId),
@@ -40,25 +39,6 @@ export function parseExternalBatchSettlement(input: BatchBody): CommitExternalBa
     },
     positionOpenings: parsePositionOpenings(input.positionOpenings),
     residualOrders: parseResidualOrders(input.residualOrders),
-  };
-}
-
-function parseAttestation(value: unknown): CommitExternalBatchSettlementRequest["attestation"] {
-  if (value === undefined) return undefined;
-  const body = requiredObject(value, "attestation");
-  const signatures = body.signatures;
-  if (!Array.isArray(signatures)) throw new Error("attestation signatures must be an array");
-  return {
-    publicInputHash: String(body.publicInputHash) as `0x${string}`,
-    settlementDigest: String(body.settlementDigest) as `0x${string}`,
-    signatures: signatures.map((entry) => {
-      const signature = requiredObject(entry, "attestation signature");
-      return {
-        signer: String(signature.signer),
-        signature: String(signature.signature),
-      };
-    }),
-    transcriptHash: String(body.transcriptHash) as `0x${string}`,
   };
 }
 

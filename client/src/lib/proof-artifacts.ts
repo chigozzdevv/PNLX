@@ -1,4 +1,4 @@
-import { merklPost } from "@/lib/merkl-api";
+import { pnlxPost } from "@/lib/pnlx-api";
 import type { Hex, ServerProofMeta } from "@/types/trading";
 
 export interface ClientProofArtifactRegistration {
@@ -22,7 +22,7 @@ export async function registerClientProofArtifact(
   input: ClientProofArtifactRegistration,
   token?: string,
 ): Promise<RegisteredProofArtifact> {
-  const result = await merklPost<{ artifact: RegisteredProofArtifact }>(
+  const result = await pnlxPost<{ artifact: RegisteredProofArtifact }>(
     "/proofs/artifacts",
     input,
     token,

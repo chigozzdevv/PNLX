@@ -10,7 +10,7 @@ const phoneFields = [
 ];
 export function LandingPrivacySection() {
   return (
-    <section className="landing-privacy-section">
+    <section className="landing-privacy-section" id="product">
       <div className="landing-privacy-copy">
         <h2>
           Private order flow.

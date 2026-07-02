@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { CircleDollarSign } from "lucide-react";
 import { useMemo, useState } from "react";
 import { formatNumber, formatUsd, shortAddress } from "@/lib/format";
-import type { SubmitTradeIntentResult } from "@/lib/trade-submit";
+import type { SubmitTradeIntentResult, TradeSubmitStage } from "@/lib/trade-submit";
 import type { MarketDisplay, OrderDraft, Side } from "@/types/trading";
 
 interface OrderTicketProps {
@@ -19,7 +19,10 @@ export interface OrderTicketSubmitInput {
   leverage: number;
   limitPrice: number;
   margin: number;
+  onProgress?: (stage: TradeSubmitStage) => void;
+  orderType?: "market" | "limit";
   side: Side;
+  sizingPrice?: number;
   stopLossPrice?: number | null;
   takeProfitPrice?: number | null;
 }
@@ -32,10 +35,12 @@ export function OrderTicket({ connected = false, market, onSubmit, order }: Orde
   const [tpSlEnabled, setTpSlEnabled] = useState(false);
   const [conditionMode, setConditionMode] = useState<ConditionMode>("percent");
   const [submitError, setSubmitError] = useState<string | undefined>();
+  const [submitStage, setSubmitStage] = useState<TradeSubmitStage | undefined>();
   const [submitSuccess, setSubmitSuccess] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
   const [margin, setMargin] = useState(order.collateral);
   const [limitPrice, setLimitPrice] = useState(market.price);
+  const [slippagePercent, setSlippagePercent] = useState(0.5);
   const [leverage, setLeverage] = useState(Math.min(order.leverage, market.maxLeverage));
   const [takeProfitPrice, setTakeProfitPrice] = useState(
     order.takeProfitPrice ?? defaultTakeProfit(order.side, market.price, order.leverage),
@@ -45,6 +50,9 @@ export function OrderTicket({ connected = false, market, onSubmit, order }: Orde
   );
 
   const activePrice = orderType === "market" ? market.price : limitPrice;
+  const executionLimitPrice = orderType === "market"
+    ? marketLimitPrice(side, market.price, slippagePercent)
+    : limitPrice;
   const exposure = margin * leverage;
   const size = activePrice > 0 ? exposure / activePrice : 0;
   const takeProfitPnl = estimatePnl(side, size, activePrice, takeProfitPrice);
@@ -96,19 +104,25 @@ export function OrderTicket({ connected = false, market, onSubmit, order }: Orde
 
     setSubmitError(undefined);
     setSubmitSuccess(undefined);
+    setSubmitStage("hashing");
     setSubmitting(true);
     try {
       const result = await onSubmit({
         collateralAsset: order.collateralAsset,
         leverage,
-        limitPrice: activePrice,
+        limitPrice: executionLimitPrice,
         margin,
+        onProgress: setSubmitStage,
+        orderType,
         side,
+        sizingPrice: activePrice,
         stopLossPrice: tpSlEnabled ? stopLossPrice : null,
         takeProfitPrice: tpSlEnabled ? takeProfitPrice : null,
       });
+      setSubmitStage("done");
       setSubmitSuccess(`Intent ${shortAddress(result.intent.intentCommitment)} submitted`);
     } catch (error) {
+      setSubmitStage(undefined);
       setSubmitError(error instanceof Error ? error.message : "Trade submission failed");
     } finally {
       setSubmitting(false);
@@ -180,7 +194,22 @@ export function OrderTicket({ connected = false, market, onSubmit, order }: Orde
             <span className="asset-pill">{market.quoteAsset}</span>
           </div>
         </div>
-      ) : null}
+      ) : (
+        <div className="ticket-field">
+          <div className="field-label">
+            <span>Slippage</span>
+          </div>
+          <div className="field-control">
+            <input
+              aria-label="Market slippage"
+              inputMode="decimal"
+              value={slippagePercent}
+              onChange={(event) => setSlippagePercent(clamp(Number(event.target.value) || 0, 0.01, 20))}
+            />
+            <span className="asset-pill">%</span>
+          </div>
+        </div>
+      )}
 
       <div className="ticket-field">
         <div className="field-label">
@@ -313,7 +342,13 @@ export function OrderTicket({ connected = false, market, onSubmit, order }: Orde
         {!connected ? "Connect Wallet" : submitting ? "Submitting" : side === "long" ? "Submit Long" : "Submit Short"}
       </motion.button>
 
-      {submitError ? <p className="ticket-message ticket-message-error">{submitError}</p> : null}
+      <TradeProgress stage={submitStage} />
+
+      {submitError ? (
+        <p className="ticket-message ticket-message-error" role="alert" title={submitError}>
+          {submitError}
+        </p>
+      ) : null}
       {submitSuccess ? <p className="ticket-message ticket-message-success">{submitSuccess}</p> : null}
 
       <div className="ticket-summary">
@@ -322,8 +357,45 @@ export function OrderTicket({ connected = false, market, onSubmit, order }: Orde
         <SummaryRow label="Private Margin" value={formatUsd(margin, { maximumFractionDigits: 2 })} />
         <SummaryRow label="Leverage" value={`${formatNumber(leverage, 2)}x`} />
         <SummaryRow label="Liquidation Price" value={formatNumber(liquidationPrice, market.price < 10 ? 4 : 1)} />
+        {orderType === "market" ? (
+          <SummaryRow
+            label={side === "long" ? "Max Fill" : "Min Fill"}
+            value={formatNumber(executionLimitPrice, market.price < 10 ? 4 : 1)}
+          />
+        ) : null}
       </div>
     </section>
+  );
+}
+
+const TRADE_PROGRESS: Array<{ id: TradeSubmitStage; label: string }> = [
+  { id: "hashing", label: "Hash" },
+  { id: "shielding", label: "Shield" },
+  { id: "signing", label: "Sign" },
+  { id: "proving", label: "Proof" },
+  { id: "matching", label: "Match" },
+];
+
+function TradeProgress({ stage }: { stage?: TradeSubmitStage }) {
+  if (!stage) return null;
+  const activeIndex = stage === "done"
+    ? TRADE_PROGRESS.length
+    : TRADE_PROGRESS.findIndex((step) => step.id === stage);
+
+  return (
+    <div className="trade-progress" aria-label="Private trade progress">
+      {TRADE_PROGRESS.map((step, index) => (
+        <div
+          className={`trade-progress-step ${
+            index <= activeIndex ? "trade-progress-step-active" : ""
+          } ${index === activeIndex ? "trade-progress-step-current" : ""}`}
+          key={step.id}
+        >
+          <span />
+          <strong>{step.label}</strong>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -399,7 +471,16 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
 }
 
 function clampLeverage(value: number, maxLeverage: number) {
-  return Math.min(Math.max(value, 1), maxLeverage);
+  return clamp(value, 1, maxLeverage);
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function marketLimitPrice(side: Side, price: number, slippagePercent: number) {
+  const slippage = Math.max(slippagePercent, 0) / 100;
+  return side === "long" ? price * (1 + slippage) : price * (1 - slippage);
 }
 
 function defaultTakeProfit(side: Side, price: number, leverage: number) {

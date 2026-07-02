@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { mod } from "@merkl/crypto";
-import type { Hex } from "@merkl/protocol-types";
+import { mod } from "@pnlx/crypto";
+import type { Hex } from "@pnlx/protocol-types";
 
 export type ContractPublicInput =
   | { kind: "field"; value: Hex }

@@ -1,5 +1,5 @@
 import { json, readJson } from "@/shared/http/json";
-import { ownerCommitment } from "@merkl/crypto";
+import { ownerCommitment } from "@pnlx/crypto";
 import type { AuthService } from "@/features/auth/auth.service";
 import { parseAuthChallenge, parseAuthSession } from "@/features/auth/auth.schema";
 

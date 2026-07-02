@@ -1,28 +1,37 @@
 import { ChevronDown } from "lucide-react";
+import Image from "next/image";
+import { useState } from "react";
 import { formatCompact, formatPct } from "@/lib/format";
 import type { MarketDisplay } from "@/types/trading";
 
 interface MarketHeaderProps {
+  markets: MarketDisplay[];
   selectedMarket: MarketDisplay;
   onSelectMarket: (marketId: string) => void;
 }
 
-export function MarketHeader({ selectedMarket, onSelectMarket }: MarketHeaderProps) {
+const ASSET_LOGOS: Record<string, string> = {
+  BTC: "https://s2.coinmarketcap.com/static/img/coins/64x64/1.png",
+  ETH: "https://s2.coinmarketcap.com/static/img/coins/64x64/1027.png",
+  SOL: "https://s2.coinmarketcap.com/static/img/coins/64x64/5426.png",
+  XLM: "https://s2.coinmarketcap.com/static/img/coins/64x64/512.png",
+  XRP: "https://s2.coinmarketcap.com/static/img/coins/64x64/52.png",
+};
+
+export function MarketHeader({ markets, selectedMarket, onSelectMarket }: MarketHeaderProps) {
+  const [open, setOpen] = useState(false);
+  const totalOpenInterest = selectedMarket.openInterestLong + selectedMarket.openInterestShort;
   const stats = [
     {
-      label: "Open Interest (L)",
-      value: `${formatCompact(selectedMarket.openInterestLong)} / ${formatCompact(
-        selectedMarket.openInterestLong + selectedMarket.openInterestShort,
-      )}`,
+      label: "Open Interest",
+      value: formatCompact(totalOpenInterest),
     },
     {
-      label: "Open Interest (S)",
-      value: `${formatCompact(selectedMarket.openInterestShort)} / ${formatCompact(
-        selectedMarket.openInterestLong + selectedMarket.openInterestShort,
-      )}`,
+      label: "Long / Short",
+      value: `${formatCompact(selectedMarket.openInterestLong)} / ${formatCompact(selectedMarket.openInterestShort)}`,
     },
     {
-      label: "Net Rate (L/S)",
+      label: "Funding Rate",
       value: `${formatPct(selectedMarket.netRateLong, 4)} / ${formatPct(selectedMarket.netRateShort, 4)}`,
       mixed: true,
     },
@@ -34,18 +43,48 @@ export function MarketHeader({ selectedMarket, onSelectMarket }: MarketHeaderPro
 
   return (
     <section className="market-header">
-      <div className="market-card">
-        <div className="asset-badge">{selectedMarket.baseAsset.slice(0, 1)}</div>
+      <div
+        className="market-card"
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            setOpen(false);
+          }
+        }}
+      >
+        <AssetLogo asset={selectedMarket.baseAsset} />
         <div className="min-w-0">
           <button
-            className="flex min-w-0 items-center gap-2 text-left"
+            aria-expanded={open}
+            className="market-select-button"
             type="button"
-            onClick={() => onSelectMarket(selectedMarket.marketId)}
+            onClick={() => setOpen((value) => !value)}
           >
             <span className="truncate text-lg font-semibold text-white">{selectedMarket.pair}</span>
             <ChevronDown size={18} className="text-[var(--text-muted)]" />
           </button>
         </div>
+
+        {open ? (
+          <div className="market-dropdown">
+            {markets.map((market) => (
+              <button
+                className={`market-dropdown-item ${
+                  market.marketId === selectedMarket.marketId ? "market-dropdown-item-active" : ""
+                }`}
+                key={market.marketId}
+                type="button"
+                onClick={() => {
+                  onSelectMarket(market.marketId);
+                  setOpen(false);
+                }}
+              >
+                <AssetLogo asset={market.baseAsset} small />
+                <strong>{market.pair}</strong>
+                <em>{market.maxLeverage}x</em>
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <div className="market-summary">
@@ -59,5 +98,20 @@ export function MarketHeader({ selectedMarket, onSelectMarket }: MarketHeaderPro
         </div>
       </div>
     </section>
+  );
+}
+
+function AssetLogo({ asset, small = false }: { asset: string; small?: boolean }) {
+  const src = ASSET_LOGOS[asset];
+  const size = small ? 22 : 28;
+
+  return (
+    <span className={`asset-logo ${small ? "asset-logo-small" : ""}`}>
+      {src ? (
+        <Image alt={`${asset} logo`} draggable={false} height={size} src={src} width={size} />
+      ) : (
+        <strong>{asset.slice(0, 1)}</strong>
+      )}
+    </span>
   );
 }

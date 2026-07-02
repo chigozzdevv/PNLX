@@ -24,6 +24,19 @@ export interface IntentValidityRecord {
   proof: ServerProofMeta;
 }
 
+export interface PositionCloseRecord {
+  closeCommitment: Hex;
+  marginOutputCommitment: Hex;
+  marketId: string;
+  markPrice: string;
+  newPositionCommitment: Hex;
+  newPositionRoot: Hex;
+  positionCommitment: Hex;
+  positionNullifier: Hex;
+  positionRoot: Hex;
+  proof: ServerProofMeta;
+}
+
 export interface ProofBundle<T> {
   artifact: ClientProofArtifactRegistration;
   record: T;
@@ -63,10 +76,45 @@ export interface ClientProofProvider {
     size: bigint;
     spendSecretDigest: Hex;
   }): Promise<ProofBundle<IntentValidityRecord>>;
+
+  positionClose(input: {
+    blinding: Hex;
+    closeCommitment: Hex;
+    closeSize: bigint;
+    entryPrice: bigint;
+    fee: bigint;
+    fundingIndex: bigint;
+    fundingPayment: bigint;
+    margin: bigint;
+    marginOutputAmount: bigint;
+    marginOutputAssetDigest: Hex;
+    marginOutputBlinding: Hex;
+    marginOutputCommitment: Hex;
+    marginOutputRhoDigest: Hex;
+    marketDigest: Hex;
+    marketId: string;
+    markPrice: bigint;
+    newMargin: bigint;
+    newPositionBlinding: Hex;
+    newPositionCommitment: Hex;
+    newPositionRhoDigest: Hex;
+    newPositionRoot: Hex;
+    ownerDigest: Hex;
+    pathIndices: boolean[];
+    pathSiblings: Hex[];
+    positionCommitment: Hex;
+    positionNullifier: Hex;
+    positionRoot: Hex;
+    remainingMargin: bigint;
+    rhoDigest: Hex;
+    side: Side;
+    size: bigint;
+    spendSecretDigest: Hex;
+  }): Promise<ProofBundle<PositionCloseRecord>>;
 }
 
 export function defaultClientProofProvider(): ClientProofProvider | undefined {
-  const baseUrl = process.env.NEXT_PUBLIC_MERKL_PROVER_URL?.trim();
+  const baseUrl = process.env.NEXT_PUBLIC_PNLX_PROVER_URL?.trim();
   return baseUrl ? new HttpClientProofProvider(baseUrl) : undefined;
 }
 
@@ -87,6 +135,10 @@ class HttpClientProofProvider implements ClientProofProvider {
 
   intentValidity(input: Parameters<ClientProofProvider["intentValidity"]>[0]) {
     return this.post<IntentValidityRecord>("/intent-validity", stringifyBigInts(input));
+  }
+
+  positionClose(input: Parameters<ClientProofProvider["positionClose"]>[0]) {
+    return this.post<PositionCloseRecord>("/position-close", stringifyBigInts(input));
   }
 
   private async post<T>(path: string, data: Record<string, unknown>): Promise<ProofBundle<T>> {

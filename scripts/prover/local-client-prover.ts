@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { ProverService } from "@/workers/prover/prover.service";
-import type { ProofMeta } from "@merkl/protocol-types";
-import type { ProofArtifact } from "@merkl/proof-system";
+import type { ProofMeta } from "@pnlx/protocol-types";
+import type { ProofArtifact } from "@pnlx/proof-system";
 
 const DEFAULT_PORT = 4101;
 
@@ -13,7 +13,7 @@ export function createLocalClientProverHandler(root = process.cwd()) {
 
     try {
       if (request.method === "GET" && url.pathname === "/health") {
-        return json({ ok: true, service: "merkl-local-client-prover" });
+        return json({ ok: true, service: "pnlx-local-client-prover" });
       }
       if (request.method === "POST" && url.pathname === "/deposit-note") {
         const input = await request.json() as Record<string, unknown>;
@@ -57,6 +57,44 @@ export function createLocalClientProverHandler(root = process.cwd()) {
         });
         return json(proofBundle(prover, record, record.proof));
       }
+      if (request.method === "POST" && url.pathname === "/position-close") {
+        const input = await request.json() as Record<string, unknown>;
+        const record = prover.provePositionClose({
+          blinding: requiredHex(input.blinding, "blinding"),
+          closeCommitment: requiredHex(input.closeCommitment, "closeCommitment"),
+          closeSize: BigInt(String(input.closeSize)),
+          entryPrice: BigInt(String(input.entryPrice)),
+          fee: BigInt(String(input.fee)),
+          fundingIndex: BigInt(String(input.fundingIndex)),
+          fundingPayment: BigInt(String(input.fundingPayment)),
+          margin: BigInt(String(input.margin)),
+          marginOutputAmount: BigInt(String(input.marginOutputAmount)),
+          marginOutputAssetDigest: requiredHex(input.marginOutputAssetDigest, "marginOutputAssetDigest"),
+          marginOutputBlinding: requiredHex(input.marginOutputBlinding, "marginOutputBlinding"),
+          marginOutputCommitment: requiredHex(input.marginOutputCommitment, "marginOutputCommitment"),
+          marginOutputRhoDigest: requiredHex(input.marginOutputRhoDigest, "marginOutputRhoDigest"),
+          marketDigest: requiredHex(input.marketDigest, "marketDigest"),
+          marketId: requiredString(input.marketId, "marketId"),
+          markPrice: BigInt(String(input.markPrice)),
+          newMargin: BigInt(String(input.newMargin)),
+          newPositionBlinding: requiredHex(input.newPositionBlinding, "newPositionBlinding"),
+          newPositionCommitment: requiredHex(input.newPositionCommitment, "newPositionCommitment"),
+          newPositionRhoDigest: requiredHex(input.newPositionRhoDigest, "newPositionRhoDigest"),
+          newPositionRoot: requiredHex(input.newPositionRoot, "newPositionRoot"),
+          ownerDigest: requiredHex(input.ownerDigest, "ownerDigest"),
+          pathIndices: requiredBooleanArray(input.pathIndices, "pathIndices"),
+          pathSiblings: requiredHexArray(input.pathSiblings, "pathSiblings"),
+          positionCommitment: requiredHex(input.positionCommitment, "positionCommitment"),
+          positionNullifier: requiredHex(input.positionNullifier, "positionNullifier"),
+          positionRoot: requiredHex(input.positionRoot, "positionRoot"),
+          remainingMargin: BigInt(String(input.remainingMargin)),
+          rhoDigest: requiredHex(input.rhoDigest, "rhoDigest"),
+          side: input.side === "short" ? "short" : "long",
+          size: BigInt(String(input.size)),
+          spendSecretDigest: requiredHex(input.spendSecretDigest, "spendSecretDigest"),
+        });
+        return json(proofBundle(prover, record, record.proof));
+      }
       return cors(Response.json({ error: "not found" }, { status: 404 }));
     } catch (error) {
       const message = error instanceof Error ? error.message : "local prover error";
@@ -66,13 +104,13 @@ export function createLocalClientProverHandler(root = process.cwd()) {
 }
 
 if (import.meta.main) {
-  const port = Number(process.env.MERKL_CLIENT_PROVER_PORT ?? DEFAULT_PORT);
+  const port = Number(process.env.PNLX_CLIENT_PROVER_PORT ?? DEFAULT_PORT);
   const server = Bun.serve({
     port,
     fetch: createLocalClientProverHandler(process.cwd()),
   });
 
-  console.log(`Merkl local client prover listening on http://127.0.0.1:${server.port}`);
+  console.log(`PNLX local client prover listening on http://127.0.0.1:${server.port}`);
 }
 
 function proofBundle(prover: ProverService, record: unknown, proof: ProofMeta) {

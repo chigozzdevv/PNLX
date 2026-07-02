@@ -1,4 +1,4 @@
-import type { Hex, OrderStatus, PositionStatus } from "@merkl/protocol-types";
+import type { Hex, OrderStatus, PositionStatus } from "@pnlx/protocol-types";
 
 export interface MarketPublicSnapshot {
   aggregateVolume: string;

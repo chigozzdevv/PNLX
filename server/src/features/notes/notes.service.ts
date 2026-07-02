@@ -1,8 +1,8 @@
 import { assertAuthenticatedAccount } from "@/shared/http/auth-context";
-import { contractPublicInputHash, publicField, publicU128 } from "@merkl/proof-system";
-import { hashFields } from "@merkl/crypto";
+import { contractPublicInputHash, publicField, publicU128 } from "@pnlx/proof-system";
+import { hashFields } from "@pnlx/crypto";
 import type { ServerEnv } from "@/config/env";
-import type { DepositNoteRecord, DepositNoteWitness, Hex, PendingAssetDepositRecord } from "@merkl/protocol-types";
+import type { DepositNoteRecord, DepositNoteWitness, Hex, PendingAssetDepositRecord } from "@pnlx/protocol-types";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
 import type { ProverService } from "@/workers/prover/prover.service";
@@ -57,11 +57,12 @@ export class NotesService {
     assertAuthenticatedAccount(authenticated, input.from, "from");
     this.assertCollateralToken(input.token);
     const onchain = this.requireOnchain();
+    this.assertCollateralFunding(input, onchain);
     const depositProof = this.prover.proveDepositNote(assetDepositWitness(input));
     const proofVerification = onchain.verifyProof(depositProof.proof);
     this.assertSubmittedCustodyRelay(proofVerification, "verify_and_record");
     const action = onchain.prepareDepositAsset({ ...input, depositProof });
-    const pendingDeposit = this.recordPendingDeposit(input, depositProof, action.xdr);
+    const pendingDeposit = this.recordPendingDeposit(input, depositProof, action.xdr, action.txHash);
     return {
       action,
       depositProof,
@@ -78,10 +79,11 @@ export class NotesService {
     this.assertCollateralToken(input.token);
     this.assertDepositProof(input);
     const onchain = this.requireOnchain();
+    this.assertCollateralFunding(input, onchain);
     const proofVerification = onchain.verifyProof(input.depositProof.proof);
     this.assertSubmittedCustodyRelay(proofVerification, "verify_and_record");
     const action = onchain.prepareDepositAsset({ ...input, depositProof: input.depositProof });
-    const pendingDeposit = this.recordPendingDeposit(input, input.depositProof, action.xdr);
+    const pendingDeposit = this.recordPendingDeposit(input, input.depositProof, action.xdr, action.txHash);
     return {
       action,
       depositProof: input.depositProof,
@@ -120,6 +122,7 @@ export class NotesService {
     assertAuthenticatedAccount(authenticated, input.from, "from");
     this.assertCollateralToken(input.token);
     const onchainRelay = this.requireOnchain();
+    this.assertCollateralFunding(input, onchainRelay);
     const depositProof = this.prover.proveDepositNote(assetDepositWitness(input));
     const onchain = onchainRelay.depositAsset({ ...input, depositProof });
     this.assertSubmittedCustodyRelay(onchain, "deposit_asset");
@@ -143,6 +146,7 @@ export class NotesService {
     this.assertCollateralToken(input.token);
     this.assertDepositProof(input);
     const onchainRelay = this.requireOnchain();
+    this.assertCollateralFunding(input, onchainRelay);
     const onchain = onchainRelay.depositAsset({ ...input, depositProof: input.depositProof });
     this.assertSubmittedCustodyRelay(onchain, "deposit_asset");
     this.executor.store.recordProof(input.depositProof.proof);
@@ -235,10 +239,33 @@ export class NotesService {
     assertSubmittedRelay(result, functionName);
   }
 
+  private assertCollateralFunding(
+    input: Pick<ProvenAssetDepositNoteInput, "amount" | "from" | "source" | "token">,
+    onchain: Pick<OnchainRelayService, "assetBalance">,
+  ): void {
+    let balance: bigint;
+    try {
+      balance = onchain.assetBalance(input.token, input.from, input.source);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("collateral trustline is missing")) {
+        throw new Error(`${this.collateralLabel()} trustline is missing for this wallet`);
+      }
+      throw error;
+    }
+    if (balance < input.amount) {
+      throw new Error(`Insufficient ${this.collateralLabel()} balance for private margin`);
+    }
+  }
+
+  private collateralLabel(): string {
+    return this.env.collateralAssetCode || "collateral";
+  }
+
   private recordPendingDeposit(
     input: Pick<ProvenAssetDepositNoteInput, "amount" | "commitment" | "from" | "token">,
     depositProof: DepositNoteRecord,
     preparedXdr: string | undefined,
+    preparedTxHash?: Hex,
   ): PendingAssetDepositRecord {
     if (!preparedXdr) {
       throw new Error("asset deposit preparation did not return wallet transaction xdr");
@@ -249,6 +276,7 @@ export class NotesService {
       createdAt: Date.now(),
       depositProof,
       from: input.from,
+      preparedTxHash,
       preparedXdrDigest: hashFields("prepared-asset-deposit-xdr", [preparedXdr]),
       token: input.token,
       tokenDigest: depositProof.tokenDigest,

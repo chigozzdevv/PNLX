@@ -35,6 +35,7 @@ export function parseSignedXdr(input: RelayBody): SubmitSignedXdrInput {
   if (!/^[A-Za-z0-9+/=]+$/.test(xdr)) throw new Error("signed transaction xdr must be base64");
   return {
     commitment: optionalHex(input.commitment),
+    expectedTxHash: optionalHex(input.expectedTxHash),
     preparedXdrDigest: optionalHex(input.preparedXdrDigest),
     xdr,
   };

@@ -1,15 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { commitIntent, hashFields, intentBindingFields, ownerCommitment, recoverSecret } from "@merkl/crypto";
-import { PRICE_SCALE, RATE_SCALE } from "@merkl/market-math";
-import { circuitKey, loadCircuit } from "@merkl/proof-system";
-import type { Hex, IntentValidityRecord, MarketConfig, ProofMeta, TradeIntent } from "@merkl/protocol-types";
-import { createMarginNote } from "@merkl/sdk";
+import { commitIntent, hashFields, intentBindingFields, ownerCommitment, recoverSecret } from "@pnlx/crypto";
+import { PRICE_SCALE, RATE_SCALE } from "@pnlx/market-math";
+import { circuitKey, loadCircuit } from "@pnlx/proof-system";
+import type { Hex, IntentValidityRecord, MarketConfig, ProofMeta, TradeIntent } from "@pnlx/protocol-types";
+import { createMarginNote } from "@pnlx/sdk";
 import { readFileSync } from "node:fs";
 import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
 import type { RecoveredIntent } from "@/workers/threshold-shares/threshold-shares.model";
 import { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
 import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
 import { createExecutor } from "@/workers/executor/executor.worker";
+import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
 
 describe("private batch settlement", () => {
   test("keeps raw match fill handling outside the executor boundary", () => {
@@ -181,13 +182,14 @@ describe("private batch settlement", () => {
   test("rejects tampered match transcripts before proof generation", () => {
     const matcher = new BatchMatcherService();
     const market = testMarket();
+    const intents = [
+      recoveredIntent("tampered-long", "long", 1n, 52_000n * PRICE_SCALE),
+      recoveredIntent("tampered-short", "short", 1n, 49_000n * PRICE_SCALE),
+    ];
     const match = matcher.match({
       batchId: "tampered-transcript",
       market,
-      intents: [
-        recoveredIntent("tampered-long", "long", 1n, 52_000n * PRICE_SCALE),
-        recoveredIntent("tampered-short", "short", 1n, 49_000n * PRICE_SCALE),
-      ],
+      intents,
     });
     const proofs = new ProofCoordinatorService();
 
@@ -197,6 +199,8 @@ describe("private batch settlement", () => {
         market,
         oldRoot: hashFields("old-root", ["tampered-transcript"]),
         newRoot: hashFields("new-root", ["tampered-transcript"]),
+        intents,
+        positionCommitments: [],
         match: {
           ...match,
           matchTranscriptDigest: hashFields("bad-transcript", []),
@@ -303,17 +307,14 @@ describe("private batch settlement", () => {
         status: "open",
       }),
     ]);
-    const batchCircuit = loadCircuit(process.cwd(), "batch-match");
     expect(settlement.proof.proofDigest.startsWith("0x")).toBe(true);
     expect(settlement.proof.circuitId).toBe("batch-match");
-    expect(settlement.proof.circuitKey).toBe(circuitKey("batch-match"));
-    expect(settlement.proof.circuitHash).toBe(batchCircuit.sourceHash);
-    expect(settlement.proof.proofHash).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(settlement.proof.vkHash).toBe(settlement.proof.verifierHash);
+    expect(settlement.proof.proofSystem).toBe("risc0-groth16");
+    expect(settlement.proof.imageId).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(settlement.proof.journalDigest).toBe(batchSettlementPublicInputHash(settlement));
+    expect(settlement.proof.sealDigest).toBe(settlement.proof.proofDigest);
     expect(executor.store.hasProof(settlement.proof)).toBe(true);
-    const artifact = executor.artifactFor(settlement.proof);
-    expect(artifact?.proofPath).toContain("proof");
-    expect(createExecutor().artifactFor(settlement.proof)?.proofPath).toBe(artifact?.proofPath);
+    expect(executor.artifactFor(settlement.proof)).toBeUndefined();
     const publicSettlement = JSON.stringify(settlement, (_key, value) =>
       typeof value === "bigint" ? value.toString() : value,
     );

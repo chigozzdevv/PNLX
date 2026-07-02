@@ -2,15 +2,19 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { fieldMerkleRoot } from "@merkl/crypto";
-import { circuitKey } from "@merkl/proof-system";
-import type { Hex } from "@merkl/protocol-types";
+import { fieldMerkleRoot } from "@pnlx/crypto";
+import { circuitKey } from "@pnlx/proof-system";
+import type { Hex } from "@pnlx/protocol-types";
 import { loadEnv } from "@/config/env";
+import { RISC0_BATCH_MATCH_CIRCUIT_KEY } from "@/workers/risc0-matcher/risc0-proof";
 import { createDeployManifest } from "./manifest";
 
 interface Deployment {
   contracts: Record<string, string>;
   network: string;
+  risc0VerifierStack?: {
+    router: string;
+  };
   source: string;
   sourceAddress: string;
   verifiers: Record<string, string>;
@@ -36,18 +40,16 @@ invoke(deployment.contracts["price-oracle"], "init", [
 
 for (const verifier of manifest.verifiers) {
   const verifierId = deployment.verifiers[verifier.verifierAuthority];
-  invoke(verifierId, "init", [
-    "--governance",
-    deployment.contracts.governance,
-    "--proof_ledger",
-    deployment.contracts["proof-ledger"],
-    "--circuit_id",
-    bytes32(verifier.circuitKey),
-    "--verifier_hash",
-    bytes32(verifier.verifierHash),
-    "--vk_bytes-file-path",
-    verifier.vkPath,
-  ], true);
+  invoke(
+    verifierId,
+    "init",
+    verifierInitArgs(verifier, {
+      governance: deployment.contracts.governance,
+      proofLedger: deployment.contracts["proof-ledger"],
+      router: deployment.risc0VerifierStack?.router ?? deployment.contracts["risc0-router"] ?? "",
+    }),
+    true,
+  );
   invoke(deployment.contracts.governance, "set_verifier", [
     "--circuit_id",
     bytes32(verifier.circuitKey),
@@ -100,7 +102,7 @@ invoke(deployment.contracts["batch-settlement"], "init", [
   "--intent_registry",
   deployment.contracts["intent-registry"],
   "--circuit_id",
-  bytes32(circuitKey("batch-match")),
+  bytes32(RISC0_BATCH_MATCH_CIRCUIT_KEY),
 ], true);
 invoke(deployment.contracts.liquidation, "init", [
   "--governance",
@@ -191,6 +193,43 @@ function readDeployment(): Deployment {
   const path = join(root, env.stellarDeploymentFile);
   if (!existsSync(path)) throw new Error(`missing deployment: ${path}`);
   return JSON.parse(readFileSync(path, "utf8")) as Deployment;
+}
+
+function verifierInitArgs(
+  verifier: ReturnType<typeof createDeployManifest>["verifiers"][number],
+  ids: { governance: string; proofLedger: string; router: string },
+): string[] {
+  const base = [
+    "--governance",
+    ids.governance,
+    "--proof_ledger",
+    ids.proofLedger,
+  ];
+
+  if (verifier.verifierContract === "risc0-proof-verifier") {
+    if (!ids.router) {
+      throw new Error("deployment is missing the RISC0 router contract for verifier finalization");
+    }
+    return [
+      ...base,
+      "--router",
+      ids.router,
+      "--circuit_id",
+      bytes32(verifier.circuitKey),
+      "--verifier_hash",
+      bytes32(verifier.verifierHash),
+    ];
+  }
+
+  return [
+    ...base,
+    "--circuit_id",
+    bytes32(verifier.circuitKey),
+    "--verifier_hash",
+    bytes32(verifier.verifierHash),
+    "--vk_bytes-file-path",
+    verifier.vkPath,
+  ];
 }
 
 function invoke(contractId: string, method: string, args: string[], allowFailure = false): string {

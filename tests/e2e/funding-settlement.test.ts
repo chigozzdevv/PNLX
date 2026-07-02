@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { commitConditionalOrder, hashFields, ownerCommitment } from "@merkl/crypto";
-import { PRICE_SCALE, settleClose } from "@merkl/market-math";
+import { commitConditionalOrder, hashFields, ownerCommitment } from "@pnlx/crypto";
+import { PRICE_SCALE, settleClose } from "@pnlx/market-math";
 import type {
   BatchSettlement,
   ConditionalOrderRecord,
@@ -12,7 +12,7 @@ import type {
   PositionCloseRecord,
   PositionCloseWitness,
   ProofMeta,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 import { createExecutor } from "@/workers/executor/executor.worker";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { ProverService } from "@/workers/prover/prover.service";

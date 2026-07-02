@@ -1,10 +1,20 @@
 import type {
+  PositionCloseContextInput,
   CreatePositionCloseInput,
   CreateProvenPositionCloseInput,
 } from "@/features/position-closes/position-closes.model";
 import { parseProofMeta } from "@/features/intents/intents.schema";
 
 type PositionCloseBody = Record<string, unknown>;
+
+export function parsePositionCloseContext(request: Request): PositionCloseContextInput {
+  const params = new URL(request.url).searchParams;
+  return {
+    newPositionCommitment: String(params.get("newPositionCommitment") ?? "") as `0x${string}`,
+    ownerCommitment: String(params.get("ownerCommitment") ?? "") as `0x${string}`,
+    positionCommitment: String(params.get("positionCommitment") ?? "") as `0x${string}`,
+  };
+}
 
 export function parsePositionClose(input: PositionCloseBody): CreatePositionCloseInput {
   return {

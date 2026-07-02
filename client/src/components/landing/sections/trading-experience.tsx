@@ -1,59 +1,27 @@
-import { BadgeCheck, LockKeyhole } from "lucide-react";
-
-const tradingControls = [
-  ["Order type", "Market / Limit"],
-  ["Margin", "Private balance"],
-  ["Leverage", "Before submit"],
-  ["Risk", "Checked"],
+const tradingTools = [
+  "Market and limit orders",
+  "Private margin and leverage",
+  "Hidden TP/SL and liquidation levels",
+  "Batch execution",
+  "Proof-backed settlement",
 ];
 
 export function LandingTradingExperienceSection() {
   return (
-    <section className="landing-dark-section landing-trading-experience-section">
-      <div className="landing-section-copy landing-section-copy-front">
-        <h2>
-          Trading stays familiar.
-          <br />
-          Privacy stays built in.
-        </h2>
-        <span>
-          Use market or limit orders, set margin and leverage, review size and risk, then submit. The protocol
-          handles private intent flow and proof-backed settlement behind the trade.
-        </span>
+    <section className="landing-dark-section landing-trading-experience-section" id="perps">
+      <div className="landing-trading-copy">
+        <h2>Built for serious perps flow.</h2>
+        <span>PNLX ships with the tools traders expect, while sensitive trading state stays private by default.</span>
       </div>
 
-      <div className="landing-trading-visual" aria-hidden="true">
-        <div className="landing-execution-panel">
-          <div className="landing-execution-controls">
-            {tradingControls.map(([label, value]) => (
-              <div key={label}>
-                <span>{label}</span>
-                <strong>{value}</strong>
-              </div>
-            ))}
-          </div>
-
-          <div className="landing-execution-flow">
-            <div className="landing-flow-node">
-              <span>
-                <LockKeyhole size={22} />
-              </span>
-              <strong>Private intent</strong>
-              <em>Trade details stay off the public path</em>
-            </div>
-
-            <i />
-
-            <div className="landing-flow-node landing-flow-node-proof">
-              <span>
-                <BadgeCheck size={22} />
-              </span>
-              <strong>Proof settlement</strong>
-              <em>Outcome becomes verifiable</em>
-            </div>
-          </div>
-        </div>
-      </div>
+      <ul className="landing-trading-tool-list" aria-label="PNLX trading tools">
+        {tradingTools.map((tool) => (
+          <li key={tool}>
+            <span aria-hidden="true" />
+            <strong>{tool}</strong>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

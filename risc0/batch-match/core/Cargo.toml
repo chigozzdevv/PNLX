@@ -1,0 +1,13 @@
+[package]
+name = "pnlx-risc0-batch-match-core"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+hex.workspace = true
+num-bigint.workspace = true
+num-traits.workspace = true
+serde.workspace = true
+sha2.workspace = true
+

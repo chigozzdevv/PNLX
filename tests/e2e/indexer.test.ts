@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { digestToFieldHex, hashFields, intentOwnerCommitmentField, ownerCommitment } from "@merkl/crypto";
+import { digestToFieldHex, hashFields, intentOwnerCommitmentField, ownerCommitment } from "@pnlx/crypto";
 import type {
   BatchSettlement,
   Hex,
@@ -10,13 +10,13 @@ import type {
   MarketConfig,
   PositionLifecycleRecord,
   ProofMeta,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 import { FileProtocolStore } from "@/shared/state/persistent-store";
 import { createIndexer } from "@/workers/indexer/indexer.worker";
 
 describe("public and owner indexer", () => {
   test("rebuilds market aggregates and owner order status from the persistent protocol store", () => {
-    const storePath = join(mkdtempSync(join(tmpdir(), "merkl-indexer-")), "protocol-store.json");
+    const storePath = join(mkdtempSync(join(tmpdir(), "pnlx-indexer-")), "protocol-store.json");
     const store = new FileProtocolStore(storePath);
     const proof = proofMeta("indexer-proof");
     const market: MarketConfig = {

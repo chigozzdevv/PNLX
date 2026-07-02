@@ -4,9 +4,9 @@ import {
   commitMargin,
   digestToFieldHex,
   hashFields,
-} from "@merkl/crypto";
-import { hasInitialMargin, hasMaxLeverage } from "@merkl/market-math";
-import type { Fill, Hex, MarginNote, PositionNote } from "@merkl/protocol-types";
+} from "@pnlx/crypto";
+import { hasInitialMargin, hasMaxLeverage } from "@pnlx/market-math";
+import type { Fill, Hex, MarginNote, PositionNote } from "@pnlx/protocol-types";
 import type { MatchExecution, MatchInput, MatchResult } from "@/workers/batch-matcher/batch-matcher.model";
 import { matchTranscriptDigest } from "@/workers/batch-matcher/match-transcript";
 import type { RecoveredIntent } from "@/workers/threshold-shares/threshold-shares.model";

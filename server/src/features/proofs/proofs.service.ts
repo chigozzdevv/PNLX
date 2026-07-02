@@ -1,4 +1,10 @@
-import { loadCircuits, verifierEntry } from "@merkl/proof-system";
+import { loadCircuits, verifierEntry } from "@pnlx/proof-system";
+import {
+  RISC0_BATCH_MATCH_CIRCUIT_HASH,
+  RISC0_BATCH_MATCH_CIRCUIT_ID,
+  RISC0_BATCH_MATCH_CIRCUIT_KEY,
+  RISC0_STELLAR_VERIFIER_HASH,
+} from "@/workers/risc0-matcher/risc0-proof";
 import type { ProverService } from "@/workers/prover/prover.service";
 import type {
   DisclosureProofRequest,
@@ -34,7 +40,7 @@ export class ProofsService {
   }
 
   verifiers(): VerifierRegistryItem[] {
-    return Array.from(loadCircuits(this.root).values()).map((circuit) => {
+    const noirVerifiers = Array.from(loadCircuits(this.root).values()).map((circuit) => {
       const entry = verifierEntry(circuit);
 
       return {
@@ -46,5 +52,16 @@ export class ProofsService {
         verifierContract: "proof-verifier",
       };
     });
+    return [
+      ...noirVerifiers,
+      {
+        circuitHash: RISC0_BATCH_MATCH_CIRCUIT_HASH,
+        circuitId: RISC0_BATCH_MATCH_CIRCUIT_ID,
+        circuitKey: RISC0_BATCH_MATCH_CIRCUIT_KEY,
+        verifierAuthority: `${RISC0_BATCH_MATCH_CIRCUIT_ID}-risc0-verifier`,
+        verifierContract: "risc0-proof-verifier",
+        verifierHash: RISC0_STELLAR_VERIFIER_HASH,
+      },
+    ];
   }
 }

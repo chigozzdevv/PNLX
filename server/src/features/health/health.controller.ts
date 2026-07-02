@@ -1,9 +1,16 @@
 import { json } from "@/shared/http/json";
 import { oracleReadinessIssues } from "@/shared/protocol/oracle";
 import type { ServerEnv } from "@/config/env";
+import type { Hex } from "@pnlx/protocol-types";
+import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
 
 export class HealthController {
-  constructor(private readonly env: ServerEnv) {}
+  private collateralTokenDigestCache?: Hex | null;
+
+  constructor(
+    private readonly env: ServerEnv,
+    private readonly onchain?: Pick<OnchainRelayService, "enabled" | "tokenDigest">,
+  ) {}
 
   get(): Response {
     const custodyIssues = custodyReadinessIssues(this.env);
@@ -15,7 +22,7 @@ export class HealthController {
     const matchingIssues = matchingReadinessIssues(this.env);
     return json({
       ok: true,
-      service: "merkl-server",
+      service: "pnlx-server",
       auth: {
         required: this.env.authRequired,
       },
@@ -42,6 +49,7 @@ export class HealthController {
           code: this.env.collateralAssetCode,
           issuer: this.env.collateralAssetIssuer,
           tokenContract: this.env.collateralTokenContract,
+          tokenDigest: this.collateralTokenDigest(),
         },
         collateralTokenConfigured: Boolean(this.env.collateralTokenContract),
         onchainRelayEnabled: this.env.stellarOnchainRelay,
@@ -65,6 +73,11 @@ export class HealthController {
         enabled: this.env.batchExecutorEnabled,
         intervalMs: this.env.batchExecutorIntervalMs,
         prefix: this.env.batchExecutorPrefix,
+        protocolLiquidity: {
+          enabled: this.env.protocolLiquidityEnabled,
+          maxNotional: this.env.protocolLiquidityMaxNotional.toString(),
+          quoteSpreadBps: this.env.protocolLiquidityQuoteSpreadBps.toString(),
+        },
       },
       matching: {
         backend: this.env.matchingBackend,
@@ -72,33 +85,13 @@ export class HealthController {
           configured: Boolean(this.env.matcherServiceUrl),
           url: this.env.matcherServiceUrl ? redactUrl(this.env.matcherServiceUrl) : "",
         },
-        provider: {
-          backend: this.env.matcherProvider,
-          configured: matcherProviderConfigured(this.env),
-          url: this.env.matcherProviderUrl ? redactUrl(this.env.matcherProviderUrl) : "",
-          mpspdz: {
-            coordinatorUrl: this.env.mpspdzCoordinatorUrl ? redactUrl(this.env.mpspdzCoordinatorUrl) : "",
-            partyCount: this.env.mpspdzPartyUrls.length,
-            protocol: this.env.mpspdzProtocol,
-          },
-        },
-        nilcc: {
-          attestationPinned: Boolean(
-            this.env.nilccAttestationReportSha256 ||
-              this.env.nilccAttestationContains.length > 0,
-          ),
-          attestationRequired: this.env.nilccAttestationRequired,
-          configured: Boolean(this.env.nilccWorkloadUrl),
-          workloadUrl: this.env.nilccWorkloadUrl ? redactUrl(this.env.nilccWorkloadUrl) : "",
+        proofEngine: {
+          provider: this.env.matcherProvider,
+          proofSystem: "risc0-groth16",
         },
         thresholdShares: {
           nodeIds: this.env.thresholdShareNodeIds,
           threshold: this.env.thresholdShareThreshold,
-        },
-        matcherCommittee: {
-          addressCount: this.env.matcherCommitteeAddresses.length,
-          required: this.env.matcherCommitteeRequired,
-          threshold: this.env.matcherCommitteeThreshold,
         },
         privateMatchingRequired: this.env.privateMatchingRequired,
         readyForPrivateMatching: matchingIssues.length === 0,
@@ -132,6 +125,28 @@ export class HealthController {
         relayerMode: this.env.stellarRelayerMode,
       },
     });
+  }
+
+  private collateralTokenDigest(): Hex | undefined {
+    if (this.collateralTokenDigestCache !== undefined) {
+      return this.collateralTokenDigestCache ?? undefined;
+    }
+    if (this.env.collateralTokenDigest) {
+      this.collateralTokenDigestCache = normalizeHex32(this.env.collateralTokenDigest);
+      return this.collateralTokenDigestCache;
+    }
+    if (!this.env.collateralTokenContract || !this.onchain?.enabled) {
+      this.collateralTokenDigestCache = null;
+      return undefined;
+    }
+
+    try {
+      this.collateralTokenDigestCache = this.onchain.tokenDigest(this.env.collateralTokenContract);
+      return this.collateralTokenDigestCache;
+    } catch {
+      this.collateralTokenDigestCache = null;
+      return undefined;
+    }
   }
 }
 
@@ -183,46 +198,13 @@ function settlementReadinessIssues(env: ServerEnv): string[] {
 }
 
 function matchingReadinessIssues(env: ServerEnv): string[] {
-  if (!env.privateMatchingRequired && !env.matcherCommitteeRequired) return [];
+  if (!env.privateMatchingRequired) return [];
   const issues: string[] = [];
   if (env.matchingBackend === "threshold-recovery") {
     issues.push("MATCHING_BACKEND=threshold-recovery is not executor-blind");
   }
   if (env.matchingBackend === "external-blind" && env.privateMatchingRequired && !env.matcherServiceUrl) {
     issues.push("MATCHER_SERVICE_URL is required for private matcher service");
-  }
-  if (env.privateMatchingRequired && env.matcherProvider === "embedded") {
-    issues.push("MATCHER_PROVIDER=custom, mpspdz, or nilcc is required for private matcher service");
-  }
-  if (env.privateMatchingRequired && env.matcherProvider === "custom" && !env.matcherProviderUrl) {
-    issues.push("MATCHER_PROVIDER_URL is required for custom matcher provider");
-  }
-  if (env.privateMatchingRequired && env.matcherProvider === "mpspdz" && !env.mpspdzCoordinatorUrl) {
-    issues.push("MPSPDZ_COORDINATOR_URL is required for MP-SPDZ matcher provider");
-  }
-  if (env.privateMatchingRequired && env.matcherProvider === "mpspdz" && env.mpspdzPartyUrls.length < 3) {
-    issues.push("MPSPDZ_PARTY_URLS must include at least 3 party URLs for MP-SPDZ matcher provider");
-  }
-  if (env.privateMatchingRequired && env.matcherProvider === "nilcc" && !env.nilccWorkloadUrl) {
-    issues.push("NILCC_WORKLOAD_URL is required for nilCC matcher provider");
-  }
-  if (
-    env.privateMatchingRequired &&
-    env.matcherProvider === "nilcc" &&
-    env.nilccAttestationRequired &&
-    !env.nilccAttestationReportSha256 &&
-    env.nilccAttestationContains.length === 0
-  ) {
-    issues.push("NILCC_ATTESTATION_REPORT_SHA256 or NILCC_ATTESTATION_CONTAINS is required for nilCC matcher provider");
-  }
-  if (env.matcherCommitteeRequired && env.matcherCommitteeThreshold < 1) {
-    issues.push("MATCHER_COMMITTEE_THRESHOLD must be at least 1");
-  }
-  if (
-    env.matcherCommitteeRequired &&
-    env.matcherCommitteeAddresses.length < env.matcherCommitteeThreshold
-  ) {
-    issues.push("MATCHER_COMMITTEE_ADDRESSES must include at least MATCHER_COMMITTEE_THRESHOLD signers");
   }
   if (env.thresholdShareThreshold < 2) {
     issues.push("THRESHOLD_SHARE_THRESHOLD must be at least 2");
@@ -231,15 +213,6 @@ function matchingReadinessIssues(env: ServerEnv): string[] {
     issues.push("THRESHOLD_SHARE_NODE_IDS must include at least THRESHOLD_SHARE_THRESHOLD nodes");
   }
   return issues;
-}
-
-function matcherProviderConfigured(env: ServerEnv): boolean {
-  if (env.matcherProvider === "custom") return Boolean(env.matcherProviderUrl);
-  if (env.matcherProvider === "mpspdz") {
-    return Boolean(env.mpspdzCoordinatorUrl) && env.mpspdzPartyUrls.length >= 3;
-  }
-  if (env.matcherProvider === "nilcc") return Boolean(env.nilccWorkloadUrl);
-  return false;
 }
 
 function redactUrl(value: string): string {
@@ -260,6 +233,9 @@ function custodyReadinessIssues(env: ServerEnv): string[] {
   if (!env.collateralTokenContract) {
     issues.push("COLLATERAL_TOKEN_CONTRACT is required for asset custody");
   }
+  if (!env.collateralTokenDigest && !env.stellarOnchainRelay) {
+    issues.push("COLLATERAL_TOKEN_DIGEST or STELLAR_ONCHAIN_RELAY is required for asset custody proofs");
+  }
   if (!env.stellarOnchainRelay) {
     issues.push("STELLAR_ONCHAIN_RELAY must be enabled for asset custody");
   }
@@ -267,4 +243,10 @@ function custodyReadinessIssues(env: ServerEnv): string[] {
     issues.push("STELLAR_RELAYER_MODE must be stellar-cli for live asset custody");
   }
   return issues;
+}
+
+function normalizeHex32(value: string): Hex {
+  const match = value.trim().match(/^(?:0x)?([0-9a-fA-F]{64})$/);
+  if (!match) throw new Error("COLLATERAL_TOKEN_DIGEST must be bytes32 hex");
+  return `0x${match[1].toLowerCase()}`;
 }

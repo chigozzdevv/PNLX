@@ -9,4 +9,4 @@ Bun.serve({
   fetch: (request) => app.handle(request),
 });
 
-console.log(`merkl server listening on ${env.port}`);
+console.log(`pnlx server listening on ${env.port}`);

@@ -1,4 +1,4 @@
-import type { Hex } from "@merkl/protocol-types";
+import type { Hex } from "@pnlx/protocol-types";
 import { FIELD_PRIME, hashToField, mod } from "./field";
 
 export const FIELD_MERKLE_DEPTH = 8;

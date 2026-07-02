@@ -1,5 +1,5 @@
 import type { ProtocolStore } from "@/shared/state/store";
-import type { Hex } from "@merkl/protocol-types";
+import type { Hex } from "@pnlx/protocol-types";
 import type {
   MarketPublicSnapshot,
   OwnerActivitySnapshot,

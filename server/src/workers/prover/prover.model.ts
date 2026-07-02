@@ -14,7 +14,7 @@ import type {
   PositionCloseWitness,
   WithdrawalRecord,
   WithdrawalRequest,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 
 export type ConditionalCloseProofInput = ConditionalOrderWitness;
 export type LiquidationProofInput = LiquidationWitness;

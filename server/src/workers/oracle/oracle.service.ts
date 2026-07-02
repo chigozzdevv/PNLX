@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { hashFields } from "@merkl/crypto";
-import { PRICE_SCALE } from "@merkl/market-math";
-import type { Hex } from "@merkl/protocol-types";
+import { hashFields } from "@pnlx/crypto";
+import { PRICE_SCALE } from "@pnlx/market-math";
+import type { Hex } from "@pnlx/protocol-types";
 import type { CommandResult } from "@/workers/relayer/relayer.model";
 import type { OracleConfig, OracleMarketPriceInput, OraclePrice, PythPriceResponse } from "@/workers/oracle/oracle.model";
 
@@ -60,7 +60,7 @@ export class OracleService {
       "--id",
       contractId,
       "--source",
-      this.config.source || "merkl-testnet",
+      this.config.source || "pnlx-testnet",
       "--network",
       this.config.network || "testnet",
       ...networkArgs(this.config),

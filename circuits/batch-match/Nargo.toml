@@ -1,6 +1,0 @@
-[package]
-name = "batch_match"
-type = "bin"
-authors = ["Merkl"]
-
-[dependencies]

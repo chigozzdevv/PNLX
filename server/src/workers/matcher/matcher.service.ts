@@ -4,25 +4,22 @@ import type {
   IntentRecord,
   PositionLifecycleRecord,
   ResidualOrderRecord,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 import {
   createPositionOpeningAccountEvent,
   createResidualOrderAccountEvent,
 } from "@/shared/protocol/account-event-outcomes";
-import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
-import { externalMatcherTranscriptHash } from "@/shared/protocol/external-matcher-transcript";
-import { matcherAttestationMessage } from "@/shared/protocol/matcher-attestation";
 import type { ProtocolStore } from "@/shared/state/store";
-import type { ExternalBatchSettlementTranscript, ExternalMatcherAttestation } from "@/workers/executor/executor.model";
+import type { ExternalBatchSettlementTranscript } from "@/workers/executor/executor.model";
 import type { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
 import { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
+import { isProtocolLiquidityBatch } from "@/workers/protocol-liquidity/protocol-liquidity.service";
 import type {
   MatcherProviderGateway,
   CreateExternalSettlementInput,
   MatcherAccountEventEncryptor,
   MatcherConfig,
   MatcherProviderTranscript,
-  MatcherSigner,
 } from "@/workers/matcher/matcher.model";
 import type {
   CommitteeSettlementInput,
@@ -33,7 +30,6 @@ import type {
 export class MatcherService {
   private readonly accountEventEncryptor?: MatcherAccountEventEncryptor;
   private readonly provider: MatcherProviderGateway;
-  private readonly signers: MatcherSigner[];
 
   constructor(
     private readonly store: ProtocolStore,
@@ -43,7 +39,6 @@ export class MatcherService {
   ) {
     this.accountEventEncryptor = config.accountEventEncryptor;
     this.provider = config.provider ?? new EmbeddedMatcherProviderGateway(committee);
-    this.signers = config.signers ?? [];
   }
 
   createSettlementTranscript(
@@ -52,7 +47,7 @@ export class MatcherService {
     const market = this.store.markets.get(input.marketId);
     if (!market) throw new Error("unknown market");
 
-    const records = input.records ?? activeIntents(this.store, input.marketId);
+    const records = input.records ?? activeIntents(this.store, input.marketId, input.batchId);
     const residuals = input.residuals ?? activeResiduals(this.store, input.marketId, input.batchId);
     if (records.length === 0 && residuals.length === 0) {
       throw new Error("batch has no active intents");
@@ -77,9 +72,7 @@ export class MatcherService {
     transcript: MatcherProviderTranscript,
   ): ExternalBatchSettlementTranscript {
     if (isExternalBatchSettlementTranscript(transcript)) {
-      return this.signers.length > 0
-        ? this.attest(transcript, this.signers)
-        : transcript;
+      return transcript;
     }
     return this.finalizeTranscript(transcript);
   }
@@ -100,19 +93,7 @@ export class MatcherService {
       settlement: transcript.settlement,
     };
 
-    return this.signers.length > 0
-      ? this.attest(externalTranscript, this.signers)
-      : externalTranscript;
-  }
-
-  attest(
-    transcript: ExternalBatchSettlementTranscript,
-    signers = this.signers,
-  ): ExternalBatchSettlementTranscript {
-    return {
-      ...transcript,
-      attestation: createMatcherAttestation(transcript, signers),
-    };
+    return externalTranscript;
   }
 }
 
@@ -162,35 +143,19 @@ function createAccountEvents(
   ];
 }
 
-export function createMatcherAttestation(
-  transcript: ExternalBatchSettlementTranscript,
-  signers: MatcherSigner[],
-): ExternalMatcherAttestation {
-  if (signers.length === 0) {
-    throw new Error("external matcher attestation requires at least one signer");
-  }
-
-  const publicInputHash = batchSettlementPublicInputHash(transcript.settlement);
-  const transcriptHash = externalMatcherTranscriptHash(transcript);
-  const message = matcherAttestationMessage(transcript, publicInputHash, transcriptHash);
-
-  return {
-    publicInputHash,
-    settlementDigest: transcript.settlement.settlementDigest,
-    signatures: signers.map((signer) => ({
-      signer: signer.address,
-      signature: signer.sign(message),
-    })),
-    transcriptHash,
-  };
-}
-
-function activeIntents(store: ProtocolStore, marketId: string): IntentRecord[] {
-  return [...store.intents.values()].filter(
-    (intent) =>
-      intent.marketId === marketId &&
-      store.orderLifecycle.get(intent.intentCommitment)?.status === "open",
-  );
+function activeIntents(store: ProtocolStore, marketId: string, _batchId: string): IntentRecord[] {
+  return [...store.intents.values()]
+    .filter(
+      (intent) =>
+        intent.marketId === marketId &&
+        store.orderLifecycle.get(intent.intentCommitment)?.status === "open",
+    )
+    .sort((left, right) => {
+      const leftLp = isProtocolLiquidityBatch(left.batchId);
+      const rightLp = isProtocolLiquidityBatch(right.batchId);
+      if (leftLp !== rightLp) return leftLp ? -1 : 1;
+      return left.batchId.localeCompare(right.batchId) || left.intentCommitment.localeCompare(right.intentCommitment);
+    });
 }
 
 function activeResiduals(

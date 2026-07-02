@@ -10,7 +10,7 @@ const instrumentSans = Instrument_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Merkl | Private Perpetuals",
+  title: "PNLX | Private Perpetuals",
   description: "Private perpetuals trading with proof-backed settlement.",
 };
 

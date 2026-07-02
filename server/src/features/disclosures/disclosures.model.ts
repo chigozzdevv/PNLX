@@ -1,4 +1,4 @@
-import type { DisclosureInput, DisclosureRecord } from "@merkl/protocol-types";
+import type { DisclosureInput, DisclosureRecord } from "@pnlx/protocol-types";
 
 export type CreateDisclosureInput = DisclosureInput;
 export type CreateProvenDisclosureInput = DisclosureRecord;

@@ -7,7 +7,7 @@ import type {
   PositionLifecycleRecord,
   ResidualOrderRecord,
   TradeIntent,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 import type { NodeShareSet } from "@/workers/threshold-shares/threshold-shares.model";
 
 export interface ExecutorConfig {
@@ -40,29 +40,16 @@ export interface SettleBatchInput {
 
 export interface ExternalBatchSettlementTranscript {
   accountEvents: AccountEventRecord[];
-  attestation?: ExternalMatcherAttestation;
   positionOpenings: PositionLifecycleRecord[];
   residualOrders?: ResidualOrderRecord[];
   settlement: BatchSettlement;
-}
-
-export interface ExternalMatcherAttestation {
-  publicInputHash: `0x${string}`;
-  settlementDigest: `0x${string}`;
-  signatures: ExternalMatcherSignature[];
-  transcriptHash: `0x${string}`;
-}
-
-export interface ExternalMatcherSignature {
-  signature: string;
-  signer: string;
 }
 
 export interface ExternalBatchSettlementCommitOptions {
   proofVerified?: boolean;
 }
 
-export interface MerklExecutor {
+export interface PnlxExecutor {
   addMarket(market: MarketConfig): void;
   prepareIntent(input: SubmitIntentInput): PreparedIntentSubmission;
   commitPreparedIntent(input: PreparedIntentSubmission): IntentRecord;

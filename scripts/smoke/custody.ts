@@ -3,9 +3,10 @@ import { createPrivateKey, sign } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCircuitMarginNote } from "@merkl/sdk";
+import { createCircuitMarginNote } from "@pnlx/sdk";
 import { createApp } from "@/app";
 import { loadEnv, type ServerEnv } from "@/config/env";
+import { stellarSignedMessageHash } from "@/features/auth/auth.service";
 import { ProverService } from "@/workers/prover/prover.service";
 
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -94,6 +95,7 @@ async function runCustodySmoke(options: CustodySmokeOptions): Promise<Record<str
   const shieldedPool = deployment.contracts["shielded-pool"];
   if (!shieldedPool) throw new Error("deployment missing shielded-pool contract");
   const tokenDigest = tokenDigestFor(shieldedPool, token, source, configured);
+  process.env.COLLATERAL_TOKEN_DIGEST = tokenDigest;
 
   const note = createCircuitMarginNote({
     assetDigest: tokenDigest,
@@ -130,7 +132,7 @@ async function runCustodySmoke(options: CustodySmokeOptions): Promise<Record<str
       health,
       mode: "prepare-only",
       noteCommitment: note.commitment,
-      prepared,
+      prepared: summarizePreparedDeposit(prepared),
       shieldedPool,
       source,
       token,
@@ -138,12 +140,19 @@ async function runCustodySmoke(options: CustodySmokeOptions): Promise<Record<str
   }
 
   const before = readBalances(token, from, shieldedPool, configured);
-  const deposit = await post(app, "/notes/deposit-asset/proven", {
+  const signedXdr = signPreparedXdr(prepared, source, configured);
+  const relay = await post(app, "/relays/signed-xdr", {
+    commitment: preparedPendingField(prepared, "commitment"),
+    expectedTxHash: preparedPendingField(prepared, "preparedTxHash"),
+    preparedXdrDigest: preparedPendingField(prepared, "preparedXdrDigest"),
+    xdr: signedXdr,
+  }, authHeaders);
+  const deposit = await post(app, "/notes/deposit-asset/finalize", {
     amount: options.amount,
     commitment: note.commitment,
     depositProof,
     from,
-    source,
+    relayId: String((relay.relay as Record<string, unknown>).relayId),
     token,
   }, authHeaders);
   const after = waitForCustodyBalances(token, from, shieldedPool, before, options.amount, configured);
@@ -169,11 +178,13 @@ async function runCustodySmoke(options: CustodySmokeOptions): Promise<Record<str
       poolDelta,
       traderDelta,
     },
-    deposit,
+    deposit: summarizeFinalizedDeposit(deposit),
     from,
     health,
-    mode: "live-deposit",
+    mode: "live-wallet-deposit",
     noteCommitment: note.commitment,
+    prepared: summarizePreparedDeposit(prepared),
+    relay: summarizeRelay(relay.relay as Record<string, unknown>),
     shieldedPool,
     source,
     token,
@@ -190,8 +201,93 @@ async function runCustodySmoke(options: CustodySmokeOptions): Promise<Record<str
   };
 }
 
+function signPreparedXdr(prepared: Record<string, unknown>, source: string, env: ServerEnv): string {
+  const action = prepared.action as Record<string, unknown> | undefined;
+  const xdr = String(action?.xdr ?? "").trim();
+  if (!xdr) throw new Error("prepared deposit action did not include xdr");
+  return parseXdr(
+    runCommand([
+      "stellar",
+      "tx",
+      "sign",
+      xdr,
+      "--sign-with-key",
+      source,
+      "--network",
+      env.stellarNetwork,
+      ...networkArgs(env),
+      "--network-passphrase",
+      env.stellarNetworkPassphrase,
+      "--auto-sign",
+    ]),
+    "signed transaction xdr",
+  );
+}
+
+function summarizePreparedDeposit(prepared: Record<string, unknown>): Record<string, unknown> {
+  const action = prepared.action as Record<string, unknown> | undefined;
+  const pending = prepared.pendingDeposit as Record<string, unknown> | undefined;
+  const verification = prepared.proofVerification as Record<string, unknown> | undefined;
+  const relays = Array.isArray(verification?.relays) ? verification.relays : [];
+  return {
+    action: {
+      contractId: action?.contractId,
+      functionName: action?.functionName,
+      kind: action?.kind,
+      preparedTxHash: action?.txHash ?? pending?.preparedTxHash,
+    },
+    pendingDeposit: pending
+      ? {
+          amount: pending.amount,
+          commitment: pending.commitment,
+          from: pending.from,
+          preparedTxHash: pending.preparedTxHash,
+          preparedXdrDigest: pending.preparedXdrDigest,
+          token: pending.token,
+          tokenDigest: pending.tokenDigest,
+        }
+      : undefined,
+    proofVerification: {
+      relays: relays.map((relay) => summarizeRelay(relay as Record<string, unknown>)),
+    },
+  };
+}
+
+function summarizeRelay(relay: Record<string, unknown>): Record<string, unknown> {
+  return {
+    functionName: relay.functionName,
+    kind: relay.kind,
+    relayId: relay.relayId,
+    submitted: relay.submitted,
+    txHash: relay.txHash,
+  };
+}
+
+function summarizeFinalizedDeposit(deposit: Record<string, unknown>): Record<string, unknown> {
+  const note = deposit.note as Record<string, unknown> | undefined;
+  const onchain = note?.onchain as Record<string, unknown> | undefined;
+  const relays = Array.isArray(onchain?.relays) ? onchain.relays : [];
+  return {
+    amount: note?.amount,
+    commitment: note?.commitment,
+    marginRoot: note?.marginRoot,
+    membershipRoot: note?.membershipRoot,
+    onchain: {
+      relays: relays.map((relay) => summarizeRelay(relay as Record<string, unknown>)),
+    },
+    token: note?.token,
+  };
+}
+
+function preparedPendingField(prepared: Record<string, unknown>, field: string): string {
+  const pending = prepared.pendingDeposit as Record<string, unknown> | undefined;
+  const value = pending?.[field];
+  if (typeof value !== "string" || !value) throw new Error(`prepared pending deposit missing ${field}`);
+  return value;
+}
+
 function configureCustodySmokeEnvironment(options: CustodySmokeOptions): ServerEnv {
-  const runtimeDir = mkdtempSync(join(tmpdir(), "merkl-custody-smoke-"));
+  const runtimeDir = mkdtempSync(join(tmpdir(), "pnlx-custody-smoke-"));
   process.env.ASSET_CUSTODY_REQUIRED = "true";
   process.env.STELLAR_ONCHAIN_RELAY = "true";
   process.env.STELLAR_RELAYER_MODE = "stellar-cli";
@@ -269,8 +365,18 @@ function waitForCustodyBalances(
 }
 
 function readTokenBalance(token: string, account: string, source: string, env: ServerEnv): bigint {
-  const output = invoke(token, "balance", ["--id", account], source, env, "no");
-  return BigInt(output.trim().match(/-?\d+/)?.[0] ?? "0");
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    try {
+      const output = invoke(token, "balance", ["--id", account], source, env, "no");
+      return BigInt(output.trim().match(/-?\d+/)?.[0] ?? "0");
+    } catch (error) {
+      lastError = error;
+      if (!isTransientStellarReadFailure(error) || attempt === 4) break;
+      sleep(2_500);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("token balance read failed");
 }
 
 function hasPoolCommitment(
@@ -297,10 +403,19 @@ function waitForPoolCommitment(
   env: ServerEnv,
 ): boolean {
   for (let attempt = 1; attempt <= 12; attempt += 1) {
-    if (hasPoolCommitment(shieldedPool, commitment, source, env)) return true;
+    try {
+      if (hasPoolCommitment(shieldedPool, commitment, source, env)) return true;
+    } catch (error) {
+      if (!isTransientStellarReadFailure(error)) throw error;
+    }
     sleep(2_500);
   }
   return false;
+}
+
+function isTransientStellarReadFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Request timeout") || message.includes("client error (Connect)");
 }
 
 function tokenDigestFor(
@@ -314,7 +429,7 @@ function tokenDigestFor(
 }
 
 async function get(app: ReturnType<typeof createApp>, path: string): Promise<Record<string, unknown>> {
-  const response = await app.handle(new Request(`http://merkl.local${path}`));
+  const response = await app.handle(new Request(`http://pnlx.local${path}`));
   const text = await response.text();
   if (!response.ok) throw new Error(`${path} failed: ${response.status} ${text}`);
   return JSON.parse(text) as Record<string, unknown>;
@@ -327,7 +442,7 @@ async function post(
   headers: Record<string, string> = { "content-type": "application/json" },
 ): Promise<Record<string, unknown>> {
   const response = await app.handle(
-    new Request(`http://merkl.local${path}`, {
+    new Request(`http://pnlx.local${path}`, {
       method: "POST",
       body: JSON.stringify(data, bigintReplacer),
       headers,
@@ -352,11 +467,11 @@ async function authHeadersFor(
   const secret = runCommand(["stellar", "keys", "secret", source]).trim();
   const challenge = await post(app, "/auth/challenge", {
     address,
-    domain: "merkl.local",
-    uri: "http://merkl.local",
+    domain: "pnlx.local",
+    uri: "http://pnlx.local",
   });
   const message = String(challenge.message);
-  const signature = sign(null, Buffer.from(message), privateKeyFromStellarSecret(secret)).toString("base64");
+  const signature = sign(null, stellarSignedMessageHash(message), privateKeyFromStellarSecret(secret)).toString("base64");
   const session = await post(app, "/auth/session", {
     address,
     nonce: challenge.nonce,
@@ -471,6 +586,15 @@ function parseHex32(output: string, label: string): `0x${string}` {
   const value = output.match(/(?:0x)?[0-9a-fA-F]{64}/)?.[0];
   if (!value) throw new Error(`could not parse ${label}`);
   return value.startsWith("0x") ? (value.toLowerCase() as `0x${string}`) : `0x${value.toLowerCase()}`;
+}
+
+function parseXdr(output: string, label: string): string {
+  const candidates = output
+    .split(/\s+/)
+    .filter((part) => /^[A-Za-z0-9+/=]+$/.test(part) && part.length > 80)
+    .sort((a, b) => b.length - a.length);
+  if (!candidates[0]) throw new Error(`could not parse ${label}`);
+  return candidates[0];
 }
 
 function optionalValue(argv: string[], name: string): string | undefined {

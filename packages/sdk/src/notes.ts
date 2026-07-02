@@ -1,4 +1,4 @@
-import type { Hex, MarginNote, PositionNote, Side, TradeIntent } from "@merkl/protocol-types";
+import type { Hex, MarginNote, PositionNote, Side, TradeIntent } from "@pnlx/protocol-types";
 import {
   circuitMarginCommitment,
   circuitNullifier,
@@ -8,7 +8,7 @@ import {
   commitPosition,
   digestToFieldHex,
   nullifier,
-} from "@merkl/crypto";
+} from "@pnlx/crypto";
 
 export function createMarginNote(input: {
   assetId: string;

@@ -15,6 +15,8 @@ export function registerMarketsRoute(
 ): void {
   const controller = new MarketsController(new MarketsService(executor, oracle, env, onchain));
   router.add("GET", "/markets", () => controller.list());
+  router.add("GET", "/markets/ticker", () => controller.ticker());
+  router.add("GET", "/markets/candles", (request) => controller.candles(request));
   router.add("POST", "/markets", (request) => controller.create(request));
   router.add("POST", "/markets/update", (request) => controller.update(request));
   router.add("POST", "/markets/oracle", (request) => controller.createFromOracle(request));

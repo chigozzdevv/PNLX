@@ -1,0 +1,13 @@
+[package]
+name = "guest"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "batch_match"
+path = "src/main.rs"
+
+[dependencies]
+pnlx-risc0-batch-match-core = { path = "../../core" }
+risc0-zkvm = { workspace = true, features = ["std"] }

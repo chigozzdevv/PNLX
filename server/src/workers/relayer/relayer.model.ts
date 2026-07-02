@@ -1,10 +1,11 @@
-import type { Hex } from "@merkl/protocol-types";
+import type { Hex } from "@pnlx/protocol-types";
 
 export interface RelayRequest {
   kind:
     | "deposit"
     | "intent"
     | "market"
+    | "oracle-price"
     | "batch-settlement"
     | "withdraw"
     | "conditional-order"
@@ -51,7 +52,15 @@ export interface PreparedXdr {
   command: string[];
   commandOutputDigest: Hex;
   commandStatus: number | null;
+  txHash?: Hex;
   xdr: string;
+}
+
+export interface ContractReadResult {
+  command: string[];
+  commandOutputDigest: Hex;
+  commandStatus: number | null;
+  output: string;
 }
 
 export interface StellarRelayerConfig {
@@ -64,6 +73,7 @@ export interface StellarRelayerConfig {
 
 export interface SignedXdrRelayInput {
   commitment?: Hex;
+  expectedTxHash?: Hex;
   preparedXdrDigest?: Hex;
   submittedBy?: string;
   xdr: string;

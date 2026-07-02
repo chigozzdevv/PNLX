@@ -1,4 +1,4 @@
-import type { AccountEventRecord, Hex } from "@merkl/protocol-types";
+import type { AccountEventRecord, Hex } from "@pnlx/protocol-types";
 import type {
   OwnerActivitySnapshot,
   OwnerOrderSnapshot,

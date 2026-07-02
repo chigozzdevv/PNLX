@@ -1,6 +1,6 @@
 node_modules/
 .env
-.merkl/
+.pnlx/
 .cache/
 .next/
 client/.next/
@@ -15,3 +15,4 @@ package-lock.json
 circuits/**/target/
 circuits/**/proofs/
 circuits/**/witness.gz
+risc0/**/target/

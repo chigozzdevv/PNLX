@@ -18,9 +18,9 @@ describe("proof system", () => {
   });
 
   test("binds proof digests to circuit metadata and public inputs", () => {
-    const circuit = loadCircuit(process.cwd(), "batch-match");
-    const firstInputs = publicInputDigest("batch-match", ["batch-1", "btc-usd", 2n]);
-    const nextInputs = publicInputDigest("batch-match", ["batch-1", "btc-usd", 3n]);
+    const circuit = loadCircuit(process.cwd(), "intent-validity");
+    const firstInputs = publicInputDigest("intent-validity", ["batch-1", "btc-usd", 2n]);
+    const nextInputs = publicInputDigest("intent-validity", ["batch-1", "btc-usd", 3n]);
 
     const firstProof = bindProof(circuit, firstInputs);
     const sameProof = bindProof(circuit, firstInputs);
@@ -28,7 +28,7 @@ describe("proof system", () => {
 
     expect(firstProof).toEqual(sameProof);
     expect(firstProof.proofDigest).not.toBe(nextProof.proofDigest);
-    expect(firstProof.circuitKey).toBe(circuitKey("batch-match"));
+    expect(firstProof.circuitKey).toBe(circuitKey("intent-validity"));
     expect(firstProof.circuitHash).toBe(circuit.sourceHash);
     expect(firstProof.verifierHash).toBe(circuit.verifierHash);
     expect(firstProof.publicInputHash).toBe(firstInputs);

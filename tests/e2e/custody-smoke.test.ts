@@ -14,7 +14,7 @@ describe("custody smoke helpers", () => {
       "--from=GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       "--prepare-only",
       "--source",
-      "merkl-trader",
+      "pnlx-trader",
       "--token",
       "CCOLLATERAL",
     ]);
@@ -24,7 +24,7 @@ describe("custody smoke helpers", () => {
     expect(options.deployAsset).toBe(true);
     expect(options.from).toBe("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF");
     expect(options.prepareOnly).toBe(true);
-    expect(options.source).toBe("merkl-trader");
+    expect(options.source).toBe("pnlx-trader");
     expect(options.token).toBe("CCOLLATERAL");
   });
 

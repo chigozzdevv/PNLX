@@ -1,5 +1,5 @@
-import { commitConditionalOrder } from "@merkl/crypto";
-import { contractPublicInputHash, publicField, publicU128 } from "@merkl/proof-system";
+import { commitConditionalOrder } from "@pnlx/crypto";
+import { contractPublicInputHash, publicField, publicU128 } from "@pnlx/proof-system";
 import type { ServerEnv } from "@/config/env";
 import { assertSubmittedRelay } from "@/shared/protocol/onchain-submission";
 import type { ExecutorService } from "@/workers/executor/executor.service";

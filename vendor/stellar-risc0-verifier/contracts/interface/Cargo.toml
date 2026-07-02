@@ -1,0 +1,17 @@
+[package]
+name = "risc0-interface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["lib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }

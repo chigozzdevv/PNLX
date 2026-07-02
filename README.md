@@ -1,22 +1,21 @@
-# Merkl
+# PNLX
 
-Merkl is a confidential perpetual futures DEX on Stellar. It keeps user
+PNLX is a confidential perpetual futures DEX on Stellar. It keeps user
 identity, margin, positions, order intent, entry price, liquidation threshold,
 TP/SL strategy, and account state private by default while exposing public
 market aggregates needed for a healthy perps venue.
 
-The selected production design uses separated blind matching plus ZK proof
-binding: traders secret-share intents to an executor/MPC/FHE committee, the
-committee computes private fills and state transitions outside the Merkl API
-server, and Soroban contracts accept only proof metadata bound to circuit key,
-circuit source, registered verifier hash, public inputs, settlement state, and
-an on-chain proof-ledger record written by the governance-approved verifier
-authority for that circuit.
+The selected production design uses private off-chain order inputs plus a
+RISC Zero zkVM matcher proof. Traders submit commitments and encrypted/private
+intent material, the matcher proves deterministic batch execution off-chain,
+and Soroban settlement accepts only receipt metadata bound to the RISC0 image,
+journal digest, settlement state, and proof-ledger/on-chain verification path.
 
 ## Repo Layout
 
 ```text
-merkl/
+pnlx/
+  client/
   server/
   contracts/
   circuits/
@@ -26,9 +25,9 @@ merkl/
   package.json
 ```
 
-`client/` is intentionally left out for now. When added, deploy from the repo
-root and target the app with commands such as `bun --filter client build` or
-`bun --filter server start` so both apps can use shared packages.
+Deploy from the repo root and target the apps with commands such as
+`bun --filter client build` or `bun --filter server start` so both apps can use
+shared packages.
 
 ## Server
 
@@ -56,10 +55,8 @@ server/
     workers/
       batch-matcher/
       matcher/
-        mpspdz/
-        nilcc/
         remote/
-        custom/
+      risc0-matcher/
       executor/
       indexer/
       threshold-shares/
@@ -71,10 +68,11 @@ server/
 `GET /proofs/verifiers` returns circuit keys, circuit hashes, verifier hashes,
 verifier contract instance names, and the reusable verifier contract artifact.
 
-Server proof flows for withdrawals, batch settlement, conditional TP/SL closes,
-liquidations, and disclosures generate request-specific Noir witnesses and
-Barretenberg UltraHonk proofs. The returned proof metadata includes proof,
-witness, bytecode, public input, and VK hashes.
+Server proof flows for withdrawals, conditional TP/SL closes, liquidations, and
+disclosures generate request-specific Noir witnesses and Barretenberg UltraHonk
+proofs. Batch settlement uses the RISC Zero matcher proof path and returns
+receipt-bound metadata: image id, journal digest, seal digest, public input
+hash, and verifier hash.
 
 Wallet auth is Freighter-compatible signed-message auth:
 
@@ -95,18 +93,18 @@ Wallet auth is Freighter-compatible signed-message auth:
 The execution store mirrors the contract invariant: withdrawals, settlements,
 conditional closes, liquidations, and disclosures are rejected unless their
 proof digest has first been recorded in the local proof ledger. In
-development/production it is file-backed under `MERKL_RUNTIME_DIR` by default,
+development/production it is file-backed under `PNLX_RUNTIME_DIR` by default,
 so markets, notes, intents, proofs, settlements, account events, and relay
 history survive server restarts. Tests stay in-memory unless a test explicitly
 sets a store path.
 
-Matching backend modes:
+Matching flow:
 
 - `MATCHING_BACKEND=threshold-recovery` is the embedded recovery path. It
   validates threshold shares and creates settlements inside the API process, so
   it is not executor-blind and must not be used for private deployments.
-- `MATCHING_BACKEND=external-blind` is the production path. The Merkl API server
-  refuses to recover shares for `/batches/settle`; an external MPC/FHE matcher
+- `MATCHING_BACKEND=external-blind` is the production path. The PNLX API server
+  refuses to recover shares for `/batches/settle`; the RISC0 matcher service
   posts a proven transcript to `POST /batches/settle-external`.
 - `MATCHER_SERVICE_URL` points the API/batch executor at the separate matcher
   service. When `PRIVATE_MATCHING_REQUIRED=true` and `MATCHING_BACKEND=external-blind`,
@@ -117,49 +115,17 @@ Matching backend modes:
   returns the settlement transcript. Use `MATCHER_PORT` and
   `MATCHER_API_TOKEN` for the matcher service, and `MATCHER_SERVICE_TOKEN` for
   the API client bearer token.
-- The matcher service delegates private settlement creation to a matcher
-  provider. Use `MATCHER_PROVIDER=mpspdz` with
-  `MPSPDZ_COORDINATOR_URL`, `MPSPDZ_PARTY_URLS`, and `MPSPDZ_PROTOCOL` for the
-  cheap self-hosted MPC path. Local Docker can run three parties on one machine
-  for integration, then the same party topology can move to three independent
-  VPS/operators for actual operator privacy.
-- Use `MATCHER_PROVIDER=nilcc` plus `NILCC_WORKLOAD_URL` only when using
-  Nillion nilCC confidential compute. Use `MATCHER_PROVIDER=custom` plus
-  `MATCHER_PROVIDER_URL` for another provider adapter that implements
-  `POST /compute/settlement`, including Arcium, FHE, or a committee-operated
-  service. `MATCHER_PROVIDER=embedded` is only the in-process harness;
-  readiness rejects it when private matching is required.
-- When `PRIVATE_MATCHING_REQUIRED=true`, `bun run matcher:server` refuses to
-  start unless `MATCHER_PROVIDER` is `custom`, `mpspdz`, or `nilcc`. MP-SPDZ
-  mode requires `MPSPDZ_COORDINATOR_URL` plus at least three
-  `MPSPDZ_PARTY_URLS`; nilCC mode requires `NILCC_WORKLOAD_URL` and an
-  attestation pin through `NILCC_ATTESTATION_REPORT_SHA256` or
-  `NILCC_ATTESTATION_CONTAINS`.
+- `MATCHER_PROVIDER=risc0` is the only matcher provider. The matcher recovers
+  eligible private order inputs just-in-time, runs deterministic batch matching,
+  and emits RISC Zero Groth16 receipt metadata. The public journal binds batch
+  id, market id, position roots, settlement digest, filled intents, new
+  commitments, spent nullifiers, residual size, and aggregate volume.
 - `PRIVATE_MATCHING_REQUIRED=true` makes startup reject `threshold-recovery`.
   Health also reports matching readiness under `GET /health`.
-- `MATCHER_COMMITTEE_REQUIRED=true` makes external settlement ingestion require
-  threshold Ed25519/Stellar-address signatures over the batch settlement public
-  input hash. Defaults to `PRIVATE_MATCHING_REQUIRED`.
-- `MATCHER_COMMITTEE_ADDRESSES` and `MATCHER_COMMITTEE_THRESHOLD` configure the
-  authorized matcher/executor committee.
-- Build the local MP-SPDZ party image with `bun run docker:mpspdz-party`, then
-  run the three-party integration kernel with `bun run mpspdz:local`. The
-  first included MP-SPDZ program is `server/mpspdz/merkl_batch_match.mpc`,
-  which verifies a basic crossed long/short match inside MP-SPDZ. That is the
-  starting matching kernel, not the full private CLOB.
-- The nilCC matcher provider image is built from
-  `server/docker/matcher-provider.Dockerfile`; run
-  `bun run docker:matcher-provider` for a local image tag. The compose payload for
-  nilCC is `server/docker/nilcc-matcher-provider.compose.yml`; set
-  `MERKL_MATCHER_PROVIDER_IMAGE`, `MATCHER_PROVIDER_TOKEN`,
-  `THRESHOLD_SHARE_NODE_IDS`, and `THRESHOLD_SHARE_THRESHOLD` before submitting
-  it to nilCC.
 - External settlement transcripts are checked against current roots, active
   order commitments, spent nullifiers, new position commitments, owner
   commitments, residual order records, encrypted owner account events, and the
-  batch proof public-input hash before indexing. Matcher committee attestations
-  sign both the public-input hash and a full transcript hash covering indexed
-  position/residual records plus the encrypted account event commitments.
+  RISC0 journal digest before indexing.
 - `BATCH_EXECUTOR_ENABLED=true` starts the automated batch executor. It scans
   markets with open private orders, asks the matcher service to create a
   settlement transcript, relays settlement on-chain when configured, commits
@@ -173,9 +139,6 @@ Matching backend modes:
   event id before it will index the batch. This gives the authenticated owner a
   private client-side path to reconstruct position notes for close/TP/SL flows
   without exposing `positionNullifier` in public portfolio snapshots.
-- Provider/coordinator responses from `POST /compute/settlement` return these
-  encrypted account events directly, so plaintext position event payloads do not
-  return to the matcher service in provider mode.
 
 Private dashboard state is backed by encrypted account events:
 
@@ -193,7 +156,7 @@ Private dashboard state is backed by encrypted account events:
 - When `AUTH_REQUIRED=true`, account event writes and portfolio/event reads are
   bound to the signed Stellar account by checking
   `ownerCommitment(address) == ownerCommitment`.
-- External matcher account events use a `merkl-account-event-v1` envelope:
+- External matcher account events use a `pnlx-account-event-v1` envelope:
   ephemeral P-256 ECDH, AES-GCM payload encryption, and event commitments bound
   to settlement digest, owner commitment, and ciphertext.
 
@@ -251,6 +214,7 @@ contracts/
   position-close/
   disclosure-verifier/
   proof-verifier/
+  risc0-proof-verifier/
   governance/
   proof-ledger/
   price-oracle/
@@ -279,6 +243,9 @@ Responsibilities:
 - `disclosure-verifier`: records selective disclosure proofs.
 - `proof-verifier`: verifies UltraHonk proof bytes for a circuit VK and records
   accepted proof digests into `proof-ledger`.
+- `risc0-proof-verifier`: calls the Stellar RISC0 verifier router for Groth16
+  receipt seals, then records the journal digest and seal digest into
+  `proof-ledger`.
 - `governance`: stores admin, pause state, and verifier hashes keyed by circuit.
 - `proof-ledger`: stores accepted proof digests keyed by circuit, verifier,
   public input, and proof digest.
@@ -301,13 +268,17 @@ before accepting a batch. On each proof call they reject paused protocol state,
 wrong circuit keys, verifier hashes that do not match governance, stale oracle
 prices, inactive markets, and proof digests missing from `proof-ledger`.
 
-`proof-verifier.verify_and_record` verifies UltraHonk proof bytes against the
-stored VK, checks the SHA-256 hashes of the VK, public input bytes, and proof
-bytes, then records the proof through `proof-ledger`. `proof-ledger.record`
-requires authorization from the governance-approved verifier contract for the
-circuit, rejects paused governance, and rejects verifier hashes that do not
-match governance. The contracts are pinned to `soroban-sdk 26.1.0`, and the
-test suite exercises the BN254 host-function surface exposed by Protocol 25+.
+`proof-verifier.verify_and_record` verifies UltraHonk proof bytes for the Noir
+circuits against the stored VK, checks the SHA-256 hashes of the VK, public
+input bytes, and proof bytes, then records the proof through `proof-ledger`.
+Batch settlement uses the RISC0 matcher receipt path instead of a Noir
+`batch-match` circuit. The deploy script builds and deploys the official
+Stellar RISC0 router, Groth16 verifier, and emergency-stop wrapper before
+initializing the PNLX `risc0-proof-verifier` wrapper. `proof-ledger.record` requires authorization from the
+governance-approved verifier contract for the circuit, rejects paused
+governance, and rejects verifier hashes that do not match governance. The
+contracts are pinned to `soroban-sdk 26.1.0`, and the test suite exercises the
+BN254 host-function surface exposed by Protocol 25+.
 
 ## Circuits
 
@@ -315,7 +286,6 @@ Noir circuits live in `circuits/`.
 
 ```text
 circuits/
-  batch-match/
   conditional-close/
   deposit-note/
   disclosure/
@@ -328,11 +298,11 @@ circuits/
   withdraw/
 ```
 
-Each circuit has a `Nargo.toml`, `Prover.toml`, and `src/main.nr`. The
+Each Noir circuit has a `Nargo.toml`, `Prover.toml`, and `src/main.nr`. The
 TypeScript proof system loads these manifests and source files, derives circuit
 keys, and uses real Barretenberg VK hashes when proof artifacts have been built.
 Without built artifacts it falls back to source-bound hashes for local metadata
-tests.
+tests. The matcher proof lives in the RISC0 matcher path.
 
 Sensitive fields are private witnesses unless the Soroban action itself exposes
 them. Sizes, sides, margins, entry prices, realized PnL, TP/SL trigger prices,
@@ -358,8 +328,8 @@ contract hashes, verifier registry entries, and initialization plan.
 
 Oracle environment:
 
-- `MERKL_RUNTIME_DIR`: directory for durable local runtime state. Defaults to
-  `.merkl` outside tests.
+- `PNLX_RUNTIME_DIR`: directory for durable local runtime state. Defaults to
+  `.pnlx` outside tests.
 - `FUNDING_ENGINE_ENABLED`: starts the periodic funding worker outside tests by
   default. Set `false` to keep funding manual-only.
 - `FUNDING_INTERVAL_MS`: funding accrual interval. Defaults to one hour.
@@ -432,12 +402,12 @@ Initial perp assets:
 | --- | --- | ---: | ---: | ---: | --- |
 | `btc-usd-perp` | `BTC` | `10x` | `10%` | `5%` | `e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43` |
 | `eth-usd-perp` | `ETH` | `10x` | `10%` | `5%` | `ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace` |
-| `xlm-usd-perp` | `XLM` | `5x` | `20%` | `10%` | `b7a8eba68a997cd0210c2e1e4ee811ad2d174b3611c22d9ebf16f4cb7e9ba850` |
+| `xlm-usd-perp` | `XLM` | `10x` | `10%` | `5%` | `b7a8eba68a997cd0210c2e1e4ee811ad2d174b3611c22d9ebf16f4cb7e9ba850` |
 | `sol-usd-perp` | `SOL` | `5x` | `20%` | `10%` | `ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d` |
 | `xrp-usd-perp` | `XRP` | `5x` | `20%` | `10%` | `ec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8` |
 
-The default smoke run uses `MERKL_SMOKE_MARKETS=BTC,ETH,XLM`. Override it with
-`MERKL_SMOKE_MARKETS=BTC,ETH,XLM,SOL,XRP` or with `--markets=BTC,XLM`.
+The default smoke run uses `PNLX_SMOKE_MARKETS=BTC,ETH,XLM`. Override it with
+`PNLX_SMOKE_MARKETS=BTC,ETH,XLM,SOL,XRP` or with `--markets=BTC,XLM`.
 
 Asset custody smoke:
 
@@ -460,9 +430,10 @@ bun run deploy:local
 ```
 
 That command starts/configures a local Stellar container, funds the
-`merkl-admin` identity, deploys every contract, deploys one proof-verifier
-instance per circuit, initializes governance/proof-ledger/proof consumers, and
-runs a withdraw proof through `proof-verifier.verify_and_record`.
+`pnlx-admin` identity, deploys every contract, deploys Noir proof-verifier
+instances plus the RISC0 batch verifier wrapper, initializes
+governance/proof-ledger/proof consumers, and runs a withdraw proof through
+`proof-verifier.verify_and_record`.
 
 ## Packages
 
@@ -497,10 +468,10 @@ Do not put Soroban contracts or Noir circuits in `packages/`.
 user creates shielded margin note
 -> user deposits commitment into shielded pool
 -> user creates private trade intent
--> intent fields are secret-shared for external matcher provider
--> matcher delegates private batch computation to the configured MPC/FHE/confidential provider
--> matcher/prover binds settlement to circuit and public inputs
--> proof digest is recorded in the proof ledger
+-> intent fields are kept off public state and shared to threshold-share storage
+-> RISC0 matcher recovers eligible batch inputs off-chain
+-> RISC0 guest proves deterministic matching and commits the settlement journal
+-> Soroban/proof ledger path binds the journal digest before settlement
 -> market reads a fresh SEP-40/Reflector price on-chain
 -> settlement checks filled intent commitments are active, not cancelled
 -> settlement stores roots, nullifiers, commitments, oracle price, and aggregate market data
@@ -537,7 +508,6 @@ bun run prove:circuits
 bun run build:contracts
 bun run manifest:deploy
 cargo test --offline --workspace --manifest-path contracts/Cargo.toml
-cd circuits/batch-match && nargo test
 cd circuits/conditional-close && nargo test
 cd circuits/deposit-note && nargo test
 cd circuits/disclosure && nargo test

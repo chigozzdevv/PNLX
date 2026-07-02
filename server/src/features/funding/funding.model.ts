@@ -1,4 +1,4 @@
-import type { FundingUpdateRecord } from "@merkl/protocol-types";
+import type { FundingUpdateRecord } from "@pnlx/protocol-types";
 import type { FundingCycleResult } from "@/workers/funding-engine/funding-engine.model";
 
 export interface AdvanceFundingInput {

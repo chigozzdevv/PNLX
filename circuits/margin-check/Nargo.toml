@@ -1,6 +1,6 @@
 [package]
 name = "margin_check"
 type = "bin"
-authors = ["Merkl"]
+authors = ["PNLX"]
 
 [dependencies]

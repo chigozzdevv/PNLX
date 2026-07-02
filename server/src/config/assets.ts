@@ -38,10 +38,10 @@ export const SUPPORTED_PERP_ASSETS: Record<string, SupportedPerpAsset> = {
   },
   XLM: {
     displaySymbol: "XLM/USD",
-    initialMarginRate: 200_000n,
+    initialMarginRate: 100_000n,
     marketId: "xlm-usd-perp",
-    maintenanceMarginRate: 100_000n,
-    maxLeverage: 5n,
+    maintenanceMarginRate: 50_000n,
+    maxLeverage: 10n,
     oracleAssetAddress: "",
     oracleAssetSymbol: "XLM",
     oracleAssetType: "other",

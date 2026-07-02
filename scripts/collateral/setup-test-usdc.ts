@@ -22,8 +22,8 @@ export function parseOptions(argv = process.argv.slice(2)): Options {
   return {
     amount: BigInt(value(argv, "--amount", "100000000000")),
     assetCode: value(argv, "--asset-code", "USDC"),
-    issuer: value(argv, "--issuer", "merkl-usdc-issuer"),
-    recipient: value(argv, "--recipient", "merkl-testnet"),
+    issuer: value(argv, "--issuer", "pnlx-usdc-issuer"),
+    recipient: value(argv, "--recipient", "pnlx-testnet"),
     writeEnv: flag(argv, "--write-env"),
   };
 }
@@ -127,7 +127,7 @@ function deployAssetContract(
       "--network-passphrase",
       env.stellarNetworkPassphrase,
       "--alias",
-      "merkl-test-usdc",
+      "pnlx-test-usdc",
       "--auto-sign",
     ], true);
   } catch (error) {

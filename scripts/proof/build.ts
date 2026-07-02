@@ -1,4 +1,4 @@
-import { buildProofArtifact, CIRCUITS, type CircuitId } from "@merkl/proof-system";
+import { buildProofArtifact, CIRCUITS, type CircuitId } from "@pnlx/proof-system";
 
 const requested = process.argv.slice(2);
 const ids = requested.length > 0 ? requested : CIRCUITS.map((circuit) => circuit.id);

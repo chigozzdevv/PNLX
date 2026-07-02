@@ -1,6 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, test } from "bun:test";
-import { circuitKey } from "@merkl/proof-system";
+import { circuitKey } from "@pnlx/proof-system";
+import {
+  RISC0_BATCH_MATCH_CIRCUIT_KEY,
+  RISC0_STELLAR_VERIFIER_HASH,
+} from "@/workers/risc0-matcher/risc0-proof";
 import { createDeployManifest } from "../../scripts/deploy/manifest";
 
 function buildContracts(): void {
@@ -23,6 +27,16 @@ function buildContracts(): void {
   }
 }
 
+function buildRisc0VerifierStack(): void {
+  const result = spawnSync("stellar", ["contract", "build", "--optimize"], {
+    cwd: "vendor/stellar-risc0-verifier",
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    throw new Error([result.stdout, result.stderr].filter(Boolean).join("\n"));
+  }
+}
+
 function buildProofs(): void {
   const result = spawnSync("bun", ["scripts/proof/build.ts"], {
     cwd: process.cwd(),
@@ -38,6 +52,7 @@ let artifactsReady = false;
 function ensureArtifacts(): void {
   if (artifactsReady) return;
   buildContracts();
+  buildRisc0VerifierStack();
   buildProofs();
   artifactsReady = true;
 }
@@ -64,6 +79,7 @@ describe("deployment manifest", () => {
 
     const manifest = createDeployManifest();
     const contractNames = manifest.contracts.map((contract) => contract.name);
+    const risc0StackNames = manifest.risc0VerifierStack.map((contract) => contract.name);
     const shieldedPoolInit = manifest.initPlan.find((item) => item.contract === "shielded-pool");
     const marketInit = manifest.initPlan.find((item) => item.contract === "market");
     const fundingSettlementInit = manifest.initPlan.find(
@@ -100,19 +116,35 @@ describe("deployment manifest", () => {
       "position-close",
       "disclosure-verifier",
       "proof-verifier",
+      "risc0-proof-verifier",
+    ]);
+    expect(risc0StackNames).toEqual([
+      "risc0-router",
+      "risc0-groth16-verifier",
+      "risc0-emergency-stop",
     ]);
     for (const contract of manifest.contracts) {
       expect(contract.wasmHash).toMatch(/^0x[0-9a-f]{64}$/);
     }
     expect(manifest.verifiers).toHaveLength(11);
-    expect(manifest.verifiers.every((verifier) => verifier.verifierSource === "artifact")).toBe(true);
-    expect(
-      manifest.verifiers.every((verifier) => verifier.verifierAuthority.endsWith("-proof-verifier")),
-    ).toBe(true);
-    expect(manifest.verifiers.every((verifier) => verifier.verifierContract === "proof-verifier")).toBe(
-      true,
+    const noirVerifiers = manifest.verifiers.filter((verifier) =>
+      verifier.verifierContract === "proof-verifier"
     );
-    expect(manifest.verifiers.every((verifier) => verifier.vkPath.endsWith("target/bb/vk"))).toBe(true);
+    const risc0Verifier = manifest.verifiers.find((verifier) =>
+      verifier.verifierAuthority === "batch-match-risc0-verifier"
+    );
+    expect(noirVerifiers).toHaveLength(10);
+    expect(noirVerifiers.every((verifier) => verifier.verifierSource === "artifact")).toBe(true);
+    expect(
+      noirVerifiers.every((verifier) => verifier.verifierAuthority.endsWith("-proof-verifier")),
+    ).toBe(true);
+    expect(noirVerifiers.every((verifier) => verifier.vkPath.endsWith("target/bb/vk"))).toBe(true);
+    expect(risc0Verifier).toEqual(expect.objectContaining({
+      circuitKey: RISC0_BATCH_MATCH_CIRCUIT_KEY,
+      verifierContract: "risc0-proof-verifier",
+      verifierHash: RISC0_STELLAR_VERIFIER_HASH,
+      verifierSource: "risc0-router",
+    }));
     expect(proofLedgerInit?.args).toEqual(["governance"]);
     expect(shieldedPoolInit?.args).toEqual([
       "governance",
@@ -134,7 +166,7 @@ describe("deployment manifest", () => {
       "market",
       "position-state",
       "intent-registry",
-      circuitKey("batch-match"),
+      RISC0_BATCH_MATCH_CIRCUIT_KEY,
     ]);
     expect(liquidationInit?.args).toEqual([
       "governance",

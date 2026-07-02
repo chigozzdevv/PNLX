@@ -3,14 +3,16 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "baseUrl": ".",
     "paths": {
       "@/*": [
-        "server/src/*"
+        "./server/src/*"
       ]
     },
     "skipLibCheck": true,
-    "strict": true
+    "strict": true,
+    "types": [
+      "bun"
+    ]
   },
   "include": [
     "server/src/**/*.ts",

@@ -1,16 +1,19 @@
-import { contractPublicInputHash, publicField, publicU128 } from "@merkl/proof-system";
+import { contractPublicInputHash, publicField, publicU128 } from "@pnlx/proof-system";
 import type { ServerEnv } from "@/config/env";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { OnchainRelayResult } from "@/workers/onchain/onchain.model";
 import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
 import type { ProverService } from "@/workers/prover/prover.service";
+import { assertAuthenticatedOwnerCommitment } from "@/shared/http/auth-context";
 import { assertFundingPayment } from "@/shared/protocol/funding";
 import { assertSubmittedRelay } from "@/shared/protocol/onchain-submission";
 import { createPositionCloseAccountEvent } from "@/shared/protocol/account-event-outcomes";
-import { PRICE_SCALE } from "@merkl/market-math";
-import type { MarketConfig } from "@merkl/protocol-types";
+import { PRICE_SCALE } from "@pnlx/market-math";
+import type { MarketConfig } from "@pnlx/protocol-types";
 import type {
   CreatePositionCloseInput,
+  PositionCloseContextInput,
+  PositionCloseContextResult,
   CreatePositionCloseResult,
   CreateProvenPositionCloseInput,
 } from "@/features/position-closes/position-closes.model";
@@ -24,6 +27,25 @@ export class PositionClosesService {
       settlementsOnchainRequired: false,
     },
   ) {}
+
+  context(input: PositionCloseContextInput, authenticated?: string): PositionCloseContextResult {
+    assertAuthenticatedOwnerCommitment(authenticated, input.ownerCommitment, "ownerCommitment");
+    const position = this.executor.store.positionsFor(input.ownerCommitment).find(
+      (candidate) => candidate.positionCommitment === input.positionCommitment,
+    );
+    if (!position) throw new Error("position not found");
+    if (position.status !== "open") throw new Error("position is not open");
+
+    const membershipProof = this.executor.store.positionMembershipProof(input.positionCommitment);
+    const positionRoot = this.executor.store.positionMembershipRoot();
+    if (membershipProof.root !== positionRoot) throw new Error("position root is not current");
+
+    return {
+      membershipProof,
+      newPositionRoot: this.executor.store.positionMembershipRootWith(input.newPositionCommitment),
+      positionRoot,
+    };
+  }
 
   create(input: CreatePositionCloseInput): CreatePositionCloseResult {
     const record = this.prepare(input);

@@ -6,7 +6,7 @@ import type {
   IntentValidityWitness,
   ProofMeta,
   TradeIntent,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 import type { CreateIntentInput, CreateSharedIntentInput, ProveAndSubmitIntentInput } from "@/features/intents/intents.model";
 import type { NodeShareSet } from "@/workers/threshold-shares/threshold-shares.model";
 
@@ -103,12 +103,22 @@ export function parseProofMeta(input: IntentBody): ProofMeta {
     verifierHash: String(input.verifierHash) as Hex,
     publicInputHash: String(input.publicInputHash) as Hex,
     proofDigest: String(input.proofDigest) as Hex,
+    proofSystem: parseProofSystem(input.proofSystem),
     bytecodeHash: optionalHex(input.bytecodeHash),
+    imageId: optionalHex(input.imageId),
+    journalDigest: optionalHex(input.journalDigest),
     witnessHash: optionalHex(input.witnessHash),
     proofHash: optionalHex(input.proofHash),
     publicInputsHash: optionalHex(input.publicInputsHash),
+    sealDigest: optionalHex(input.sealDigest),
     vkHash: optionalHex(input.vkHash),
   };
+}
+
+function parseProofSystem(value: unknown): ProofMeta["proofSystem"] {
+  if (value === undefined) return undefined;
+  if (value === "noir-ultrahonk" || value === "risc0-groth16") return value;
+  throw new Error("invalid proof system");
 }
 
 function optionalHex(value: unknown): Hex | undefined {

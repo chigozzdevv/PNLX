@@ -2,17 +2,19 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { commitIntent, hashFields, intentBindingFields } from "@merkl/crypto";
-import { PRICE_SCALE } from "@merkl/market-math";
-import type { BatchSettlement, Hex, IntentValidityRecord, MarketConfig, ProofMeta, TradeIntent } from "@merkl/protocol-types";
-import { createMarginNote } from "@merkl/sdk";
+import { commitIntent, hashFields, intentBindingFields } from "@pnlx/crypto";
+import { PRICE_SCALE } from "@pnlx/market-math";
+import type { BatchSettlement, Hex, IntentValidityRecord, MarketConfig, ProofMeta, TradeIntent } from "@pnlx/protocol-types";
+import { createMarginNote } from "@pnlx/sdk";
 import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
 import type { MatchResult } from "@/workers/batch-matcher/batch-matcher.model";
 import { createExecutor } from "@/workers/executor/executor.worker";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import { createIndexer } from "@/workers/indexer/indexer.worker";
+import { createMatcher } from "@/workers/matcher/matcher.worker";
 import type { SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
 import type { RecoveredIntent } from "@/workers/threshold-shares/threshold-shares.model";
+import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
 
 describe("private orderbook residuals", () => {
   test("matches crossed private orders by price-time priority at maker price", () => {
@@ -103,7 +105,7 @@ describe("private orderbook residuals", () => {
   });
 
   test("persists residual orders and fills them in a later batch", () => {
-    const storePath = join(mkdtempSync(join(tmpdir(), "merkl-orderbook-")), "store.json");
+    const storePath = join(mkdtempSync(join(tmpdir(), "pnlx-orderbook-")), "store.json");
     const firstExecutor = createExecutor({ storePath });
     installFastSettlementProofs(firstExecutor);
     const market = testMarket();
@@ -188,8 +190,55 @@ describe("private orderbook residuals", () => {
     expect(secondSettlement.spentNullifiers).not.toContain(alice.note.nullifier as Hex);
   });
 
+  test("settles an external private batch with RISC0 receipt metadata", async () => {
+    const executor = createExecutor({ matchingBackend: "external-blind" });
+    const market = testMarket();
+    executor.addMarket(market);
+    backedIntent(executor, {
+      batchId: "risc0-flow",
+      limitPrice: 52_000n * PRICE_SCALE,
+      margin: 12_000n,
+      marketId: market.marketId,
+      owner: "risc0-alice",
+      side: "long",
+      size: 1n,
+    });
+    backedIntent(executor, {
+      batchId: "risc0-flow",
+      limitPrice: 49_000n * PRICE_SCALE,
+      margin: 12_000n,
+      marketId: market.marketId,
+      owner: "risc0-bob",
+      side: "short",
+      size: 1n,
+    });
+
+    const matcher = createMatcher(executor, {
+      accountEventEncryptor: (payload) => JSON.stringify(payload, bigintStringify),
+    });
+    const transcript = await matcher.createSettlementTranscript({
+      batchId: "risc0-flow",
+      marketId: market.marketId,
+    });
+
+    expect(transcript.settlement.proof).toMatchObject({
+      circuitId: "batch-match",
+      proofSystem: "risc0-groth16",
+    });
+    expect(transcript.settlement.proof.imageId).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(transcript.settlement.proof.journalDigest).toBe(batchSettlementPublicInputHash(transcript.settlement));
+    expect(transcript.settlement.proof.sealDigest).toBe(transcript.settlement.proof.proofDigest);
+    expect(transcript.accountEvents).toHaveLength(2);
+
+    const settlement = executor.commitExternalBatchSettlement(transcript, { proofVerified: true });
+
+    expect(settlement.fillCount).toBe(2);
+    expect(executor.store.settlements.has(`${market.marketId}:risc0-flow`)).toBe(true);
+    expect(executor.store.positionLifecycle.size).toBe(2);
+  });
+
   test("persists cancelled order lifecycle state", () => {
-    const storePath = join(mkdtempSync(join(tmpdir(), "merkl-order-cancel-")), "store.json");
+    const storePath = join(mkdtempSync(join(tmpdir(), "pnlx-order-cancel-")), "store.json");
     const executor = createExecutor({ storePath });
     executor.addMarket(testMarket());
     const alice = backedIntent(executor, {
@@ -348,4 +397,8 @@ function proofMeta(label: string, fields: unknown[]): ProofMeta {
     publicInputHash: hashFields("public-input", [digest]),
     verifierHash: hashFields("verifier", [label]),
   };
+}
+
+function bigintStringify(_key: string, value: unknown): unknown {
+  return typeof value === "bigint" ? value.toString() : value;
 }

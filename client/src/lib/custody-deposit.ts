@@ -1,4 +1,4 @@
-import { merklGet, merklPost } from "@/lib/merkl-api";
+import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
 import { createCircuitMarginNote, randomLabel, type CircuitMarginNote } from "@/lib/private-note";
 import { signWalletTransaction, type WalletSession } from "@/lib/wallet-auth";
 import type { Hex, ServerProofMeta } from "@/types/trading";
@@ -42,6 +42,7 @@ interface PendingDeposit {
   amount: string;
   commitment: Hex;
   from: string;
+  preparedTxHash?: Hex;
   preparedXdrDigest: Hex;
   token: string;
   tokenDigest: Hex;
@@ -75,6 +76,7 @@ interface FinalizeAssetDepositResponse {
 
 export interface PrepareWalletAssetDepositInput {
   amount: bigint;
+  assetDigest?: Hex;
   assetId?: string;
   proofProvider?: ClientProofProvider;
   session: WalletSession;
@@ -91,6 +93,7 @@ export async function prepareWalletAssetDeposit(
 ): Promise<PreparedWalletAssetDeposit> {
   const note = await createCircuitMarginNote({
     amount: input.amount,
+    assetDigest: input.assetDigest,
     assetId: input.assetId ?? "usdc",
     blinding: randomLabel("custody-blind"),
     owner: input.session.address,
@@ -109,7 +112,7 @@ export async function prepareWalletAssetDeposit(
   };
   const prepared = input.proofProvider
     ? await prepareProvenDeposit(input.proofProvider, depositRequest, input.session.token)
-    : await merklPost<PrepareAssetDepositResponse>(
+    : await pnlxPost<PrepareAssetDepositResponse>(
         "/notes/deposit-asset/prepare",
         depositRequest,
         input.session.token,
@@ -143,7 +146,7 @@ async function prepareProvenDeposit(
     }),
     token,
   );
-  return merklPost<PrepareAssetDepositResponse>(
+  return pnlxPost<PrepareAssetDepositResponse>(
     "/notes/deposit-asset/prepare-proven",
     {
       amount: request.amount,
@@ -163,16 +166,17 @@ export async function signAndRelayPreparedDeposit(input: {
   if (!input.prepared.action.xdr) {
     throw new Error("Prepared deposit action did not include wallet transaction xdr");
   }
-  const health = await merklGet<HealthResponse>("/health", input.session.token);
+  const health = await pnlxGet<HealthResponse>("/health", input.session.token);
   const signedXdr = await signWalletTransaction(input.prepared.action.xdr, {
     address: input.session.address,
     network: health.stellar.network,
     networkPassphrase: health.stellar.networkPassphrase,
   });
-  const result = await merklPost<{ relay: RelayedTx }>(
+  const result = await pnlxPost<{ relay: RelayedTx }>(
     "/relays/signed-xdr",
     {
       commitment: input.prepared.pendingDeposit.commitment,
+      expectedTxHash: input.prepared.pendingDeposit.preparedTxHash,
       preparedXdrDigest: input.prepared.pendingDeposit.preparedXdrDigest,
       xdr: signedXdr,
     },
@@ -186,7 +190,7 @@ export async function finalizeWalletAssetDeposit(input: {
   relay: RelayedTx;
   session: WalletSession;
 }): Promise<FinalizeAssetDepositResponse["note"]> {
-  const result = await merklPost<FinalizeAssetDepositResponse>(
+  const result = await pnlxPost<FinalizeAssetDepositResponse>(
     "/notes/deposit-asset/finalize",
     {
       amount: input.prepared.depositProof.amount,

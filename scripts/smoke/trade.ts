@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createECDH } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -8,9 +9,9 @@ import {
   fieldMerkleRoot,
   hashFields,
   ownerCommitment,
-} from "@merkl/crypto";
-import { PRICE_SCALE, settleClose } from "@merkl/market-math";
-import { createCircuitMarginNote, createCircuitPositionNote } from "@merkl/sdk";
+} from "@pnlx/crypto";
+import { PRICE_SCALE, settleClose } from "@pnlx/market-math";
+import { createCircuitMarginNote, createCircuitPositionNote } from "@pnlx/sdk";
 import type {
   ConditionalOrderRecord,
   ConditionalOrderWitness,
@@ -18,12 +19,14 @@ import type {
   IntentRecord,
   IntentValidityRecord,
   PositionCloseRecord,
+  ProofMeta,
   TradeIntent,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 import { createApp } from "@/app";
 import { getSupportedPerpAsset, type SupportedPerpAsset } from "@/config/assets";
 import { loadEnv } from "@/config/env";
 import { FileProtocolStore } from "@/shared/state/persistent-store";
+import { ProofArtifactRegistry } from "@/shared/proofs/artifact-registry";
 import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
 import { ProverService } from "@/workers/prover/prover.service";
 
@@ -166,9 +169,11 @@ async function runMarketSmoke(asset: SupportedPerpAsset): Promise<Record<string,
   const bobDeposit = await depositCircuitNote(bob);
   const bobValidity = proveIntentValidity(bobIntent, bob, bobDeposit);
   const bobRecord = await submitSharedIntent(bobIntent, bobValidity);
+  await registerAccountKey(aliceRecord.ownerCommitment);
+  await registerAccountKey(bobRecord.ownerCommitment);
 
   const settleStartedAt = Date.now();
-  const settlementResult = await post("/batches/settle", { batchId, marketId });
+  const settlementResult = await settleBatch(batchId, marketId);
   const settlement = settlementResult.settlement as Record<string, unknown>;
   const settlementMs = Date.now() - settleStartedAt;
   const closeStartedAt = Date.now();
@@ -250,8 +255,10 @@ async function runMarketSmoke(asset: SupportedPerpAsset): Promise<Record<string,
 
 function configureSmokeEnvironment(): void {
   const baseEnv = loadEnv();
+  const usesExternalMatcher =
+    baseEnv.matchingBackend === "external-blind" && Boolean(baseEnv.matcherServiceUrl);
   const runtimeDir = serverOnly
-    ? mkdtempSync(join(tmpdir(), "merkl-smoke-"))
+    ? mkdtempSync(join(tmpdir(), "pnlx-smoke-"))
     : smokeRuntimeDir(baseEnv);
   process.env.ASSET_CUSTODY_REQUIRED = "false";
   process.env.AUTH_REQUIRED = "false";
@@ -259,13 +266,19 @@ function configureSmokeEnvironment(): void {
   process.env.SERVER_WITNESS_ROUTES_ENABLED = "true";
   process.env.STELLAR_ONCHAIN_RELAY = "false";
   process.env.STELLAR_RELAYER_MODE = "local";
-  process.env.PROTOCOL_STORE_PATH ??= join(runtimeDir, "protocol-store.json");
-  process.env.RELAY_STORE_PATH ??= join(runtimeDir, "relay-store.json");
-  process.env.AUTH_STORE_PATH ??= join(runtimeDir, "auth-store.json");
+  process.env.PROTOCOL_STORE_PATH ??= usesExternalMatcher && baseEnv.protocolStorePath
+    ? baseEnv.protocolStorePath
+    : join(runtimeDir, "protocol-store.json");
+  process.env.RELAY_STORE_PATH ??= usesExternalMatcher && baseEnv.relayStorePath
+    ? baseEnv.relayStorePath
+    : join(runtimeDir, "relay-store.json");
+  process.env.AUTH_STORE_PATH ??= usesExternalMatcher && baseEnv.authStorePath
+    ? baseEnv.authStorePath
+    : join(runtimeDir, "auth-store.json");
 }
 
 function smokeRuntimeDir(baseEnv: ReturnType<typeof loadEnv>): string {
-  if (process.env.MERKL_SMOKE_RUNTIME_DIR) return process.env.MERKL_SMOKE_RUNTIME_DIR;
+  if (process.env.PNLX_SMOKE_RUNTIME_DIR) return process.env.PNLX_SMOKE_RUNTIME_DIR;
 
   const deployment = readDeploymentFile(baseEnv);
   const key = hashFields("smoke-runtime", [
@@ -274,7 +287,7 @@ function smokeRuntimeDir(baseEnv: ReturnType<typeof loadEnv>): string {
     deployment.contracts["position-state"],
     deployment.contracts["batch-settlement"],
   ]).slice(2, 14);
-  return join(".merkl", "smoke", `${baseEnv.stellarNetwork}-${key}`);
+  return join(".pnlx", "smoke", `${baseEnv.stellarNetwork}-${key}`);
 }
 
 async function depositCircuitNote(note: CircuitMarginNote): Promise<MarginMembershipProof> {
@@ -332,6 +345,39 @@ async function submitSharedIntent(
     shareSets,
     validity,
   }) as unknown as IntentRecord;
+}
+
+async function registerAccountKey(owner: Hex): Promise<void> {
+  await post("/account-keys", {
+    algorithm: "ecdh-p256-aes-gcm",
+    ownerCommitment: owner,
+    publicKey: rawP256PublicKey(),
+  });
+}
+
+async function settleBatch(batchId: string, marketId: string): Promise<Record<string, unknown>> {
+  if (env.matchingBackend !== "external-blind") {
+    return post("/batches/settle", { batchId, marketId });
+  }
+  if (!env.matcherServiceUrl) {
+    throw new Error("MATCHER_SERVICE_URL is required for external-blind smoke settlement");
+  }
+  const transcript = await requestMatcherSettlement(batchId, marketId);
+  return post("/batches/settle-external", transcript);
+}
+
+async function requestMatcherSettlement(batchId: string, marketId: string): Promise<Record<string, unknown>> {
+  const response = await fetch(new URL("/match/settlement", env.matcherServiceUrl), {
+    body: JSON.stringify({ batchId, marketId }),
+    headers: {
+      "content-type": "application/json",
+      ...(env.matcherServiceToken ? { authorization: `Bearer ${env.matcherServiceToken}` } : {}),
+    },
+    method: "POST",
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`/match/settlement failed: ${response.status} ${text}`);
+  return JSON.parse(text) as Record<string, unknown>;
 }
 
 async function closeLongTakeProfit(input: {
@@ -527,6 +573,12 @@ function parseHexList(value: unknown, field: string): Hex[] {
   return value.map((entry) => String(entry) as Hex);
 }
 
+function rawP256PublicKey(): string {
+  const ecdh = createECDH("prime256v1");
+  ecdh.generateKeys();
+  return ecdh.getPublicKey().toString("base64url");
+}
+
 function loadKnownPositionCommitments(storePath: string): Hex[] {
   if (!storePath || !existsSync(storePath)) return [];
   return [...new FileProtocolStore(storePath).positionCommitments];
@@ -558,7 +610,7 @@ function intent(
 
 async function post(path: string, data: unknown): Promise<Record<string, unknown>> {
   const response = await app.handle(
-    new Request(`http://merkl.local${path}`, {
+    new Request(`http://pnlx.local${path}`, {
       method: "POST",
       body: JSON.stringify(serialize(data)),
       headers: { "content-type": "application/json" },
@@ -585,18 +637,9 @@ function pushOnChain(context: MarketSmokeContext): Record<string, unknown> {
   console.error(`[smoke] ${context.asset.symbol}: pushing settlement on-chain`);
   const startedAt = Date.now();
   const deployment = readDeployment();
-  const proof = context.settlement.proof as Record<string, string>;
+  const proof = context.settlement.proof as unknown as ProofMeta;
   const batchKey = bytes32(hashFields("batch-id", [context.batchId]));
   const marketKey = bytes32(hashFields("market-id", [context.marketId]));
-  const artifactDir = join(
-    process.cwd(),
-    "circuits/batch-match/target/bb",
-    `batch-${hashFields("proof-artifact", [
-      context.batchId,
-      context.marketId,
-      context.settlement.newRoot,
-    ]).slice(2, 18)}`,
-  );
 
   const oracleContract = activeOracleContract(deployment);
   assertPositionRootAligned(deployment, context);
@@ -606,15 +649,24 @@ function pushOnChain(context: MarketSmokeContext): Record<string, unknown> {
   submitIntent(deployment, context.aliceRecord);
   submitIntent(deployment, context.bobRecord);
 
-  invoke(deployment.verifiers["batch-match-proof-verifier"], "verify_and_record", [
-    "--public_inputs-file-path",
-    join(artifactDir, "public_inputs"),
-    "--proof_bytes-file-path",
-    join(artifactDir, "proof"),
-    "--public_input_hash",
-    bytes32(proof.publicInputHash),
+  if (proof.proofSystem !== "risc0-groth16") {
+    throw new Error("batch settlement must use a RISC0 Groth16 matcher proof");
+  }
+  const risc0Verifier = deployment.verifiers["batch-match-risc0-verifier"];
+  if (!risc0Verifier) {
+    throw new Error("deployment is missing batch-match-risc0-verifier");
+  }
+  const artifact = new ProofArtifactRegistry().get(proof);
+  if (!artifact) throw new Error("RISC0 batch proof artifact is missing from the proof registry");
+  invoke(risc0Verifier, "verify_and_record", [
+    "--seal-file-path",
+    artifact.proofPath,
+    "--image_id",
+    bytes32(requiredProofField(proof.imageId, "imageId")),
+    "--journal_digest",
+    bytes32(requiredProofField(proof.journalDigest ?? proof.publicInputHash, "journalDigest")),
     "--proof_digest",
-    bytes32(proof.proofDigest),
+    bytes32(requiredProofField(proof.sealDigest ?? proof.proofDigest, "sealDigest")),
   ]);
   waitForProof(deployment, proof);
 
@@ -669,7 +721,7 @@ function pushOnChain(context: MarketSmokeContext): Record<string, unknown> {
   return {
     deployment: env.stellarDeploymentFile,
     batchSettlement: deployment.contracts["batch-settlement"],
-    batchProofVerifier: deployment.verifiers["batch-match-proof-verifier"],
+    batchProofVerifier: risc0Verifier,
     oracleContract,
     oracleKind: env.oracleKind,
     oracleAsset:
@@ -900,7 +952,7 @@ function submitIntent(deployment: Deployment, record: IntentRecord): void {
   ]);
 }
 
-function waitForProof(deployment: Deployment, proof: Record<string, string>): void {
+function waitForProof(deployment: Deployment, proof: ProofMeta): void {
   for (let attempt = 1; attempt <= 12; attempt += 1) {
     console.error(`[stellar] has_proof attempt ${attempt}`);
     const hasProof = invoke(deployment.contracts["proof-ledger"], "has_proof", [
@@ -918,6 +970,11 @@ function waitForProof(deployment: Deployment, proof: Record<string, string>): vo
   }
 
   throw new Error(`proof was not recorded for ${proof.publicInputHash}`);
+}
+
+function requiredProofField(value: Hex | undefined, label: string): Hex {
+  if (!value) throw new Error(`proof is missing ${label}`);
+  return value;
 }
 
 function waitForSettlement(deployment: Deployment, batchKey: string, marketKey: string): void {
@@ -953,7 +1010,7 @@ function waitForPositionClose(deployment: Deployment, closeCommitment: Hex): voi
 function verifyAndRecord(
   deployment: Deployment,
   verifierAuthority: string,
-  proof: Record<string, string>,
+  proof: ProofMeta,
   artifactDir: string,
 ): void {
   invoke(deployment.verifiers[verifierAuthority], "verify_and_record", [
@@ -989,7 +1046,7 @@ function assertPositionRootAligned(deployment: Deployment, context: MarketSmokeC
       `localOldRoot=${localOldRoot}`,
       `chainCurrentRoot=${chainRoot}`,
       `deployment=${env.stellarDeploymentFile}`,
-      "Use the matching PROTOCOL_STORE_PATH/MERKL_SMOKE_RUNTIME_DIR, or deploy a fresh position-state/batch-settlement set before running a live smoke.",
+      "Use the matching PROTOCOL_STORE_PATH/PNLX_SMOKE_RUNTIME_DIR, or deploy a fresh position-state/batch-settlement set before running a live smoke.",
     ].join("\n"),
   );
 }
@@ -1165,7 +1222,7 @@ function normalizeRoot(hex: string): Hex {
   return `0x${bytes32(hex).toLowerCase().padStart(64, "0")}` as Hex;
 }
 
-function proofMetaArg(proof: Record<string, string>): string {
+function proofMetaArg(proof: ProofMeta): string {
   return JSON.stringify({
     circuit_hash: bytes32(proof.circuitHash),
     circuit_id: bytes32(proof.circuitKey),

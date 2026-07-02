@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { fieldMerkleProof, hashFields } from "@merkl/crypto";
-import { PRICE_SCALE } from "@merkl/market-math";
-import { createCircuitMarginNote } from "@merkl/sdk";
-import type { Hex } from "@merkl/protocol-types";
+import { fieldMerkleProof, fieldMerkleRoot, hashFields } from "@pnlx/crypto";
+import { PRICE_SCALE, settleClose } from "@pnlx/market-math";
+import { createCircuitMarginNote, createCircuitPositionNote } from "@pnlx/sdk";
+import type { Hex } from "@pnlx/protocol-types";
 import { createLocalClientProverHandler } from "../../scripts/prover/local-client-prover";
 
 function body(data: unknown): BodyInit {
@@ -95,5 +95,98 @@ describe("local client prover", () => {
       }),
     );
     expect(badResponse.status).toBe(500);
+  });
+
+  test("generates position close proof bundles for client-side closes", async () => {
+    const handle = createLocalClientProverHandler(process.cwd());
+    const owner = hashFields("owner", ["local-close-owner"]);
+    const position = createCircuitPositionNote({
+      blinding: "local-close-position-blind",
+      entryPrice: 50_000n * PRICE_SCALE,
+      fundingIndex: 0n,
+      margin: 12_000n,
+      marketId: "btc-usd-perp",
+      owner,
+      rho: "local-close-position-rho",
+      side: "long",
+      size: 1n,
+      spendSecret: "local-close-position-spend",
+    });
+    const positionCommitment = position.commitment as Hex;
+    const membership = fieldMerkleProof([positionCommitment], positionCommitment);
+    const closeSettlement = settleClose({
+      closeSize: 1n,
+      entryPrice: 50_000n * PRICE_SCALE,
+      fee: 0n,
+      fundingPayment: 0n,
+      margin: 12_000n,
+      markPrice: 51_000n * PRICE_SCALE,
+      side: "long",
+    });
+    const closedPosition = createCircuitPositionNote({
+      blinding: "local-close-new-position-blind",
+      entryPrice: 50_000n * PRICE_SCALE,
+      fundingIndex: 0n,
+      margin: 0n,
+      marketId: "btc-usd-perp",
+      owner,
+      rho: "local-close-new-position-rho",
+      side: "long",
+      size: 0n,
+      spendSecret: "local-close-new-position-spend",
+    });
+    const marginOutput = createCircuitMarginNote({
+      amount: closeSettlement.newMargin,
+      assetId: "usdc",
+      blinding: "local-close-margin-blind",
+      owner,
+      rho: "local-close-margin-rho",
+      spendSecret: "local-close-margin-spend",
+    });
+    const response = await handle(
+      new Request("http://127.0.0.1:4101/position-close", {
+        method: "POST",
+        body: body({
+          blinding: position.blinding,
+          closeCommitment: hashFields("manual-position-close", ["local-close"]),
+          closeSize: 1n,
+          entryPrice: 50_000n * PRICE_SCALE,
+          fee: 0n,
+          fundingIndex: 0n,
+          fundingPayment: 0n,
+          margin: 12_000n,
+          marginOutputAmount: closeSettlement.newMargin,
+          marginOutputAssetDigest: marginOutput.assetDigest,
+          marginOutputBlinding: marginOutput.blinding,
+          marginOutputCommitment: marginOutput.commitment,
+          marginOutputRhoDigest: marginOutput.rhoDigest,
+          marketDigest: position.marketDigest,
+          marketId: "btc-usd-perp",
+          markPrice: 51_000n * PRICE_SCALE,
+          newMargin: closeSettlement.newMargin,
+          newPositionBlinding: closedPosition.blinding,
+          newPositionCommitment: closedPosition.commitment,
+          newPositionRhoDigest: closedPosition.rhoDigest,
+          newPositionRoot: fieldMerkleRoot([positionCommitment, closedPosition.commitment as Hex]),
+          ownerDigest: position.ownerDigest,
+          pathIndices: membership.indices,
+          pathSiblings: membership.siblings,
+          positionCommitment,
+          positionNullifier: position.positionNullifier,
+          positionRoot: membership.root,
+          remainingMargin: 0n,
+          rhoDigest: position.rhoDigest,
+          side: "long",
+          size: 1n,
+          spendSecretDigest: position.spendSecretDigest,
+        }),
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    expect(response.status).toBe(200);
+    const close = await response.json() as Record<string, Record<string, unknown>>;
+    expect((close.record as Record<string, unknown>).positionCommitment).toBe(positionCommitment);
+    expect(typeof (close.artifact as Record<string, unknown>).proofBase64).toBe("string");
+    expect(JSON.stringify(close)).not.toContain("local-close-position-spend");
   });
 });

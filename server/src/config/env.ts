@@ -13,6 +13,7 @@ export interface ServerEnv {
   collateralAssetCode: string;
   collateralAssetIssuer: string;
   collateralTokenContract: string;
+  collateralTokenDigest: string;
   conditionalOrdersOnchainRequired: boolean;
   fundingEngineEnabled: boolean;
   fundingIntervalMs: number;
@@ -25,27 +26,12 @@ export interface ServerEnv {
   matcherServiceUrl: string;
   matcherServiceToken: string;
   matcherApiToken: string;
-  matcherProvider: "embedded" | "custom" | "mpspdz" | "nilcc";
-  matcherProviderPort: number;
-  matcherProviderToken: string;
-  matcherProviderUrl: string;
+  matcherProvider: "risc0";
   matcherPort: number;
-  matcherCommitteeAddresses: string[];
-  matcherCommitteeRequired: boolean;
-  matcherCommitteeThreshold: number;
   marketId: string;
   thresholdShareNodeIds: string[];
   thresholdShareStoreDir: string;
   thresholdShareThreshold: number;
-  mpspdzCoordinatorUrl: string;
-  mpspdzPartyUrls: string[];
-  mpspdzProtocol: string;
-  nilccAttestationContains: string[];
-  nilccAttestationReportSha256: string;
-  nilccAttestationReportUrl: string;
-  nilccAttestationRequired: boolean;
-  nilccAttestationToken: string;
-  nilccWorkloadUrl: string;
   port: number;
   nodeEnv: string;
   oracleAssetAddress: string;
@@ -68,6 +54,11 @@ export interface ServerEnv {
   oracleTwapRecords: number;
   protocolAdminAddresses: string[];
   protocolAdminRequired: boolean;
+  protocolLiquidityEnabled: boolean;
+  protocolLiquidityMaxNotional: bigint;
+  protocolLiquidityOwner: string;
+  protocolLiquidityPublicKey: string;
+  protocolLiquidityQuoteSpreadBps: bigint;
   protocolStorePath: string;
   privateMatchingRequired: boolean;
   pythBtcUsdFeedId: string;
@@ -91,7 +82,7 @@ export function loadEnv(): ServerEnv {
   if (process.env.NODE_ENV !== "test") loadEnvFile();
 
   const nodeEnv = process.env.NODE_ENV ?? "development";
-  const runtimeDir = value("MERKL_RUNTIME_DIR", ".merkl");
+  const runtimeDir = value("PNLX_RUNTIME_DIR", ".pnlx");
   const persistentByDefault = nodeEnv !== "test";
   const stellarRelayerMode = value("STELLAR_RELAYER_MODE", "local");
   const oracleOnchainRequired = booleanValue("ORACLE_ONCHAIN_REQUIRED", nodeEnv === "production");
@@ -113,6 +104,7 @@ export function loadEnv(): ServerEnv {
     collateralAssetCode: value("COLLATERAL_ASSET_CODE", ""),
     collateralAssetIssuer: value("COLLATERAL_ASSET_ISSUER", ""),
     collateralTokenContract: value("COLLATERAL_TOKEN_CONTRACT", ""),
+    collateralTokenDigest: value("COLLATERAL_TOKEN_DIGEST", ""),
     conditionalOrdersOnchainRequired: booleanValue(
       "CONDITIONAL_ORDERS_ONCHAIN_REQUIRED",
       nodeEnv === "production",
@@ -128,32 +120,12 @@ export function loadEnv(): ServerEnv {
     matcherServiceUrl: value("MATCHER_SERVICE_URL", value("EXTERNAL_MATCHER_URL", "")),
     matcherServiceToken: value("MATCHER_SERVICE_TOKEN", value("EXTERNAL_MATCHER_TOKEN", "")),
     matcherApiToken: value("MATCHER_API_TOKEN", ""),
-    matcherProvider: matcherProvider(
-      value("MATCHER_PROVIDER", nodeEnv === "production" ? "mpspdz" : "embedded"),
-    ),
-    matcherProviderPort: Number(value("MATCHER_PROVIDER_PORT", "4103")),
-    matcherProviderToken: value("MATCHER_PROVIDER_TOKEN", ""),
-    matcherProviderUrl: value("MATCHER_PROVIDER_URL", ""),
+    matcherProvider: matcherProvider(value("MATCHER_PROVIDER", "risc0")),
     matcherPort: Number(value("MATCHER_PORT", "4102")),
-    matcherCommitteeAddresses: listValue("MATCHER_COMMITTEE_ADDRESSES", []),
-    matcherCommitteeRequired: booleanValue(
-      "MATCHER_COMMITTEE_REQUIRED",
-      booleanValue("PRIVATE_MATCHING_REQUIRED", nodeEnv === "production"),
-    ),
-    matcherCommitteeThreshold: Number(value("MATCHER_COMMITTEE_THRESHOLD", "2")),
-    marketId: value("MERKL_MARKET_ID", "btc-usd-perp"),
+    marketId: value("PNLX_MARKET_ID", "xlm-usd-perp"),
     thresholdShareNodeIds: listValue("THRESHOLD_SHARE_NODE_IDS", ["node-a", "node-b", "node-c"], { uppercase: false }),
     thresholdShareStoreDir: value("THRESHOLD_SHARE_STORE_DIR", persistentByDefault ? join(runtimeDir, "threshold-shares") : ""),
     thresholdShareThreshold: Number(value("THRESHOLD_SHARE_THRESHOLD", "2")),
-    mpspdzCoordinatorUrl: value("MPSPDZ_COORDINATOR_URL", ""),
-    mpspdzPartyUrls: listValue("MPSPDZ_PARTY_URLS", [], { uppercase: false }),
-    mpspdzProtocol: value("MPSPDZ_PROTOCOL", "replicated-ring"),
-    nilccAttestationContains: listValue("NILCC_ATTESTATION_CONTAINS", [], { uppercase: false }),
-    nilccAttestationReportSha256: value("NILCC_ATTESTATION_REPORT_SHA256", ""),
-    nilccAttestationReportUrl: value("NILCC_ATTESTATION_REPORT_URL", ""),
-    nilccAttestationRequired: booleanValue("NILCC_ATTESTATION_REQUIRED", true),
-    nilccAttestationToken: value("NILCC_ATTESTATION_TOKEN", ""),
-    nilccWorkloadUrl: value("NILCC_WORKLOAD_URL", ""),
     port: Number(process.env.PORT ?? 4000),
     nodeEnv,
     oracleAssetAddress: value("ORACLE_ASSET_ADDRESS", ""),
@@ -178,6 +150,11 @@ export function loadEnv(): ServerEnv {
     oracleTwapRecords: Number(value("ORACLE_TWAP_RECORDS", "1")),
     protocolAdminAddresses: listValue("PROTOCOL_ADMIN_ADDRESSES", []),
     protocolAdminRequired: booleanValue("PROTOCOL_ADMIN_REQUIRED", nodeEnv === "production"),
+    protocolLiquidityEnabled: booleanValue("PROTOCOL_LIQUIDITY_ENABLED", false),
+    protocolLiquidityMaxNotional: BigInt(value("PROTOCOL_LIQUIDITY_MAX_NOTIONAL", "50000")),
+    protocolLiquidityOwner: value("PROTOCOL_LIQUIDITY_OWNER", "pnlx-protocol-liquidity"),
+    protocolLiquidityPublicKey: value("PROTOCOL_LIQUIDITY_PUBLIC_KEY", ""),
+    protocolLiquidityQuoteSpreadBps: BigInt(value("PROTOCOL_LIQUIDITY_QUOTE_SPREAD_BPS", "10")),
     protocolStorePath: value(
       "PROTOCOL_STORE_PATH",
       persistentByDefault ? join(runtimeDir, "protocol-store.json") : "",
@@ -186,7 +163,7 @@ export function loadEnv(): ServerEnv {
     pythBtcUsdFeedId: pythFeedIds.BTC,
     pythFeedIds,
     pythHermesUrl: value("PYTH_HERMES_URL", "https://hermes.pyth.network"),
-    smokeMarketSymbols: listValue("MERKL_SMOKE_MARKETS", DEFAULT_SMOKE_MARKET_SYMBOLS),
+    smokeMarketSymbols: listValue("PNLX_SMOKE_MARKETS", DEFAULT_SMOKE_MARKET_SYMBOLS),
     relayStorePath: value("RELAY_STORE_PATH", persistentByDefault ? join(runtimeDir, "relay-state.json") : ""),
     serverWitnessRoutesEnabled: booleanValue("SERVER_WITNESS_ROUTES_ENABLED", nodeEnv === "test"),
     settlementsOnchainRequired: booleanValue("SETTLEMENTS_ONCHAIN_REQUIRED", nodeEnv === "production"),
@@ -200,7 +177,7 @@ export function loadEnv(): ServerEnv {
       "Test SDF Network ; September 2015",
     ),
     stellarRpcUrl: value("STELLAR_RPC_URL", "https://soroban-testnet.stellar.org/"),
-    stellarSource: value("STELLAR_SOURCE", "merkl-testnet"),
+    stellarSource: value("STELLAR_SOURCE", "pnlx-testnet"),
   };
 }
 
@@ -266,8 +243,8 @@ function matchingBackend(value: string): ServerEnv["matchingBackend"] {
 }
 
 function matcherProvider(value: string): ServerEnv["matcherProvider"] {
-  if (value === "embedded" || value === "custom" || value === "mpspdz" || value === "nilcc") return value;
-  throw new Error("MATCHER_PROVIDER must be embedded, custom, mpspdz, or nilcc");
+  if (value === "risc0") return value;
+  throw new Error("MATCHER_PROVIDER must be risc0");
 }
 
 function oraclePriceSource(value: string): "hermes" | "onchain-market" {

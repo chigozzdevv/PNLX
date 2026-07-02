@@ -1,0 +1,17 @@
+[package]
+name = "pnlx-risc0-batch-match-prover"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+hex.workspace = true
+pnlx-risc0-batch-match-core = { path = "../core" }
+pnlx-risc0-methods = { path = "../methods" }
+risc0-ethereum-contracts.workspace = true
+risc0-zkvm = { workspace = true, features = ["prove", "disable-dev-mode"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+

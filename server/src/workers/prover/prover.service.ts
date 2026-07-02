@@ -12,8 +12,8 @@ import {
   hashFields,
   intentBindingFields,
   mod,
-} from "@merkl/crypto";
-import { isLiquidatable, PRICE_SCALE, RATE_SCALE, settleClose } from "@merkl/market-math";
+} from "@pnlx/crypto";
+import { isLiquidatable, PRICE_SCALE, RATE_SCALE, settleClose } from "@pnlx/market-math";
 import {
   bindProof,
   buildProofArtifact,
@@ -22,7 +22,7 @@ import {
   publicInputDigest,
   type ProofArtifact,
   type CircuitId,
-} from "@merkl/proof-system";
+} from "@pnlx/proof-system";
 import type {
   ConditionalOrderRecord,
   DisclosureRecord,
@@ -34,7 +34,7 @@ import type {
   PositionCloseRecord,
   ProofMeta,
   WithdrawalRecord,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 import type {
   ConditionalCloseProofInput,
   DepositNoteProofInput,
@@ -57,7 +57,7 @@ export class ProverService implements Prover {
   private readonly artifactRegistry: ProofArtifactRegistry;
 
   constructor(private readonly root = process.cwd()) {
-    this.artifactRegistry = new ProofArtifactRegistry(join(root, ".merkl", "proof-artifacts.json"));
+    this.artifactRegistry = new ProofArtifactRegistry(join(root, ".pnlx", "proof-artifacts.json"));
   }
 
   artifactFor(proof: ProofMeta): ProofArtifact | undefined {
@@ -82,7 +82,7 @@ export class ProverService implements Prover {
 
     const dir = join(
       this.root,
-      ".merkl",
+      ".pnlx",
       "client-proof-artifacts",
       createHash("sha256").update(proofKey(input.proof)).digest("hex"),
     );

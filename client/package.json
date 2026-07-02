@@ -1,15 +1,16 @@
 {
-  "name": "@merkl/client",
+  "name": "@pnlx/client",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bunx next dev",
+    "dev": "bunx next dev --webpack",
     "build": "bunx next build",
     "start": "bunx next start",
     "check": "bunx eslint . && bunx tsc --noEmit"
   },
   "dependencies": {
+    "@stellar/freighter-api": "^6.0.1",
     "@tailwindcss/postcss": "^4.3.1",
     "framer-motion": "^12.42.0",
     "lucide-react": "^1.21.0",

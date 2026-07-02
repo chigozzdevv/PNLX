@@ -4,7 +4,7 @@ import type {
   ConditionalOrderWitness,
   PositionCloseRecord,
   PositionCloseWitness,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 
 export type RegisterConditionalOrderInput = ConditionalOrderCommitment;
 export type RegisterConditionalOrderResult = ConditionalOrderCommitment;

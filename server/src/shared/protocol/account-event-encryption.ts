@@ -35,7 +35,7 @@ export function encryptAccountEventPayload(payload: unknown, recipientPublicKey:
     v: 1,
   };
 
-  return `merkl-account-event-v1:${base64UrlEncode(Buffer.from(JSON.stringify(envelope), "utf8"))}`;
+  return `pnlx-account-event-v1:${base64UrlEncode(Buffer.from(JSON.stringify(envelope), "utf8"))}`;
 }
 
 function bigintReplacer(_key: string, value: unknown): unknown {

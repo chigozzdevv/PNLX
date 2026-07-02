@@ -1,5 +1,5 @@
-import { hashFields } from "@merkl/crypto";
-import type { Hex, LiquidationAutomationJobRecord } from "@merkl/protocol-types";
+import { hashFields } from "@pnlx/crypto";
+import type { Hex, LiquidationAutomationJobRecord } from "@pnlx/protocol-types";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { LiquidationsService } from "@/features/liquidations/liquidations.service";
 import type {

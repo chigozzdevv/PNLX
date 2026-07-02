@@ -10,7 +10,7 @@
     "disclosure-verifier": "CAQAED5SPRSBMHU3P4FRX7VCTZNZ4WGSKKGDTAPHSOXGQZT4WXGOTUSQ"
   },
   "network": "local",
-  "source": "merkl-admin",
+  "source": "pnlx-admin",
   "sourceAddress": "GBXW6QITMXYO7DQWZ44PUAWBHFIFB53DPCGUWLQDDBEUMSUXZ4PLMUTH",
   "verifiers": {
     "batch-match-proof-verifier": "CDCGWCLMZVM76XX7VA7EIYCXINN4QBMCVQ7LAJ4IFSIQ7WVLKDOLWNW3",

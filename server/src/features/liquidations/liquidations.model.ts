@@ -1,4 +1,4 @@
-import type { LiquidationRecord, LiquidationWitness } from "@merkl/protocol-types";
+import type { LiquidationRecord, LiquidationWitness } from "@pnlx/protocol-types";
 
 export type CreateLiquidationInput = LiquidationWitness;
 export type CreateProvenLiquidationInput = LiquidationRecord;

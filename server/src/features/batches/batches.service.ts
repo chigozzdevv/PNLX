@@ -1,7 +1,6 @@
-import type { BatchSettlement } from "@merkl/protocol-types";
+import type { BatchSettlement } from "@pnlx/protocol-types";
 import { assertProtocolAdmin } from "@/shared/http/auth-context";
 import type { ServerEnv } from "@/config/env";
-import { assertMatcherCommitteeAttestation } from "@/shared/protocol/matcher-attestation";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
 import type { OnchainRelayResult } from "@/workers/onchain/onchain.model";
@@ -13,13 +12,11 @@ export class BatchesService {
     private readonly onchain?: OnchainRelayService,
     private readonly protocolAdminAddresses: string[] = [],
     private readonly protocolAdminRequired = false,
-    private readonly matcherCommittee: Pick<
+    private readonly settlementConfig: Pick<
       ServerEnv,
-      "matcherCommitteeAddresses" | "matcherCommitteeRequired" | "matcherCommitteeThreshold"
+      "settlementsOnchainRequired"
     > = {
-      matcherCommitteeAddresses: [],
-      matcherCommitteeRequired: false,
-      matcherCommitteeThreshold: 0,
+      settlementsOnchainRequired: false,
     },
   ) {}
 
@@ -38,15 +35,10 @@ export class BatchesService {
 
   commitExternal(input: CommitExternalBatchSettlementRequest, authenticated?: string): BatchSettlement {
     this.assertAuthorized(authenticated);
-    assertMatcherCommitteeAttestation(input, {
-      addresses: this.matcherCommittee.matcherCommitteeAddresses,
-      required: this.matcherCommittee.matcherCommitteeRequired,
-      threshold: this.matcherCommittee.matcherCommitteeThreshold,
-    });
     this.executor.validateExternalBatchSettlement(input);
     const relay = this.onchain?.settleBatch(input.settlement);
     return this.executor.commitExternalBatchSettlement(input, {
-      proofVerified: hasSubmittedProofVerification(relay),
+      proofVerified: hasSubmittedProofVerification(relay) || !this.settlementConfig.settlementsOnchainRequired,
     });
   }
 }

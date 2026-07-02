@@ -6,7 +6,7 @@ import {
 } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { ownerCommitment } from "@merkl/crypto";
+import { ownerCommitment } from "@pnlx/crypto";
 import type {
   AuthChallengeInput,
   AuthChallengeResult,
@@ -19,6 +19,7 @@ import type { AuthContext } from "@/shared/http/auth-context";
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const ED25519_PUBLIC_KEY_VERSION = 6 << 3;
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+const STELLAR_SIGNED_MESSAGE_PREFIX = "Stellar Signed Message:\n";
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -50,10 +51,10 @@ export class AuthService {
 
     const nonce = randomBytes(24).toString("base64url");
     const expiresAt = Date.now() + CHALLENGE_TTL_MS;
-    const domain = input.domain?.trim() || "merkl.local";
+    const domain = input.domain?.trim() || "pnlx.local";
     const uri = input.uri?.trim() || `https://${domain}`;
     const message = [
-      "Merkl authentication",
+      "PNLX authentication",
       `Address: ${address}`,
       `Domain: ${domain}`,
       `URI: ${uri}`,
@@ -90,7 +91,7 @@ export class AuthService {
 
     const publicKey = decodeStellarPublicKey(address);
     const signature = Buffer.from(input.signature, "base64");
-    const verified = verifyEd25519(publicKey, challenge.message, signature);
+    const verified = verifyStellarSignedMessage(publicKey, challenge.message, signature);
     if (!verified) throw new Error("invalid auth signature");
 
     this.challenges.delete(input.nonce);
@@ -187,14 +188,21 @@ export function encodeStellarPublicKey(publicKey: Buffer): string {
   return base32Encode(Buffer.concat([payload, Buffer.from([checksum & 0xff, checksum >> 8])]));
 }
 
-function verifyEd25519(publicKey: Buffer, message: string, signature: Buffer): boolean {
+export function stellarSignedMessageHash(message: string): Buffer {
+  return createHash("sha256")
+    .update(Buffer.from(STELLAR_SIGNED_MESSAGE_PREFIX, "utf8"))
+    .update(Buffer.from(message, "utf8"))
+    .digest();
+}
+
+function verifyStellarSignedMessage(publicKey: Buffer, message: string, signature: Buffer): boolean {
   try {
     const key = createPublicKey({
       key: Buffer.concat([ED25519_SPKI_PREFIX, publicKey]),
       format: "der",
       type: "spki",
     });
-    return verifySignature(null, Buffer.from(message), key, signature);
+    return verifySignature(null, stellarSignedMessageHash(message), key, signature);
   } catch {
     return false;
   }

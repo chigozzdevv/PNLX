@@ -13,7 +13,7 @@ import type {
   PositionCloseRecord,
   ProofMeta,
   WithdrawalRecord,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 import type { RelayedTx, StellarInvokePayload } from "@/workers/relayer/relayer.model";
 
 export interface DeploymentRegistry {
@@ -78,6 +78,7 @@ export interface PreparedOnchainAction {
   functionName: string;
   kind: string;
   payload: StellarInvokePayload;
+  txHash?: Hex;
   xdr?: string;
 }
 
@@ -93,9 +94,11 @@ export interface AssetDepositRelayInput {
 
 export interface OnchainRelay {
   readonly enabled: boolean;
+  assetBalance(token: string, account: string, source?: string): bigint;
   deposit(commitment: Hex): OnchainRelayResult;
   depositAsset(input: AssetDepositRelayInput): OnchainRelayResult;
   prepareDepositAsset(input: AssetDepositRelayInput): PreparedOnchainAction;
+  tokenDigest(token: string, source?: string): Hex;
   verifyProof(proof: ProofMeta): OnchainRelayResult;
   publishOraclePrice(input: OraclePriceRelayInput): OnchainRelayResult;
   submitIntent(record: IntentRecord): OnchainRelayResult;

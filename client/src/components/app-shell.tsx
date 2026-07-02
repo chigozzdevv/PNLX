@@ -1,20 +1,28 @@
 "use client";
 
 import { LogOut, UserRound, Wallet } from "lucide-react";
+import Image from "next/image";
+import Link from "next/link";
 import type { ReactNode } from "react";
-import { shortAddress } from "@/lib/format";
+import { formatUsd, shortAddress } from "@/lib/format";
 import type { WalletSessionController } from "@/lib/use-wallet-session";
 import type { AccountSnapshot } from "@/types/trading";
 
-const navItems = ["Trade", "Portfolio"];
+export type AppView = "trade" | "portfolio";
+
+const navItems: Array<{ href: string; id: AppView; label: string }> = [
+  { href: "/trade", id: "trade", label: "Trade" },
+  { href: "/portfolio", id: "portfolio", label: "Portfolio" },
+];
 
 interface AppShellProps {
   account: AccountSnapshot;
+  activeView: AppView;
   children: ReactNode;
   wallet: WalletSessionController;
 }
 
-export function AppShell({ account, children, wallet }: AppShellProps) {
+export function AppShell({ account, activeView, children, wallet }: AppShellProps) {
   const address = wallet.session?.address ?? account.address;
   const connected = Boolean(wallet.session);
   const connecting = wallet.status === "connecting";
@@ -22,27 +30,37 @@ export function AppShell({ account, children, wallet }: AppShellProps) {
   return (
     <div className="min-h-screen bg-[var(--surface-page)] text-[var(--text-primary)]">
       <header className="sticky top-0 z-40 border-b border-white/7 bg-[rgba(12,12,11,0.9)] backdrop-blur-xl">
-        <div className="flex min-h-[72px] items-center gap-4 px-4 md:px-5">
-          <div className="flex items-center gap-3">
-            <div className="grid size-9 place-items-center rounded-[10px] bg-[var(--accent-orange)] text-sm font-black text-black">
-              M
-            </div>
-            <span className="tracking-[0.34em] text-lg font-semibold text-white">MERKL</span>
-          </div>
+        <div className="flex min-h-[72px] min-w-0 items-center gap-3 px-3 md:gap-4 md:px-5">
+          <Link className="app-brand" href="/" aria-label="PNLX home">
+            <Image
+              alt="PNLX"
+              className="app-brand-logo"
+              height={25}
+              priority
+              src="/pnlx-logo.png"
+              width={138}
+            />
+          </Link>
 
           <nav className="hidden items-center gap-1 lg:flex">
             {navItems.map((item) => (
-              <button
-                className={`nav-item ${item === "Trade" ? "nav-item-active" : ""}`}
-                key={item}
-                type="button"
+              <Link
+                className={`nav-item ${item.id === activeView ? "nav-item-active" : ""}`}
+                href={item.href}
+                key={item.id}
               >
-                {item}
-              </button>
+                {item.label}
+              </Link>
             ))}
           </nav>
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="wallet-area ml-auto">
+            {connected ? (
+              <div className="header-balance" aria-label="Shielded USDC balance">
+                <span>USDC</span>
+                <strong>{account.shieldedUsdc === null ? "Private" : formatUsd(account.shieldedUsdc)}</strong>
+              </div>
+            ) : null}
             <button
               className={`wallet-button account-button ${connected ? "account-button-connected" : ""} ${
                 wallet.error ? "account-button-error" : ""

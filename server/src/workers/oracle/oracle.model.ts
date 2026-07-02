@@ -1,4 +1,4 @@
-import type { Hex } from "@merkl/protocol-types";
+import type { Hex } from "@pnlx/protocol-types";
 import type { CommandRunner } from "@/workers/relayer/relayer.model";
 
 export type OraclePriceSource = "hermes" | "onchain-market";

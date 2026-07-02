@@ -1,6 +1,6 @@
 [package]
 name = "position_transition"
 type = "bin"
-authors = ["Merkl"]
+authors = ["PNLX"]
 
 [dependencies]

@@ -1,12 +1,12 @@
 import { registerPendingConditionalOrdersForPosition } from "@/lib/conditional-orders";
-import { merklPost } from "@/lib/merkl-api";
+import { pnlxPost } from "@/lib/pnlx-api";
 import type { ServerAccountEvent } from "@/types/trading";
 import type { WalletSession } from "@/lib/wallet-auth";
 
-const DB_NAME = "merkl-account-encryption";
+const DB_NAME = "pnlx-account-encryption";
 const DB_VERSION = 1;
 const KEY_STORE = "keys";
-const CIPHERTEXT_PREFIX = "merkl-account-event-v1:";
+const CIPHERTEXT_PREFIX = "pnlx-account-event-v1:";
 
 interface StoredAccountKey {
   ownerCommitment: string;
@@ -24,9 +24,29 @@ interface AccountEventEnvelope {
   v: 1;
 }
 
+export type PrivateAccountEventPayload =
+  | {
+      kind: "position-opening";
+      opening: {
+        entryPrice: string;
+        fundingIndex: string;
+        margin: string;
+        marketId: string;
+        positionCommitment: `0x${string}`;
+        positionNullifier: `0x${string}`;
+        side: "long" | "short";
+        size: string;
+        sourceIntentCommitment: `0x${string}`;
+      };
+    }
+  | {
+      kind: "position-close" | "liquidation" | "residual-order";
+      [key: string]: unknown;
+    };
+
 export async function ensureAccountEncryptionKey(session: WalletSession): Promise<void> {
   const key = await getOrCreateAccountKey(session.ownerCommitment);
-  await merklPost(
+  await pnlxPost(
     "/account-keys",
     {
       algorithm: "ecdh-p256-aes-gcm",
@@ -44,17 +64,10 @@ export async function syncPrivateConditionalOrders(
   if (accountEvents.length === 0) return;
   await ensureAccountEncryptionKey(session);
   for (const event of accountEvents) {
-    const payload = await decryptAccountEvent<{
-      kind?: string;
-      opening?: {
-        marketId: string;
-        positionCommitment: `0x${string}`;
-        positionNullifier: `0x${string}`;
-        side: "long" | "short";
-        size: string;
-        sourceIntentCommitment: `0x${string}`;
-      };
-    }>(session.ownerCommitment, event.ciphertext).catch(() => undefined);
+    const payload = await decryptAccountEvent<PrivateAccountEventPayload>(
+      session.ownerCommitment,
+      event.ciphertext,
+    ).catch(() => undefined);
     if (payload?.kind !== "position-opening" || !payload.opening) continue;
     await registerPendingConditionalOrdersForPosition(session, {
       kind: "position-opening",
@@ -63,7 +76,7 @@ export async function syncPrivateConditionalOrders(
   }
 }
 
-async function decryptAccountEvent<T>(ownerCommitment: string, ciphertext: string): Promise<T> {
+export async function decryptAccountEvent<T>(ownerCommitment: string, ciphertext: string): Promise<T> {
   if (!ciphertext.startsWith(CIPHERTEXT_PREFIX)) {
     throw new Error("unsupported account event ciphertext");
   }

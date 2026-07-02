@@ -14,7 +14,7 @@
     "disclosure-verifier": "CCTNGKQIKSNWEVCQMNQYDNKMMAZSBEADDDULBHDPBCEYUFBHU2KGAVP6"
   },
   "network": "testnet",
-  "source": "merkl-testnet",
+  "source": "pnlx-testnet",
   "sourceAddress": "GDNHJPGBEPMMAINDMU3TN6V6PCDQKXWVY4FWHLMBJXPCBSCKLUYIESOC",
   "verifiers": {
     "batch-match-proof-verifier": "CDIEQTF2Z3M6AW4MJYEITFZPUNGFQ5RJIKPRGWIA7VIMUIRXHGXOBIXP",

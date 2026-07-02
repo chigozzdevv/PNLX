@@ -2,6 +2,7 @@ import { authenticatedAddress } from "@/shared/http/auth-context";
 import { json, readJson } from "@/shared/http/json";
 import type { MarketsService } from "@/features/markets/markets.service";
 import {
+  parseMarketCandles,
   parseMarket,
   parseMarketUpdate,
   parseOracleMarket,
@@ -11,8 +12,16 @@ import {
 export class MarketsController {
   constructor(private readonly markets: MarketsService) {}
 
-  list(): Response {
-    return json({ markets: this.markets.list() });
+  async list(): Promise<Response> {
+    return json({ markets: await this.markets.list() });
+  }
+
+  async ticker(): Promise<Response> {
+    return json(await this.markets.ticker());
+  }
+
+  async candles(request: Request): Promise<Response> {
+    return json(await this.markets.candles(parseMarketCandles(request)));
   }
 
   async create(request: Request): Promise<Response> {

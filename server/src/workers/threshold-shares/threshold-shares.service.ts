@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { Hex, IntentRecord, IntentShares, PositionLifecycleRecord, ResidualOrderRecord, TradeIntent } from "@merkl/protocol-types";
-import { decodeSigned, encodeSigned, fieldMerkleRoot, hashFields, recoverSecret, splitSecret } from "@merkl/crypto";
+import type { Hex, IntentRecord, IntentShares, PositionLifecycleRecord, ResidualOrderRecord, TradeIntent } from "@pnlx/protocol-types";
+import { decodeSigned, encodeSigned, fieldMerkleRoot, hashFields, recoverSecret, splitSecret } from "@pnlx/crypto";
 import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
 import type { MatchResult } from "@/workers/batch-matcher/batch-matcher.model";
 import type { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
@@ -25,7 +25,11 @@ export class ThresholdShareNodeService {
 
   accept(shares: IntentShares): void {
     if (shares.nodeId !== this.nodeId) throw new Error("share node mismatch");
-    if (this.shares.has(shares.intentCommitment)) throw new Error("share already stored");
+    const existing = this.shares.get(shares.intentCommitment);
+    if (existing) {
+      if (sameIntentShares(existing, shares)) return;
+      throw new Error("share already stored");
+    }
     this.shares.set(shares.intentCommitment, shares);
     this.save();
   }
@@ -188,10 +192,7 @@ export class ThresholdShareCommittee {
   }
 
   matchBatch(input: CommitteeMatchInput): MatchResult {
-    const recovered = [
-      ...(input.residuals ?? []).map((record) => this.#recoverResidual(record, input.batchId)),
-      ...input.records.map((record) => this.#recoverShared(record, record.batchId)),
-    ];
+    const recovered = this.recoverBatchIntents(input);
     return this.matcher.match({
       batchId: input.batchId,
       market: input.market,
@@ -199,11 +200,24 @@ export class ThresholdShareCommittee {
     });
   }
 
+  private recoverBatchIntents(input: CommitteeMatchInput): RecoveredIntent[] {
+    const recovered = [
+      ...(input.residuals ?? []).map((record) => this.#recoverResidual(record, input.batchId)),
+      ...input.records.map((record) => this.#recoverShared(record, record.batchId)),
+    ];
+    return recovered;
+  }
+
   createSettlementTranscript(
     input: CommitteeSettlementInput,
     proofs: ProofCoordinatorService,
   ): CommitteeSettlementTranscript {
-    const match = this.matchBatch(input);
+    const recovered = this.recoverBatchIntents(input);
+    const match = this.matcher.match({
+      batchId: input.batchId,
+      market: input.market,
+      intents: recovered,
+    });
     const newRoot = fieldMerkleRoot([
       ...input.positionCommitments,
       ...match.fills.map((fill) => fill.positionCommitment),
@@ -213,6 +227,8 @@ export class ThresholdShareCommittee {
       market: input.market,
       oldRoot: input.oldRoot,
       newRoot,
+      positionCommitments: input.positionCommitments,
+      intents: recovered,
       match,
     });
 
@@ -328,18 +344,29 @@ function createPositionOpenings(
   }));
 }
 
+function sameIntentShares(left: IntentShares, right: IntentShares): boolean {
+  return left.intentCommitment === right.intentCommitment &&
+    left.nodeId === right.nodeId &&
+    left.signedSize.x === right.signedSize.x &&
+    left.signedSize.y === right.signedSize.y &&
+    left.limitPrice.x === right.limitPrice.x &&
+    left.limitPrice.y === right.limitPrice.y &&
+    left.margin.x === right.margin.x &&
+    left.margin.y === right.margin.y;
+}
+
 function bigintReplacer(_key: string, value: unknown): unknown {
-  return typeof value === "bigint" ? { __merklBigInt: value.toString() } : value;
+  return typeof value === "bigint" ? { __pnlxBigInt: value.toString() } : value;
 }
 
 function bigintReviver(_key: string, value: unknown): unknown {
   if (
     value &&
     typeof value === "object" &&
-    "__merklBigInt" in value &&
-    typeof (value as { __merklBigInt: unknown }).__merklBigInt === "string"
+    "__pnlxBigInt" in value &&
+    typeof (value as { __pnlxBigInt: unknown }).__pnlxBigInt === "string"
   ) {
-    return BigInt((value as { __merklBigInt: string }).__merklBigInt);
+    return BigInt((value as { __pnlxBigInt: string }).__pnlxBigInt);
   }
   return value;
 }

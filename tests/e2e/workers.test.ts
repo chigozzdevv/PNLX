@@ -5,47 +5,44 @@ import {
   hashFields,
   intentBindingFields,
   intentOwnerCommitmentField,
-} from "@merkl/crypto";
-import { createECDH, generateKeyPairSync, sign } from "node:crypto";
+} from "@pnlx/crypto";
+import { createECDH } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PRICE_SCALE } from "@merkl/market-math";
+import { PRICE_SCALE } from "@pnlx/market-math";
 import type {
   BatchSettlement,
   Hex,
   IntentRecord,
   IntentValidityRecord,
   TradeIntent,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 import { loadEnv } from "@/config/env";
 import { BatchesService } from "@/features/batches/batches.service";
-import { encodeStellarPublicKey } from "@/features/auth/auth.service";
 import { IntentsService } from "@/features/intents/intents.service";
 import { MarketsService } from "@/features/markets/markets.service";
 import { NotesService } from "@/features/notes/notes.service";
 import { OrdersService } from "@/features/orders/orders.service";
-import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
 import {
   positionOpeningAccountEventDataCommitment,
   positionOpeningAccountEventId,
 } from "@/shared/protocol/account-event-binding";
-import { externalMatcherTranscriptHash } from "@/shared/protocol/external-matcher-transcript";
-import { matcherAttestationMessage } from "@/shared/protocol/matcher-attestation";
 import { ProtocolStore } from "@/shared/state/store";
 import { createBatchExecutor } from "@/workers/batch-executor/batch-executor.worker";
 import { createExecutor } from "@/workers/executor/executor.worker";
 import { createMatcherApp } from "@/workers/matcher/matcher.app";
-import { NilccMatcherProviderClient } from "@/workers/matcher/nilcc/matcher.service";
-import { CustomMatcherProviderClient } from "@/workers/matcher/custom/matcher.service";
-import { MpspdzMatcherProviderClient } from "@/workers/matcher/mpspdz/matcher.service";
 import { RemoteMatcherClient } from "@/workers/matcher/remote/matcher.service";
+import { MatcherService } from "@/workers/matcher/matcher.service";
 import { createMatcher } from "@/workers/matcher/matcher.worker";
 import { createFundingEngine } from "@/workers/funding-engine/funding-engine.worker";
 import { createIndexer } from "@/workers/indexer/indexer.worker";
 import { createOnchainRelay } from "@/workers/onchain/onchain.worker";
 import { OracleService } from "@/workers/oracle/oracle.service";
+import type { SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
+import { ProtocolLiquidityService } from "@/workers/protocol-liquidity/protocol-liquidity.service";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
+import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
 
 describe("support workers", () => {
   test("defaults production oracle authority to on-chain market pricing", () => {
@@ -70,12 +67,12 @@ describe("support workers", () => {
   test("preserves oracle publisher aliases while normalizing publisher addresses", () => {
     const previousSources = process.env.ORACLE_PUBLISHER_SOURCES;
     const previousAddresses = process.env.ORACLE_PUBLISHER_ADDRESSES;
-    process.env.ORACLE_PUBLISHER_SOURCES = "merkl-oracle-1,OracleTwo";
+    process.env.ORACLE_PUBLISHER_SOURCES = "pnlx-oracle-1,OracleTwo";
     process.env.ORACLE_PUBLISHER_ADDRESSES = "gpublishera,gpublisherb";
 
     try {
       const env = loadEnv();
-      expect(env.oraclePublisherSources).toEqual(["merkl-oracle-1", "OracleTwo"]);
+      expect(env.oraclePublisherSources).toEqual(["pnlx-oracle-1", "OracleTwo"]);
       expect(env.oraclePublisherAddresses).toEqual(["GPUBLISHERA", "GPUBLISHERB"]);
     } finally {
       restoreEnv("ORACLE_PUBLISHER_SOURCES", previousSources);
@@ -92,74 +89,22 @@ describe("support workers", () => {
     try {
       delete process.env.MATCHER_SERVICE_URL;
       delete process.env.MATCHER_SERVICE_TOKEN;
-      process.env.EXTERNAL_MATCHER_URL = "https://legacy-matcher.merkl.local";
+      process.env.EXTERNAL_MATCHER_URL = "https://legacy-matcher.pnlx.local";
       process.env.EXTERNAL_MATCHER_TOKEN = "legacy-token";
       const legacyEnv = loadEnv();
-      expect(legacyEnv.matcherServiceUrl).toBe("https://legacy-matcher.merkl.local");
+      expect(legacyEnv.matcherServiceUrl).toBe("https://legacy-matcher.pnlx.local");
       expect(legacyEnv.matcherServiceToken).toBe("legacy-token");
 
-      process.env.MATCHER_SERVICE_URL = "https://matcher.merkl.local";
+      process.env.MATCHER_SERVICE_URL = "https://matcher.pnlx.local";
       process.env.MATCHER_SERVICE_TOKEN = "service-token";
       const preferredEnv = loadEnv();
-      expect(preferredEnv.matcherServiceUrl).toBe("https://matcher.merkl.local");
+      expect(preferredEnv.matcherServiceUrl).toBe("https://matcher.pnlx.local");
       expect(preferredEnv.matcherServiceToken).toBe("service-token");
     } finally {
       restoreEnv("MATCHER_SERVICE_URL", previousServiceUrl);
       restoreEnv("MATCHER_SERVICE_TOKEN", previousServiceToken);
       restoreEnv("EXTERNAL_MATCHER_URL", previousLegacyUrl);
       restoreEnv("EXTERNAL_MATCHER_TOKEN", previousLegacyToken);
-    }
-  });
-
-  test("parses nilCC matcher provider configuration", () => {
-    const previousBackend = process.env.MATCHER_PROVIDER;
-    const previousWorkload = process.env.NILCC_WORKLOAD_URL;
-    const previousContains = process.env.NILCC_ATTESTATION_CONTAINS;
-    const previousHash = process.env.NILCC_ATTESTATION_REPORT_SHA256;
-    process.env.MATCHER_PROVIDER = "nilcc";
-    process.env.NILCC_WORKLOAD_URL = "https://nilcc.merkl.local";
-    process.env.NILCC_ATTESTATION_CONTAINS = "merkl-matcher-provider-v1,sev-snp";
-    process.env.NILCC_ATTESTATION_REPORT_SHA256 = "0xabc123";
-
-    try {
-      const env = loadEnv();
-      expect(env.matcherProvider).toBe("nilcc");
-      expect(env.nilccWorkloadUrl).toBe("https://nilcc.merkl.local");
-      expect(env.nilccAttestationContains).toEqual(["merkl-matcher-provider-v1", "sev-snp"]);
-      expect(env.nilccAttestationReportSha256).toBe("0xabc123");
-    } finally {
-      restoreEnv("MATCHER_PROVIDER", previousBackend);
-      restoreEnv("NILCC_WORKLOAD_URL", previousWorkload);
-      restoreEnv("NILCC_ATTESTATION_CONTAINS", previousContains);
-      restoreEnv("NILCC_ATTESTATION_REPORT_SHA256", previousHash);
-    }
-  });
-
-  test("parses MP-SPDZ matcher provider configuration", () => {
-    const previousBackend = process.env.MATCHER_PROVIDER;
-    const previousCoordinator = process.env.MPSPDZ_COORDINATOR_URL;
-    const previousParties = process.env.MPSPDZ_PARTY_URLS;
-    const previousProtocol = process.env.MPSPDZ_PROTOCOL;
-    process.env.MATCHER_PROVIDER = "mpspdz";
-    process.env.MPSPDZ_COORDINATOR_URL = "https://mpspdz.merkl.local";
-    process.env.MPSPDZ_PARTY_URLS = "https://party-0.merkl.local,https://party-1.merkl.local,https://party-2.merkl.local";
-    process.env.MPSPDZ_PROTOCOL = "replicated-ring";
-
-    try {
-      const env = loadEnv();
-      expect(env.matcherProvider).toBe("mpspdz");
-      expect(env.mpspdzCoordinatorUrl).toBe("https://mpspdz.merkl.local");
-      expect(env.mpspdzPartyUrls).toEqual([
-        "https://party-0.merkl.local",
-        "https://party-1.merkl.local",
-        "https://party-2.merkl.local",
-      ]);
-      expect(env.mpspdzProtocol).toBe("replicated-ring");
-    } finally {
-      restoreEnv("MATCHER_PROVIDER", previousBackend);
-      restoreEnv("MPSPDZ_COORDINATOR_URL", previousCoordinator);
-      restoreEnv("MPSPDZ_PARTY_URLS", previousParties);
-      restoreEnv("MPSPDZ_PROTOCOL", previousProtocol);
     }
   });
 
@@ -183,7 +128,7 @@ describe("support workers", () => {
   });
 
   test("persists relay history across relayer restarts", () => {
-    const dir = mkdtempSync(join(tmpdir(), "merkl-relays-"));
+    const dir = mkdtempSync(join(tmpdir(), "pnlx-relays-"));
     const historyPath = join(dir, "relay-state.json");
     const first = createRelayer({ historyPath });
     const commitment = hashFields("note", ["persistent-relay"]);
@@ -273,7 +218,7 @@ describe("support workers", () => {
   });
 
   test("persists protocol state across executor restarts", () => {
-    const dir = mkdtempSync(join(tmpdir(), "merkl-store-"));
+    const dir = mkdtempSync(join(tmpdir(), "pnlx-store-"));
     const storePath = join(dir, "protocol-store.json");
     const market = {
       marketId: "btc-usd-perp",
@@ -325,6 +270,25 @@ describe("support workers", () => {
         privateMatchingRequired: true,
       }),
     ).toThrow("private matching requires MATCHING_BACKEND=external-blind");
+  });
+
+  test("threshold share storage allows identical retried shares", () => {
+    const shareStoreDir = join(mkdtempSync(join(tmpdir(), "pnlx-share-retry-")), "shares");
+    const committee = new ThresholdShareCommittee({
+      nodeIds: ["node-a", "node-b", "node-c"],
+      shareStoreDir,
+      threshold: 2,
+    });
+    const intent = matchedTradeIntent("share-retry", "long", {
+      batchId: "share-retry-batch",
+      limitPrice: 50_000n * PRICE_SCALE,
+      marketId: "btc-usd-perp",
+    });
+    const intentCommitment = commitIntent(intent);
+    const shareSets = committee.shareIntent(intent, intentCommitment);
+
+    committee.distribute(shareSets);
+    expect(() => committee.distribute(shareSets)).not.toThrow();
   });
 
   test("commits externally proven blind settlement transcripts without recovering shares", () => {
@@ -495,71 +459,7 @@ describe("support workers", () => {
     expect(executor.store.accountEvents.size).toBe(2);
   });
 
-  test("requires authorized matcher committee attestation for external blind settlements", () => {
-    const fixture = externalBatchFixture("matcher-attestation-required");
-    const signer = matcherSigner();
-    fixture.executor.store.recordProof(fixture.settlement.proof);
-    const service = new BatchesService(
-      fixture.executor,
-      undefined,
-      [],
-      false,
-      {
-        matcherCommitteeAddresses: [signer.address],
-        matcherCommitteeRequired: true,
-        matcherCommitteeThreshold: 1,
-      },
-    );
-
-    expect(() =>
-      service.commitExternal({
-        accountEvents: fixture.accountEvents,
-        settlement: fixture.settlement,
-        positionOpenings: fixture.positionOpenings,
-      }),
-    ).toThrow("external matcher attestation is required");
-    expect(fixture.executor.store.settlements.size).toBe(0);
-  });
-
-  test("accepts external blind settlements attested by matcher committee quorum", () => {
-    const fixture = externalBatchFixture("matcher-attestation-ok");
-    const signerA = matcherSigner();
-    const signerB = matcherSigner();
-    const outsider = matcherSigner();
-    fixture.executor.store.recordProof(fixture.settlement.proof);
-    const service = new BatchesService(
-      fixture.executor,
-      undefined,
-      [],
-      false,
-      {
-        matcherCommitteeAddresses: [signerA.address, signerB.address],
-        matcherCommitteeRequired: true,
-        matcherCommitteeThreshold: 2,
-      },
-    );
-
-    expect(() =>
-      service.commitExternal({
-        accountEvents: fixture.accountEvents,
-        attestation: matcherAttestation(fixture, [signerA, outsider]),
-        settlement: fixture.settlement,
-        positionOpenings: fixture.positionOpenings,
-      }),
-    ).toThrow("external matcher attestation threshold not met");
-
-    const result = service.commitExternal({
-      accountEvents: fixture.accountEvents,
-      attestation: matcherAttestation(fixture, [signerA, signerB]),
-      settlement: fixture.settlement,
-      positionOpenings: fixture.positionOpenings,
-    });
-
-    expect(result.settlementDigest).toBe(fixture.settlement.settlementDigest);
-    expect(fixture.executor.store.positionLifecycle.size).toBe(2);
-  });
-
-  test("accepts worker-produced external matcher transcripts through attested batch ingestion", () => {
+  test("accepts worker-produced RISC0 matcher transcripts through batch ingestion", () => {
     const executor = createExecutor({ matchingBackend: "external-blind" });
     const market = {
       marketId: "btc-usd-perp",
@@ -569,7 +469,6 @@ describe("support workers", () => {
       maintenanceMarginRate: 50_000n,
       fundingIndex: 0n,
     };
-    const signer = matcherSigner();
     executor.addMarket(market);
     submitBackedIntent(executor, matchedTradeIntent("worker-produced-long", "long", {
       batchId: "worker-produced-batch",
@@ -583,12 +482,6 @@ describe("support workers", () => {
     }));
     const matcher = createMatcher(executor, {
       accountEventEncryptor: (payload) => `base64:test-encrypted:${payload.kind}`,
-      signers: [
-        {
-          address: signer.address,
-          sign: (message) => sign(null, Buffer.from(message), signer.keyPair.privateKey).toString("base64"),
-        },
-      ],
     });
     const service = new BatchesService(
       executor,
@@ -612,11 +505,7 @@ describe("support workers", () => {
       } as never,
       [],
       false,
-      {
-        matcherCommitteeAddresses: [signer.address],
-        matcherCommitteeRequired: true,
-        matcherCommitteeThreshold: 1,
-      },
+      { settlementsOnchainRequired: true },
     );
 
     const transcript = matcher.createSettlementTranscript({
@@ -625,7 +514,7 @@ describe("support workers", () => {
     });
     const result = service.commitExternal(transcript);
 
-    expect(transcript.attestation?.transcriptHash).toBe(externalMatcherTranscriptHash(transcript));
+    expect(transcript.settlement.proof.proofSystem).toBe("risc0-groth16");
     expect(result.settlementDigest).toBe(transcript.settlement.settlementDigest);
     expect(result.aggregateVolume).toBe(2n);
     expect(executor.store.positionLifecycle.size).toBe(2);
@@ -643,7 +532,6 @@ describe("support workers", () => {
       maintenanceMarginRate: 50_000n,
       fundingIndex: 9n,
     };
-    const signer = matcherSigner();
     executor.addMarket(market);
     const long = submitBackedIntent(executor, matchedTradeIntent("encrypted-worker-long", "long", {
       batchId: "encrypted-worker-batch",
@@ -665,14 +553,7 @@ describe("support workers", () => {
         updatedAt: now,
       });
     }
-    const matcher = createMatcher(executor, {
-      signers: [
-        {
-          address: signer.address,
-          sign: (message) => sign(null, Buffer.from(message), signer.keyPair.privateKey).toString("base64"),
-        },
-      ],
-    });
+    const matcher = createMatcher(executor);
 
     const transcript = matcher.createSettlementTranscript({
       batchId: "encrypted-worker-batch",
@@ -681,17 +562,73 @@ describe("support workers", () => {
 
     expect(transcript.accountEvents).toHaveLength(2);
     expect(transcript.accountEvents.every((event) =>
-      event.ciphertext.startsWith("merkl-account-event-v1:")
+      event.ciphertext.startsWith("pnlx-account-event-v1:")
     )).toBe(true);
     expect(JSON.stringify(transcript.accountEvents)).not.toContain("positionNullifier");
-    expect(transcript.attestation?.transcriptHash).toBe(externalMatcherTranscriptHash(transcript));
+    expect(transcript.settlement.proof.proofSystem).toBe("risc0-groth16");
+  });
+
+  test("worker-produced matcher carries forward open market intents across batches", () => {
+    const executor = createExecutor({ matchingBackend: "external-blind" });
+    const market = {
+      marketId: "btc-usd-perp",
+      oraclePrice: 50_000n * PRICE_SCALE,
+      maxLeverage: 10n,
+      initialMarginRate: 100_000n,
+      maintenanceMarginRate: 50_000n,
+      fundingIndex: 0n,
+    };
+    executor.addMarket(market);
+
+    const oldLong = submitBackedIntent(executor, matchedTradeIntent("stale-batch-long", "long", {
+      batchId: "old-open-batch",
+      limitPrice: 50_500n * PRICE_SCALE,
+      marketId: market.marketId,
+    }));
+    const oldShort = submitBackedIntent(executor, matchedTradeIntent("stale-batch-short", "short", {
+      batchId: "old-open-batch",
+      limitPrice: 49_500n * PRICE_SCALE,
+      marketId: market.marketId,
+    }));
+    const currentLong = submitBackedIntent(executor, matchedTradeIntent("current-batch-long", "long", {
+      batchId: "current-open-batch",
+      limitPrice: 50_500n * PRICE_SCALE,
+      marketId: market.marketId,
+    }));
+    const currentShort = submitBackedIntent(executor, matchedTradeIntent("current-batch-short", "short", {
+      batchId: "current-open-batch",
+      limitPrice: 49_500n * PRICE_SCALE,
+      marketId: market.marketId,
+    }));
+    for (const record of [oldLong, oldShort, currentLong, currentShort]) {
+      executor.store.upsertAccountEncryptionKey({
+        algorithm: "ecdh-p256-aes-gcm",
+        createdAt: 1,
+        ownerCommitment: record.ownerCommitment,
+        publicKey: rawP256PublicKey(),
+        updatedAt: 1,
+      });
+    }
+
+    const transcript = createProoflessMatcher(executor).createSettlementTranscript({
+      batchId: "current-open-batch",
+      marketId: market.marketId,
+    });
+
+    expect(transcript.settlement.fillCount).toBe(4);
+    expect(transcript.positionOpenings.map((opening) => opening.sourceIntentCommitment).sort()).toEqual([
+      oldLong.intentCommitment,
+      oldShort.intentCommitment,
+      currentLong.intentCommitment,
+      currentShort.intentCommitment,
+    ].sort());
   });
 
   test("remote matcher client requests a separate matcher service", async () => {
     const fixture = externalBatchFixture("remote-matcher-client");
     const previousFetch = globalThis.fetch;
     globalThis.fetch = (async (url, init) => {
-      expect(String(url)).toBe("https://matcher.merkl.local/match/settlement");
+      expect(String(url)).toBe("https://matcher.pnlx.local/match/settlement");
       expect(init?.method).toBe("POST");
       expect((init?.headers as Record<string, string>).authorization).toBe("Bearer remote-secret");
       return new Response(body({
@@ -708,7 +645,7 @@ describe("support workers", () => {
     try {
       const client = new RemoteMatcherClient({
         token: "remote-secret",
-        url: "https://matcher.merkl.local",
+        url: "https://matcher.pnlx.local",
       });
       const transcript = await client.createSettlementTranscript({
         batchId: fixture.settlement.batchId,
@@ -722,215 +659,8 @@ describe("support workers", () => {
     }
   });
 
-  test("custom matcher provider client requests a separate provider endpoint", async () => {
-    const fixture = externalBatchFixture("custom-compute-client");
-    const computeTranscript = committeeTranscript(fixture);
-    const previousFetch = globalThis.fetch;
-    globalThis.fetch = (async (url, init) => {
-      expect(String(url)).toBe("https://compute.merkl.local/compute/settlement");
-      expect(init?.method).toBe("POST");
-      expect((init?.headers as Record<string, string>).authorization).toBe("Bearer compute-secret");
-      const requestBody = JSON.parse(String(init?.body));
-      expect(requestBody.market.oraclePrice).toBe((50_000n * PRICE_SCALE).toString());
-      return new Response(body(computeTranscript), {
-        headers: { "content-type": "application/json" },
-        status: 201,
-      });
-    }) as typeof fetch;
-
-    try {
-      const client = new CustomMatcherProviderClient({
-        token: "compute-secret",
-        url: "https://compute.merkl.local",
-      });
-      const transcript = await client.createSettlementTranscript({
-        batchId: fixture.settlement.batchId,
-        market: fixture.executor.store.markets.get(fixture.settlement.marketId)!,
-        oldRoot: fixture.executor.store.positionMembershipRoot(),
-        positionCommitments: [],
-        records: [],
-        residuals: [],
-      }, {} as never);
-
-      expect(transcript.settlement.settlementDigest).toBe(fixture.settlement.settlementDigest);
-      expect(transcript.positionEvents).toHaveLength(2);
-      expect(transcript.positionEvents[0].margin).toBe(10_000n);
-    } finally {
-      globalThis.fetch = previousFetch;
-    }
-  });
-
-  test("MP-SPDZ matcher provider client requests coordinator with party metadata", async () => {
-    const fixture = externalBatchFixture("mpspdz-compute-client");
-    const computeTranscript = committeeTranscript(fixture);
-    const previousFetch = globalThis.fetch;
-    globalThis.fetch = (async (url, init) => {
-      expect(String(url)).toBe("https://mpspdz.merkl.local/compute/settlement");
-      expect(init?.method).toBe("POST");
-      const headers = init?.headers as Record<string, string>;
-      expect(headers.authorization).toBe("Bearer mpspdz-secret");
-      expect(headers["x-merkl-mpspdz-party-count"]).toBe("3");
-      expect(headers["x-merkl-mpspdz-protocol"]).toBe("replicated-ring");
-      const requestBody = JSON.parse(String(init?.body));
-      expect(requestBody.mpspdz.protocol).toBe("replicated-ring");
-      expect(requestBody.mpspdz.partyUrls).toEqual([
-        "https://party-0.merkl.local",
-        "https://party-1.merkl.local",
-        "https://party-2.merkl.local",
-      ]);
-      expect(requestBody.market.oraclePrice).toBe((50_000n * PRICE_SCALE).toString());
-      return new Response(body(computeTranscript), {
-        headers: { "content-type": "application/json" },
-        status: 201,
-      });
-    }) as typeof fetch;
-
-    try {
-      const client = new MpspdzMatcherProviderClient({
-        coordinatorUrl: "https://mpspdz.merkl.local",
-        partyUrls: [
-          "https://party-0.merkl.local",
-          "https://party-1.merkl.local",
-          "https://party-2.merkl.local",
-        ],
-        protocol: "replicated-ring",
-        token: "mpspdz-secret",
-      });
-      const transcript = await client.createSettlementTranscript({
-        batchId: fixture.settlement.batchId,
-        market: fixture.executor.store.markets.get(fixture.settlement.marketId)!,
-        oldRoot: fixture.executor.store.positionMembershipRoot(),
-        positionCommitments: [],
-        records: [],
-        residuals: [],
-      }, {} as never);
-
-      expect(transcript.settlement.settlementDigest).toBe(fixture.settlement.settlementDigest);
-      expect(transcript.positionEvents).toHaveLength(2);
-      expect(transcript.positionEvents[0].margin).toBe(10_000n);
-    } finally {
-      globalThis.fetch = previousFetch;
-    }
-  });
-
-  test("nilCC matcher provider client verifies workload attestation before settlement", async () => {
-    const fixture = externalBatchFixture("nilcc-matcher-provider-client");
-    const computeTranscript = committeeTranscript(fixture);
-    const calls: string[] = [];
-    const previousFetch = globalThis.fetch;
-    globalThis.fetch = (async (url, init) => {
-      calls.push(String(url));
-      if (String(url) === "https://nilcc.merkl.local/nilcc/api/v2/report") {
-        expect(init?.method).toBe("GET");
-        expect((init?.headers as Record<string, string>).authorization).toBe("Bearer attest-secret");
-        return new Response("measurement:merkl-matcher-provider-v1", { status: 200 });
-      }
-
-      expect(String(url)).toBe("https://nilcc.merkl.local/compute/settlement");
-      expect(init?.method).toBe("POST");
-      expect((init?.headers as Record<string, string>).authorization).toBe("Bearer compute-secret");
-      return new Response(body(computeTranscript), {
-        headers: { "content-type": "application/json" },
-        status: 201,
-      });
-    }) as typeof fetch;
-
-    try {
-      const client = new NilccMatcherProviderClient({
-        attestationContains: ["merkl-matcher-provider-v1"],
-        attestationRequired: true,
-        attestationToken: "attest-secret",
-        token: "compute-secret",
-        workloadUrl: "https://nilcc.merkl.local",
-      });
-      const transcript = await client.createSettlementTranscript({
-        batchId: fixture.settlement.batchId,
-        market: fixture.executor.store.markets.get(fixture.settlement.marketId)!,
-        oldRoot: fixture.executor.store.positionMembershipRoot(),
-        positionCommitments: [],
-        records: [],
-        residuals: [],
-      }, {} as never);
-
-      expect(transcript.settlement.settlementDigest).toBe(fixture.settlement.settlementDigest);
-      expect(calls).toEqual([
-        "https://nilcc.merkl.local/nilcc/api/v2/report",
-        "https://nilcc.merkl.local/compute/settlement",
-      ]);
-    } finally {
-      globalThis.fetch = previousFetch;
-    }
-  });
-
-  test("nilCC matcher provider client rejects unpinned attestations", async () => {
-    const previousFetch = globalThis.fetch;
-    globalThis.fetch = (async () =>
-      new Response("measurement:other-workload", { status: 200 })) as typeof fetch;
-
-    try {
-      const client = new NilccMatcherProviderClient({
-        attestationContains: ["merkl-matcher-provider-v1"],
-        attestationRequired: true,
-        workloadUrl: "https://nilcc.merkl.local",
-      });
-
-      await expect(client.createSettlementTranscript({} as never, {} as never)).rejects.toThrow(
-        "nilCC attestation report does not match pinned workload identity",
-      );
-    } finally {
-      globalThis.fetch = previousFetch;
-    }
-  });
-
-  test("private matcher app requires a deployable matcher provider", () => {
-    expect(() =>
-      createMatcherApp({
-        provider: "embedded",
-        privateMatchingRequired: true,
-      }),
-    ).toThrow("MATCHER_PROVIDER=custom, mpspdz, or nilcc is required for private matcher service");
-
-    expect(() =>
-      createMatcherApp({
-        provider: "custom",
-        privateMatchingRequired: true,
-      }),
-    ).toThrow("MATCHER_PROVIDER_URL is required for custom matcher provider");
-
-    expect(() =>
-      createMatcherApp({
-        provider: "mpspdz",
-        privateMatchingRequired: true,
-      }),
-    ).toThrow("MPSPDZ_COORDINATOR_URL is required for MP-SPDZ matcher provider");
-
-    expect(() =>
-      createMatcherApp({
-        provider: "mpspdz",
-        mpspdzCoordinatorUrl: "https://mpspdz.merkl.local",
-        mpspdzPartyUrls: ["https://party-0.merkl.local", "https://party-1.merkl.local"],
-        privateMatchingRequired: true,
-      }),
-    ).toThrow("MPSPDZ_PARTY_URLS must include at least 3 party URLs for MP-SPDZ matcher provider");
-
-    expect(() =>
-      createMatcherApp({
-        provider: "nilcc",
-        privateMatchingRequired: true,
-      }),
-    ).toThrow("NILCC_WORKLOAD_URL is required for nilCC matcher provider");
-
-    expect(() =>
-      createMatcherApp({
-        provider: "nilcc",
-        nilccWorkloadUrl: "https://nilcc.merkl.local",
-        privateMatchingRequired: true,
-      }),
-    ).toThrow("NILCC_ATTESTATION_REPORT_SHA256 or NILCC_ATTESTATION_CONTAINS is required for nilCC matcher provider");
-  });
-
   test("matcher app produces transcripts from a separate persisted matcher process view", async () => {
-    const storePath = join(mkdtempSync(join(tmpdir(), "merkl-remote-matcher-")), "protocol-store.json");
+    const storePath = join(mkdtempSync(join(tmpdir(), "pnlx-remote-matcher-")), "protocol-store.json");
     const executor = createExecutor({ matchingBackend: "external-blind", storePath });
     const market = {
       marketId: "btc-usd-perp",
@@ -970,7 +700,7 @@ describe("support workers", () => {
     const response = await matcherApp.handle(
       new Request("http://matcher.local/match/settlement", {
         body: body({
-          batchId: "remote-app-batch",
+          batchId: "remote-app-input",
           marketId: market.marketId,
         }),
         headers: {
@@ -986,209 +716,6 @@ describe("support workers", () => {
     expect(JSON.stringify(transcript.accountEvents)).not.toContain("positionNullifier");
   });
 
-  test("private matcher app delegates settlement compute to custom matcher provider", async () => {
-    const storePath = join(mkdtempSync(join(tmpdir(), "merkl-custom-")), "protocol-store.json");
-    const executor = createExecutor({ matchingBackend: "external-blind", storePath });
-    const market = {
-      marketId: "btc-usd-perp",
-      oraclePrice: 50_000n * PRICE_SCALE,
-      maxLeverage: 10n,
-      initialMarginRate: 100_000n,
-      maintenanceMarginRate: 50_000n,
-      fundingIndex: 0n,
-    };
-    executor.addMarket(market);
-    const long = intentRecord("custom-long", market.marketId, executor.store.marginMembershipRoot());
-    const short = intentRecord("custom-short", market.marketId, executor.store.marginMembershipRoot());
-    executor.store.recordProof(long.proof);
-    executor.store.recordProof(short.proof);
-    executor.store.addIntent(long);
-    executor.store.addIntent(short);
-    for (const record of [long, short]) {
-      executor.store.upsertAccountEncryptionKey({
-        algorithm: "ecdh-p256-aes-gcm",
-        createdAt: 1,
-        ownerCommitment: record.ownerCommitment,
-        publicKey: rawP256PublicKey(),
-        updatedAt: 1,
-      });
-    }
-    const settlement = externalSettlement({
-      batchId: "custom-batch",
-      marketId: market.marketId,
-      oldRoot: executor.store.positionMembershipRoot(),
-      newCommitments: [
-        hashFields("position", ["custom-long"]),
-        hashFields("position", ["custom-short"]),
-      ],
-      orderUpdates: [
-        { intentCommitment: long.intentCommitment, status: "filled" as const },
-        { intentCommitment: short.intentCommitment, status: "filled" as const },
-      ],
-      spentNullifiers: [long.noteNullifier, short.noteNullifier],
-      store: executor.store,
-    });
-    const computeTranscript = committeeTranscript({
-      executor,
-      positionOpenings: [
-        positionOpening(settlement, long, settlement.newCommitments[0]),
-        positionOpening(settlement, short, settlement.newCommitments[1]),
-      ],
-      settlement,
-    });
-    const previousFetch = globalThis.fetch;
-    globalThis.fetch = (async (url, init) => {
-      expect(String(url)).toBe("https://compute.merkl.local/compute/settlement");
-      expect((init?.headers as Record<string, string>).authorization).toBe("Bearer compute-token");
-      const requestBody = JSON.parse(String(init?.body));
-      expect(requestBody.records).toHaveLength(2);
-      return new Response(body(computeTranscript), {
-        headers: { "content-type": "application/json" },
-        status: 201,
-      });
-    }) as typeof fetch;
-
-    try {
-      const matcherApp = createMatcherApp({
-        provider: "custom",
-        providerToken: "compute-token",
-        providerUrl: "https://compute.merkl.local",
-        privateMatchingRequired: true,
-        storePath,
-        token: "matcher-token",
-      });
-      const response = await matcherApp.handle(
-        new Request("http://matcher.local/match/settlement", {
-          body: body({
-            batchId: "custom-batch",
-            marketId: market.marketId,
-          }),
-          headers: {
-            authorization: "Bearer matcher-token",
-            "content-type": "application/json",
-          },
-          method: "POST",
-        }),
-      );
-
-      expect(response.status).toBe(201);
-      const transcript = (await response.json()) as Record<string, unknown>;
-      expect((transcript.accountEvents as unknown[])).toHaveLength(2);
-      expect(JSON.stringify(transcript.accountEvents)).not.toContain("positionNullifier");
-      expect((transcript.settlement as Record<string, unknown>).settlementDigest).toBe(settlement.settlementDigest);
-    } finally {
-      globalThis.fetch = previousFetch;
-    }
-  });
-
-  test("private matcher app delegates settlement compute to MP-SPDZ matcher provider", async () => {
-    const storePath = join(mkdtempSync(join(tmpdir(), "merkl-mpspdz-")), "protocol-store.json");
-    const executor = createExecutor({ matchingBackend: "external-blind", storePath });
-    const market = {
-      marketId: "btc-usd-perp",
-      oraclePrice: 50_000n * PRICE_SCALE,
-      maxLeverage: 10n,
-      initialMarginRate: 100_000n,
-      maintenanceMarginRate: 50_000n,
-      fundingIndex: 0n,
-    };
-    executor.addMarket(market);
-    const long = intentRecord("mpspdz-long", market.marketId, executor.store.marginMembershipRoot());
-    const short = intentRecord("mpspdz-short", market.marketId, executor.store.marginMembershipRoot());
-    executor.store.recordProof(long.proof);
-    executor.store.recordProof(short.proof);
-    executor.store.addIntent(long);
-    executor.store.addIntent(short);
-    for (const record of [long, short]) {
-      executor.store.upsertAccountEncryptionKey({
-        algorithm: "ecdh-p256-aes-gcm",
-        createdAt: 1,
-        ownerCommitment: record.ownerCommitment,
-        publicKey: rawP256PublicKey(),
-        updatedAt: 1,
-      });
-    }
-    const settlement = externalSettlement({
-      batchId: "mpspdz-batch",
-      marketId: market.marketId,
-      oldRoot: executor.store.positionMembershipRoot(),
-      newCommitments: [
-        hashFields("position", ["mpspdz-long"]),
-        hashFields("position", ["mpspdz-short"]),
-      ],
-      orderUpdates: [
-        { intentCommitment: long.intentCommitment, status: "filled" as const },
-        { intentCommitment: short.intentCommitment, status: "filled" as const },
-      ],
-      spentNullifiers: [long.noteNullifier, short.noteNullifier],
-      store: executor.store,
-    });
-    const positionOpenings = [
-      positionOpening(settlement, long, settlement.newCommitments[0]),
-      positionOpening(settlement, short, settlement.newCommitments[1]),
-    ];
-    const computeTranscript = {
-      accountEvents: accountEventsForOpenings(positionOpenings),
-      positionOpenings,
-      residualOrders: [],
-      settlement,
-    };
-    const previousFetch = globalThis.fetch;
-    globalThis.fetch = (async (url, init) => {
-      expect(String(url)).toBe("https://mpspdz.merkl.local/compute/settlement");
-      const headers = init?.headers as Record<string, string>;
-      expect(headers.authorization).toBe("Bearer mpspdz-token");
-      expect(headers["x-merkl-mpspdz-party-count"]).toBe("3");
-      const requestBody = JSON.parse(String(init?.body));
-      expect(requestBody.records).toHaveLength(2);
-      expect(requestBody.mpspdz.partyUrls).toHaveLength(3);
-      expect(requestBody.accountEncryptionKeys).toHaveLength(2);
-      return new Response(body(computeTranscript), {
-        headers: { "content-type": "application/json" },
-        status: 201,
-      });
-    }) as typeof fetch;
-
-    try {
-      const matcherApp = createMatcherApp({
-        provider: "mpspdz",
-        providerToken: "mpspdz-token",
-        mpspdzCoordinatorUrl: "https://mpspdz.merkl.local",
-        mpspdzPartyUrls: [
-          "https://party-0.merkl.local",
-          "https://party-1.merkl.local",
-          "https://party-2.merkl.local",
-        ],
-        mpspdzProtocol: "replicated-ring",
-        privateMatchingRequired: true,
-        storePath,
-        token: "matcher-token",
-      });
-      const response = await matcherApp.handle(
-        new Request("http://matcher.local/match/settlement", {
-          body: body({
-            batchId: "mpspdz-batch",
-            marketId: market.marketId,
-          }),
-          headers: {
-            authorization: "Bearer matcher-token",
-            "content-type": "application/json",
-          },
-          method: "POST",
-        }),
-      );
-
-      expect(response.status).toBe(201);
-      const transcript = (await response.json()) as Record<string, unknown>;
-      expect((transcript.accountEvents as unknown[])).toHaveLength(2);
-      expect(transcript).not.toHaveProperty("positionEvents");
-      expect(JSON.stringify(transcript.accountEvents)).not.toContain("positionNullifier");
-      expect((transcript.settlement as Record<string, unknown>).settlementDigest).toBe(settlement.settlementDigest);
-    } finally {
-      globalThis.fetch = previousFetch;
-    }
-  });
-
   test("batch executor automatically settles crossed private orders through matcher service", async () => {
     const executor = createExecutor({ matchingBackend: "external-blind" });
     const market = {
@@ -1201,12 +728,12 @@ describe("support workers", () => {
     };
     executor.addMarket(market);
     const long = submitBackedIntent(executor, matchedTradeIntent("batch-executor-long", "long", {
-      batchId: "batch-executor-input",
+      batchId: "runner-btc-usd-perp-1234",
       limitPrice: 50_500n * PRICE_SCALE,
       marketId: market.marketId,
     }));
     const short = submitBackedIntent(executor, matchedTradeIntent("batch-executor-short", "short", {
-      batchId: "batch-executor-input",
+      batchId: "runner-btc-usd-perp-1234",
       limitPrice: 49_500n * PRICE_SCALE,
       marketId: market.marketId,
     }));
@@ -1262,6 +789,60 @@ describe("support workers", () => {
     expect(executor.store.orderLifecycle.get(short.intentCommitment)?.status).toBe("filled");
   });
 
+  test("batch executor commits locally when optional on-chain settlement relay fails", async () => {
+    const executor = createExecutor({ matchingBackend: "external-blind" });
+    const market = {
+      marketId: "btc-usd-perp",
+      oraclePrice: 50_000n * PRICE_SCALE,
+      maxLeverage: 10n,
+      initialMarginRate: 100_000n,
+      maintenanceMarginRate: 50_000n,
+      fundingIndex: 0n,
+    };
+    executor.addMarket(market);
+    const long = submitBackedIntent(executor, matchedTradeIntent("optional-relay-long", "long", {
+      batchId: "optional-relay-batch",
+      limitPrice: 50_500n * PRICE_SCALE,
+      marketId: market.marketId,
+    }));
+    const short = submitBackedIntent(executor, matchedTradeIntent("optional-relay-short", "short", {
+      batchId: "optional-relay-batch",
+      limitPrice: 49_500n * PRICE_SCALE,
+      marketId: market.marketId,
+    }));
+    for (const record of [long, short]) {
+      executor.store.upsertAccountEncryptionKey({
+        algorithm: "ecdh-p256-aes-gcm",
+        createdAt: 1,
+        ownerCommitment: record.ownerCommitment,
+        publicKey: rawP256PublicKey(),
+        updatedAt: 1,
+      });
+    }
+    const batchExecutor = createBatchExecutor(
+      executor,
+      createProoflessMatcher(executor),
+      {
+        batchIdPrefix: "runner",
+        intervalMs: 1000,
+        settlementsOnchainRequired: false,
+      },
+      {
+        settleBatch() {
+          throw new Error("stellar relay failed: HostError: Error(WasmVm, InvalidAction)");
+        },
+      } as never,
+    );
+
+    const result = await batchExecutor.runOnce({ now: 2468 });
+
+    expect(result.results[0].record.status).toBe("settled");
+    expect(result.results[0].record.fillCount).toBe(2);
+    expect(executor.store.settlements.size).toBe(1);
+    expect(executor.store.orderLifecycle.get(long.intentCommitment)?.status).toBe("filled");
+    expect(executor.store.orderLifecycle.get(short.intentCommitment)?.status).toBe("filled");
+  });
+
   test("batch executor records skipped runs without mutating settlement state", async () => {
     const executor = createExecutor({ matchingBackend: "external-blind" });
     const market = {
@@ -1274,7 +855,7 @@ describe("support workers", () => {
     };
     executor.addMarket(market);
     const long = submitBackedIntent(executor, matchedTradeIntent("batch-executor-skip-long", "long", {
-      batchId: "batch-executor-skip-input",
+      batchId: "runner-btc-usd-perp-5678",
       limitPrice: 49_000n * PRICE_SCALE,
       marketId: market.marketId,
     }));
@@ -1287,7 +868,7 @@ describe("support workers", () => {
     });
     const batchExecutor = createBatchExecutor(
       executor,
-      createMatcher(executor),
+      createProoflessMatcher(executor),
       {
         batchIdPrefix: "runner",
         intervalMs: 1000,
@@ -1305,35 +886,68 @@ describe("support workers", () => {
     expect(executor.store.orderLifecycle.get(long.intentCommitment)?.status).toBe("open");
   });
 
-  test("rejects external matcher attestations when indexed transcript is tampered", () => {
-    const fixture = externalBatchFixture("matcher-attestation-tamper");
-    const signer = matcherSigner();
-    fixture.executor.store.recordProof(fixture.settlement.proof);
-    const service = new BatchesService(
-      fixture.executor,
-      undefined,
-      [],
-      false,
+  test("batch executor fills market-style orders against protocol liquidity", async () => {
+    const executor = createExecutor({ matchingBackend: "external-blind" });
+    const market = {
+      marketId: "btc-usd-perp",
+      oraclePrice: 50_000n * PRICE_SCALE,
+      maxLeverage: 10n,
+      initialMarginRate: 100_000n,
+      maintenanceMarginRate: 50_000n,
+      fundingIndex: 0n,
+    };
+    executor.addMarket(market);
+    const userLong = submitBackedIntent(executor, matchedTradeIntent("protocol-liquidity-user-long", "long", {
+      batchId: "ui-protocol-liquidity-long",
+      limitPrice: 50_250n * PRICE_SCALE,
+      marketId: market.marketId,
+    }));
+    executor.store.upsertAccountEncryptionKey({
+      algorithm: "ecdh-p256-aes-gcm",
+      createdAt: 1,
+      ownerCommitment: userLong.ownerCommitment,
+      publicKey: rawP256PublicKey(),
+      updatedAt: 1,
+    });
+
+    const protocolLiquidity = new ProtocolLiquidityService(executor, {
+      proveIntentValidity(input: { intent: TradeIntent }) {
+        return intentValidity(executor, input.intent);
+      },
+    } as never, {
+      enabled: true,
+      maxNotional: 50_000n,
+      owner: "pnlx-protocol-liquidity-test",
+      publicKey: rawP256PublicKey(),
+      quoteSpreadBps: 10n,
+      tokenDigest: digestToFieldHex("asset:usdc"),
+    });
+    const batchExecutor = createBatchExecutor(
+      executor,
+      createProoflessMatcher(executor),
       {
-        matcherCommitteeAddresses: [signer.address],
-        matcherCommitteeRequired: true,
-        matcherCommitteeThreshold: 1,
+        batchIdPrefix: "runner",
+        intervalMs: 1000,
+        protocolLiquidity,
+        settlementsOnchainRequired: false,
       },
     );
-    const tamperedOpenings = [
-      { ...fixture.positionOpenings[0], openedAt: fixture.positionOpenings[0].openedAt + 1 },
-      fixture.positionOpenings[1],
-    ];
 
-    expect(() =>
-      service.commitExternal({
-        accountEvents: fixture.accountEvents,
-        attestation: matcherAttestation(fixture, [signer]),
-        settlement: fixture.settlement,
-        positionOpenings: tamperedOpenings,
-      }),
-    ).toThrow("external matcher attestation transcript mismatch");
-    expect(fixture.executor.store.settlements.size).toBe(0);
+    const result = await batchExecutor.runOnce({ marketId: market.marketId, now: 9010 });
+    const lpOrders = [...executor.store.orderLifecycle.values()].filter((order) =>
+      order.batchId.startsWith("lp-")
+    );
+
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0].record.reason).toBeUndefined();
+    expect(result.results[0].record.status).toBe("settled");
+    expect(result.results[0].record.fillCount).toBe(2);
+    expect(executor.store.settlements.size).toBe(1);
+    expect(executor.store.positionLifecycle.size).toBe(2);
+    expect(executor.store.orderLifecycle.get(userLong.intentCommitment)?.status).toBe("filled");
+    expect(lpOrders).toHaveLength(2);
+    expect(lpOrders.some((order) => order.status === "filled")).toBe(true);
+    expect(lpOrders.some((order) => order.status === "open")).toBe(true);
   });
 
   test("runs bounded funding engine cycles from market oracle price", () => {
@@ -1511,7 +1125,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
       },
       runCommand: (command, args) => {
         calls.push([command, ...args]);
@@ -1539,7 +1153,7 @@ describe("support workers", () => {
       "--id",
       "shielded-pool-contract",
       "--source",
-      "merkl-testnet",
+      "pnlx-testnet",
       "--network",
       "testnet",
       "--send",
@@ -1564,7 +1178,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
       },
       runCommand: () => ({
         status: 0,
@@ -1589,7 +1203,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
       },
       runCommand: () => ({
         status: 0,
@@ -1619,7 +1233,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
       },
       runCommand: (command, args) => {
         calls.push([command, ...args]);
@@ -1631,13 +1245,93 @@ describe("support workers", () => {
       },
     });
 
-    const tx = relayer.submitSignedXdr({ xdr: "AAAA" });
+    const tx = relayer.submitSignedXdr({
+      expectedTxHash: "0xabc99900abc99900abc99900abc99900abc99900abc99900abc99900abc99900",
+      xdr: "AAAA",
+    });
 
-    expect(calls[0]).toEqual(["stellar", "tx", "send", "AAAA", "--network", "testnet"]);
+    expect(calls[0]).toEqual(["stellar", "tx", "hash", "AAAA", "--network", "testnet"]);
+    expect(calls[1]).toEqual(["stellar", "tx", "send", "AAAA", "--network", "testnet"]);
+    expect(tx.command).toEqual(["stellar", "tx", "send", "<signed-xdr-redacted>", "--network", "testnet"]);
     expect(tx.kind).toBe("signed-xdr");
     expect(tx.functionName).toBe("tx send");
     expect(tx.submitted).toBe(true);
     expect(tx.txHash).toBe("0xabc99900abc99900abc99900abc99900abc99900abc99900abc99900abc99900");
+  });
+
+  test("normalizes failed wallet-signed stellar cli relay errors", () => {
+    const relayer = createRelayer({
+      config: {
+        mode: "stellar-cli",
+        network: "testnet",
+        source: "pnlx-testnet",
+      },
+      runCommand: (_command, args) => {
+        if (args[1] === "hash") {
+          return {
+            status: 0,
+            stderr: "",
+            stdout: "7e897199956b77aa908bf4a437baa41ff464909ec155b5fd93a9e5c28a306763",
+          };
+        }
+        return {
+          status: 1,
+          stderr: [
+            "ℹ️ Transaction hash is 7e897199956b77aa908bf4a437baa41ff464909ec155b5fd93a9e5c28a306763",
+            "🔗 https://stellar.expert/explorer/testnet/tx/7e897199956b77aa908bf4a437baa41ff464909ec155b5fd93a9e5c28a306763",
+            "❌ error: transaction submission failed: TxMalformed",
+          ].join("\n"),
+          stdout: "",
+        };
+      },
+    });
+
+    expect(() => relayer.submitSignedXdr({ xdr: "AAAA" })).toThrow(
+      "Transaction rejected by Stellar: TxMalformed",
+    );
+  });
+
+  test("parses stellar cli transaction hashes from stderr", () => {
+    const relayer = createRelayer({
+      config: {
+        mode: "stellar-cli",
+        network: "testnet",
+        source: "pnlx-testnet",
+      },
+      runCommand: () => ({
+        status: 0,
+        stderr: "Transaction hash: def11100def11100def11100def11100def11100def11100def11100def11100",
+        stdout: "",
+      }),
+    });
+
+    const tx = relayer.submitSignedXdr({ xdr: "AAAA" });
+
+    expect(tx.submitted).toBe(true);
+    expect(tx.txHash).toBe("0xdef11100def11100def11100def11100def11100def11100def11100def11100");
+  });
+
+  test("parses stellar cli transaction hashes from json output", () => {
+    const relayer = createRelayer({
+      config: {
+        mode: "stellar-cli",
+        network: "testnet",
+        source: "pnlx-testnet",
+      },
+      runCommand: () => ({
+        status: 0,
+        stderr: "",
+        stdout: JSON.stringify({
+          status: "SUCCESS",
+          txHash: "123abc00123abc00123abc00123abc00123abc00123abc00123abc00123abc00",
+        }),
+      }),
+    });
+
+    const tx = relayer.submitSignedXdr({ xdr: "AAAA" });
+
+    expect(tx.submitted).toBe(true);
+    expect(tx.txHash).toBe("0x123abc00123abc00123abc00123abc00123abc00123abc00123abc00123abc00");
   });
 
   test("retries transient stellar cli sequence failures", () => {
@@ -1646,7 +1340,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
       },
       runCommand: (command, args) => {
         calls.push([command, ...args]);
@@ -1685,7 +1379,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
       },
       runCommand: (command, args) => {
         calls.push([command, ...args]);
@@ -1702,7 +1396,7 @@ describe("support workers", () => {
           "intent-registry": "intent-registry-contract",
         },
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
         sourceAddress: "GTEST",
         verifiers: {},
       },
@@ -1742,7 +1436,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
       },
     });
 
@@ -1799,7 +1493,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
       },
       runCommand: (command, args) => {
         calls.push([command, ...args]);
@@ -1816,7 +1510,7 @@ describe("support workers", () => {
         "position-close": "position-close-contract",
       },
       network: "testnet",
-      source: "merkl-testnet",
+      source: "pnlx-testnet",
       sourceAddress: "GTEST",
       verifiers: {
         "conditional-close-proof-verifier": "conditional-close-verifier",
@@ -1894,7 +1588,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
       },
       runCommand: (command, args) => {
         calls.push([command, ...args]);
@@ -1911,7 +1605,7 @@ describe("support workers", () => {
           "position-close": "position-close-contract",
         },
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
         sourceAddress: "GTEST",
         verifiers: {
           "position-close-proof-verifier": "position-close-verifier",
@@ -1955,7 +1649,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
       },
       runCommand: (command, args) => {
         calls.push([command, ...args]);
@@ -1972,10 +1666,10 @@ describe("support workers", () => {
           "batch-settlement": "batch-settlement-contract",
         },
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
         sourceAddress: "GTEST",
         verifiers: {
-          "batch-match-proof-verifier": "batch-match-verifier",
+          "batch-match-risc0-verifier": "batch-match-risc0-verifier",
         },
       },
       enabled: true,
@@ -1986,7 +1680,16 @@ describe("support workers", () => {
     });
     const marketId = "btc-usd-perp";
     const batchId = "batch-worker-onchain";
-    const batchProof = proof("batch-match");
+    const sealDigest = hashFields("risc0-seal", [batchId]);
+    const batchProof = {
+      ...proof("batch-match"),
+      imageId: hashFields("risc0-image", [batchId]),
+      journalDigest: hashFields("risc0-journal", [batchId]),
+      proofDigest: sealDigest,
+      proofSystem: "risc0-groth16" as const,
+      publicInputHash: hashFields("risc0-journal", [batchId]),
+      sealDigest,
+    };
 
     onchain.settleBatch({
       batchId,
@@ -2016,9 +1719,12 @@ describe("support workers", () => {
     });
 
     expect(calls).toHaveLength(2);
-    expect(calls[0]).toContain("batch-match-verifier");
+    expect(calls[0]).toContain("batch-match-risc0-verifier");
     expect(calls[0]).toContain("verify_and_record");
-    expect(calls[0]).toContain(`/tmp/batch-match/public_inputs`);
+    expect(calls[0]).toContain(`/tmp/batch-match/proof`);
+    expect(calls[0]).toContain(batchProof.imageId!.slice(2));
+    expect(calls[0]).toContain(batchProof.journalDigest!.slice(2));
+    expect(calls[0]).toContain(batchProof.sealDigest!.slice(2));
     expect(calls[1]).toContain("batch-settlement-contract");
     expect(calls[1]).toContain("settle");
     expect(calls[1]).toContain(hashFields("batch-id", [batchId]).slice(2));
@@ -2044,7 +1750,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
       },
       runCommand: (command, args) => {
         calls.push([command, ...args]);
@@ -2061,7 +1767,7 @@ describe("support workers", () => {
           "funding-settlement": "funding-settlement-contract",
         },
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
         sourceAddress: "GTEST",
         verifiers: {
           "funding-update-proof-verifier": "funding-update-verifier",
@@ -2111,7 +1817,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
       },
       runCommand: (command, args) => {
         calls.push([command, ...args]);
@@ -2129,7 +1835,7 @@ describe("support workers", () => {
           "price-oracle": "price-oracle-contract",
         },
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
         sourceAddress: "GTEST",
         verifiers: {},
       },
@@ -2179,7 +1885,7 @@ describe("support workers", () => {
       networkPassphrase: "Test SDF Network ; September 2015",
       priceSource: "onchain-market",
       rpcUrl: "https://rpc.example",
-      source: "merkl-reader",
+      source: "pnlx-reader",
       runCommand: (command, args) => {
         calls.push([command, ...args]);
         return {
@@ -2205,7 +1911,7 @@ describe("support workers", () => {
       "--id",
       "market-contract",
       "--source",
-      "merkl-reader",
+      "pnlx-reader",
       "--network",
       "testnet",
       "--rpc-url",
@@ -2280,7 +1986,7 @@ describe("support workers", () => {
   });
 
   test("market updates are durable and relay on-chain upserts", () => {
-    const dir = mkdtempSync(join(tmpdir(), "merkl-market-update-"));
+    const dir = mkdtempSync(join(tmpdir(), "pnlx-market-update-"));
     const storePath = join(dir, "protocol-store.json");
     const executor = createExecutor({ storePath });
     const events: string[] = [];
@@ -2522,7 +2228,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
       },
       runCommand: (command, args) => {
         calls.push([command, ...args]);
@@ -2573,7 +2279,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-admin",
+        source: "pnlx-admin",
       },
       runCommand: (command, args) => {
         calls.push([command, ...args]);
@@ -2590,7 +2296,7 @@ describe("support workers", () => {
           "price-oracle": "price-oracle-contract",
         },
         network: "testnet",
-        source: "merkl-admin",
+        source: "pnlx-admin",
         sourceAddress: "GADMIN",
         verifiers: {},
       },
@@ -2624,7 +2330,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-admin",
+        source: "pnlx-admin",
       },
       runCommand: (command, args) => {
         calls.push([command, ...args]);
@@ -2641,7 +2347,7 @@ describe("support workers", () => {
           "price-oracle": "price-oracle-contract",
         },
         network: "testnet",
-        source: "merkl-admin",
+        source: "pnlx-admin",
         sourceAddress: "GADMIN",
         verifiers: {},
       },
@@ -2678,7 +2384,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
       },
       runCommand: (command, args) => {
         calls.push([command, ...args]);
@@ -2695,7 +2401,7 @@ describe("support workers", () => {
           "shielded-pool": "shielded-pool-contract",
         },
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
         sourceAddress: "GTEST",
         verifiers: {
           "deposit-note-proof-verifier": "deposit-note-verifier-contract",
@@ -2730,22 +2436,25 @@ describe("support workers", () => {
     expect(prepared.command).toContain("--build-only");
     expect(prepared.command).toContain("GTRADER");
     expect(prepared.command).toContain("--proof");
+    expect(prepared.txHash).toBe("0xfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeed");
     expect(prepared.xdr).toBe("facefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeed");
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(5);
     expect(calls[0]).toContain("--build-only");
     expect(calls[0]).toContain("deposit_asset");
-    expect(calls[1]).toContain("deposit-note-verifier-contract");
-    expect(calls[1]).toContain("verify_and_record");
-    expect(calls[2]).toContain("shielded-pool-contract");
-    expect(calls[2]).toContain("deposit_asset");
-    expect(calls[2]).toContain("--source");
-    expect(calls[2]).toContain("trader-alias");
-    expect(calls[2]).toContain("--token");
-    expect(calls[2]).toContain("usdc-token-contract");
-    expect(calls[2]).toContain("--amount");
-    expect(calls[2]).toContain("25000000");
-    expect(calls[2]).toContain(commitment.slice(2));
-    expect(calls[2]).toContain("--proof");
+    expect(calls[1]).toContain("simulate");
+    expect(calls[2]).toContain("hash");
+    expect(calls[3]).toContain("deposit-note-verifier-contract");
+    expect(calls[3]).toContain("verify_and_record");
+    expect(calls[4]).toContain("shielded-pool-contract");
+    expect(calls[4]).toContain("deposit_asset");
+    expect(calls[4]).toContain("--source");
+    expect(calls[4]).toContain("trader-alias");
+    expect(calls[4]).toContain("--token");
+    expect(calls[4]).toContain("usdc-token-contract");
+    expect(calls[4]).toContain("--amount");
+    expect(calls[4]).toContain("25000000");
+    expect(calls[4]).toContain(commitment.slice(2));
+    expect(calls[4]).toContain("--proof");
   });
 
   test("asset-backed deposit relay credits private margin membership", () => {
@@ -2753,7 +2462,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
       },
       runCommand: () => ({
         status: 0,
@@ -2767,7 +2476,7 @@ describe("support workers", () => {
           "shielded-pool": "shielded-pool-contract",
         },
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
         sourceAddress: "GTEST",
         verifiers: {
           "deposit-note-proof-verifier": "deposit-note-verifier-contract",
@@ -2821,6 +2530,10 @@ describe("support workers", () => {
       env,
       {
         enabled: true,
+        assetBalance() {
+          events.push("balance");
+          return 25_000_000n;
+        },
         prepareDepositAsset() {
           events.push("prepare");
           return {
@@ -2866,7 +2579,7 @@ describe("support workers", () => {
       tokenDigest: hashFields("token-digest", ["asset-deposit"]),
     });
 
-    expect(events).toEqual(["prove", `verify:${depositProof.proof.proofDigest}`, "prepare"]);
+    expect(events).toEqual(["balance", "prove", `verify:${depositProof.proof.proofDigest}`, "prepare"]);
     expect(result.depositProof).toBe(depositProof);
     expect(result.proofVerification.relays[0].functionName).toBe("verify_and_record");
     expect(result.proofVerification.relays[0].submitted).toBe(true);
@@ -2875,6 +2588,57 @@ describe("support workers", () => {
     expect(result.pendingDeposit.preparedXdrDigest).toBe(
       hashFields("prepared-asset-deposit-xdr", ["assetpreparedxdr"]),
     );
+  });
+
+  test("asset deposit preparation explains missing collateral trustline before proving", () => {
+    const executor = createExecutor();
+    const env = {
+      ...loadEnv(),
+      assetCustodyRequired: true,
+      collateralAssetCode: "USDC",
+      collateralTokenContract: "CUSDC",
+    };
+    const events: string[] = [];
+    const commitment = hashFields("note", ["custody-missing-trustline"]);
+    const service = new NotesService(
+      executor,
+      {
+        proveDepositNote() {
+          events.push("prove");
+          return depositProofRecord(25_000_000n, commitment);
+        },
+      } as never,
+      env,
+      {
+        enabled: true,
+        assetBalance() {
+          events.push("balance");
+          throw new Error("stellar contract read failed: USDC trustline is missing for this wallet");
+        },
+        prepareDepositAsset() {
+          events.push("prepare");
+          throw new Error("should not prepare");
+        },
+        verifyProof() {
+          events.push("verify");
+          throw new Error("should not verify");
+        },
+      } as never,
+    );
+
+    expect(() =>
+      service.prepareDepositAsset({
+        amount: 25_000_000n,
+        blinding: hashFields("blinding", ["custody-missing-trustline"]),
+        commitment,
+        from: "GTRADER",
+        ownerDigest: hashFields("owner", ["custody-missing-trustline"]),
+        rhoDigest: hashFields("rho", ["custody-missing-trustline"]),
+        token: "CUSDC",
+        tokenDigest: hashFields("token-digest", ["custody-missing-trustline"]),
+      }),
+    ).toThrow("USDC trustline is missing for this wallet");
+    expect(events).toEqual(["balance"]);
   });
 
   test("custody-required wallet finalization needs a recorded submitted signed deposit relay", () => {
@@ -2897,6 +2661,9 @@ describe("support workers", () => {
       env,
       {
         enabled: true,
+        assetBalance() {
+          return 25_000_000n;
+        },
         prepareDepositAsset() {
           return {
             command: ["stellar", "contract", "invoke", "--build-only"],
@@ -2986,6 +2753,9 @@ describe("support workers", () => {
       env,
       {
         enabled: true,
+        assetBalance() {
+          return 25_000_000n;
+        },
         prepareDepositAsset() {
           return {
             command: ["stellar", "contract", "invoke", "--build-only"],
@@ -3074,6 +2844,9 @@ describe("support workers", () => {
       env,
       {
         enabled: true,
+        assetBalance() {
+          return 25_000_000n;
+        },
         depositAsset() {
           return {
             relays: [
@@ -3134,6 +2907,9 @@ describe("support workers", () => {
       env,
       {
         enabled: true,
+        assetBalance() {
+          return 25_000_000n;
+        },
         depositAsset() {
           return {
             relays: [
@@ -3310,7 +3086,7 @@ describe("support workers", () => {
           "shielded-pool": "shielded-pool-contract",
         },
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
         sourceAddress: "GTEST",
         verifiers: {
           "deposit-note-proof-verifier": "deposit-note-verifier-contract",
@@ -3341,7 +3117,7 @@ describe("support workers", () => {
       config: {
         mode: "stellar-cli",
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
       },
       runCommand: (command, args) => {
         calls.push([command, ...args]);
@@ -3358,7 +3134,7 @@ describe("support workers", () => {
           "shielded-pool": "shielded-pool-contract",
         },
         network: "testnet",
-        source: "merkl-testnet",
+        source: "pnlx-testnet",
         sourceAddress: "GTEST",
         verifiers: {
           "withdraw-proof-verifier": "withdraw-verifier-contract",
@@ -3403,6 +3179,10 @@ describe("support workers", () => {
 
 function body(data: unknown): BodyInit {
   return JSON.stringify(data, (_key, value) => (typeof value === "bigint" ? value.toString() : value));
+}
+
+function bigintStringify(_key: string, value: unknown): unknown {
+  return typeof value === "bigint" ? value.toString() : value;
 }
 
 function proof(circuitId: string) {
@@ -3507,11 +3287,11 @@ function unsubmittedRelay(kind: string, functionName: string) {
   };
 }
 
-function intentRecord(seed: string, marketId: string, marginRoot: Hex): IntentRecord {
+function intentRecord(seed: string, marketId: string, marginRoot: Hex, batchId = "external-batch"): IntentRecord {
   const intentCommitment = hashFields("intent", [seed]);
   return {
     batchDigest: hashFields("batch-digest", [seed]),
-    batchId: "external-batch",
+    batchId,
     intentCommitment,
     marketDigest: hashFields("market-digest", [marketId]),
     marketId,
@@ -3533,7 +3313,7 @@ function externalSettlement(input: {
   spentNullifiers: Hex[];
   store: ProtocolStore;
 }): BatchSettlement {
-  const settlement: BatchSettlement = {
+  const draft = {
     aggregateVolume: BigInt(input.newCommitments.length),
     batchId: input.batchId,
     fillCount: input.newCommitments.length,
@@ -3545,13 +3325,41 @@ function externalSettlement(input: {
     oldRoot: input.oldRoot,
     openInterestDelta: BigInt(input.newCommitments.length),
     orderUpdates: input.orderUpdates,
-    proof: proof("batch-match"),
     residualSize: 0n,
     settlementDigest: hashFields("external-settlement", [input.batchId]),
     spentNullifiers: input.spentNullifiers,
   };
-  settlement.proof.publicInputHash = batchSettlementPublicInputHash(settlement);
-  return settlement;
+  return {
+    ...draft,
+    proof: proof("batch-match"),
+  };
+}
+
+function createProoflessMatcher(executor: ReturnType<typeof createExecutor>): MatcherService {
+  return new MatcherService(executor.store, executor.committee, {
+    createSettlement(input: SettlementProofInput): BatchSettlement {
+      const draft = {
+        aggregateVolume: input.match.aggregateVolume,
+        batchId: input.batchId,
+        fillCount: input.match.fills.length,
+        marginChangeCommitments: input.match.marginChangeCommitments,
+        marketId: input.market.marketId,
+        matchTranscriptDigest: input.match.matchTranscriptDigest,
+        newCommitments: input.match.fills.map((fill) => fill.positionCommitment),
+        newRoot: input.newRoot,
+        oldRoot: input.oldRoot,
+        openInterestDelta: input.match.openInterestDelta,
+        orderUpdates: input.match.orderUpdates,
+        residualSize: input.match.residualSize,
+        settlementDigest: hashFields("test-settlement", [input.batchId, input.newRoot]),
+        spentNullifiers: input.match.spentNullifiers,
+      };
+      return {
+        ...draft,
+        proof: proof("batch-match"),
+      };
+    },
+  } as never);
 }
 
 function externalBatchFixture(seed: string) {
@@ -3598,62 +3406,10 @@ function externalBatchFixture(seed: string) {
   };
 }
 
-function committeeTranscript(fixture: {
-  positionOpenings: ReturnType<typeof positionOpening>[];
-  settlement: BatchSettlement;
-}) {
-  return {
-    positionEvents: fixture.positionOpenings.map((opening, index) => ({
-      entryPrice: 50_000n * PRICE_SCALE,
-      fundingIndex: 0n,
-      margin: 10_000n,
-      marketId: opening.marketId,
-      positionCommitment: opening.positionCommitment,
-      positionNullifier: opening.positionNullifier,
-      side: index === 0 ? "long" as const : "short" as const,
-      size: 1n,
-      sourceIntentCommitment: opening.sourceIntentCommitment,
-    })),
-    positionOpenings: fixture.positionOpenings,
-    residualOrders: [],
-    settlement: fixture.settlement,
-  };
-}
-
-function matcherSigner() {
-  const keyPair = generateKeyPairSync("ed25519");
-  const publicKeyDer = keyPair.publicKey.export({ format: "der", type: "spki" });
-  return {
-    address: encodeStellarPublicKey(Buffer.from(publicKeyDer).subarray(-32)),
-    keyPair,
-  };
-}
-
 function rawP256PublicKey(): string {
   const ecdh = createECDH("prime256v1");
   ecdh.generateKeys();
   return ecdh.getPublicKey().toString("base64url");
-}
-
-function matcherAttestation(transcript: {
-  accountEvents: ReturnType<typeof accountEventForOpening>[];
-  positionOpenings: ReturnType<typeof positionOpening>[];
-  residualOrders?: [];
-  settlement: BatchSettlement;
-}, signers: ReturnType<typeof matcherSigner>[]) {
-  const { settlement } = transcript;
-  const publicInputHash = batchSettlementPublicInputHash(settlement);
-  const transcriptHash = externalMatcherTranscriptHash(transcript);
-  const message = matcherAttestationMessage(transcript, publicInputHash, transcriptHash);
-  return {
-    publicInputHash,
-    settlementDigest: settlement.settlementDigest,
-    signatures: signers.map((signer) => ({
-      signer: signer.address,
-      signature: sign(null, Buffer.from(message), signer.keyPair.privateKey).toString("base64"),
-    })),
-    transcriptHash,
-  };
 }
 
 function accountEventsForOpenings(openings: ReturnType<typeof positionOpening>[]) {

@@ -32,6 +32,7 @@ import { OracleService } from "@/workers/oracle/oracle.service";
 import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createOnchainRelay } from "@/workers/onchain/onchain.worker";
 import { createProver } from "@/workers/prover/prover.worker";
+import { ProtocolLiquidityService } from "@/workers/protocol-liquidity/protocol-liquidity.service";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
 
 export interface AppRuntime {
@@ -112,12 +113,23 @@ export function createAppRuntime(): AppRuntime {
         url: env.matcherServiceUrl,
       })
     : createMatcher(executor);
+  const protocolLiquidity = env.protocolLiquidityEnabled
+    ? new ProtocolLiquidityService(executor, prover, {
+        enabled: true,
+        maxNotional: env.protocolLiquidityMaxNotional,
+        owner: env.protocolLiquidityOwner,
+        publicKey: env.protocolLiquidityPublicKey || undefined,
+        quoteSpreadBps: env.protocolLiquidityQuoteSpreadBps,
+        tokenDigest: env.collateralTokenDigest as `0x${string}`,
+      })
+    : undefined;
   const batchExecutor = createBatchExecutor(
     executor,
     matcher,
     {
       batchIdPrefix: env.batchExecutorPrefix,
       intervalMs: env.batchExecutorIntervalMs,
+      protocolLiquidity,
       settlementsOnchainRequired: env.settlementsOnchainRequired,
     },
     onchain,
@@ -128,7 +140,7 @@ export function createAppRuntime(): AppRuntime {
   });
 
   registerAuthRoute(router, auth);
-  registerHealthRoute(router, env);
+  registerHealthRoute(router, env, onchain);
   registerAccountKeysRoute(router, executor);
   registerAccountEventsRoute(router, executor);
   registerPortfolioRoute(router, executor);
@@ -145,7 +157,7 @@ export function createAppRuntime(): AppRuntime {
   registerProofsRoute(router, prover, {
     witnessRoutesEnabled: env.serverWitnessRoutesEnabled,
   });
-  registerRelaysRoute(router, relayer, env);
+  registerRelaysRoute(router, relayer, env, executor);
   registerLiquidationsRoute(router, executor, prover, env, onchain, {
     witnessRoutesEnabled: env.serverWitnessRoutesEnabled,
   });

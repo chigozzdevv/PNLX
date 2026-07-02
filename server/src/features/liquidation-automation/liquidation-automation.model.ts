@@ -1,4 +1,4 @@
-import type { LiquidationAutomationJobRecord, LiquidationRecord } from "@merkl/protocol-types";
+import type { LiquidationAutomationJobRecord, LiquidationRecord } from "@pnlx/protocol-types";
 
 export interface EnqueueLiquidationJobInput {
   liquidation: LiquidationRecord;

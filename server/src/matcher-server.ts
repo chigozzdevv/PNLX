@@ -4,17 +4,6 @@ import { createMatcherApp } from "@/workers/matcher/matcher.app";
 const env = loadEnv();
 const app = createMatcherApp({
   provider: env.matcherProvider,
-  providerToken: env.matcherProviderToken || undefined,
-  providerUrl: env.matcherProviderUrl || undefined,
-  mpspdzCoordinatorUrl: env.mpspdzCoordinatorUrl || undefined,
-  mpspdzPartyUrls: env.mpspdzPartyUrls,
-  mpspdzProtocol: env.mpspdzProtocol,
-  nilccAttestationContains: env.nilccAttestationContains,
-  nilccAttestationReportSha256: env.nilccAttestationReportSha256 || undefined,
-  nilccAttestationReportUrl: env.nilccAttestationReportUrl || undefined,
-  nilccAttestationRequired: env.nilccAttestationRequired,
-  nilccAttestationToken: env.nilccAttestationToken || undefined,
-  nilccWorkloadUrl: env.nilccWorkloadUrl || undefined,
   thresholdShareNodeIds: env.thresholdShareNodeIds,
   thresholdShareStoreDir: env.thresholdShareStoreDir || undefined,
   thresholdShareThreshold: env.thresholdShareThreshold,
@@ -29,4 +18,4 @@ Bun.serve({
   fetch: (request) => app.handle(request),
 });
 
-console.log(`merkl matcher listening on ${port}`);
+console.log(`pnlx matcher listening on ${port}`);

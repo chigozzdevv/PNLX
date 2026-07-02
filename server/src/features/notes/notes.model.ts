@@ -6,7 +6,7 @@ import type {
   PendingAssetDepositRecord,
   WithdrawalRecord,
   WithdrawalRequest,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 import type { OnchainRelayResult, PreparedOnchainAction } from "@/workers/onchain/onchain.model";
 
 export interface DepositNoteInput {

@@ -1,4 +1,4 @@
-import { hashFields } from "@merkl/crypto";
+import { hashFields } from "@pnlx/crypto";
 import type {
   BatchSettlement,
   ConditionalOrderCommitment,
@@ -13,7 +13,7 @@ import type {
   PositionCloseRecord,
   ProofMeta,
   WithdrawalRecord,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 import type { RelayerService } from "@/workers/relayer/relayer.service";
 import type {
   DeploymentRegistry,
@@ -102,8 +102,51 @@ export class OnchainRelayService implements OnchainRelay {
       functionName: payload.functionName,
       kind: "deposit",
       payload,
+      txHash: prepared.txHash,
       xdr: prepared.xdr,
     };
+  }
+
+  tokenDigest(token: string, source?: string): Hex {
+    if (!this.config.enabled) throw new Error("asset token digest requires on-chain relay");
+    if (!token) throw new Error("asset token digest requires token");
+    const deployment = this.deployment();
+    const result = this.relayer.read({
+      kind: "contract-invoke",
+      payload: {
+        args: ["--token", token],
+        contractId: contractId(deployment, "shielded-pool"),
+        functionName: "token_digest",
+        send: "no",
+        source: source ?? deployment.source,
+      },
+    });
+    return parseHex32(result.output, `token digest for ${token}`);
+  }
+
+  assetBalance(token: string, account: string, source?: string): bigint {
+    if (!this.config.enabled) throw new Error("asset balance requires on-chain relay");
+    if (!token) throw new Error("asset balance requires token");
+    if (!account) throw new Error("asset balance requires account");
+    const deployment = this.deployment();
+    try {
+      const result = this.relayer.read({
+        kind: "contract-invoke",
+        payload: {
+          args: ["--id", account],
+          contractId: token,
+          functionName: "balance",
+          send: "no",
+          source: source ?? deployment.source,
+        },
+      });
+      return parseInteger(result.output, `asset balance for ${account}`);
+    } catch (error) {
+      if (isStellarAssetTrustlineMissing(error)) {
+        throw new Error("collateral trustline is missing for this wallet");
+      }
+      throw error;
+    }
   }
 
   submitIntent(record: IntentRecord): OnchainRelayResult {
@@ -493,6 +536,9 @@ export class OnchainRelayService implements OnchainRelay {
   }
 
   private invokeProofVerifier(proof: ProofMeta) {
+    if (proof.proofSystem === "risc0-groth16") {
+      return this.invokeRisc0ProofVerifier(proof);
+    }
     const artifact = this.artifactFor(proof);
     return this.invoke("contract-invoke", `${proof.circuitId}-proof-verifier`, "verify_and_record", [
       "--public_inputs-file-path",
@@ -503,6 +549,23 @@ export class OnchainRelayService implements OnchainRelay {
       bytes32(proof.publicInputHash),
       "--proof_digest",
       bytes32(proof.proofDigest),
+    ], true);
+  }
+
+  private invokeRisc0ProofVerifier(proof: ProofMeta) {
+    if (!proof.imageId || !proof.journalDigest || !proof.sealDigest) {
+      throw new Error("missing RISC0 receipt metadata");
+    }
+    const artifact = this.artifactFor(proof);
+    return this.invoke("contract-invoke", `${proof.circuitId}-risc0-verifier`, "verify_and_record", [
+      "--seal-file-path",
+      artifact.proofPath,
+      "--image_id",
+      bytes32(proof.imageId),
+      "--journal_digest",
+      bytes32(proof.journalDigest),
+      "--proof_digest",
+      bytes32(proof.sealDigest),
     ], true);
   }
 
@@ -633,4 +696,23 @@ function bytes32(value: Hex | string): string {
 
 function bytes32Vec(values: Array<Hex | string>): string {
   return JSON.stringify(values.map(bytes32));
+}
+
+function parseHex32(output: string, label: string): Hex {
+  const match = output.match(/(?:0x)?([0-9a-fA-F]{64})/);
+  if (!match) throw new Error(`${label} did not return bytes32`);
+  return `0x${match[1].toLowerCase()}`;
+}
+
+function parseInteger(output: string, label: string): bigint {
+  const match = output.match(/-?\d+/);
+  if (!match) throw new Error(`${label} did not return integer`);
+  return BigInt(match[0]);
+}
+
+function isStellarAssetTrustlineMissing(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Contract, #13") ||
+    message.includes("TrustlineMissingError") ||
+    message.toLowerCase().includes("trustline is missing");
 }

@@ -1,4 +1,4 @@
-import { contractPublicInputHash, publicField, publicU128 } from "@merkl/proof-system";
+import { contractPublicInputHash, publicField, publicU128 } from "@pnlx/proof-system";
 import type { ServerEnv } from "@/config/env";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { OnchainRelayResult } from "@/workers/onchain/onchain.model";
@@ -7,8 +7,8 @@ import type { ProverService } from "@/workers/prover/prover.service";
 import { assertFundingPayment } from "@/shared/protocol/funding";
 import { assertSubmittedRelay } from "@/shared/protocol/onchain-submission";
 import { createLiquidationAccountEvent } from "@/shared/protocol/account-event-outcomes";
-import { PRICE_SCALE, RATE_SCALE } from "@merkl/market-math";
-import type { MarketConfig } from "@merkl/protocol-types";
+import { PRICE_SCALE, RATE_SCALE } from "@pnlx/market-math";
+import type { MarketConfig } from "@pnlx/protocol-types";
 import type {
   CreateLiquidationInput,
   CreateLiquidationResult,

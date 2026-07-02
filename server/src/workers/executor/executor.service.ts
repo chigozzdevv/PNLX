@@ -1,4 +1,4 @@
-import { commitIntent, intentBindingFields, ownerCommitment } from "@merkl/crypto";
+import { commitIntent, intentBindingFields, ownerCommitment } from "@pnlx/crypto";
 import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
 import {
   assertPositionOpeningAccountEvent,
@@ -18,8 +18,8 @@ import type {
   ProofMeta,
   ResidualOrderRecord,
   TradeIntent,
-} from "@merkl/protocol-types";
-import type { ProofArtifact } from "@merkl/proof-system";
+} from "@pnlx/protocol-types";
+import type { ProofArtifact } from "@pnlx/proof-system";
 import { ProtocolStore } from "@/shared/state/store";
 import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
 import { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
@@ -27,14 +27,14 @@ import type {
   ExecutorConfig,
   ExternalBatchSettlementCommitOptions,
   ExternalBatchSettlementTranscript,
-  MerklExecutor,
+  PnlxExecutor,
   PreparedIntentSubmission,
   SettleBatchInput,
   SubmitIntentInput,
   SubmitSharedIntentInput,
 } from "@/workers/executor/executor.model";
 
-export class ExecutorService implements MerklExecutor {
+export class ExecutorService implements PnlxExecutor {
   readonly store: ProtocolStore;
   readonly committee: ThresholdShareCommittee;
   private readonly matchingBackend: NonNullable<ExecutorConfig["matchingBackend"]>;
@@ -233,8 +233,24 @@ export class ExecutorService implements MerklExecutor {
     if (settlement.proof.circuitId !== "batch-match") {
       throw new Error("external settlement proof circuit mismatch");
     }
+    if (settlement.proof.proofSystem !== "risc0-groth16") {
+      throw new Error("external settlement proof system mismatch");
+    }
     if (settlement.proof.publicInputHash !== batchSettlementPublicInputHash(settlement)) {
       throw new Error("external settlement proof public input mismatch");
+    }
+    if (
+      !settlement.proof.imageId ||
+      !settlement.proof.journalDigest ||
+      !settlement.proof.sealDigest
+    ) {
+      throw new Error("external settlement RISC0 receipt metadata is required");
+    }
+    if (settlement.proof.journalDigest !== settlement.proof.publicInputHash) {
+      throw new Error("external settlement RISC0 journal mismatch");
+    }
+    if (settlement.proof.sealDigest !== settlement.proof.proofDigest) {
+      throw new Error("external settlement RISC0 seal mismatch");
     }
 
     const activeOrders = activeOrderRecords(this.store, settlement.marketId);

@@ -8,10 +8,14 @@ export interface ServerProofMeta {
   verifierHash: Hex;
   publicInputHash: Hex;
   proofDigest: Hex;
+  proofSystem?: "noir-ultrahonk" | "risc0-groth16";
   bytecodeHash?: Hex;
+  imageId?: Hex;
+  journalDigest?: Hex;
   witnessHash?: Hex;
   proofHash?: Hex;
   publicInputsHash?: Hex;
+  sealDigest?: Hex;
   vkHash?: Hex;
 }
 
@@ -119,50 +123,15 @@ export interface ServerIntentRecord {
   noteNullifier: Hex;
 }
 
-export interface ServerBatchSettlement {
-  batchId: string;
-  marketId: string;
-  oldRoot: Hex;
-  newRoot: Hex;
-  newCommitments: Hex[];
-  spentNullifiers: Hex[];
-  fillCount: number;
-  aggregateVolume: string;
-  openInterestDelta: string;
-  residualSize: string;
-  proof: ServerProofMeta;
-}
-
-export interface ServerVerifierRegistryItem {
-  circuitId: string;
-  circuitKey: Hex;
-  circuitHash: Hex;
-  verifierHash: Hex;
-  verifierAuthority: string;
-  verifierContract: string;
-}
-
-export interface ServerDepositNoteResult {
-  commitment: Hex;
-  marginRoot: Hex;
-}
-
-export interface MockServerResponses {
-  health: { ok: true };
-  markets: { markets: ServerMarketConfig[] };
-  deposit: { note: ServerDepositNoteResult };
-  intent: ServerIntentRecord;
-  settlement: { settlement: ServerBatchSettlement };
-  verifiers: { verifiers: ServerVerifierRegistryItem[] };
-}
-
 export interface AccountSnapshot {
   address: string;
-  accountValue: number;
-  cash: number;
+  accountValue: number | null;
+  cash: number | null;
+  lockedMargin: number;
   livePnl: number;
   marginRoot: Hex;
   privacyMode: "shielded";
+  shieldedUsdc: number | null;
 }
 
 export interface MarketDisplay {
@@ -171,6 +140,7 @@ export interface MarketDisplay {
   baseAsset: string;
   quoteAsset: string;
   assetName: string;
+  oraclePrice: string;
   price: number;
   change24h: number;
   openInterestLong: number;
@@ -205,6 +175,7 @@ export interface OrderDraft {
 }
 
 export interface PositionRow {
+  marketId: string;
   id: string;
   time: string;
   market: string;
@@ -217,23 +188,23 @@ export interface PositionRow {
   closePrice: number | null;
   unrealizedPnl?: number;
   commitment?: Hex;
+  privateState?: {
+    entryPrice: string;
+    fundingIndex: string;
+    margin: string;
+    positionNullifier: Hex;
+    side: Side;
+    size: string;
+    sourceIntentCommitment: Hex;
+  };
   privateDetails?: boolean;
   status?: string;
 }
 
 export interface TickerItem {
+  lastPrice?: number;
   pair: string;
   change: number;
-}
-
-export interface TradingMockData {
-  server: MockServerResponses;
-  account: AccountSnapshot;
-  markets: MarketDisplay[];
-  candlesByMarket: Record<string, ChartCandle[]>;
-  orderDraft: OrderDraft;
-  positions: PositionRow[];
-  ticker: TickerItem[];
 }
 
 export interface TradingLiveData {

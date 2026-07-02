@@ -1,6 +1,6 @@
-import { commitIntent, digestToFieldHex, intentBindingFields, intentOwnerCommitmentField } from "@merkl/crypto";
-import { contractPublicInputHash, publicField, publicU128 } from "@merkl/proof-system";
-import type { IntentRecord, IntentValidityRecord } from "@merkl/protocol-types";
+import { commitIntent, digestToFieldHex, intentBindingFields, intentOwnerCommitmentField } from "@pnlx/crypto";
+import { contractPublicInputHash, publicField, publicU128 } from "@pnlx/proof-system";
+import type { IntentRecord, IntentValidityRecord } from "@pnlx/protocol-types";
 import { proofKey } from "@/shared/proofs/artifact-registry";
 import type { ServerEnv } from "@/config/env";
 import {

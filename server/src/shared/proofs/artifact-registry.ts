@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { ProofArtifact } from "@merkl/proof-system";
-import type { ProofMeta } from "@merkl/protocol-types";
+import type { ProofArtifact } from "@pnlx/proof-system";
+import type { ProofMeta } from "@pnlx/protocol-types";
 
 interface ArtifactSnapshot {
   artifacts: [string, ProofArtifact][];
@@ -10,7 +10,7 @@ interface ArtifactSnapshot {
 export class ProofArtifactRegistry {
   private readonly artifacts = new Map<string, ProofArtifact>();
 
-  constructor(private readonly path = join(process.cwd(), ".merkl", "proof-artifacts.json")) {
+  constructor(private readonly path = join(process.cwd(), ".pnlx", "proof-artifacts.json")) {
     this.load();
   }
 

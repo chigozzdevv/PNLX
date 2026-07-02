@@ -1,8 +1,10 @@
-import type { BatchExecutionRunRecord } from "@merkl/protocol-types";
+import type { BatchExecutionRunRecord } from "@pnlx/protocol-types";
+import type { ProtocolLiquidityService } from "@/workers/protocol-liquidity/protocol-liquidity.service";
 
 export interface BatchExecutorConfig {
   batchIdPrefix?: string;
   intervalMs: number;
+  protocolLiquidity?: ProtocolLiquidityService;
   settlementsOnchainRequired?: boolean;
 }
 

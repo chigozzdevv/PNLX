@@ -7,10 +7,14 @@ export interface ProofMeta {
   verifierHash: Hex;
   publicInputHash: Hex;
   proofDigest: Hex;
+  proofSystem?: "noir-ultrahonk" | "risc0-groth16";
   bytecodeHash?: Hex;
+  imageId?: Hex;
+  journalDigest?: Hex;
   witnessHash?: Hex;
   proofHash?: Hex;
   publicInputsHash?: Hex;
+  sealDigest?: Hex;
   vkHash?: Hex;
 }
 
@@ -162,6 +166,7 @@ export interface PendingAssetDepositRecord {
   depositProof: DepositNoteRecord;
   finalizedAt?: number;
   from: string;
+  preparedTxHash?: Hex;
   preparedXdrDigest: Hex;
   relayId?: Hex;
   token: string;

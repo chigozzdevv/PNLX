@@ -4,23 +4,6 @@ import { describe, expect, test } from "bun:test";
 
 const PRIVATE_FIELDS = new Map([
   [
-    "batch-match",
-    [
-      "execution_count",
-      "execution_sizes",
-      "execution_prices",
-      "long_limit_prices",
-      "short_limit_prices",
-      "maker_is_long",
-      "long_margins",
-      "short_margins",
-      "total_long_size",
-      "total_short_size",
-      "initial_margin_rate",
-      "max_leverage",
-    ],
-  ],
-  [
     "conditional-close",
     ["is_long", "is_take_profit", "market_digest", "trigger_price", "size", "salt_digest"],
   ],

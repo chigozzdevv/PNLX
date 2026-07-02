@@ -1,5 +1,5 @@
-import { hashFields } from "@merkl/crypto";
-import type { BatchExecutionRunRecord, Hex } from "@merkl/protocol-types";
+import { hashFields } from "@pnlx/crypto";
+import type { BatchExecutionRunRecord, Hex } from "@pnlx/protocol-types";
 import type { OnchainRelay, OnchainRelayResult } from "@/workers/onchain/onchain.model";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { MatcherGateway } from "@/workers/matcher/matcher.model";
@@ -59,11 +59,12 @@ export class BatchExecutorService {
   ): BatchExecutorMarketResult {
     const batchId = `${input.batchIdPrefix ?? this.config.batchIdPrefix ?? DEFAULT_BATCH_PREFIX}-${marketId}-${startedAt}`;
     try {
+      this.config.protocolLiquidity?.seedMarket(marketId, batchId);
       const transcript = await this.matcher.createSettlementTranscript({
         batchId,
         marketId,
       });
-      const relay = this.onchain?.settleBatch(transcript.settlement);
+      const relay = this.trySettleOnchain(transcript.settlement);
       const proofVerified = hasSubmittedProofVerification(relay);
       if (this.config.settlementsOnchainRequired && !proofVerified) {
         throw new Error("settlements require on-chain relay");
@@ -102,6 +103,15 @@ export class BatchExecutorService {
       marketId: record.marketId,
       record,
     };
+  }
+
+  private trySettleOnchain(settlement: Parameters<NonNullable<OnchainRelay>["settleBatch"]>[0]): OnchainRelayResult | undefined {
+    try {
+      return this.onchain?.settleBatch(settlement);
+    } catch (error) {
+      if (this.config.settlementsOnchainRequired) throw error;
+      return undefined;
+    }
   }
 
   private marketIds(marketId?: string): string[] {

@@ -1,4 +1,4 @@
-import { ArrowDown, Settings, ShieldCheck } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { formatNumber, formatUsd, shortAddress } from "@/lib/format";
 import type {
@@ -10,22 +10,38 @@ import type {
 interface PositionsTableProps {
   accountEventCount?: number;
   activity?: ServerOwnerActivitySnapshot[];
+  activeView?: PositionsTableView;
   loading?: boolean;
+  closingPositionId?: string;
+  actionMessage?: { tone: "error" | "success"; text: string };
+  onClosePosition?: (position: PositionRow) => Promise<void> | void;
+  onViewChange?: (view: PositionsTableView) => void;
   orders?: ServerOwnerOrderSnapshot[];
   positions: PositionRow[];
 }
 
 type TableView = "positions" | "orders" | "history";
+export type PositionsTableView = TableView;
 
 export function PositionsTable({
   accountEventCount = 0,
+  actionMessage,
   activity = [],
+  activeView,
+  closingPositionId,
   loading = false,
+  onClosePosition,
+  onViewChange,
   orders = [],
   positions,
 }: PositionsTableProps) {
-  const [view, setView] = useState<TableView>("positions");
+  const [internalView, setInternalView] = useState<TableView>("positions");
+  const view = activeView ?? internalView;
   const rowCount = view === "positions" ? positions.length : view === "orders" ? orders.length : activity.length;
+  const selectView = (nextView: TableView) => {
+    setInternalView(nextView);
+    onViewChange?.(nextView);
+  };
 
   return (
     <section className="panel positions-panel">
@@ -34,41 +50,39 @@ export function PositionsTable({
           <button
             className={`positions-tab ${view === "positions" ? "positions-tab-active" : ""}`}
             type="button"
-            onClick={() => setView("positions")}
+            onClick={() => selectView("positions")}
           >
             Trades ({positions.length})
           </button>
           <button
             className={`positions-tab ${view === "orders" ? "positions-tab-active" : ""}`}
             type="button"
-            onClick={() => setView("orders")}
+            onClick={() => selectView("orders")}
           >
             Orders ({orders.length})
           </button>
           <button
             className={`positions-tab ${view === "history" ? "positions-tab-active" : ""}`}
             type="button"
-            onClick={() => setView("history")}
+            onClick={() => selectView("history")}
           >
             History ({activity.length || accountEventCount})
           </button>
         </div>
-        <div className="flex items-center gap-2">
-          <button className="subtle-button" type="button">
-            Show BTC
-          </button>
-          <button className="icon-button-subtle" aria-label="Table settings" type="button">
-            <Settings size={17} />
-          </button>
-          <button className="icon-button-subtle" aria-label="Download" type="button">
-            <ArrowDown size={17} />
-          </button>
-        </div>
+        {actionMessage ? (
+          <p className={`positions-action-message positions-action-message-${actionMessage.tone}`} title={actionMessage.text}>
+            {actionMessage.text}
+          </p>
+        ) : null}
       </div>
 
       <div className="positions-table">
         {view === "positions" ? (
-          <PositionsView positions={positions} />
+          <PositionsView
+            closingPositionId={closingPositionId}
+            onClosePosition={onClosePosition}
+            positions={positions}
+          />
         ) : view === "orders" ? (
           <OrdersView orders={orders} />
         ) : (
@@ -88,7 +102,15 @@ export function PositionsTable({
   );
 }
 
-function PositionsView({ positions }: { positions: PositionRow[] }) {
+function PositionsView({
+  closingPositionId,
+  onClosePosition,
+  positions,
+}: {
+  closingPositionId?: string;
+  onClosePosition?: (position: PositionRow) => Promise<void> | void;
+  positions: PositionRow[];
+}) {
   return (
     <>
       <div className="positions-head">
@@ -101,6 +123,7 @@ function PositionsView({ positions }: { positions: PositionRow[] }) {
         <span>Net Value</span>
         <span>Status</span>
         <span>Commitment</span>
+        <span />
       </div>
 
       {positions.map((position) => (
@@ -117,6 +140,20 @@ function PositionsView({ positions }: { positions: PositionRow[] }) {
           <span>{privateNumber(position.netValue, formatUsd, position.privateDetails)}</span>
           <span>{statusLabel(position.status)}</span>
           <span>{position.commitment ? shortAddress(position.commitment) : "--"}</span>
+          <span>
+            {position.status === "open" ? (
+              <button
+                className="row-action-button"
+                disabled={!onClosePosition || !position.privateState || closingPositionId === position.id}
+                type="button"
+                onClick={() => onClosePosition?.(position)}
+              >
+                {closingPositionId === position.id ? "Closing" : "Close"}
+              </button>
+            ) : (
+              "--"
+            )}
+          </span>
         </div>
       ))}
     </>
@@ -136,6 +173,7 @@ function OrdersView({ orders }: { orders: ServerOwnerOrderSnapshot[] }) {
         <span>Batch</span>
         <span>Updated</span>
         <span>Shares</span>
+        <span />
       </div>
 
       {orders.map((order) => (
@@ -149,6 +187,7 @@ function OrdersView({ orders }: { orders: ServerOwnerOrderSnapshot[] }) {
           <span>{order.batchId}</span>
           <span>{formatTime(order.updatedAt)}</span>
           <span>{shortAddress(order.shareCommitment)}</span>
+          <span />
         </div>
       ))}
     </>
@@ -168,6 +207,7 @@ function HistoryView({ activity }: { activity: ServerOwnerActivitySnapshot[] }) 
         <span>Data</span>
         <span>Updated</span>
         <span />
+        <span />
       </div>
 
       {activity.map((item) => (
@@ -180,6 +220,7 @@ function HistoryView({ activity }: { activity: ServerOwnerActivitySnapshot[] }) 
           <span>{item.batchId ?? "--"}</span>
           <span>{item.dataCommitment ? shortAddress(item.dataCommitment) : "--"}</span>
           <span>{formatTime(item.updatedAt)}</span>
+          <span />
           <span />
         </div>
       ))}

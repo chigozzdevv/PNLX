@@ -1,0 +1,12 @@
+[package]
+name = "pnlx-risc0-methods"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[build-dependencies]
+risc0-build.workspace = true
+
+[package.metadata.risc0]
+methods = ["guest"]
+

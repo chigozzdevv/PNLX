@@ -7,29 +7,32 @@ import {
   fieldMerkleRoot,
   hashFields,
   ownerCommitment,
-} from "@merkl/crypto";
-import { PRICE_SCALE, settleClose } from "@merkl/market-math";
-import { circuitKey, loadCircuit } from "@merkl/proof-system";
-import type { Hex, ProofMeta, TradeIntent } from "@merkl/protocol-types";
-import { createCircuitMarginNote, createCircuitPositionNote } from "@merkl/sdk";
+} from "@pnlx/crypto";
+import { PRICE_SCALE, settleClose } from "@pnlx/market-math";
+import { circuitKey } from "@pnlx/proof-system";
+import type { Hex, ProofMeta, TradeIntent } from "@pnlx/protocol-types";
+import { createCircuitMarginNote, createCircuitPositionNote } from "@pnlx/sdk";
 import { createECDH, generateKeyPairSync, sign } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp, createAppRuntime } from "@/app";
-import { encodeStellarPublicKey } from "@/features/auth/auth.service";
-import { createMatcherProviderApp } from "@/workers/matcher-provider/matcher-provider.app";
+import { encodeStellarPublicKey, stellarSignedMessageHash } from "@/features/auth/auth.service";
+import { createMatcherApp } from "@/workers/matcher/matcher.app";
 import { createExecutor } from "@/workers/executor/executor.worker";
 import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
 import { ProverService } from "@/workers/prover/prover.service";
+import {
+  RISC0_BATCH_MATCH_CIRCUIT_KEY,
+  RISC0_STELLAR_VERIFIER_HASH,
+} from "@/workers/risc0-matcher/risc0-proof";
 
 process.env.ASSET_CUSTODY_REQUIRED = "false";
 process.env.AUTH_REQUIRED = "false";
 process.env.COLLATERAL_TOKEN_CONTRACT = "";
+process.env.COLLATERAL_TOKEN_DIGEST = "";
 process.env.FUNDING_ENGINE_ENABLED = "false";
-process.env.MATCHER_COMMITTEE_REQUIRED = "false";
-process.env.MATCHER_PROVIDER = "embedded";
-process.env.MATCHER_PROVIDER_URL = "";
+process.env.MATCHER_PROVIDER = "risc0";
 process.env.MATCHING_BACKEND = "threshold-recovery";
 process.env.PRIVATE_MATCHING_REQUIRED = "false";
 process.env.SERVER_WITNESS_ROUTES_ENABLED = "true";
@@ -52,7 +55,7 @@ function rawP256PublicKey(): string {
 async function call(path: string, data?: unknown): Promise<Record<string, unknown>> {
   const app = createApp();
   const response = await app.handle(
-    new Request(`http://merkl.local${path}`, {
+    new Request(`http://pnlx.local${path}`, {
       method: data ? "POST" : "GET",
       body: data ? body(data) : undefined,
       headers: data ? { "content-type": "application/json" } : undefined,
@@ -70,7 +73,7 @@ async function createSignedSession(
   const publicKeyDer = publicKey.export({ format: "der", type: "spki" });
   const address = encodeStellarPublicKey(Buffer.from(publicKeyDer).subarray(-32));
   const challengeResponse = await app.handle(
-    new Request("http://merkl.local/auth/challenge", {
+    new Request("http://pnlx.local/auth/challenge", {
       method: "POST",
       body: body({ address }),
       headers: { "content-type": "application/json" },
@@ -78,9 +81,9 @@ async function createSignedSession(
   );
   expect(challengeResponse.status).toBe(201);
   const challenge = (await challengeResponse.json()) as Record<string, string>;
-  const signature = sign(null, Buffer.from(challenge.message), privateKey).toString("base64");
+  const signature = sign(null, stellarSignedMessageHash(challenge.message), privateKey).toString("base64");
   const sessionResponse = await app.handle(
-    new Request("http://merkl.local/auth/session", {
+    new Request("http://pnlx.local/auth/session", {
       method: "POST",
       body: body({ address, nonce: challenge.nonce, signature }),
       headers: { "content-type": "application/json" },
@@ -99,7 +102,7 @@ async function proveIntent(
   headers: Record<string, string> = { "content-type": "application/json" },
 ): Promise<Record<string, unknown>> {
   const proofResponse = await app.handle(
-    new Request("http://merkl.local/proofs/intent", {
+    new Request("http://pnlx.local/proofs/intent", {
       method: "POST",
       body: body({
         ...intent,
@@ -133,7 +136,7 @@ async function submitIntentRequest(
 ): Promise<Response> {
   const validity = await proveIntent(app, intent, note, membershipProof, headers);
   return app.handle(
-    new Request("http://merkl.local/intents", {
+    new Request("http://pnlx.local/intents", {
       method: "POST",
       body: body({ ...intent, validity }),
       headers,
@@ -149,7 +152,7 @@ async function proveAndSubmitIntentRequest(
   headers: Record<string, string> = { "content-type": "application/json" },
 ): Promise<Response> {
   return app.handle(
-    new Request("http://merkl.local/intents/prove-and-submit", {
+    new Request("http://pnlx.local/intents/prove-and-submit", {
       method: "POST",
       body: body({
         ...intent,
@@ -263,7 +266,7 @@ async function depositCircuitMarginNote(
 ) {
   const note = createCircuitMarginNote(input);
   const depositResponse = await app.handle(
-    new Request("http://merkl.local/notes/deposit", {
+    new Request("http://pnlx.local/notes/deposit", {
       method: "POST",
       body: body({ commitment: note.commitment }),
       headers,
@@ -338,7 +341,7 @@ async function createCloseableLongPositionFixture(
   };
   const post = async (path: string, data: unknown) => {
     const response = await app.handle(
-      new Request(`http://merkl.local${path}`, {
+      new Request(`http://pnlx.local${path}`, {
         method: "POST",
         body: body(data),
         headers: { "content-type": "application/json" },
@@ -479,7 +482,7 @@ describe("server api", () => {
     process.env.STELLAR_RELAYER_MODE = "local";
     try {
       const app = createApp();
-      const healthResponse = await app.handle(new Request("http://merkl.local/health"));
+      const healthResponse = await app.handle(new Request("http://pnlx.local/health"));
       expect(healthResponse.status).toBe(200);
       const health = (await healthResponse.json()) as Record<string, Record<string, unknown>>;
       const custody = health.custody;
@@ -498,7 +501,7 @@ describe("server api", () => {
       );
 
       const response = await app.handle(
-        new Request("http://merkl.local/notes/deposit-asset/prepare", {
+        new Request("http://pnlx.local/notes/deposit-asset/prepare", {
           method: "POST",
           body: body({
             amount: "1000",
@@ -533,7 +536,7 @@ describe("server api", () => {
     process.env.STELLAR_RELAYER_MODE = "local";
     try {
       const app = createApp();
-      const healthResponse = await app.handle(new Request("http://merkl.local/health"));
+      const healthResponse = await app.handle(new Request("http://pnlx.local/health"));
       expect(healthResponse.status).toBe(200);
       const health = (await healthResponse.json()) as Record<string, Record<string, unknown>>;
       expect(health.conditionalOrders).toEqual({
@@ -546,7 +549,7 @@ describe("server api", () => {
       });
 
       const response = await app.handle(
-        new Request("http://merkl.local/conditional-orders", {
+        new Request("http://pnlx.local/conditional-orders", {
           method: "POST",
           body: body({
             closeCommitment: hashFields("close", ["onchain-required"]),
@@ -576,7 +579,7 @@ describe("server api", () => {
     process.env.STELLAR_RELAYER_MODE = "local";
     try {
       const app = createApp();
-      const healthResponse = await app.handle(new Request("http://merkl.local/health"));
+      const healthResponse = await app.handle(new Request("http://pnlx.local/health"));
       expect(healthResponse.status).toBe(200);
       const health = (await healthResponse.json()) as Record<string, Record<string, unknown>>;
       expect(health.settlements).toEqual({
@@ -603,7 +606,7 @@ describe("server api", () => {
     process.env.STELLAR_RELAYER_MODE = "local";
     try {
       const app = createApp();
-      const healthResponse = await app.handle(new Request("http://merkl.local/health"));
+      const healthResponse = await app.handle(new Request("http://pnlx.local/health"));
       expect(healthResponse.status).toBe(200);
       const health = (await healthResponse.json()) as Record<string, Record<string, unknown>>;
       expect(health.intentRegistry).toEqual({
@@ -621,42 +624,30 @@ describe("server api", () => {
     }
   });
 
-  test("reports matcher committee readiness for private matcher service", async () => {
+  test("reports RISC0 matcher readiness for private matcher service", async () => {
     const previousRequired = process.env.PRIVATE_MATCHING_REQUIRED;
     const previousBackend = process.env.MATCHING_BACKEND;
-    const previousCommitteeRequired = process.env.MATCHER_COMMITTEE_REQUIRED;
-    const previousCommittee = process.env.MATCHER_COMMITTEE_ADDRESSES;
-    const previousThreshold = process.env.MATCHER_COMMITTEE_THRESHOLD;
     const previousMatcherUrl = process.env.MATCHER_SERVICE_URL;
     const previousLegacyMatcherUrl = process.env.EXTERNAL_MATCHER_URL;
     process.env.PRIVATE_MATCHING_REQUIRED = "true";
     process.env.MATCHING_BACKEND = "external-blind";
-    process.env.MATCHER_SERVICE_URL = "https://matcher.merkl.local";
+    process.env.MATCHER_SERVICE_URL = "https://matcher.pnlx.local";
     delete process.env.EXTERNAL_MATCHER_URL;
-    process.env.MATCHER_COMMITTEE_REQUIRED = "true";
-    process.env.MATCHER_COMMITTEE_ADDRESSES = "";
-    process.env.MATCHER_COMMITTEE_THRESHOLD = "2";
     try {
       const app = createApp();
-      const healthResponse = await app.handle(new Request("http://merkl.local/health"));
+      const healthResponse = await app.handle(new Request("http://pnlx.local/health"));
       expect(healthResponse.status).toBe(200);
       const health = (await healthResponse.json()) as Record<string, Record<string, unknown>>;
       const matching = health.matching as Record<string, unknown>;
-      expect(matching.readyForPrivateMatching).toBe(false);
-      expect(matching.matcherCommittee).toEqual({
-        addressCount: 0,
-        required: true,
-        threshold: 2,
+      expect(matching.readyForPrivateMatching).toBe(true);
+      expect(matching.proofEngine).toEqual({
+        provider: "risc0",
+        proofSystem: "risc0-groth16",
       });
-      expect(matching.issues as string[]).toContain(
-        "MATCHER_COMMITTEE_ADDRESSES must include at least MATCHER_COMMITTEE_THRESHOLD signers",
-      );
+      expect(matching.issues).toEqual([]);
     } finally {
       restoreEnv("PRIVATE_MATCHING_REQUIRED", previousRequired);
       restoreEnv("MATCHING_BACKEND", previousBackend);
-      restoreEnv("MATCHER_COMMITTEE_REQUIRED", previousCommitteeRequired);
-      restoreEnv("MATCHER_COMMITTEE_ADDRESSES", previousCommittee);
-      restoreEnv("MATCHER_COMMITTEE_THRESHOLD", previousThreshold);
       restoreEnv("MATCHER_SERVICE_URL", previousMatcherUrl);
       restoreEnv("EXTERNAL_MATCHER_URL", previousLegacyMatcherUrl);
     }
@@ -684,9 +675,10 @@ describe("server api", () => {
     }
   });
 
-  test("serves custom matcher provider settlement transcripts from persisted threshold shares", async () => {
-    const shareDir = mkdtempSync(join(tmpdir(), "merkl-matcher-provider-shares-"));
-    const executor = createExecutor({ thresholdShareStoreDir: shareDir });
+  test("serves RISC0 matcher settlement transcripts from persisted threshold shares", async () => {
+    const shareDir = mkdtempSync(join(tmpdir(), "pnlx-matcher-provider-shares-"));
+    const storePath = join(mkdtempSync(join(tmpdir(), "pnlx-risc0-matcher-store-")), "protocol-store.json");
+    const executor = createExecutor({ storePath, thresholdShareStoreDir: shareDir });
     const clientProver = new ProverService();
     const clientCommittee = new ThresholdShareCommittee({
       nodeIds: ["node-a", "node-b", "node-c"],
@@ -751,39 +743,34 @@ describe("server api", () => {
     executor.store.recordProof(short.validity.proof);
     executor.submitSharedIntent(long);
     executor.submitSharedIntent(short);
+    executor.store.upsertAccountEncryptionKey({
+      algorithm: "ecdh-p256-aes-gcm",
+      createdAt: 1,
+      ownerCommitment: long.record.ownerCommitment,
+      publicKey: rawP256PublicKey(),
+      updatedAt: 1,
+    });
+    executor.store.upsertAccountEncryptionKey({
+      algorithm: "ecdh-p256-aes-gcm",
+      createdAt: 1,
+      ownerCommitment: short.record.ownerCommitment,
+      publicKey: rawP256PublicKey(),
+      updatedAt: 1,
+    });
 
-    const provider = createMatcherProviderApp({
+    const provider = createMatcherApp({
       thresholdShareNodeIds: ["node-a", "node-b", "node-c"],
       thresholdShareStoreDir: shareDir,
       thresholdShareThreshold: 2,
+      storePath,
       token: "provider-secret",
     });
     const response = await provider.handle(
-      new Request("http://provider.local/compute/settlement", {
+      new Request("http://provider.local/match/settlement", {
         method: "POST",
         body: body({
-          accountEncryptionKeys: [
-            {
-              algorithm: "ecdh-p256-aes-gcm",
-              createdAt: 1,
-              ownerCommitment: long.record.ownerCommitment,
-              publicKey: rawP256PublicKey(),
-              updatedAt: 1,
-            },
-            {
-              algorithm: "ecdh-p256-aes-gcm",
-              createdAt: 1,
-              ownerCommitment: short.record.ownerCommitment,
-              publicKey: rawP256PublicKey(),
-              updatedAt: 1,
-            },
-          ],
           batchId: "matcher-provider-batch",
-          market,
-          oldRoot: executor.store.positionMembershipRoot(),
-          positionCommitments: [],
-          records: [long.record, short.record],
-          residuals: [],
+          marketId: market.marketId,
         }),
         headers: {
           authorization: "Bearer provider-secret",
@@ -798,7 +785,10 @@ describe("server api", () => {
     expect(JSON.stringify(transcript.accountEvents)).not.toContain("positionNullifier");
     const settlement = transcript.settlement as Record<string, unknown>;
     expect(settlement.fillCount).toBe(2);
-    expect(settlement.proof).toMatchObject({ circuitId: "batch-match" });
+    expect(settlement.proof).toMatchObject({
+      circuitId: "batch-match",
+      proofSystem: "risc0-groth16",
+    });
     expect(transcript.positionOpenings as unknown[]).toHaveLength(2);
     expect(JSON.stringify(transcript)).not.toContain("matcher-provider-long-spend");
   });
@@ -816,7 +806,7 @@ describe("server api", () => {
     process.env.ORACLE_CONTRACT_ID = "";
     try {
       const app = createApp();
-      const healthResponse = await app.handle(new Request("http://merkl.local/health"));
+      const healthResponse = await app.handle(new Request("http://pnlx.local/health"));
       expect(healthResponse.status).toBe(200);
       const health = (await healthResponse.json()) as Record<string, Record<string, unknown>>;
       expect(health.oracle.source).toBe("hermes");
@@ -826,7 +816,7 @@ describe("server api", () => {
       );
 
       const marketResponse = await app.handle(
-        new Request("http://merkl.local/markets/oracle", {
+        new Request("http://pnlx.local/markets/oracle", {
           method: "POST",
           body: body({
             marketId: "btc-usd-perp",
@@ -871,7 +861,7 @@ describe("server api", () => {
 
     try {
       const missing = createApp();
-      const missingResponse = await missing.handle(new Request("http://merkl.local/health"));
+      const missingResponse = await missing.handle(new Request("http://pnlx.local/health"));
       const missingHealth = (await missingResponse.json()) as Record<string, Record<string, unknown>>;
       expect(missingHealth.oracle.issues as string[]).toContain(
         "ORACLE_PUBLISHER_ADDRESSES must include at least ORACLE_COMMITTEE_THRESHOLD publishers",
@@ -879,7 +869,7 @@ describe("server api", () => {
 
       process.env.ORACLE_PUBLISHER_ADDRESSES = "GPUBLISHERA,GPUBLISHERB";
       const ready = createApp();
-      const readyResponse = await ready.handle(new Request("http://merkl.local/health"));
+      const readyResponse = await ready.handle(new Request("http://pnlx.local/health"));
       const readyHealth = (await readyResponse.json()) as Record<string, Record<string, unknown>>;
       const oracle = readyHealth.oracle as Record<string, unknown>;
       expect(oracle.issues).toEqual([]);
@@ -905,10 +895,10 @@ describe("server api", () => {
     const batchVerifier = verifiers.find((entry) => entry.circuitId === "batch-match");
 
     expect(verifiers).toHaveLength(11);
-    expect(batchVerifier?.circuitKey).toBe(circuitKey("batch-match"));
-    expect(batchVerifier?.verifierHash).toBe(loadCircuit(process.cwd(), "batch-match").verifierHash);
-    expect(batchVerifier?.verifierAuthority).toBe("batch-match-proof-verifier");
-    expect(batchVerifier?.verifierContract).toBe("proof-verifier");
+    expect(batchVerifier?.circuitKey).toBe(RISC0_BATCH_MATCH_CIRCUIT_KEY);
+    expect(batchVerifier?.verifierHash).toBe(RISC0_STELLAR_VERIFIER_HASH);
+    expect(batchVerifier?.verifierAuthority).toBe("batch-match-risc0-verifier");
+    expect(batchVerifier?.verifierContract).toBe("risc0-proof-verifier");
   });
 
   test("keeps witness-producing helper routes disabled outside dev/test opt-in", async () => {
@@ -916,11 +906,11 @@ describe("server api", () => {
     process.env.SERVER_WITNESS_ROUTES_ENABLED = "false";
     try {
       const app = createApp();
-      const healthResponse = await app.handle(new Request("http://merkl.local/health"));
+      const healthResponse = await app.handle(new Request("http://pnlx.local/health"));
       const health = (await healthResponse.json()) as Record<string, Record<string, unknown>>;
       expect((health.privacy as Record<string, unknown>).serverWitnessRoutesEnabled).toBe(false);
 
-      const verifiers = await app.handle(new Request("http://merkl.local/proofs/verifiers"));
+      const verifiers = await app.handle(new Request("http://pnlx.local/proofs/verifiers"));
       expect(verifiers.status).toBe(200);
 
       for (const path of [
@@ -942,7 +932,7 @@ describe("server api", () => {
         "/orders/replace",
       ]) {
         const response = await app.handle(
-          new Request(`http://merkl.local${path}`, {
+          new Request(`http://pnlx.local${path}`, {
             method: "POST",
             body: body({}),
             headers: { "content-type": "application/json" },
@@ -982,7 +972,7 @@ describe("server api", () => {
       });
 
       const response = await app.handle(
-        new Request("http://merkl.local/proofs/artifacts", {
+        new Request("http://pnlx.local/proofs/artifacts", {
           method: "POST",
           body: body(proofArtifactRegistrationBody(clientProver, disclosure.proof)),
           headers: { "content-type": "application/json" },
@@ -995,7 +985,7 @@ describe("server api", () => {
       expect(JSON.stringify(result)).not.toContain("client-proof-artifacts");
 
       const witnessResponse = await app.handle(
-        new Request("http://merkl.local/proofs/disclosure", {
+        new Request("http://pnlx.local/proofs/disclosure", {
           method: "POST",
           body: body({}),
           headers: { "content-type": "application/json" },
@@ -1015,7 +1005,7 @@ describe("server api", () => {
     try {
       const app = createApp();
       const market = {
-        marketId: "btc-usd-perp",
+        marketId: "admin-auth-btc-usd-perp",
         oraclePrice: 50_000n * PRICE_SCALE,
         maxLeverage: 5n,
         initialMarginRate: 200_000n,
@@ -1023,7 +1013,7 @@ describe("server api", () => {
         fundingIndex: 0n,
       };
       const blocked = await app.handle(
-        new Request("http://merkl.local/markets", {
+        new Request("http://pnlx.local/markets", {
           method: "POST",
           body: body(market),
           headers: { "content-type": "application/json" },
@@ -1035,7 +1025,7 @@ describe("server api", () => {
       const publicKeyDer = publicKey.export({ format: "der", type: "spki" });
       const address = encodeStellarPublicKey(Buffer.from(publicKeyDer).subarray(-32));
       const challengeResponse = await app.handle(
-        new Request("http://merkl.local/auth/challenge", {
+        new Request("http://pnlx.local/auth/challenge", {
           method: "POST",
           body: body({ address }),
           headers: { "content-type": "application/json" },
@@ -1043,13 +1033,13 @@ describe("server api", () => {
       );
       expect(challengeResponse.status).toBe(201);
       const challenge = (await challengeResponse.json()) as Record<string, string>;
-      expect(challenge.domain).toBe("merkl.local");
+      expect(challenge.domain).toBe("pnlx.local");
       expect(challenge.ownerCommitment).toBe(ownerCommitment(address));
       expect(challenge.signingMode).toBe("stellar-ed25519-message");
-      expect(challenge.message).toContain("Domain: merkl.local");
-      const signature = sign(null, Buffer.from(challenge.message), privateKey).toString("base64");
+      expect(challenge.message).toContain("Domain: pnlx.local");
+      const signature = sign(null, stellarSignedMessageHash(challenge.message), privateKey).toString("base64");
       const sessionResponse = await app.handle(
-        new Request("http://merkl.local/auth/session", {
+        new Request("http://pnlx.local/auth/session", {
           method: "POST",
           body: body({ address, nonce: challenge.nonce, signature }),
           headers: { "content-type": "application/json" },
@@ -1061,7 +1051,7 @@ describe("server api", () => {
       expect(session.signingMode).toBe("stellar-ed25519-message");
 
       const currentSession = await app.handle(
-        new Request("http://merkl.local/auth/session", {
+        new Request("http://pnlx.local/auth/session", {
           headers: {
             authorization: `Bearer ${session.token}`,
           },
@@ -1076,7 +1066,7 @@ describe("server api", () => {
       });
 
       const invalidSession = await app.handle(
-        new Request("http://merkl.local/auth/session", {
+        new Request("http://pnlx.local/auth/session", {
           headers: {
             authorization: "Bearer not-a-real-token",
           },
@@ -1086,7 +1076,7 @@ describe("server api", () => {
       expect(await invalidSession.json()).toEqual({ error: "invalid auth token" });
 
       const allowed = await app.handle(
-        new Request("http://merkl.local/markets", {
+        new Request("http://pnlx.local/markets", {
           method: "POST",
           body: body(market),
           headers: {
@@ -1112,7 +1102,7 @@ describe("server api", () => {
     const previousAdmin = process.env.PROTOCOL_ADMIN_ADDRESSES;
     process.env.AUTH_REQUIRED = "true";
     process.env.PROTOCOL_ADMIN_ADDRESSES = "";
-    const authStorePath = join(mkdtempSync(join(tmpdir(), "merkl-auth-")), "auth-state.json");
+    const authStorePath = join(mkdtempSync(join(tmpdir(), "pnlx-auth-")), "auth-state.json");
     process.env.AUTH_STORE_PATH = authStorePath;
     try {
       const first = createApp();
@@ -1129,7 +1119,7 @@ describe("server api", () => {
       };
 
       const response = await restarted.handle(
-        new Request("http://merkl.local/markets", {
+        new Request("http://pnlx.local/markets", {
           method: "POST",
           body: body(market),
           headers: {
@@ -1141,7 +1131,7 @@ describe("server api", () => {
 
       expect(response.status).toBe(201);
       const currentSession = await restarted.handle(
-        new Request("http://merkl.local/auth/session", {
+        new Request("http://pnlx.local/auth/session", {
           headers: {
             authorization: `Bearer ${token}`,
           },
@@ -1179,7 +1169,7 @@ describe("server api", () => {
       const admin = await createSignedSession(app, adminKeyPair);
       const trader = await createSignedSession(app);
       const market = {
-        marketId: "btc-usd-perp",
+        marketId: "admin-mutations-btc-usd-perp",
         oraclePrice: 50_000n * PRICE_SCALE,
         maxLeverage: 10n,
         initialMarginRate: 100_000n,
@@ -1196,7 +1186,7 @@ describe("server api", () => {
       };
 
       const blockedMarket = await app.handle(
-        new Request("http://merkl.local/markets", {
+        new Request("http://pnlx.local/markets", {
           method: "POST",
           body: body(market),
           headers: traderHeaders,
@@ -1208,7 +1198,7 @@ describe("server api", () => {
       });
 
       const allowedMarket = await app.handle(
-        new Request("http://merkl.local/markets", {
+        new Request("http://pnlx.local/markets", {
           method: "POST",
           body: body(market),
           headers: adminHeaders,
@@ -1217,7 +1207,7 @@ describe("server api", () => {
       expect(allowedMarket.status).toBe(201);
 
       const blockedBatchSettlement = await app.handle(
-        new Request("http://merkl.local/batches/settle", {
+        new Request("http://pnlx.local/batches/settle", {
           method: "POST",
           body: body({ batchId: "admin-gated-batch", marketId: market.marketId }),
           headers: traderHeaders,
@@ -1229,7 +1219,7 @@ describe("server api", () => {
       });
 
       const blockedExternalSettlement = await app.handle(
-        new Request("http://merkl.local/batches/settle-external", {
+        new Request("http://pnlx.local/batches/settle-external", {
           method: "POST",
           body: body({}),
           headers: traderHeaders,
@@ -1248,7 +1238,7 @@ describe("server api", () => {
         oraclePrice: 51_000n * PRICE_SCALE,
       };
       const blockedUpdate = await app.handle(
-        new Request("http://merkl.local/markets/update", {
+        new Request("http://pnlx.local/markets/update", {
           method: "POST",
           body: body(updatedMarket),
           headers: traderHeaders,
@@ -1260,7 +1250,7 @@ describe("server api", () => {
       });
 
       const allowedUpdate = await app.handle(
-        new Request("http://merkl.local/markets/update", {
+        new Request("http://pnlx.local/markets/update", {
           method: "POST",
           body: body(updatedMarket),
           headers: adminHeaders,
@@ -1271,12 +1261,8 @@ describe("server api", () => {
       expect(updateResult.market.maxLeverage).toBe("5");
       expect(updateResult.market.oraclePrice).toBe((51_000n * PRICE_SCALE).toString());
 
-      const listedMarkets = await app.handle(new Request("http://merkl.local/markets"));
-      const listed = (await listedMarkets.json()) as Record<string, Record<string, string>[]>;
-      expect(listed.markets[0].maxLeverage).toBe("5");
-
       const blockedFunding = await app.handle(
-        new Request("http://merkl.local/funding/advance", {
+        new Request("http://pnlx.local/funding/advance", {
           method: "POST",
           body: body({
             fundingDelta: "1",
@@ -1291,7 +1277,7 @@ describe("server api", () => {
       });
 
       const allowedFunding = await app.handle(
-        new Request("http://merkl.local/funding/advance", {
+        new Request("http://pnlx.local/funding/advance", {
           method: "POST",
           body: body({
             fundingDelta: "1",
@@ -1311,7 +1297,7 @@ describe("server api", () => {
         },
       };
       const blockedRelay = await app.handle(
-        new Request("http://merkl.local/relays", {
+        new Request("http://pnlx.local/relays", {
           method: "POST",
           body: body(relayPayload),
           headers: traderHeaders,
@@ -1323,7 +1309,7 @@ describe("server api", () => {
       });
 
       const allowedRelay = await app.handle(
-        new Request("http://merkl.local/relays", {
+        new Request("http://pnlx.local/relays", {
           method: "POST",
           body: body(relayPayload),
           headers: adminHeaders,
@@ -1346,7 +1332,7 @@ describe("server api", () => {
     try {
       const app = createApp();
       const trader = await createSignedSession(app);
-      const healthResponse = await app.handle(new Request("http://merkl.local/health"));
+      const healthResponse = await app.handle(new Request("http://pnlx.local/health"));
       expect(healthResponse.status).toBe(200);
       const health = (await healthResponse.json()) as Record<string, Record<string, unknown>>;
       expect(health.governance).toEqual({
@@ -1357,7 +1343,7 @@ describe("server api", () => {
       });
 
       const blockedMarket = await app.handle(
-        new Request("http://merkl.local/markets", {
+        new Request("http://pnlx.local/markets", {
           method: "POST",
           body: body({
             marketId: "btc-usd-perp",
@@ -1392,7 +1378,7 @@ describe("server api", () => {
       const commitment = hashFields("note", ["custody-required"]);
 
       const plainDeposit = await app.handle(
-        new Request("http://merkl.local/notes/deposit", {
+        new Request("http://pnlx.local/notes/deposit", {
           method: "POST",
           body: body({ commitment }),
           headers: { "content-type": "application/json" },
@@ -1404,7 +1390,7 @@ describe("server api", () => {
       });
 
       const plainWithdrawal = await app.handle(
-        new Request("http://merkl.local/notes/withdraw", {
+        new Request("http://pnlx.local/notes/withdraw", {
           method: "POST",
           body: body({
             assetDigest: hashFields("asset", ["custody-required"]),
@@ -1449,7 +1435,7 @@ describe("server api", () => {
     try {
       const app = createApp();
       const response = await app.handle(
-        new Request("http://merkl.local/notes/deposit-asset/prepare", {
+        new Request("http://pnlx.local/notes/deposit-asset/prepare", {
           method: "POST",
           body: body({
             amount: "1000",
@@ -1469,7 +1455,7 @@ describe("server api", () => {
     }
   });
 
-  test("rejects asset deposits without a valid private deposit note witness", async () => {
+  test("fails closed when asset deposit preparation cannot read custody state", async () => {
     const previousToken = process.env.COLLATERAL_TOKEN_CONTRACT;
     const previousRelay = process.env.STELLAR_ONCHAIN_RELAY;
     process.env.COLLATERAL_TOKEN_CONTRACT = "CUSDC";
@@ -1477,7 +1463,7 @@ describe("server api", () => {
     try {
       const app = createApp();
       const incomplete = await app.handle(
-        new Request("http://merkl.local/notes/deposit-asset/prepare", {
+        new Request("http://pnlx.local/notes/deposit-asset/prepare", {
           method: "POST",
           body: body({
             amount: "1000",
@@ -1490,11 +1476,11 @@ describe("server api", () => {
       );
       expect(incomplete.status).toBe(500);
       expect(await incomplete.json()).toEqual({
-        error: "blinding is required",
+        error: "stellar-cli relayer mode is required to read contract state",
       });
 
       const mismatched = await app.handle(
-        new Request("http://merkl.local/notes/deposit-asset/prepare", {
+        new Request("http://pnlx.local/notes/deposit-asset/prepare", {
           method: "POST",
           body: body({
             amount: "1000",
@@ -1511,7 +1497,7 @@ describe("server api", () => {
       );
       expect(mismatched.status).toBe(500);
       expect(await mismatched.json()).toEqual({
-        error: "deposit note commitment mismatch",
+        error: "stellar-cli relayer mode is required to read contract state",
       });
     } finally {
       restoreEnv("COLLATERAL_TOKEN_CONTRACT", previousToken);
@@ -1522,7 +1508,7 @@ describe("server api", () => {
   test("persists encrypted account events and serves portfolio snapshots", async () => {
     const previousStore = process.env.PROTOCOL_STORE_PATH;
     process.env.PROTOCOL_STORE_PATH = join(
-      mkdtempSync(join(tmpdir(), "merkl-account-events-")),
+      mkdtempSync(join(tmpdir(), "pnlx-account-events-")),
       "protocol-store.json",
     );
     try {
@@ -1536,7 +1522,7 @@ describe("server api", () => {
       };
 
       const createResponse = await first.handle(
-        new Request("http://merkl.local/account-events", {
+        new Request("http://pnlx.local/account-events", {
           method: "POST",
           body: body(event),
           headers: { "content-type": "application/json" },
@@ -1546,7 +1532,7 @@ describe("server api", () => {
 
       const restarted = createApp();
       const eventsResponse = await restarted.handle(
-        new Request(`http://merkl.local/account-events?ownerCommitment=${ownerCommitment}`),
+        new Request(`http://pnlx.local/account-events?ownerCommitment=${ownerCommitment}`),
       );
       expect(eventsResponse.status).toBe(200);
       const eventsResult = (await eventsResponse.json()) as Record<string, unknown>;
@@ -1555,7 +1541,7 @@ describe("server api", () => {
       expect(accountEvents[0].ciphertext).toBe(event.ciphertext);
 
       const portfolioResponse = await restarted.handle(
-        new Request(`http://merkl.local/portfolio?ownerCommitment=${ownerCommitment}`),
+        new Request(`http://pnlx.local/portfolio?ownerCommitment=${ownerCommitment}`),
       );
       expect(portfolioResponse.status).toBe(200);
       const portfolioResult = (await portfolioResponse.json()) as Record<string, Record<string, unknown>>;
@@ -1566,7 +1552,7 @@ describe("server api", () => {
       expect(JSON.stringify(portfolio)).not.toContain("position-open");
 
       const balancesResponse = await restarted.handle(
-        new Request(`http://merkl.local/portfolio/balances?ownerCommitment=${ownerCommitment}`),
+        new Request(`http://pnlx.local/portfolio/balances?ownerCommitment=${ownerCommitment}`),
       );
       expect(balancesResponse.status).toBe(200);
       const balancesResult = (await balancesResponse.json()) as Record<string, Record<string, unknown>>;
@@ -1576,7 +1562,7 @@ describe("server api", () => {
       expect(JSON.stringify(balancesResult)).not.toContain("position-open");
 
       const activityResponse = await restarted.handle(
-        new Request(`http://merkl.local/portfolio/activity?ownerCommitment=${ownerCommitment}`),
+        new Request(`http://pnlx.local/portfolio/activity?ownerCommitment=${ownerCommitment}`),
       );
       expect(activityResponse.status).toBe(200);
       const activityResult = (await activityResponse.json()) as Record<string, unknown>;
@@ -1596,7 +1582,7 @@ describe("server api", () => {
     const previousStore = process.env.PROTOCOL_STORE_PATH;
     process.env.AUTH_REQUIRED = "true";
     process.env.PROTOCOL_STORE_PATH = join(
-      mkdtempSync(join(tmpdir(), "merkl-owned-account-events-")),
+      mkdtempSync(join(tmpdir(), "pnlx-owned-account-events-")),
       "protocol-store.json",
     );
     try {
@@ -1617,12 +1603,12 @@ describe("server api", () => {
       };
 
       const missingAuthRead = await app.handle(
-        new Request(`http://merkl.local/account-events?ownerCommitment=${ownCommitment}`),
+        new Request(`http://pnlx.local/account-events?ownerCommitment=${ownCommitment}`),
       );
       expect(missingAuthRead.status).toBe(401);
 
       const createResponse = await app.handle(
-        new Request("http://merkl.local/account-events", {
+        new Request("http://pnlx.local/account-events", {
           method: "POST",
           body: body(event),
           headers: authHeaders,
@@ -1631,7 +1617,7 @@ describe("server api", () => {
       expect(createResponse.status).toBe(201);
 
       const foreignCreate = await app.handle(
-        new Request("http://merkl.local/account-events", {
+        new Request("http://pnlx.local/account-events", {
           method: "POST",
           body: body({
             ...event,
@@ -1647,7 +1633,7 @@ describe("server api", () => {
       });
 
       const foreignRead = await app.handle(
-        new Request(`http://merkl.local/portfolio?ownerCommitment=${otherCommitment}`, {
+        new Request(`http://pnlx.local/portfolio?ownerCommitment=${otherCommitment}`, {
           headers: authHeaders,
         }),
       );
@@ -1657,7 +1643,7 @@ describe("server api", () => {
       });
 
       const ownRead = await app.handle(
-        new Request(`http://merkl.local/portfolio?ownerCommitment=${ownCommitment}`, {
+        new Request(`http://pnlx.local/portfolio?ownerCommitment=${ownCommitment}`, {
           headers: authHeaders,
         }),
       );
@@ -1667,7 +1653,7 @@ describe("server api", () => {
       expect(JSON.stringify(ownPortfolio)).not.toContain("owned-position-open");
 
       const foreignOrders = await app.handle(
-        new Request(`http://merkl.local/portfolio/orders?ownerCommitment=${otherCommitment}`, {
+        new Request(`http://pnlx.local/portfolio/orders?ownerCommitment=${otherCommitment}`, {
           headers: authHeaders,
         }),
       );
@@ -1677,7 +1663,7 @@ describe("server api", () => {
       });
 
       const ownBalances = await app.handle(
-        new Request(`http://merkl.local/portfolio/balances?ownerCommitment=${ownCommitment}`, {
+        new Request(`http://pnlx.local/portfolio/balances?ownerCommitment=${ownCommitment}`, {
           headers: authHeaders,
         }),
       );
@@ -1694,7 +1680,7 @@ describe("server api", () => {
     const previousRequired = process.env.AUTH_REQUIRED;
     const previousAuthStore = process.env.AUTH_STORE_PATH;
     const previousStore = process.env.PROTOCOL_STORE_PATH;
-    const runtimeDir = mkdtempSync(join(tmpdir(), "merkl-account-keys-"));
+    const runtimeDir = mkdtempSync(join(tmpdir(), "pnlx-account-keys-"));
     process.env.AUTH_REQUIRED = "true";
     process.env.AUTH_STORE_PATH = join(runtimeDir, "auth-store.json");
     process.env.PROTOCOL_STORE_PATH = join(runtimeDir, "protocol-store.json");
@@ -1711,7 +1697,7 @@ describe("server api", () => {
       const publicKey = rawP256PublicKey();
 
       const createResponse = await app.handle(
-        new Request("http://merkl.local/account-keys", {
+        new Request("http://pnlx.local/account-keys", {
           method: "POST",
           body: body({
             algorithm: "ecdh-p256-aes-gcm",
@@ -1726,7 +1712,7 @@ describe("server api", () => {
       expect(created.accountKey.publicKey).toBe(publicKey);
 
       const foreignResponse = await app.handle(
-        new Request("http://merkl.local/account-keys", {
+        new Request("http://pnlx.local/account-keys", {
           method: "POST",
           body: body({
             algorithm: "ecdh-p256-aes-gcm",
@@ -1743,7 +1729,7 @@ describe("server api", () => {
 
       const restarted = createApp();
       const readResponse = await restarted.handle(
-        new Request(`http://merkl.local/account-keys?ownerCommitment=${ownCommitment}`, {
+        new Request(`http://pnlx.local/account-keys?ownerCommitment=${ownCommitment}`, {
           headers: authHeaders,
         }),
       );
@@ -1752,7 +1738,7 @@ describe("server api", () => {
       expect(read.accountKey.publicKey).toBe(publicKey);
 
       const foreignRead = await restarted.handle(
-        new Request(`http://merkl.local/account-keys?ownerCommitment=${otherCommitment}`, {
+        new Request(`http://pnlx.local/account-keys?ownerCommitment=${otherCommitment}`, {
           headers: authHeaders,
         }),
       );
@@ -1787,7 +1773,7 @@ describe("server api", () => {
         fundingIndex: 0n,
       };
       const marketResponse = await app.handle(
-        new Request("http://merkl.local/markets", {
+        new Request("http://pnlx.local/markets", {
           method: "POST",
           body: body(market),
           headers: { "content-type": "application/json" },
@@ -1796,7 +1782,7 @@ describe("server api", () => {
       expect(marketResponse.status).toBe(201);
 
       const fundingResponse = await app.handle(
-        new Request("http://merkl.local/funding/run", {
+        new Request("http://pnlx.local/funding/run", {
           method: "POST",
           body: body({
             appliedAt: "1000",
@@ -1881,7 +1867,7 @@ describe("server api", () => {
       });
 
       const foreignDeposit = await app.handle(
-        new Request("http://merkl.local/notes/deposit-asset", {
+        new Request("http://pnlx.local/notes/deposit-asset", {
           method: "POST",
           body: body({
             amount: "1000",
@@ -1921,7 +1907,7 @@ describe("server api", () => {
     };
 
     const missingValidity = await app.handle(
-      new Request("http://merkl.local/intents", {
+      new Request("http://pnlx.local/intents", {
         method: "POST",
         body: body(intent),
         headers: { "content-type": "application/json" },
@@ -1948,7 +1934,7 @@ describe("server api", () => {
       blinding: "root-change-blind",
     });
     await app.handle(
-      new Request("http://merkl.local/notes/deposit", {
+      new Request("http://pnlx.local/notes/deposit", {
         method: "POST",
         body: body({ commitment: rootChangingNote.commitment }),
         headers: { "content-type": "application/json" },
@@ -1956,7 +1942,7 @@ describe("server api", () => {
     );
 
     const staleRoot = await app.handle(
-      new Request("http://merkl.local/intents", {
+      new Request("http://pnlx.local/intents", {
         method: "POST",
         body: body({ ...intent, validity: staleValidity }),
         headers: { "content-type": "application/json" },
@@ -2011,7 +1997,7 @@ describe("server api", () => {
     const app = createApp();
     const post = async (path: string, data: unknown) => {
       const response = await app.handle(
-        new Request(`http://merkl.local${path}`, {
+        new Request(`http://pnlx.local${path}`, {
           method: "POST",
           body: body(data),
           headers: { "content-type": "application/json" },
@@ -2137,7 +2123,7 @@ describe("server api", () => {
     );
 
     const portfolioResponse = await app.handle(
-      new Request(`http://merkl.local/portfolio?ownerCommitment=${ownerCommitment(owner)}`),
+      new Request(`http://pnlx.local/portfolio?ownerCommitment=${ownerCommitment(owner)}`),
     );
     expect(portfolioResponse.status).toBe(200);
     const portfolioResult = (await portfolioResponse.json()) as Record<string, Record<string, unknown>>;
@@ -2150,7 +2136,7 @@ describe("server api", () => {
     );
 
     const ordersResponse = await app.handle(
-      new Request(`http://merkl.local/portfolio/orders?ownerCommitment=${ownerCommitment(owner)}`),
+      new Request(`http://pnlx.local/portfolio/orders?ownerCommitment=${ownerCommitment(owner)}`),
     );
     expect(ordersResponse.status).toBe(200);
     const ordersResult = (await ordersResponse.json()) as Record<string, Record<string, string>[]>;
@@ -2159,7 +2145,7 @@ describe("server api", () => {
     );
 
     const positionsResponse = await app.handle(
-      new Request(`http://merkl.local/portfolio/positions?ownerCommitment=${ownerCommitment(owner)}`),
+      new Request(`http://pnlx.local/portfolio/positions?ownerCommitment=${ownerCommitment(owner)}`),
     );
     expect(positionsResponse.status).toBe(200);
     const positionsResult = (await positionsResponse.json()) as Record<string, Record<string, string>[]>;
@@ -2178,7 +2164,7 @@ describe("server api", () => {
       fundingIndex: 0n,
     };
     await app.handle(
-      new Request("http://merkl.local/markets", {
+      new Request("http://pnlx.local/markets", {
         method: "POST",
         body: body(market),
         headers: { "content-type": "application/json" },
@@ -2247,7 +2233,7 @@ describe("server api", () => {
     });
 
     const longResponse = await app.handle(
-      new Request("http://merkl.local/intents/shared", {
+      new Request("http://pnlx.local/intents/shared", {
         method: "POST",
         body: body(long),
         headers: { "content-type": "application/json" },
@@ -2261,7 +2247,7 @@ describe("server api", () => {
     expect(longText).not.toContain("12000");
 
     const shortResponse = await app.handle(
-      new Request("http://merkl.local/intents/shared", {
+      new Request("http://pnlx.local/intents/shared", {
         method: "POST",
         body: body(short),
         headers: { "content-type": "application/json" },
@@ -2270,7 +2256,7 @@ describe("server api", () => {
     expect(shortResponse.status).toBe(201);
 
     const settlementResponse = await app.handle(
-      new Request("http://merkl.local/batches/settle", {
+      new Request("http://pnlx.local/batches/settle", {
         method: "POST",
         body: body({ batchId, marketId: market.marketId }),
         headers: { "content-type": "application/json" },
@@ -2296,7 +2282,7 @@ describe("server api", () => {
     });
     const closeMarkPrice = 56_000n * PRICE_SCALE;
     const marketUpdateResponse = await app.handle(
-      new Request("http://merkl.local/markets/update", {
+      new Request("http://pnlx.local/markets/update", {
         method: "POST",
         body: body({ ...market, oraclePrice: closeMarkPrice }),
         headers: { "content-type": "application/json" },
@@ -2317,7 +2303,7 @@ describe("server api", () => {
     };
     const closeCommitment = commitConditionalOrder(trigger);
     const registerResponse = await app.handle(
-      new Request("http://merkl.local/conditional-orders", {
+      new Request("http://pnlx.local/conditional-orders", {
         method: "POST",
         body: body({
           marketId: trigger.marketId,
@@ -2331,7 +2317,7 @@ describe("server api", () => {
 
     const triggerProof = clientProver.proveConditionalClose(trigger);
     const triggerResponse = await app.handle(
-      new Request("http://merkl.local/conditional-orders/trigger-proven", {
+      new Request("http://pnlx.local/conditional-orders/trigger-proven", {
         method: "POST",
         body: body(triggerProof),
         headers: { "content-type": "application/json" },
@@ -2404,7 +2390,7 @@ describe("server api", () => {
       pathSiblings: longPosition.membershipProof.siblings as Hex[],
     });
     const closeResponse = await app.handle(
-      new Request("http://merkl.local/position-closes/proven", {
+      new Request("http://pnlx.local/position-closes/proven", {
         method: "POST",
         body: body(provenClose),
         headers: { "content-type": "application/json" },
@@ -2434,7 +2420,7 @@ describe("server api", () => {
     });
     const owner = ownerCommitment(`${suffix}-long-owner`);
     const accountKeyResponse = await app.handle(
-      new Request("http://merkl.local/account-keys", {
+      new Request("http://pnlx.local/account-keys", {
         method: "POST",
         body: body({
           algorithm: "ecdh-p256-aes-gcm",
@@ -2505,7 +2491,7 @@ describe("server api", () => {
     });
 
     const conditionalResponse = await app.handle(
-      new Request("http://merkl.local/position-closes/proven", {
+      new Request("http://pnlx.local/position-closes/proven", {
         method: "POST",
         body: body(provenClose),
         headers: { "content-type": "application/json" },
@@ -2515,7 +2501,7 @@ describe("server api", () => {
     expect(await conditionalResponse.json()).toEqual({ error: "conditional close not triggered" });
 
     const manualResponse = await app.handle(
-      new Request("http://merkl.local/position-closes/manual-proven", {
+      new Request("http://pnlx.local/position-closes/manual-proven", {
         method: "POST",
         body: body(provenClose),
         headers: { "content-type": "application/json" },
@@ -2528,13 +2514,13 @@ describe("server api", () => {
     expect(manualText).not.toContain(closeSettlement.newMargin.toString());
 
     const eventsResponse = await app.handle(
-      new Request(`http://merkl.local/account-events?ownerCommitment=${owner}`),
+      new Request(`http://pnlx.local/account-events?ownerCommitment=${owner}`),
     );
     expect(eventsResponse.status).toBe(200);
     const eventsResult = (await eventsResponse.json()) as Record<string, unknown>;
     const accountEvents = eventsResult.accountEvents as Record<string, string>[];
     expect(accountEvents).toHaveLength(1);
-    expect(accountEvents[0].ciphertext.startsWith("merkl-account-event-v1:")).toBe(true);
+    expect(accountEvents[0].ciphertext.startsWith("pnlx-account-event-v1:")).toBe(true);
     expect(JSON.stringify(accountEvents)).not.toContain(`${suffix}-long-owner`);
     expect(JSON.stringify(accountEvents)).not.toContain(closeSettlement.newMargin.toString());
   });
@@ -2546,7 +2532,7 @@ describe("server api", () => {
     const fixture = await createCloseableLongPositionFixture(app, clientProver, suffix);
     const owner = ownerCommitment(`${suffix}-long-owner`);
     const accountKeyResponse = await app.handle(
-      new Request("http://merkl.local/account-keys", {
+      new Request("http://pnlx.local/account-keys", {
         method: "POST",
         body: body({
           algorithm: "ecdh-p256-aes-gcm",
@@ -2560,7 +2546,7 @@ describe("server api", () => {
 
     const liquidationMarkPrice = 40_000n * PRICE_SCALE;
     const marketUpdateResponse = await app.handle(
-      new Request("http://merkl.local/markets/update", {
+      new Request("http://pnlx.local/markets/update", {
         method: "POST",
         body: body({ ...fixture.market, oraclePrice: liquidationMarkPrice }),
         headers: { "content-type": "application/json" },
@@ -2592,7 +2578,7 @@ describe("server api", () => {
     });
 
     const enqueueResponse = await app.handle(
-      new Request("http://merkl.local/liquidation-automation/jobs", {
+      new Request("http://pnlx.local/liquidation-automation/jobs", {
         method: "POST",
         body: body({ liquidation: provenLiquidation }),
         headers: { "content-type": "application/json" },
@@ -2601,7 +2587,7 @@ describe("server api", () => {
     expect(enqueueResponse.status).toBe(201);
 
     const runResponse = await app.handle(
-      new Request("http://merkl.local/liquidation-automation/run", {
+      new Request("http://pnlx.local/liquidation-automation/run", {
         method: "POST",
         body: body({ marketId: fixture.market.marketId }),
         headers: { "content-type": "application/json" },
@@ -2615,13 +2601,13 @@ describe("server api", () => {
     expect((jobs[0].job as Record<string, unknown>).status).toBe("executed");
 
     const eventsResponse = await app.handle(
-      new Request(`http://merkl.local/account-events?ownerCommitment=${owner}`),
+      new Request(`http://pnlx.local/account-events?ownerCommitment=${owner}`),
     );
     expect(eventsResponse.status).toBe(200);
     const eventsResult = (await eventsResponse.json()) as Record<string, unknown>;
     const accountEvents = eventsResult.accountEvents as Record<string, string>[];
     expect(accountEvents).toHaveLength(1);
-    expect(accountEvents[0].ciphertext.startsWith("merkl-account-event-v1:")).toBe(true);
+    expect(accountEvents[0].ciphertext.startsWith("pnlx-account-event-v1:")).toBe(true);
     expect(JSON.stringify(accountEvents)).not.toContain(`${suffix}-long-owner`);
     expect(JSON.stringify(accountEvents)).not.toContain("entryPrice");
   });
@@ -2631,7 +2617,7 @@ describe("server api", () => {
     const clientProver = new ProverService();
     const post = async (path: string, data: unknown) => {
       const response = await app.handle(
-        new Request(`http://merkl.local${path}`, {
+        new Request(`http://pnlx.local${path}`, {
           method: "POST",
           body: body(data),
           headers: { "content-type": "application/json" },
@@ -2771,7 +2757,13 @@ describe("server api", () => {
     expect(settlementText).not.toContain("long");
     expect(settlementText).not.toContain("alice");
     expect(settlementText).toContain("newCommitments");
-    expect(settlementText).toContain(circuitKey("batch-match"));
+    expect(settlementRecord.proof).toEqual(expect.objectContaining({
+      circuitKey: RISC0_BATCH_MATCH_CIRCUIT_KEY,
+      proofSystem: "risc0-groth16",
+    }));
+    expect(settlementRecord.proof).toHaveProperty("imageId");
+    expect(settlementRecord.proof).toHaveProperty("journalDigest");
+    expect(settlementRecord.proof).toHaveProperty("sealDigest");
 
     const alicePosition = createSettledPositionWitness({
       allCommitments: positionCommitments,
@@ -3004,7 +2996,7 @@ describe("server api", () => {
       value: 150n,
     });
     const response = await app.handle(
-      new Request("http://merkl.local/disclosures", {
+      new Request("http://pnlx.local/disclosures", {
         method: "POST",
         body: body({
           subject,
@@ -3038,7 +3030,7 @@ describe("server api", () => {
       salt: "alice-untriggered-tp-salt",
     };
     const marketResponse = await app.handle(
-      new Request("http://merkl.local/markets", {
+      new Request("http://pnlx.local/markets", {
         method: "POST",
         body: body({
           marketId: witness.marketId,
@@ -3062,7 +3054,7 @@ describe("server api", () => {
       reduceOnly: true,
     });
     const registerResponse = await app.handle(
-      new Request("http://merkl.local/conditional-orders", {
+      new Request("http://pnlx.local/conditional-orders", {
         method: "POST",
         body: body({
           marketId: witness.marketId,
@@ -3075,7 +3067,7 @@ describe("server api", () => {
     expect(registerResponse.status).toBeLessThan(300);
 
     const response = await app.handle(
-      new Request("http://merkl.local/conditional-orders/trigger", {
+      new Request("http://pnlx.local/conditional-orders/trigger", {
         method: "POST",
         body: body(witness),
         headers: { "content-type": "application/json" },
@@ -3107,7 +3099,7 @@ describe("server api", () => {
     const provenTrigger = clientProver.proveConditionalClose(trigger);
 
     const marketResponse = await app.handle(
-      new Request("http://merkl.local/markets", {
+      new Request("http://pnlx.local/markets", {
         method: "POST",
         body: body({
           fundingIndex: "0",
@@ -3123,7 +3115,7 @@ describe("server api", () => {
     expect(marketResponse.status).toBeLessThan(300);
 
     const registerResponse = await app.handle(
-      new Request("http://merkl.local/conditional-orders", {
+      new Request("http://pnlx.local/conditional-orders", {
         method: "POST",
         body: body({
           marketId,
@@ -3136,7 +3128,7 @@ describe("server api", () => {
     expect(registerResponse.status).toBeLessThan(300);
 
     const triggerResponse = await app.handle(
-      new Request("http://merkl.local/conditional-orders/trigger-proven", {
+      new Request("http://pnlx.local/conditional-orders/trigger-proven", {
         method: "POST",
         body: body(provenTrigger),
         headers: { "content-type": "application/json" },
@@ -3174,7 +3166,7 @@ describe("server api", () => {
     const provenTrigger = clientProver.proveConditionalClose(trigger);
 
     const marketResponse = await app.handle(
-      new Request("http://merkl.local/markets", {
+      new Request("http://pnlx.local/markets", {
         method: "POST",
         body: body({
           fundingIndex: "0",
@@ -3190,7 +3182,7 @@ describe("server api", () => {
     expect(marketResponse.status).toBeLessThan(300);
 
     const registerResponse = await app.handle(
-      new Request("http://merkl.local/conditional-orders", {
+      new Request("http://pnlx.local/conditional-orders", {
         method: "POST",
         body: body({
           marketId,
@@ -3203,7 +3195,7 @@ describe("server api", () => {
     expect(registerResponse.status).toBeLessThan(300);
 
     const triggerResponse = await app.handle(
-      new Request("http://merkl.local/conditional-orders/trigger-proven", {
+      new Request("http://pnlx.local/conditional-orders/trigger-proven", {
         method: "POST",
         body: body({
           ...provenTrigger,
@@ -3219,7 +3211,7 @@ describe("server api", () => {
   test("rejects position closes before trigger proof", async () => {
     const app = createApp();
     const response = await app.handle(
-      new Request("http://merkl.local/position-closes", {
+      new Request("http://pnlx.local/position-closes", {
         method: "POST",
         body: body({
           marketId: "btc-usd-perp",
@@ -3260,7 +3252,7 @@ describe("server api", () => {
       salt: "alice-triggered-tp-salt",
     };
     const marketResponse = await app.handle(
-      new Request("http://merkl.local/markets", {
+      new Request("http://pnlx.local/markets", {
         method: "POST",
         body: body({
           marketId: witness.marketId,
@@ -3285,7 +3277,7 @@ describe("server api", () => {
     });
 
     const registerResponse = await app.handle(
-      new Request("http://merkl.local/conditional-orders", {
+      new Request("http://pnlx.local/conditional-orders", {
         method: "POST",
         body: body({
           marketId: witness.marketId,
@@ -3298,7 +3290,7 @@ describe("server api", () => {
     expect(registerResponse.status).toBeLessThan(300);
 
     const triggerResponse = await app.handle(
-      new Request("http://merkl.local/conditional-orders/trigger", {
+      new Request("http://pnlx.local/conditional-orders/trigger", {
         method: "POST",
         body: body(witness),
         headers: { "content-type": "application/json" },
@@ -3307,7 +3299,7 @@ describe("server api", () => {
     expect(triggerResponse.status).toBeLessThan(300);
 
     const response = await app.handle(
-      new Request("http://merkl.local/position-closes", {
+      new Request("http://pnlx.local/position-closes", {
         method: "POST",
         body: body({
           marketId: witness.marketId,

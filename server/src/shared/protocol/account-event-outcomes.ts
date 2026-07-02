@@ -5,7 +5,7 @@ import type {
   PositionCloseRecord,
   PositionLifecycleRecord,
   ResidualOrderRecord,
-} from "@merkl/protocol-types";
+} from "@pnlx/protocol-types";
 import {
   liquidationAccountEventDataCommitment,
   liquidationAccountEventId,

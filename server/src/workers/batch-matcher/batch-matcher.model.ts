@@ -1,4 +1,4 @@
-import type { Fill, Hex, MarketConfig, OrderLifecycleUpdate } from "@merkl/protocol-types";
+import type { Fill, Hex, MarketConfig, OrderLifecycleUpdate } from "@pnlx/protocol-types";
 import type { RecoveredIntent } from "@/workers/threshold-shares/threshold-shares.model";
 
 export interface MatchInput {

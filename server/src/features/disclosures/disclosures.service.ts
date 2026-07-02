@@ -1,4 +1,4 @@
-import { contractPublicInputHash, publicField, publicU128 } from "@merkl/proof-system";
+import { contractPublicInputHash, publicField, publicU128 } from "@pnlx/proof-system";
 import type { ServerEnv } from "@/config/env";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { OnchainRelayResult } from "@/workers/onchain/onchain.model";

@@ -1,5 +1,5 @@
-import { fundingIndexDelta } from "@merkl/market-math";
-import type { FundingUpdateRecord, MarketConfig } from "@merkl/protocol-types";
+import { fundingIndexDelta } from "@pnlx/market-math";
+import type { FundingUpdateRecord, MarketConfig } from "@pnlx/protocol-types";
 import type { OnchainRelay, OnchainRelayResult } from "@/workers/onchain/onchain.model";
 import type { Prover } from "@/workers/prover/prover.model";
 import type { ExecutorService } from "@/workers/executor/executor.service";

@@ -8,7 +8,7 @@ import {
   registerProofBundle,
   type ClientProofProvider,
 } from "@/lib/client-proof-provider";
-import { merklGet, merklPost } from "@/lib/merkl-api";
+import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
 import { createCircuitMarginNote, randomLabel } from "@/lib/private-note";
 import {
   buildSharedIntentPayload,
@@ -19,6 +19,8 @@ import type { Hex, MarketDisplay, ServerIntentRecord, Side } from "@/types/tradi
 import type { WalletSession } from "@/lib/wallet-auth";
 
 const PRICE_SCALE = 100_000_000;
+
+export type TradeSubmitStage = "hashing" | "shielding" | "signing" | "proving" | "matching" | "done";
 
 interface DepositNoteResponse {
   note: {
@@ -38,11 +40,14 @@ interface ProveAndSubmitIntentResponse {
   intent: ServerIntentRecord;
 }
 
+type SharedIntentResponse = ServerIntentRecord | { intent: ServerIntentRecord };
+
 interface HealthResponse {
   custody: {
     required: boolean;
     collateralAsset: {
       tokenContract: string;
+      tokenDigest?: Hex;
     };
   };
 }
@@ -53,9 +58,11 @@ export interface SubmitTradeIntentInput {
   limitPrice: number;
   margin: number;
   market: MarketDisplay;
+  onProgress?: (stage: TradeSubmitStage) => void;
   proofProvider?: ClientProofProvider;
   session: WalletSession;
   side: Side;
+  sizingPrice?: number;
   stopLossPrice?: number | null;
   takeProfitPrice?: number | null;
 }
@@ -66,22 +73,27 @@ export interface SubmitTradeIntentResult {
 }
 
 export async function submitTradeIntent(input: SubmitTradeIntentInput): Promise<SubmitTradeIntentResult> {
+  markProgress(input, "hashing");
   const margin = toPositiveInteger(input.margin, "Private margin");
   const limitPrice = toPrice(input.limitPrice);
-  const protocolSize = protocolSizeFromTicket(input.margin, input.leverage, input.limitPrice);
+  const sizingPrice = input.sizingPrice ?? input.limitPrice;
+  const entryPrice = toPrice(sizingPrice);
+  const protocolSize = protocolSizeFromTicket(input.margin, input.leverage, sizingPrice);
   if (protocolSize < 1n) {
     throw new Error("Increase private margin; this market currently requires at least 1 base contract");
   }
   if (input.leverage > input.market.maxLeverage) {
     throw new Error(`Max leverage for ${input.market.pair} is ${input.market.maxLeverage}x`);
   }
-  const conditionalStrategy = normalizeConditionalStrategy(input, limitPrice);
+  const conditionalStrategy = normalizeConditionalStrategy(input, entryPrice);
 
-  const health = await merklGet<HealthResponse>("/health", input.session.token);
+  const health = await pnlxGet<HealthResponse>("/health", input.session.token);
   if (health.custody.required) {
     return submitCustodySharedTradeIntent({
       ...input,
+      collateralTokenDigest: health.custody.collateralAsset.tokenDigest,
       collateralToken: health.custody.collateralAsset.tokenContract,
+      entryPriceProtocol: entryPrice,
       limitPriceProtocol: limitPrice,
       marginProtocol: margin,
       protocolSize,
@@ -91,6 +103,7 @@ export async function submitTradeIntent(input: SubmitTradeIntentInput): Promise<
 
   return submitDevWitnessTradeIntent({
     ...input,
+    entryPriceProtocol: entryPrice,
     limitPriceProtocol: limitPrice,
     marginProtocol: margin,
     protocolSize,
@@ -101,11 +114,13 @@ export async function submitTradeIntent(input: SubmitTradeIntentInput): Promise<
 async function submitDevWitnessTradeIntent(
   input: SubmitTradeIntentInput & {
     limitPriceProtocol: bigint;
+    entryPriceProtocol: bigint;
     marginProtocol: bigint;
     protocolSize: bigint;
     conditionalStrategy: PendingConditionalStrategyInput | null;
   },
 ): Promise<SubmitTradeIntentResult> {
+  markProgress(input, "shielding");
   const note = await createCircuitMarginNote({
     amount: input.marginProtocol,
     assetId: input.collateralAsset.toLowerCase(),
@@ -114,11 +129,12 @@ async function submitDevWitnessTradeIntent(
     rho: randomLabel("rho"),
     spendSecret: randomLabel("spend"),
   });
-  const deposit = await merklPost<DepositNoteResponse>(
+  const deposit = await pnlxPost<DepositNoteResponse>(
     "/notes/deposit",
     { commitment: note.commitment },
     input.session.token,
   );
+  markProgress(input, "proving");
   const intent = {
     batchId: `ui-${Date.now()}-${input.market.marketId}`,
     limitPrice: input.limitPriceProtocol.toString(),
@@ -131,7 +147,7 @@ async function submitDevWitnessTradeIntent(
     side: input.side,
     size: input.protocolSize.toString(),
   };
-  const response = await merklPost<ProveAndSubmitIntentResponse>(
+  const response = await pnlxPost<ProveAndSubmitIntentResponse>(
     "/intents/prove-and-submit",
     {
       ...intent,
@@ -150,20 +166,23 @@ async function submitDevWitnessTradeIntent(
     },
     input.session.token,
   );
+  const submittedIntent = intentRecordFromResponse(response);
+  markProgress(input, "matching");
 
   storePrivateTradeNote({
     amount: input.marginProtocol.toString(),
     commitment: note.commitment,
     createdAt: Date.now(),
-    intentCommitment: response.intent.intentCommitment,
+    intentCommitment: submittedIntent.intentCommitment,
     marketId: input.market.marketId,
     noteNullifier: note.noteNullifier,
     ownerCommitment: input.session.ownerCommitment,
   });
-  storePendingConditionalStrategy(response.intent.intentCommitment, input);
+  storePendingConditionalStrategy(submittedIntent.intentCommitment, input);
+  markProgress(input, "done");
 
   return {
-    intent: response.intent,
+    intent: submittedIntent,
     protocolSize: input.protocolSize,
   };
 }
@@ -171,7 +190,9 @@ async function submitDevWitnessTradeIntent(
 async function submitCustodySharedTradeIntent(
   input: SubmitTradeIntentInput & {
     collateralToken: string;
+    collateralTokenDigest?: Hex;
     limitPriceProtocol: bigint;
+    entryPriceProtocol: bigint;
     marginProtocol: bigint;
     protocolSize: bigint;
     conditionalStrategy: PendingConditionalStrategyInput | null;
@@ -184,14 +205,20 @@ async function submitCustodySharedTradeIntent(
   if (!input.collateralToken) {
     throw new Error("Collateral token contract is not configured");
   }
+  if (!input.collateralTokenDigest) {
+    throw new Error("Collateral token digest is not configured");
+  }
 
+  markProgress(input, "shielding");
   const prepared = await prepareWalletAssetDeposit({
     amount: input.marginProtocol,
+    assetDigest: input.collateralTokenDigest,
     assetId: input.collateralAsset.toLowerCase(),
     proofProvider,
     session: input.session,
     token: input.collateralToken,
   });
+  markProgress(input, "signing");
   const relay = await signAndRelayPreparedDeposit({
     prepared: prepared.prepared,
     session: input.session,
@@ -201,6 +228,7 @@ async function submitCustodySharedTradeIntent(
     relay,
     session: input.session,
   });
+  markProgress(input, "proving");
   const intent = {
     batchId: `ui-${Date.now()}-${input.market.marketId}`,
     limitPrice: input.limitPriceProtocol,
@@ -245,27 +273,53 @@ async function submitCustodySharedTradeIntent(
     mpc: await getSharedIntentMpcConfig(input.session.token),
     validity: normalizeIntentValidity(validity),
   });
-  const response = await merklPost<{ intent: ServerIntentRecord }>(
+  markProgress(input, "matching");
+  const response = await pnlxPost<SharedIntentResponse>(
     "/intents/shared",
     payload,
     input.session.token,
   );
+  const submittedIntent = intentRecordFromResponse(response);
 
   storePrivateTradeNote({
     amount: input.marginProtocol.toString(),
     commitment: prepared.note.commitment,
     createdAt: Date.now(),
-    intentCommitment: response.intent.intentCommitment,
+    intentCommitment: submittedIntent.intentCommitment,
     marketId: input.market.marketId,
     noteNullifier: prepared.note.noteNullifier,
     ownerCommitment: input.session.ownerCommitment,
   });
-  storePendingConditionalStrategy(response.intent.intentCommitment, input);
+  storePendingConditionalStrategy(submittedIntent.intentCommitment, input);
+  markProgress(input, "done");
 
   return {
-    intent: response.intent,
+    intent: submittedIntent,
     protocolSize: input.protocolSize,
   };
+}
+
+function intentRecordFromResponse(response: ProveAndSubmitIntentResponse | SharedIntentResponse): ServerIntentRecord {
+  const candidate = response && typeof response === "object" && "intent" in response
+    ? response.intent
+    : response;
+  if (!isIntentRecord(candidate)) {
+    throw new Error("Intent submission returned an invalid response");
+  }
+  return candidate;
+}
+
+function isIntentRecord(value: unknown): value is ServerIntentRecord {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      "intentCommitment" in value &&
+      typeof (value as { intentCommitment?: unknown }).intentCommitment === "string",
+  );
+}
+
+function markProgress(input: Pick<SubmitTradeIntentInput, "onProgress">, stage: TradeSubmitStage): void {
+  input.onProgress?.(stage);
 }
 
 interface PendingConditionalStrategyInput {
@@ -342,7 +396,7 @@ function storePrivateTradeNote(note: {
   ownerCommitment: Hex;
 }): void {
   if (typeof window === "undefined") return;
-  const key = "merkl.private.trade-notes";
+  const key = "pnlx.private.trade-notes";
   const existing = window.localStorage.getItem(key);
   const notes = existing ? JSON.parse(existing) as unknown[] : [];
   window.localStorage.setItem(key, JSON.stringify([...notes, note]));
@@ -352,20 +406,21 @@ function storePendingConditionalStrategy(
   intentCommitment: Hex,
   input: SubmitTradeIntentInput & {
     conditionalStrategy: PendingConditionalStrategyInput | null;
+    entryPriceProtocol: bigint;
     limitPriceProtocol: bigint;
     marginProtocol: bigint;
     protocolSize: bigint;
   },
 ): void {
   if (typeof window === "undefined" || !input.conditionalStrategy) return;
-  const key = "merkl.private.conditional-strategies";
+  const key = "pnlx.private.conditional-strategies";
   const existing = window.localStorage.getItem(key);
   const strategies = existing ? JSON.parse(existing) as unknown[] : [];
   window.localStorage.setItem(key, JSON.stringify([
     ...strategies,
     {
       createdAt: Date.now(),
-      entryLimitPrice: input.limitPriceProtocol.toString(),
+      entryLimitPrice: input.entryPriceProtocol.toString(),
       intentCommitment,
       leverage: input.leverage,
       margin: input.marginProtocol.toString(),

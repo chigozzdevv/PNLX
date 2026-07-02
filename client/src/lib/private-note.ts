@@ -17,15 +17,38 @@ export interface CircuitMarginNote {
   spendSecretDigest: Hex;
 }
 
+export interface CircuitMarginCommitmentInput {
+  amount: bigint;
+  assetDigest: Hex;
+  blinding: Hex;
+  ownerDigest: Hex;
+  rhoDigest: Hex;
+  spendSecretDigest: Hex;
+}
+
+export interface CircuitPositionCommitmentInput {
+  blinding: Hex;
+  entryPrice: bigint;
+  fundingIndex: bigint;
+  margin: bigint;
+  marketDigest: Hex;
+  ownerDigest: Hex;
+  rhoDigest: Hex;
+  side: "long" | "short";
+  size: bigint;
+  spendSecretDigest: Hex;
+}
+
 export async function createCircuitMarginNote(input: {
   amount: bigint;
-  assetId: string;
+  assetDigest?: Hex;
+  assetId?: string;
   blinding: string;
   owner: string;
   rho: string;
   spendSecret: string;
 }): Promise<CircuitMarginNote> {
-  const assetDigest = await digestToFieldHex(`asset:${input.assetId}`);
+  const assetDigest = input.assetDigest ?? (await digestToFieldHex(`asset:${input.assetId ?? "usdc"}`));
   const ownerDigest = await digestToFieldHex(`owner:${input.owner}`);
   const rhoDigest = await digestToFieldHex(`rho:${input.rho}`);
   const blinding = await digestToFieldHex(`blinding:${input.blinding}`);
@@ -71,6 +94,29 @@ function circuitMarginCommitment(input: {
     fieldHashPair(input.rhoDigest, input.blinding),
   );
   return fieldHashPair(left, right);
+}
+
+export function createCircuitMarginCommitment(input: CircuitMarginCommitmentInput): Hex {
+  return circuitMarginCommitment(input);
+}
+
+export function circuitPositionCommitment(input: CircuitPositionCommitmentInput): Hex {
+  const side = input.side === "long" ? 1n : 2n;
+  const left = fieldHashPair(
+    fieldHashPair(input.marketDigest, side),
+    fieldHashPair(input.size, input.entryPrice),
+  );
+  const right = fieldHashPair(
+    fieldHashPair(input.margin, input.fundingIndex),
+    fieldHashPair(input.ownerDigest, fieldHashPair(input.rhoDigest, input.blinding)),
+  );
+  return fieldHashPair(left, right);
+}
+
+export function circuitPositionNullifier(
+  input: Pick<CircuitPositionCommitmentInput, "rhoDigest" | "spendSecretDigest">,
+): Hex {
+  return fieldHashPair(input.spendSecretDigest, input.rhoDigest);
 }
 
 export async function digestToFieldHex(input: string): Promise<Hex> {

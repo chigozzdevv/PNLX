@@ -1,5 +1,5 @@
-import { hashFields } from "@merkl/crypto";
-import type { Hex, ProofMeta } from "@merkl/protocol-types";
+import { hashFields } from "@pnlx/crypto";
+import type { Hex, ProofMeta } from "@pnlx/protocol-types";
 import type { ProofArtifact } from "./artifact";
 import type { CircuitMeta } from "./circuits";
 import { circuitKey } from "./contract";

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Hex } from "@merkl/protocol-types";
+import type { Hex } from "@pnlx/protocol-types";
 
 function normalize(value: unknown): string {
   if (typeof value === "bigint") return value.toString();
@@ -16,7 +16,7 @@ function normalize(value: unknown): string {
 
 export function hashFields(domain: string, fields: unknown[]): Hex {
   const h = createHash("sha256");
-  h.update("merkl:");
+  h.update("pnlx:");
   h.update(domain);
   h.update(":");
   h.update(fields.map(normalize).join("|"));
