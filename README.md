@@ -59,7 +59,6 @@ server/
       risc0-matcher/
       executor/
       indexer/
-      threshold-shares/
       proof-coordinator/
       prover/
       relayer/
@@ -89,39 +88,56 @@ Wallet auth is Freighter-compatible signed-message auth:
 - In custody-required mode, plain commitment-only deposits/withdrawals are
   disabled. Users must use `deposit_asset` / `withdraw_asset`, which move the
   configured collateral token through the Soroban shielded-pool contract.
+- Trading uses deposited private margin notes. The browser keeps note witnesses
+  locally, asks the API only for a fresh membership proof, proves intent validity
+  client-side, and then locks the spent note when the intent is accepted. If a
+  larger note funds a smaller margin, the proof binds a private change
+  commitment; that change note becomes spendable only after settlement records
+  it in `marginChangeCommitments`.
 
 The execution store mirrors the contract invariant: withdrawals, settlements,
 conditional closes, liquidations, and disclosures are rejected unless their
-proof digest has first been recorded in the local proof ledger. In
-development/production it is file-backed under `PNLX_RUNTIME_DIR` by default,
-so markets, notes, intents, proofs, settlements, account events, and relay
-history survive server restarts. Tests stay in-memory unless a test explicitly
-sets a store path.
+proof digest has first been recorded in the local proof ledger. For the clean
+runtime path, set `PROTOCOL_STORAGE_DRIVER=mongodb` and back protocol state with
+MongoDB. Tests stay in-memory unless a test explicitly sets a store path; the
+file store remains only as an explicit local fallback.
+
+Docker runtime:
+
+- `bun run docker:infra` starts MongoDB and Redis only.
+- `bun run docker:up` starts MongoDB, Redis, API, matcher, and client.
+- MongoDB stores protocol state: markets, margin commitments, intents, private
+  matcher payloads, proofs, settlements, account events, and lifecycle records.
+- Redis/BullMQ runs background jobs when `JOB_QUEUE_DRIVER=bullmq`, including
+  batch execution and liquidation automation. The job handlers still call the
+  same `runOnce` logic as the HTTP/manual paths.
+- Private margin note witnesses stay client-side; the server stores only
+  commitments, nullifiers, encrypted events, and proof-bound metadata.
 
 Matching flow:
 
-- `MATCHING_BACKEND=threshold-recovery` is the embedded recovery path. It
-  validates threshold shares and creates settlements inside the API process, so
-  it is not executor-blind and must not be used for private deployments.
-- `MATCHING_BACKEND=external-blind` is the production path. The PNLX API server
-  refuses to recover shares for `/batches/settle`; the RISC0 matcher service
-  posts a proven transcript to `POST /batches/settle-external`.
 - `MATCHER_SERVICE_URL` points the API/batch executor at the separate matcher
-  service. When `PRIVATE_MATCHING_REQUIRED=true` and `MATCHING_BACKEND=external-blind`,
-  the API refuses to start without this URL, so private deployments cannot
-  silently fall back to in-process matching.
+  service. When `PRIVATE_MATCHING_REQUIRED=true`, the API refuses to start
+  without this URL, so private deployments cannot silently fall back to
+  in-process matching.
 - Run the matcher process with `bun run matcher:server`. It exposes
-  `POST /match/settlement`, reads the persisted protocol/share state, and
+  `POST /match/settlement`, reads the persisted protocol state, and
   returns the settlement transcript. Use `MATCHER_PORT` and
   `MATCHER_API_TOKEN` for the matcher service, and `MATCHER_SERVICE_TOKEN` for
   the API client bearer token.
 - `MATCHER_PROVIDER=risc0` is the only matcher provider. The matcher recovers
-  eligible private order inputs just-in-time, runs deterministic batch matching,
-  and emits RISC Zero Groth16 receipt metadata. The public journal binds batch
+  eligible private order payloads just-in-time, runs deterministic batch matching,
+  applies fill risk checks, requests a Boundless RISC Zero Groth16 receipt, and
+  emits receipt metadata.
+  The public journal binds batch
   id, market id, position roots, settlement digest, filled intents, new
   commitments, spent nullifiers, residual size, and aggregate volume.
-- `PRIVATE_MATCHING_REQUIRED=true` makes startup reject `threshold-recovery`.
-  Health also reports matching readiness under `GET /health`.
+- Boundless proving uses SDK defaults. Configure `BOUNDLESS_RPC_URL`,
+  `BOUNDLESS_PRIVATE_KEY`, `STORAGE_UPLOADER=pinata`, and `PINATA_JWT`.
+  `BOUNDLESS_PROGRAM_URL` is optional when the batch-match ELF is already hosted.
+  The batch-match host caps each proof auction at `0.00025 ETH` with a
+  `0.0001 ETH` floor, matching Boundless' testing example.
+- Health reports matcher readiness under `GET /health`.
 - External settlement transcripts are checked against current roots, active
   order commitments, spent nullifiers, new position commitments, owner
   commitments, residual order records, encrypted owner account events, and the
@@ -139,6 +155,9 @@ Matching flow:
   event id before it will index the batch. This gives the authenticated owner a
   private client-side path to reconstruct position notes for close/TP/SL flows
   without exposing `positionNullifier` in public portfolio snapshots.
+- Maker liquidity comes from funded wallets that deposit USDC into the shielded
+  pool and submit normal private maker intents. User intents can still be
+  partially filled, and any unfilled size remains as a private residual order.
 
 Private dashboard state is backed by encrypted account events:
 
@@ -328,8 +347,17 @@ contract hashes, verifier registry entries, and initialization plan.
 
 Oracle environment:
 
-- `PNLX_RUNTIME_DIR`: directory for durable local runtime state. Defaults to
-  `.pnlx` outside tests.
+- `PROTOCOL_STORAGE_DRIVER`: `mongodb`, `file`, or `memory`. Docker uses
+  `mongodb`; tests use memory by default.
+- `MONGODB_URI`: MongoDB connection string for protocol state.
+- `MONGODB_DATABASE`: Mongo database name. Defaults to `pnlx`.
+- `MONGODB_PROTOCOL_COLLECTION`: collection for the protocol-state document.
+  Defaults to `protocol_state`.
+- `REDIS_URL`: Redis connection string for BullMQ jobs.
+- `JOB_QUEUE_DRIVER`: `bullmq` or `timer`. Docker uses `bullmq`; without Redis
+  the app uses timer-based local workers.
+- `PNLX_RUNTIME_DIR`: directory for explicit file fallback state. Defaults to
+  `.pnlx` outside tests when `PROTOCOL_STORAGE_DRIVER=file`.
 - `FUNDING_ENGINE_ENABLED`: starts the periodic funding worker outside tests by
   default. Set `false` to keep funding manual-only.
 - `FUNDING_INTERVAL_MS`: funding accrual interval. Defaults to one hour.
@@ -451,8 +479,7 @@ packages/
 
 Responsibilities:
 
-- `crypto`: commitments, nullifiers, Merkle roots, field helpers, and secret
-  sharing.
+- `crypto`: commitments, nullifiers, Merkle roots, and field helpers.
 - `market-math`: margin, PnL, funding, liquidation, and vAMM math.
 - `proof-system`: circuit manifest loading, circuit keys, verifier registry
   entries, contract proof metadata, and proof binding.
@@ -468,8 +495,8 @@ Do not put Soroban contracts or Noir circuits in `packages/`.
 user creates shielded margin note
 -> user deposits commitment into shielded pool
 -> user creates private trade intent
--> intent fields are kept off public state and shared to threshold-share storage
--> RISC0 matcher recovers eligible batch inputs off-chain
+-> intent fields are kept off public state and stored as private matcher payloads
+-> RISC0 matcher reads eligible batch inputs off-chain
 -> RISC0 guest proves deterministic matching and commits the settlement journal
 -> Soroban/proof ledger path binds the journal digest before settlement
 -> market reads a fresh SEP-40/Reflector price on-chain
