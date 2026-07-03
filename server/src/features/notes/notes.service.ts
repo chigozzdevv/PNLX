@@ -50,6 +50,19 @@ export class NotesService {
     };
   }
 
+  membership(commitment: Hex): DepositNoteResult {
+    if (!this.executor.store.marginCommitments.has(commitment)) {
+      throw new Error("margin note not found");
+    }
+    const membershipProof = this.executor.store.marginMembershipProof(commitment);
+    return {
+      commitment,
+      membershipProof,
+      membershipRoot: membershipProof.root,
+      marginRoot: this.executor.store.marginRoot(),
+    };
+  }
+
   prepareDepositAsset(
     input: AssetDepositNoteInput,
     authenticated?: string,

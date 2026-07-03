@@ -51,6 +51,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+const ZERO_HEX = "0x0" as Hex;
+
 export class ProverService implements Prover {
   private readonly artifacts = new Map<string, ProofArtifact>();
   private readonly intentValidityRecords = new Map<string, IntentValidityRecord>();
@@ -349,6 +351,28 @@ export class ProverService implements Prover {
     if (noteNullifier !== input.intent.noteNullifier) {
       throw new Error("margin note nullifier mismatch");
     }
+    const noteChange = input.noteAmount - input.intent.margin;
+    if (noteChange < 0n) throw new Error("intent margin exceeds note");
+    if (noteChange === 0n) {
+      if (input.noteChangeCommitment !== ZERO_HEX) {
+        throw new Error("zero margin change must use zero commitment");
+      }
+    } else {
+      if (input.changeRhoDigest === ZERO_HEX || input.changeBlinding === ZERO_HEX) {
+        throw new Error("margin change opening is required");
+      }
+      const expectedChangeCommitment = circuitMarginCommitment({
+        amount: noteChange,
+        assetDigest: input.assetDigest,
+        blinding: input.changeBlinding,
+        ownerDigest: input.ownerDigest,
+        rhoDigest: input.changeRhoDigest,
+        spendSecretDigest: ZERO_HEX,
+      });
+      if (expectedChangeCommitment !== input.noteChangeCommitment) {
+        throw new Error("margin change commitment mismatch");
+      }
+    }
 
     const binding = intentBindingFields(input.intent);
     const intentCommitment = commitIntent(input.intent);
@@ -364,6 +388,7 @@ export class ProverService implements Prover {
       input.marginRoot,
       input.noteCommitment,
       input.intent.noteNullifier,
+      input.noteChangeCommitment,
     ]);
     const artifact = buildProofArtifact(this.root, "intent-validity", {
       name: artifactName("intent", [
@@ -394,8 +419,11 @@ export class ProverService implements Prover {
         margin_root: field(input.marginRoot),
         note_commitment_public: field(input.noteCommitment),
         note_nullifier: field(input.intent.noteNullifier),
+        note_change_commitment: field(input.noteChangeCommitment),
         nonce_digest: field(binding.nonceDigest),
         salt_digest: field(binding.saltDigest),
+        change_rho_digest: field(input.changeRhoDigest),
+        change_blinding: field(input.changeBlinding),
         zero_commitment: 0n,
       },
     });
@@ -407,6 +435,7 @@ export class ProverService implements Prover {
       expiryBatch: input.expiryBatch,
       intentCommitment,
       marketDigest: binding.marketDigest,
+      noteChangeCommitment: input.noteChangeCommitment,
       noteCommitment: input.noteCommitment,
       marginRoot: input.marginRoot,
       noteNullifier: input.intent.noteNullifier,

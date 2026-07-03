@@ -15,6 +15,12 @@ import type { NotesService } from "@/features/notes/notes.service";
 export class NotesController {
   constructor(private readonly notes: NotesService) {}
 
+  membership(request: Request): Response {
+    const commitment = new URL(request.url).searchParams.get("commitment");
+    if (!commitment) throw new Error("commitment is required");
+    return json({ note: this.notes.membership(commitment as `0x${string}`) });
+  }
+
   async deposit(request: Request): Promise<Response> {
     const body = await readJson<Record<string, string>>(request);
     return json({ note: this.notes.deposit(parseDepositNote(body)) }, 201);

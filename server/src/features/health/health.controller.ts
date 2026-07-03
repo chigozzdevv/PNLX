@@ -73,14 +73,8 @@ export class HealthController {
         enabled: this.env.batchExecutorEnabled,
         intervalMs: this.env.batchExecutorIntervalMs,
         prefix: this.env.batchExecutorPrefix,
-        protocolLiquidity: {
-          enabled: this.env.protocolLiquidityEnabled,
-          maxNotional: this.env.protocolLiquidityMaxNotional.toString(),
-          quoteSpreadBps: this.env.protocolLiquidityQuoteSpreadBps.toString(),
-        },
       },
       matching: {
-        backend: this.env.matchingBackend,
         matcherService: {
           configured: Boolean(this.env.matcherServiceUrl),
           url: this.env.matcherServiceUrl ? redactUrl(this.env.matcherServiceUrl) : "",
@@ -88,10 +82,6 @@ export class HealthController {
         proofEngine: {
           provider: this.env.matcherProvider,
           proofSystem: "risc0-groth16",
-        },
-        thresholdShares: {
-          nodeIds: this.env.thresholdShareNodeIds,
-          threshold: this.env.thresholdShareThreshold,
         },
         privateMatchingRequired: this.env.privateMatchingRequired,
         readyForPrivateMatching: matchingIssues.length === 0,
@@ -115,8 +105,18 @@ export class HealthController {
       },
       persistence: {
         authStore: Boolean(this.env.authStorePath),
-        protocolStore: Boolean(this.env.protocolStorePath),
+        jobQueueDriver: this.env.jobQueueDriver,
+        mongodb: {
+          collection: this.env.mongodbCollection,
+          database: this.env.mongodbDatabase,
+          configured: Boolean(this.env.mongodbUri),
+        },
+        protocolStorageDriver: this.env.protocolStorageDriver,
+        protocolStore: this.env.protocolStorageDriver === "mongodb"
+          ? Boolean(this.env.mongodbUri)
+          : Boolean(this.env.protocolStorePath),
         relayStore: Boolean(this.env.relayStorePath),
+        redisConfigured: Boolean(this.env.redisUrl),
       },
       stellar: {
         network: this.env.stellarNetwork,
@@ -200,17 +200,8 @@ function settlementReadinessIssues(env: ServerEnv): string[] {
 function matchingReadinessIssues(env: ServerEnv): string[] {
   if (!env.privateMatchingRequired) return [];
   const issues: string[] = [];
-  if (env.matchingBackend === "threshold-recovery") {
-    issues.push("MATCHING_BACKEND=threshold-recovery is not executor-blind");
-  }
-  if (env.matchingBackend === "external-blind" && env.privateMatchingRequired && !env.matcherServiceUrl) {
+  if (!env.matcherServiceUrl) {
     issues.push("MATCHER_SERVICE_URL is required for private matcher service");
-  }
-  if (env.thresholdShareThreshold < 2) {
-    issues.push("THRESHOLD_SHARE_THRESHOLD must be at least 2");
-  }
-  if (env.thresholdShareNodeIds.length < env.thresholdShareThreshold) {
-    issues.push("THRESHOLD_SHARE_NODE_IDS must include at least THRESHOLD_SHARE_THRESHOLD nodes");
   }
   return issues;
 }

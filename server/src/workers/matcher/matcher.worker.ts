@@ -6,5 +6,5 @@ export function createMatcher(
   executor: ExecutorService,
   config: MatcherConfig = {},
 ): MatcherService {
-  return new MatcherService(executor.store, executor.committee, undefined, config);
+  return new MatcherService(executor.store, config.proofs, config);
 }

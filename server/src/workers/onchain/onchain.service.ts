@@ -160,8 +160,8 @@ export class OnchainRelayService implements OnchainRelay {
           marketKey(record.marketId),
           "--intent_commitment",
           bytes32(record.intentCommitment),
-          "--share_commitment",
-          bytes32(record.shareCommitment),
+          "--matching_payload_commitment",
+          bytes32(record.matchingPayloadCommitment),
         ]),
       ],
     };

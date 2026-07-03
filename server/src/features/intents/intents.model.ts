@@ -1,14 +1,7 @@
 import type { IntentRecord, IntentValidityRecord, IntentValidityWitness, TradeIntent } from "@pnlx/protocol-types";
-import type { NodeShareSet } from "@/workers/threshold-shares/threshold-shares.model";
 
 export interface CreateIntentInput {
   intent: TradeIntent;
-  validity: IntentValidityRecord;
-}
-
-export interface CreateSharedIntentInput {
-  record: IntentRecord;
-  shareSets: NodeShareSet[];
   validity: IntentValidityRecord;
 }
 

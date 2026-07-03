@@ -5,21 +5,23 @@ import {
   digestToFieldHex,
   hashFields,
 } from "@pnlx/crypto";
-import { hasInitialMargin, hasMaxLeverage } from "@pnlx/market-math";
-import type { Fill, Hex, MarginNote, PositionNote } from "@pnlx/protocol-types";
+import type { Fill, Hex, MarginNote, PositionNote, PrivateMatchIntent } from "@pnlx/protocol-types";
 import type { MatchExecution, MatchInput, MatchResult } from "@/workers/batch-matcher/batch-matcher.model";
 import { matchTranscriptDigest } from "@/workers/batch-matcher/match-transcript";
-import type { RecoveredIntent } from "@/workers/threshold-shares/threshold-shares.model";
+import { MatchRiskEngine } from "@/workers/batch-matcher/risk-engine";
 
 interface BookOrder {
   allocatedMargin: bigint;
   filled: bigint;
-  intent: RecoveredIntent;
+  intent: PrivateMatchIntent;
   remaining: bigint;
   sequence: number;
   side: "long" | "short";
   size: bigint;
 }
+
+const ZERO_HEX = "0x0" as Hex;
+const RISK = new MatchRiskEngine();
 
 export class BatchMatcherService {
   match(input: MatchInput): MatchResult {
@@ -112,7 +114,7 @@ function createOrderUpdates(orders: BookOrder[]) {
     }));
 }
 
-function createResiduals(input: MatchInput, orders: BookOrder[]): RecoveredIntent[] {
+function createResiduals(input: MatchInput, orders: BookOrder[]): PrivateMatchIntent[] {
   return orders
     .filter((order) => order.filled > 0n && order.remaining > 0n)
     .map((order) => {
@@ -124,6 +126,7 @@ function createResiduals(input: MatchInput, orders: BookOrder[]): RecoveredInten
         limitPrice: order.intent.limitPrice,
         margin,
         marketId: order.intent.marketId,
+        noteChangeCommitment: ZERO_HEX,
         noteNullifier: residualNullifier(order),
         ownerCommitment: order.intent.ownerCommitment,
         signedSize: order.side === "long" ? order.remaining : -order.remaining,
@@ -132,7 +135,7 @@ function createResiduals(input: MatchInput, orders: BookOrder[]): RecoveredInten
     });
 }
 
-function toBookOrder(intent: RecoveredIntent, sequence: number): BookOrder {
+function toBookOrder(intent: PrivateMatchIntent, sequence: number): BookOrder {
   const side = intent.signedSize >= 0n ? "long" : "short";
   const size = intent.signedSize >= 0n ? intent.signedSize : -intent.signedSize;
 
@@ -199,12 +202,7 @@ function createExecution(
 
 function createFill(input: MatchInput, order: BookOrder, size: bigint, price: bigint, fillIndex: number): Fill {
   const margin = allocateMargin(order, size);
-  if (!hasInitialMargin(size, price, margin, input.market.initialMarginRate)) {
-    throw new Error("insufficient initial margin");
-  }
-  if (!hasMaxLeverage(size, price, margin, input.market.maxLeverage)) {
-    throw new Error("max leverage exceeded");
-  }
+  RISK.assertFill({ margin, market: input.market, price, size });
 
   const position: PositionNote = {
     marketId: order.intent.marketId,
@@ -259,7 +257,7 @@ function allocateMargin(order: BookOrder, fillSize: bigint): bigint {
 }
 
 function createMarginChangeCommitments(orders: BookOrder[]): Hex[] {
-  return orders
+  const residualMarginChanges = orders
     .filter((order) => order.filled > 0n && order.remaining > 0n)
     .map((order) => {
       const remainingMargin = order.intent.margin - order.allocatedMargin;
@@ -273,6 +271,10 @@ function createMarginChangeCommitments(orders: BookOrder[]): Hex[] {
       };
       return commitMargin(note);
     });
+  const noteChanges = orders
+    .filter((order) => order.filled > 0n && order.intent.noteChangeCommitment !== ZERO_HEX)
+    .map((order) => order.intent.noteChangeCommitment);
+  return [...residualMarginChanges, ...noteChanges];
 }
 
 function residualCommitment(order: BookOrder): Hex {

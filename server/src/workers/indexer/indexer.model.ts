@@ -22,9 +22,9 @@ export interface OwnerOrderSnapshot {
   createdAt: number;
   intentCommitment: Hex;
   isResidual: boolean;
+  matchingPayloadCommitment: Hex;
   marketId: string;
   residualCommitment?: Hex;
-  shareCommitment: Hex;
   sourceIntentCommitment?: Hex;
   status: OrderStatus;
   updatedAt: number;

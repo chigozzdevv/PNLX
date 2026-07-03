@@ -1,6 +1,5 @@
-import type { BatchSettlement, Hex, MarketConfig } from "@pnlx/protocol-types";
+import type { BatchSettlement, Hex, MarketConfig, PrivateMatchIntent } from "@pnlx/protocol-types";
 import type { MatchResult } from "@/workers/batch-matcher/batch-matcher.model";
-import type { RecoveredIntent } from "@/workers/threshold-shares/threshold-shares.model";
 
 export interface SettlementProofInput {
   batchId: string;
@@ -8,7 +7,7 @@ export interface SettlementProofInput {
   oldRoot: Hex;
   newRoot: Hex;
   positionCommitments: Hex[];
-  intents: RecoveredIntent[];
+  intents: PrivateMatchIntent[];
   match: MatchResult;
 }
 

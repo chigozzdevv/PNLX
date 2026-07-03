@@ -5,17 +5,13 @@ import type {
   IntentValidityRecord,
   MarketConfig,
   PositionLifecycleRecord,
+  PrivateMatchIntent,
   ResidualOrderRecord,
   TradeIntent,
 } from "@pnlx/protocol-types";
-import type { NodeShareSet } from "@/workers/threshold-shares/threshold-shares.model";
 
 export interface ExecutorConfig {
-  matchingBackend?: "threshold-recovery" | "external-blind";
-  thresholdShareNodes: string[];
-  thresholdShareStoreDir?: string;
   privateMatchingRequired?: boolean;
-  threshold: number;
 }
 
 export interface SubmitIntentInput {
@@ -23,14 +19,9 @@ export interface SubmitIntentInput {
   validity: IntentValidityRecord;
 }
 
-export interface SubmitSharedIntentInput {
-  record: IntentRecord;
-  shareSets: NodeShareSet[];
-}
-
 export interface PreparedIntentSubmission {
+  privateMatchIntent: PrivateMatchIntent;
   record: IntentRecord;
-  shareSets: NodeShareSet[];
 }
 
 export interface SettleBatchInput {
@@ -40,6 +31,7 @@ export interface SettleBatchInput {
 
 export interface ExternalBatchSettlementTranscript {
   accountEvents: AccountEventRecord[];
+  privateMatchIntents?: PrivateMatchIntent[];
   positionOpenings: PositionLifecycleRecord[];
   residualOrders?: ResidualOrderRecord[];
   settlement: BatchSettlement;
@@ -53,9 +45,6 @@ export interface PnlxExecutor {
   addMarket(market: MarketConfig): void;
   prepareIntent(input: SubmitIntentInput): PreparedIntentSubmission;
   commitPreparedIntent(input: PreparedIntentSubmission): IntentRecord;
-  prepareSharedIntent(input: SubmitSharedIntentInput): PreparedIntentSubmission;
-  commitPreparedSharedIntent(input: PreparedIntentSubmission): IntentRecord;
   submitIntent(input: SubmitIntentInput): IntentRecord;
-  submitSharedIntent(input: SubmitSharedIntentInput): IntentRecord;
   settleBatch(input: SettleBatchInput): BatchSettlement;
 }

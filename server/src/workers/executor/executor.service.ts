@@ -1,4 +1,4 @@
-import { commitIntent, intentBindingFields, ownerCommitment } from "@pnlx/crypto";
+import { commitIntent, fieldMerkleRoot, intentBindingFields, ownerCommitment } from "@pnlx/crypto";
 import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
 import {
   assertPositionOpeningAccountEvent,
@@ -14,6 +14,7 @@ import type {
   Hex,
   IntentRecord,
   MarketConfig,
+  PrivateMatchIntent,
   PositionLifecycleRecord,
   ProofMeta,
   ResidualOrderRecord,
@@ -21,8 +22,13 @@ import type {
 } from "@pnlx/protocol-types";
 import type { ProofArtifact } from "@pnlx/proof-system";
 import { ProtocolStore } from "@/shared/state/store";
-import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
 import { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
+import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
+import {
+  assertPrivateMatchIntent,
+  matchingPayloadCommitment,
+  privateMatchIntentFromTradeIntent,
+} from "@/workers/batch-matcher/private-intent";
 import type {
   ExecutorConfig,
   ExternalBatchSettlementCommitOptions,
@@ -31,28 +37,20 @@ import type {
   PreparedIntentSubmission,
   SettleBatchInput,
   SubmitIntentInput,
-  SubmitSharedIntentInput,
 } from "@/workers/executor/executor.model";
+
+const ZERO_HEX = "0x0" as Hex;
 
 export class ExecutorService implements PnlxExecutor {
   readonly store: ProtocolStore;
-  readonly committee: ThresholdShareCommittee;
-  private readonly matchingBackend: NonNullable<ExecutorConfig["matchingBackend"]>;
   private readonly proofs = new ProofCoordinatorService();
+  private readonly matcher = new BatchMatcherService();
   private readonly pendingPositionOpenings = new Map<Hex, PositionLifecycleRecord[]>();
   private readonly pendingResidualOrders = new Map<Hex, ResidualOrderRecord[]>();
 
   constructor(config: ExecutorConfig, store = new ProtocolStore()) {
-    this.matchingBackend = config.matchingBackend ?? "threshold-recovery";
-    if (config.privateMatchingRequired && this.matchingBackend === "threshold-recovery") {
-      throw new Error("private matching requires MATCHING_BACKEND=external-blind");
-    }
+    void config.privateMatchingRequired;
     this.store = store;
-    this.committee = new ThresholdShareCommittee({
-      nodeIds: config.thresholdShareNodes,
-      shareStoreDir: config.thresholdShareStoreDir,
-      threshold: config.threshold,
-    });
   }
 
   artifactFor(proof: ProofMeta): ProofArtifact | undefined {
@@ -86,28 +84,32 @@ export class ExecutorService implements PnlxExecutor {
     ) {
       throw new Error("intent proof public binding mismatch");
     }
-    const shareSets = this.committee.shareIntent(input.intent, intentCommitment);
-    const shareCommitment = this.committee.shareCommitment("intent-shares", intentCommitment, shareSets);
+    const privateMatchIntent = privateMatchIntentFromTradeIntent({
+      intent: input.intent,
+      intentCommitment,
+      noteChangeCommitment: input.validity.noteChangeCommitment,
+      ownerCommitment: ownerCommitment(input.intent.owner),
+    });
     const record = {
       batchDigest: binding.batchDigest,
       batchId: input.intent.batchId,
       marketDigest: binding.marketDigest,
       marketId: input.intent.marketId,
       marginRoot: input.validity.marginRoot,
+      noteChangeCommitment: input.validity.noteChangeCommitment,
       ownerCommitmentField: binding.ownerCommitmentField,
-      ownerCommitment: ownerCommitment(input.intent.owner),
+      ownerCommitment: privateMatchIntent.ownerCommitment,
       intentCommitment,
+      matchingPayloadCommitment: matchingPayloadCommitment(privateMatchIntent),
       proof: input.validity.proof,
-      shareCommitment,
       noteNullifier: input.intent.noteNullifier,
     };
 
-    return { record, shareSets };
+    return { privateMatchIntent, record };
   }
 
   commitPreparedIntent(input: PreparedIntentSubmission): IntentRecord {
-    this.store.addIntent(input.record);
-    this.committee.distribute(input.shareSets);
+    this.store.addIntent(input.record, input.privateMatchIntent);
     return input.record;
   }
 
@@ -115,46 +117,17 @@ export class ExecutorService implements PnlxExecutor {
     return this.commitPreparedIntent(this.prepareIntent(input));
   }
 
-  prepareSharedIntent(input: SubmitSharedIntentInput): PreparedIntentSubmission {
-    this.committee.assertShareSets(input.record.intentCommitment, input.shareSets);
-    const shareCommitment = this.committee.shareCommitment(
-      "intent-shares",
-      input.record.intentCommitment,
-      input.shareSets,
-    );
-    if (input.record.shareCommitment !== shareCommitment) {
-      throw new Error("intent share commitment mismatch");
-    }
-
-    return {
-      record: input.record,
-      shareSets: input.shareSets,
-    };
-  }
-
-  commitPreparedSharedIntent(input: PreparedIntentSubmission): IntentRecord {
-    this.store.addIntent(input.record);
-    this.committee.distribute(input.shareSets);
-    return input.record;
-  }
-
-  submitSharedIntent(input: SubmitSharedIntentInput): IntentRecord {
-    return this.commitPreparedSharedIntent(this.prepareSharedIntent(input));
-  }
-
   settleBatch(input: SettleBatchInput): BatchSettlement {
     return this.commitBatchSettlement(this.createBatchSettlement(input));
   }
 
   createBatchSettlement(input: SettleBatchInput): BatchSettlement {
-    if (this.matchingBackend === "external-blind") {
-      throw new Error("external blind matching requires an externally proven settlement transcript");
-    }
     const market = this.store.markets.get(input.marketId);
     if (!market) throw new Error("unknown market");
 
     const relevant = Array.from(this.store.intents.values()).filter(
       (intent) =>
+        intent.batchId === input.batchId &&
         intent.marketId === input.marketId &&
         this.store.orderLifecycle.get(intent.intentCommitment)?.status === "open",
     );
@@ -163,23 +136,39 @@ export class ExecutorService implements PnlxExecutor {
       throw new Error("batch has no active intents");
     }
 
-    const transcript = this.committee.createSettlementTranscript({
+    const privateIntents = privateMatchIntentsFor(this.store, input.batchId, relevant, residuals);
+    const match = this.matcher.match({
       batchId: input.batchId,
+      intents: privateIntents,
       market,
+    });
+    const newRoot = fieldMerkleRoot([
+      ...this.store.positionCommitments,
+      ...match.fills.map((fill) => fill.positionCommitment),
+    ]);
+    const settlement = this.proofs.createSettlement({
+      batchId: input.batchId,
+      intents: privateIntents,
+      market,
+      match,
+      newRoot,
       oldRoot: this.store.positionMembershipRoot(),
       positionCommitments: [...this.store.positionCommitments],
-      records: relevant,
-      residuals,
-    }, this.proofs);
-    const settlement = transcript.settlement;
+    });
+    const positionOpenings = createPositionOpenings(settlement, match.fills);
+    const residualPrivateIntents = match.residuals;
+    const residualOrders = createResidualOrderRecords(settlement, residualPrivateIntents);
     this.pendingPositionOpenings.set(
       settlement.settlementDigest,
-      transcript.positionOpenings,
+      positionOpenings,
     );
     this.pendingResidualOrders.set(
       settlement.settlementDigest,
-      transcript.residualOrders,
+      residualOrders,
     );
+    for (const privateIntent of residualPrivateIntents) {
+      this.store.privateMatchIntents.set(privateIntent.intentCommitment, privateIntent);
+    }
     return settlement;
   }
 
@@ -199,6 +188,7 @@ export class ExecutorService implements PnlxExecutor {
       transcript.positionOpenings,
       transcript.residualOrders ?? [],
       transcript.accountEvents,
+      transcript.privateMatchIntents ?? [],
     );
     return transcript.settlement;
   }
@@ -207,7 +197,10 @@ export class ExecutorService implements PnlxExecutor {
     this.store.recordProof(settlement.proof);
     const openings = this.pendingPositionOpenings.get(settlement.settlementDigest) ?? [];
     const residuals = this.pendingResidualOrders.get(settlement.settlementDigest) ?? [];
-    this.store.addSettlement(settlement, openings, residuals);
+    const privateResiduals = residuals
+      .map((residual) => this.store.privateMatchIntents.get(residual.intentCommitment))
+      .filter((payload): payload is NonNullable<typeof payload> => Boolean(payload));
+    this.store.addSettlement(settlement, openings, residuals, [], privateResiduals);
     this.pendingPositionOpenings.delete(settlement.settlementDigest);
     this.pendingResidualOrders.delete(settlement.settlementDigest);
     return settlement;
@@ -268,6 +261,13 @@ export class ExecutorService implements PnlxExecutor {
       }
       if (!settlement.spentNullifiers.includes(order.noteNullifier)) {
         throw new Error("external settlement spent nullifier mismatch");
+      }
+      if (
+        order.noteChangeCommitment &&
+        order.noteChangeCommitment !== ZERO_HEX &&
+        !settlement.marginChangeCommitments.includes(order.noteChangeCommitment)
+      ) {
+        throw new Error("external settlement missing margin note change");
       }
       expectedSpentNullifiers.add(order.noteNullifier);
     }
@@ -348,6 +348,14 @@ export class ExecutorService implements PnlxExecutor {
     if (residualOrders.length !== residualUpdates.size) {
       throw new Error("external residual order count mismatch");
     }
+    const privateResiduals = new Map(
+      (transcript.privateMatchIntents ?? []).map((payload) => [payload.intentCommitment, payload]),
+    );
+    for (const residual of residualOrders) {
+      const payload = privateResiduals.get(residual.intentCommitment);
+      if (!payload) throw new Error("external residual private match payload is required");
+      assertPrivateMatchIntent(residual, payload);
+    }
 
     this.validateExternalAccountEvents(
       settlement.settlementDigest,
@@ -416,8 +424,18 @@ function findResidualOrderEvent(
 function activeOrderRecords(
   store: ProtocolStore,
   marketId: string,
-): Map<Hex, Pick<IntentRecord | ResidualOrderRecord, "intentCommitment" | "noteNullifier" | "ownerCommitment">> {
-  const orders = new Map<Hex, Pick<IntentRecord | ResidualOrderRecord, "intentCommitment" | "noteNullifier" | "ownerCommitment">>();
+): Map<
+  Hex,
+  Pick<IntentRecord | ResidualOrderRecord, "intentCommitment" | "noteNullifier" | "ownerCommitment"> & {
+    noteChangeCommitment?: Hex;
+  }
+> {
+  const orders = new Map<
+    Hex,
+    Pick<IntentRecord | ResidualOrderRecord, "intentCommitment" | "noteNullifier" | "ownerCommitment"> & {
+      noteChangeCommitment?: Hex;
+    }
+  >();
   for (const order of [...store.intents.values(), ...store.residualOrders.values()]) {
     if (
       order.marketId === marketId &&
@@ -440,4 +458,73 @@ function activeResiduals(
       store.orderLifecycle.get(order.intentCommitment)?.status === "open",
     )
     .map((order) => ({ ...order, batchId }));
+}
+
+function privateMatchIntentsFor(
+  store: ProtocolStore,
+  batchId: string,
+  records: IntentRecord[],
+  residuals: ResidualOrderRecord[],
+): PrivateMatchIntent[] {
+  return [
+    ...residuals.map((record) => privateMatchIntentFor(store, record, batchId)),
+    ...records.map((record) => privateMatchIntentFor(store, record, record.batchId)),
+  ];
+}
+
+function privateMatchIntentFor(
+  store: ProtocolStore,
+  record: IntentRecord | ResidualOrderRecord,
+  batchId: string,
+): PrivateMatchIntent {
+  const payload = store.privateMatchIntents.get(record.intentCommitment);
+  if (!payload) throw new Error("private match payload not found");
+  assertPrivateMatchIntent(record, payload);
+  return {
+    ...payload,
+    batchId,
+  };
+}
+
+function createPositionOpenings(
+  settlement: BatchSettlement,
+  fills: Array<{
+    intentCommitment: Hex;
+    marketId: string;
+    ownerCommitment: Hex;
+    positionCommitment: Hex;
+    positionNullifier: Hex;
+  }>,
+): PositionLifecycleRecord[] {
+  const now = Date.now();
+  return fills.map((fill) => ({
+    batchId: settlement.batchId,
+    marketId: fill.marketId,
+    openedAt: now,
+    ownerCommitment: fill.ownerCommitment,
+    positionCommitment: fill.positionCommitment,
+    positionNullifier: fill.positionNullifier,
+    settlementDigest: settlement.settlementDigest,
+    sourceIntentCommitment: fill.intentCommitment,
+    status: "open",
+    updatedAt: now,
+  }));
+}
+
+function createResidualOrderRecords(
+  settlement: BatchSettlement,
+  residuals: PrivateMatchIntent[],
+): ResidualOrderRecord[] {
+  const now = Date.now();
+  return residuals.map((residual) => ({
+    batchId: settlement.batchId,
+    createdAt: now,
+    intentCommitment: residual.intentCommitment,
+    marketId: residual.marketId,
+    matchingPayloadCommitment: matchingPayloadCommitment(residual),
+    noteNullifier: residual.noteNullifier,
+    ownerCommitment: residual.ownerCommitment,
+    sourceIntentCommitment: residual.sourceIntentCommitment ?? residual.intentCommitment,
+    updatedAt: now,
+  }));
 }

@@ -56,10 +56,9 @@ export class BatchExecutorService {
     marketId: string,
     startedAt: number,
     input: RunBatchExecutorInput,
-  ): BatchExecutorMarketResult {
+  ): Promise<BatchExecutorMarketResult> {
     const batchId = `${input.batchIdPrefix ?? this.config.batchIdPrefix ?? DEFAULT_BATCH_PREFIX}-${marketId}-${startedAt}`;
     try {
-      this.config.protocolLiquidity?.seedMarket(marketId, batchId);
       const transcript = await this.matcher.createSettlementTranscript({
         batchId,
         marketId,
@@ -146,7 +145,7 @@ function shouldSkip(reason: string): boolean {
   return [
     "batch has no active intents",
     "batch has no crossed liquidity",
-    "not enough shares to recover intent",
+    "private match payload not found",
     "account encryption key not found",
   ].some((message) => reason.includes(message));
 }

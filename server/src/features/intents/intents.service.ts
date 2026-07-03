@@ -1,12 +1,8 @@
-import { commitIntent, digestToFieldHex, intentBindingFields, intentOwnerCommitmentField } from "@pnlx/crypto";
+import { commitIntent, intentBindingFields } from "@pnlx/crypto";
 import { contractPublicInputHash, publicField, publicU128 } from "@pnlx/proof-system";
 import type { IntentRecord, IntentValidityRecord } from "@pnlx/protocol-types";
-import { proofKey } from "@/shared/proofs/artifact-registry";
 import type { ServerEnv } from "@/config/env";
-import {
-  assertAuthenticatedAccount,
-  assertAuthenticatedOwnerCommitment,
-} from "@/shared/http/auth-context";
+import { assertAuthenticatedAccount } from "@/shared/http/auth-context";
 import { assertSubmittedRelay } from "@/shared/protocol/onchain-submission";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { OnchainRelayResult } from "@/workers/onchain/onchain.model";
@@ -14,7 +10,6 @@ import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
 import type { ProverService } from "@/workers/prover/prover.service";
 import type {
   CreateIntentInput,
-  CreateSharedIntentInput,
   ProveAndSubmitIntentInput,
   ProveAndSubmitIntentResult,
 } from "@/features/intents/intents.model";
@@ -34,15 +29,6 @@ export class IntentsService {
     return this.submitValidated(input);
   }
 
-  submitShared(input: CreateSharedIntentInput, authenticated?: string): IntentRecord {
-    this.validateShared(input, authenticated);
-    this.executor.store.recordProof(input.validity.proof);
-    const prepared = this.executor.prepareSharedIntent(input);
-    const relay = this.onchain?.submitIntent(prepared.record);
-    this.assertSubmittedIntentRelay(relay, "submit");
-    return this.executor.commitPreparedSharedIntent(prepared);
-  }
-
   proveAndSubmit(input: ProveAndSubmitIntentInput, authenticated?: string): ProveAndSubmitIntentResult {
     assertAuthenticatedAccount(authenticated, input.intent.owner, "owner");
     if (input.marginRoot !== this.executor.store.marginMembershipRoot()) {
@@ -60,8 +46,6 @@ export class IntentsService {
     assertAuthenticatedAccount(authenticated, intent.owner, "owner");
     const expectedCommitment = commitIntent(intent);
     const binding = intentBindingFields(intent);
-    const knownValidity = this.prover.intentValidityFor(validity.proof);
-    if (!knownValidity) throw new Error("intent proof is not registered with prover");
     if (validity.intentCommitment !== expectedCommitment) {
       throw new Error("intent proof commitment mismatch");
     }
@@ -74,31 +58,6 @@ export class IntentsService {
       validity.ownerCommitmentField !== binding.ownerCommitmentField
     ) {
       throw new Error("intent proof public binding mismatch");
-    }
-    if (knownValidity.intentCommitment !== validity.intentCommitment) {
-      throw new Error("intent proof commitment mismatch");
-    }
-    if (knownValidity.marginRoot !== validity.marginRoot) {
-      throw new Error("intent proof root mismatch");
-    }
-    if (knownValidity.noteCommitment !== validity.noteCommitment) {
-      throw new Error("intent proof note commitment mismatch");
-    }
-    if (knownValidity.noteNullifier !== validity.noteNullifier) {
-      throw new Error("intent proof nullifier mismatch");
-    }
-    if (
-      knownValidity.batchDigest !== validity.batchDigest ||
-      knownValidity.marketDigest !== validity.marketDigest ||
-      knownValidity.ownerCommitmentField !== validity.ownerCommitmentField
-    ) {
-      throw new Error("intent proof public binding mismatch");
-    }
-    if (
-      knownValidity.currentBatch !== validity.currentBatch ||
-      knownValidity.expiryBatch !== validity.expiryBatch
-    ) {
-      throw new Error("intent proof batch window mismatch");
     }
     this.assertIntentValidityProof(validity);
   }
@@ -123,50 +82,6 @@ export class IntentsService {
     assertSubmittedRelay(result, functionName);
   }
 
-  private validateShared(input: CreateSharedIntentInput, authenticated?: string): void {
-    const { record, validity } = input;
-    assertAuthenticatedOwnerCommitment(authenticated, record.ownerCommitment, "ownerCommitment");
-    if (record.proof.circuitId !== "intent-validity") {
-      throw new Error("intent proof circuit mismatch");
-    }
-    if (proofKey(record.proof) !== proofKey(validity.proof)) {
-      throw new Error("intent proof record mismatch");
-    }
-    if (
-      record.intentCommitment !== validity.intentCommitment ||
-      record.marginRoot !== validity.marginRoot ||
-      record.noteNullifier !== validity.noteNullifier
-    ) {
-      throw new Error("intent proof record mismatch");
-    }
-    if (
-      record.batchDigest !== validity.batchDigest ||
-      record.marketDigest !== validity.marketDigest ||
-      record.ownerCommitmentField !== validity.ownerCommitmentField
-    ) {
-      throw new Error("intent proof public binding mismatch");
-    }
-    if (record.batchDigest !== digestToFieldHex(`batch:${record.batchId}`)) {
-      throw new Error("intent batch binding mismatch");
-    }
-    if (record.marketDigest !== digestToFieldHex(`market:${record.marketId}`)) {
-      throw new Error("intent market binding mismatch");
-    }
-    if (record.ownerCommitmentField !== intentOwnerCommitmentField(record.ownerCommitment)) {
-      throw new Error("intent owner binding mismatch");
-    }
-    if (validity.proof.circuitId !== "intent-validity") {
-      throw new Error("intent proof circuit mismatch");
-    }
-    if (validity.marginRoot !== this.executor.store.marginMembershipRoot()) {
-      throw new Error("intent margin root is not current");
-    }
-    if (validity.expiryBatch < validity.currentBatch) {
-      throw new Error("intent expired");
-    }
-    this.assertIntentValidityProof(validity);
-  }
-
   private assertIntentValidityProof(validity: IntentValidityRecord): void {
     this.prover.assertBoundProof(
       validity.proof,
@@ -180,6 +95,7 @@ export class IntentsService {
         publicField(validity.marginRoot),
         publicField(validity.noteCommitment),
         publicField(validity.noteNullifier),
+        publicField(validity.noteChangeCommitment),
       ]),
     );
   }

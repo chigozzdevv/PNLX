@@ -1,31 +1,36 @@
 import type {
   AccountEncryptionKeyRecord,
   AccountEventRecord,
+  BatchSettlement,
   IntentRecord,
+  PrivateMatchIntent,
   PositionLifecycleRecord,
   ResidualOrderRecord,
 } from "@pnlx/protocol-types";
+import { fieldMerkleRoot } from "@pnlx/crypto";
 import {
   createPositionOpeningAccountEvent,
   createResidualOrderAccountEvent,
 } from "@/shared/protocol/account-event-outcomes";
 import type { ProtocolStore } from "@/shared/state/store";
 import type { ExternalBatchSettlementTranscript } from "@/workers/executor/executor.model";
-import type { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
 import { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
-import { isProtocolLiquidityBatch } from "@/workers/protocol-liquidity/protocol-liquidity.service";
+import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
+import {
+  assertPrivateMatchIntent,
+  matchingPayloadCommitment,
+} from "@/workers/batch-matcher/private-intent";
 import type {
   MatcherProviderGateway,
   CreateExternalSettlementInput,
   MatcherAccountEventEncryptor,
+  MatcherAccountEventPayload,
   MatcherConfig,
   MatcherProviderTranscript,
-} from "@/workers/matcher/matcher.model";
-import type {
-  CommitteeSettlementInput,
-  CommitteeSettlementTranscript,
+  MatcherSettlementInput,
+  MatcherSettlementTranscript,
   PrivatePositionOpeningEvent,
-} from "@/workers/threshold-shares/threshold-shares.model";
+} from "@/workers/matcher/matcher.model";
 
 export class MatcherService {
   private readonly accountEventEncryptor?: MatcherAccountEventEncryptor;
@@ -33,12 +38,11 @@ export class MatcherService {
 
   constructor(
     private readonly store: ProtocolStore,
-    committee: ThresholdShareCommittee,
     private readonly proofs = new ProofCoordinatorService(),
     config: MatcherConfig = {},
   ) {
     this.accountEventEncryptor = config.accountEventEncryptor;
-    this.provider = config.provider ?? new EmbeddedMatcherProviderGateway(committee);
+    this.provider = config.provider ?? new EmbeddedMatcherProviderGateway();
   }
 
   createSettlementTranscript(
@@ -53,9 +57,10 @@ export class MatcherService {
       throw new Error("batch has no active intents");
     }
 
-    const computeInput: CommitteeSettlementInput = {
+    const computeInput: MatcherSettlementInput = {
       accountEncryptionKeys: accountEncryptionKeysFor(this.store, records, residuals),
       batchId: input.batchId,
+      intents: privateMatchIntentsFor(this.store, input.batchId, records, residuals),
       market,
       oldRoot: input.oldRoot ?? this.store.positionMembershipRoot(),
       positionCommitments: input.positionCommitments ?? [...this.store.positionCommitments],
@@ -77,7 +82,7 @@ export class MatcherService {
     return this.finalizeTranscript(transcript);
   }
 
-  private finalizeTranscript(transcript: CommitteeSettlementTranscript): ExternalBatchSettlementTranscript {
+  private finalizeTranscript(transcript: MatcherSettlementTranscript): ExternalBatchSettlementTranscript {
     const accountEvents = createAccountEvents(
       transcript.positionOpenings,
       transcript.positionEvents,
@@ -89,6 +94,7 @@ export class MatcherService {
     const externalTranscript: ExternalBatchSettlementTranscript = {
       accountEvents,
       positionOpenings: transcript.positionOpenings,
+      privateMatchIntents: transcript.privateMatchIntents,
       residualOrders: transcript.residualOrders,
       settlement: transcript.settlement,
     };
@@ -98,13 +104,39 @@ export class MatcherService {
 }
 
 class EmbeddedMatcherProviderGateway implements MatcherProviderGateway {
-  constructor(private readonly committee: ThresholdShareCommittee) {}
+  private readonly matcher = new BatchMatcherService();
 
   createSettlementTranscript(
-    input: CommitteeSettlementInput,
+    input: MatcherSettlementInput,
     proofs: ProofCoordinatorService,
-  ): CommitteeSettlementTranscript {
-    return this.committee.createSettlementTranscript(input, proofs);
+  ): MatcherSettlementTranscript {
+    const match = this.matcher.match({
+      batchId: input.batchId,
+      intents: input.intents,
+      market: input.market,
+    });
+    const newRoot = fieldMerkleRoot([
+      ...input.positionCommitments,
+      ...match.fills.map((fill) => fill.positionCommitment),
+    ]);
+    const settlement = proofs.createSettlement({
+      batchId: input.batchId,
+      intents: input.intents,
+      market: input.market,
+      match,
+      newRoot,
+      oldRoot: input.oldRoot,
+      positionCommitments: input.positionCommitments,
+    });
+    const positionOpenings = createPositionOpenings(settlement, match.fills);
+
+    return {
+      positionEvents: createPositionEvents(match.fills, input.market.fundingIndex),
+      positionOpenings,
+      privateMatchIntents: match.residuals,
+      residualOrders: createResidualOrderRecords(settlement, match.residuals),
+      settlement,
+    };
   }
 }
 
@@ -118,6 +150,9 @@ function createAccountEvents(
 ): AccountEventRecord[] {
   const requiredCount = positionOpenings.length + (residualOrders?.length ?? 0);
   if (requiredCount === 0) return [];
+  const eventEncryptor = encryptor
+    ? (payload: unknown) => encryptor(payload as MatcherAccountEventPayload)
+    : undefined;
 
   return [
     ...positionOpenings.map((opening) => {
@@ -129,7 +164,7 @@ function createAccountEvents(
         opening,
         positionEvent,
         keyForOwner(opening.ownerCommitment),
-        encryptor,
+        eventEncryptor,
       );
     }),
     ...(residualOrders ?? []).map((residual) =>
@@ -137,25 +172,23 @@ function createAccountEvents(
         residual,
         settlementDigest,
         keyForOwner(residual.ownerCommitment),
-        encryptor,
+        eventEncryptor,
       )
     ),
   ];
 }
 
-function activeIntents(store: ProtocolStore, marketId: string, _batchId: string): IntentRecord[] {
+function activeIntents(store: ProtocolStore, marketId: string, batchId: string): IntentRecord[] {
   return [...store.intents.values()]
     .filter(
       (intent) =>
+        intent.batchId === batchId &&
         intent.marketId === marketId &&
         store.orderLifecycle.get(intent.intentCommitment)?.status === "open",
     )
-    .sort((left, right) => {
-      const leftLp = isProtocolLiquidityBatch(left.batchId);
-      const rightLp = isProtocolLiquidityBatch(right.batchId);
-      if (leftLp !== rightLp) return leftLp ? -1 : 1;
-      return left.batchId.localeCompare(right.batchId) || left.intentCommitment.localeCompare(right.intentCommitment);
-    });
+    .sort((left, right) =>
+      left.batchId.localeCompare(right.batchId) || left.intentCommitment.localeCompare(right.intentCommitment)
+    );
 }
 
 function activeResiduals(
@@ -169,6 +202,101 @@ function activeResiduals(
       store.orderLifecycle.get(order.intentCommitment)?.status === "open",
     )
     .map((order) => ({ ...order, batchId }));
+}
+
+function privateMatchIntentsFor(
+  store: ProtocolStore,
+  batchId: string,
+  records: IntentRecord[],
+  residuals: ResidualOrderRecord[],
+): PrivateMatchIntent[] {
+  return [
+    ...residuals.map((record) => privateMatchIntentFor(store, record, batchId)),
+    ...records.map((record) => privateMatchIntentFor(store, record, record.batchId)),
+  ];
+}
+
+function privateMatchIntentFor(
+  store: ProtocolStore,
+  record: IntentRecord | ResidualOrderRecord,
+  batchId: string,
+): PrivateMatchIntent {
+  const payload = store.privateMatchIntents.get(record.intentCommitment);
+  if (!payload) throw new Error("private match payload not found");
+  assertPrivateMatchIntent(record, payload);
+  return {
+    ...payload,
+    batchId,
+  };
+}
+
+function createPositionEvents(
+  fills: Array<{
+    intentCommitment: `0x${string}`;
+    marketId: string;
+    margin: bigint;
+    positionCommitment: `0x${string}`;
+    positionNullifier: `0x${string}`;
+    price: bigint;
+    side: "long" | "short";
+    size: bigint;
+  }>,
+  fundingIndex: bigint,
+): PrivatePositionOpeningEvent[] {
+  return fills.map((fill) => ({
+    entryPrice: fill.price,
+    fundingIndex,
+    margin: fill.margin,
+    marketId: fill.marketId,
+    positionCommitment: fill.positionCommitment,
+    positionNullifier: fill.positionNullifier,
+    side: fill.side,
+    size: fill.size,
+    sourceIntentCommitment: fill.intentCommitment,
+  }));
+}
+
+function createPositionOpenings(
+  settlement: BatchSettlement,
+  fills: Array<{
+    intentCommitment: `0x${string}`;
+    marketId: string;
+    ownerCommitment: `0x${string}`;
+    positionCommitment: `0x${string}`;
+    positionNullifier: `0x${string}`;
+  }>,
+): PositionLifecycleRecord[] {
+  const now = Date.now();
+  return fills.map((fill) => ({
+    batchId: settlement.batchId,
+    marketId: fill.marketId,
+    openedAt: now,
+    ownerCommitment: fill.ownerCommitment,
+    positionCommitment: fill.positionCommitment,
+    positionNullifier: fill.positionNullifier,
+    settlementDigest: settlement.settlementDigest,
+    sourceIntentCommitment: fill.intentCommitment,
+    status: "open",
+    updatedAt: now,
+  }));
+}
+
+function createResidualOrderRecords(
+  settlement: BatchSettlement,
+  residuals: PrivateMatchIntent[],
+): ResidualOrderRecord[] {
+  const now = Date.now();
+  return residuals.map((residual) => ({
+    batchId: settlement.batchId,
+    createdAt: now,
+    intentCommitment: residual.intentCommitment,
+    marketId: residual.marketId,
+    matchingPayloadCommitment: matchingPayloadCommitment(residual),
+    noteNullifier: residual.noteNullifier,
+    ownerCommitment: residual.ownerCommitment,
+    sourceIntentCommitment: residual.sourceIntentCommitment ?? residual.intentCommitment,
+    updatedAt: now,
+  }));
 }
 
 function accountEncryptionKeysFor(

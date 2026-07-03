@@ -29,10 +29,10 @@ export function parseOracleMarket(
   return {
     feedId: input.feedId ? (String(input.feedId) as Hex) : undefined,
     fundingIndex: BigInt(input.fundingIndex ?? 0),
-    initialMarginRate: BigInt(input.initialMarginRate),
-    maintenanceMarginRate: BigInt(input.maintenanceMarginRate),
+    initialMarginRate: BigInt(requiredValue(input.initialMarginRate, "initialMarginRate")),
+    maintenanceMarginRate: BigInt(requiredValue(input.maintenanceMarginRate, "maintenanceMarginRate")),
     marketId: String(input.marketId),
-    maxLeverage: BigInt(input.maxLeverage),
+    maxLeverage: BigInt(requiredValue(input.maxLeverage, "maxLeverage")),
   };
 }
 
@@ -68,4 +68,9 @@ function parseLimit(value: string): number {
   const limit = Number(value);
   if (!Number.isInteger(limit) || limit < 1) throw new Error("invalid candle limit");
   return Math.min(limit, 300);
+}
+
+function requiredValue(value: string | number | undefined, field: string): string | number {
+  if (value === undefined) throw new Error(`${field} is required`);
+  return value;
 }

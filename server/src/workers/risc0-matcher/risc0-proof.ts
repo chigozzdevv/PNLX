@@ -43,20 +43,7 @@ export function createRisc0BatchSettlement(
   assertMatchTranscript(input);
 
   const newCommitments = input.match.fills.map((fill) => fill.positionCommitment);
-  const settlementDigest = hashFields("risc0-settlement", [
-    input.batchId,
-    input.market.marketId,
-    input.oldRoot,
-    input.newRoot,
-    input.match.matchTranscriptDigest,
-    input.match.orderUpdates,
-    newCommitments,
-    input.match.marginChangeCommitments,
-    input.match.spentNullifiers,
-    input.match.aggregateVolume,
-    input.match.openInterestDelta,
-    input.match.residualSize,
-  ]);
+  const settlementDigest = risc0SettlementDigest(input, newCommitments);
 
   const draft = {
     aggregateVolume: input.match.aggregateVolume,
@@ -130,6 +117,39 @@ function proofMeta(receipt: { imageId: Hex; journalDigest: Hex; sealDigest: Hex 
   };
 }
 
+function risc0SettlementDigest(input: SettlementProofInput, newCommitments: Hex[]): Hex {
+  return hashFields("risc0-settlement", [
+    input.batchId,
+    input.market.marketId,
+    normalizeHex(input.oldRoot),
+    normalizeHex(input.newRoot),
+    input.match.matchTranscriptDigest,
+    input.match.orderUpdates.map((update) => {
+      const normalized: {
+        intentCommitment: Hex;
+        residualCommitment?: Hex;
+        status: string;
+      } = {
+        intentCommitment: update.intentCommitment,
+        status: update.status,
+      };
+      if (update.residualCommitment) normalized.residualCommitment = update.residualCommitment;
+      return normalized;
+    }),
+    newCommitments,
+    input.match.marginChangeCommitments,
+    input.match.spentNullifiers,
+    input.match.aggregateVolume,
+    input.match.openInterestDelta,
+    input.match.residualSize,
+  ]);
+}
+
+function normalizeHex(value: Hex): Hex {
+  if (value === "0x0") return value;
+  return value.startsWith("0x") ? (`0x${value.slice(2).toLowerCase()}` as Hex) : value;
+}
+
 function runRisc0Prover(
   root: string,
   input: SettlementProofInput,
@@ -143,13 +163,23 @@ function runRisc0Prover(
     `${JSON.stringify(toProverInput(input, draft), bigintReplacer, 2)}\n`,
   );
 
-  const result = runLocalProver(root, inputPath, proofDir);
+  const cachedOutput = readRisc0ProverOutput(join(proofDir, "proof.json"));
+  if (cachedOutput) return cachedOutput;
+
+  const result = runBoundlessProver(root, inputPath, proofDir);
   if (result.status !== 0) {
     const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
-    throw new Error(`RISC0 Groth16 batch prover failed\n${output}`);
+    throw new Error(`Boundless RISC0 Groth16 batch prover failed\n${output}`);
   }
 
-  const output = JSON.parse(readFileSync(result.metadataPath, "utf8")) as Risc0ProverOutput;
+  const output = readRisc0ProverOutput(result.metadataPath);
+  if (!output) throw new Error(`RISC0 proof metadata was not written: ${result.metadataPath}`);
+  return output;
+}
+
+function readRisc0ProverOutput(metadataPath: string): Risc0ProverOutput | undefined {
+  if (!existsSync(metadataPath)) return undefined;
+  const output = JSON.parse(readFileSync(metadataPath, "utf8")) as Risc0ProverOutput;
   if (!existsSync(output.seal_path)) throw new Error(`RISC0 seal was not written: ${output.seal_path}`);
   if (!existsSync(output.journal_path)) throw new Error(`RISC0 journal was not written: ${output.journal_path}`);
   if (sha256File(output.seal_path) !== output.seal_digest) throw new Error("RISC0 seal digest mismatch");
@@ -157,8 +187,7 @@ function runRisc0Prover(
   return output;
 }
 
-function runLocalProver(root: string, inputPath: string, proofDir: string): ProverRun {
-  assertGroth16ProverHost();
+function runBoundlessProver(root: string, inputPath: string, proofDir: string): ProverRun {
   const result = spawnSync(
     "cargo",
     [
@@ -175,6 +204,7 @@ function runLocalProver(root: string, inputPath: string, proofDir: string): Prov
       encoding: "utf8",
       env: {
         ...process.env,
+        BOUNDLESS_IGNORE_PREFLIGHT: process.env.BOUNDLESS_IGNORE_PREFLIGHT ?? "1",
         RISC0_DEV_MODE: "0",
       },
     },
@@ -185,18 +215,6 @@ function runLocalProver(root: string, inputPath: string, proofDir: string): Prov
     stdout: result.stdout,
     status: result.status,
   };
-}
-
-function assertGroth16ProverHost(): void {
-  if (process.arch === "x64") return;
-  throw new Error(
-    [
-      "RISC0 Groth16 proof generation must run on an x86_64 prover host.",
-      `Current host architecture is ${process.arch}.`,
-      "RISC Zero's local-proving docs state that Groth16 proving is x86-only and Apple Silicon is unsupported, even via Docker.",
-      "Run this prover on an x86_64 Linux machine, VM, CI runner, or dedicated private prover service.",
-    ].join(" "),
-  );
 }
 
 function toProverInput(input: SettlementProofInput, draft: Omit<BatchSettlement, "proof">) {
@@ -228,6 +246,7 @@ function toProverInput(input: SettlementProofInput, draft: Omit<BatchSettlement,
       limit_price: intent.limitPrice,
       margin: intent.margin,
       market_id: intent.marketId,
+      note_change_commitment: intent.noteChangeCommitment,
       note_nullifier: intent.noteNullifier,
       owner_commitment: intent.ownerCommitment,
       signed_size: intent.signedSize,

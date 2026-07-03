@@ -41,11 +41,11 @@ export class IndexerService {
           createdAt: order.createdAt,
           intentCommitment: order.intentCommitment,
           isResidual: Boolean(residual),
+          matchingPayloadCommitment: this.store.intents.get(order.intentCommitment)?.matchingPayloadCommitment ??
+            residual?.matchingPayloadCommitment ??
+            "0x0",
           marketId: order.marketId,
           residualCommitment: order.residualCommitment,
-          shareCommitment: this.store.intents.get(order.intentCommitment)?.shareCommitment ??
-            residual?.shareCommitment ??
-            "0x0",
           sourceIntentCommitment: residual?.sourceIntentCommitment,
           status: order.status,
           updatedAt: order.updatedAt,

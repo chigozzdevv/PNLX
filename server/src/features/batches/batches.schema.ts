@@ -5,6 +5,7 @@ import type {
 import { parseProofMeta } from "@/features/intents/intents.schema";
 
 type BatchBody = Record<string, unknown>;
+const ZERO_HEX = "0x0" as `0x${string}`;
 
 export function parseSettleBatch(input: {
   batchId: string;
@@ -37,6 +38,7 @@ export function parseExternalBatchSettlement(input: BatchBody): CommitExternalBa
       residualSize: BigInt(String(settlement.residualSize)),
       proof: parseProofMeta(requiredObject(settlement.proof, "proof")),
     },
+    privateMatchIntents: parsePrivateMatchIntents(input.privateMatchIntents),
     positionOpenings: parsePositionOpenings(input.positionOpenings),
     residualOrders: parseResidualOrders(input.residualOrders),
   };
@@ -102,11 +104,31 @@ function parseResidualOrders(value: unknown): CommitExternalBatchSettlementReque
       createdAt: Number(body.createdAt),
       intentCommitment: String(body.intentCommitment) as `0x${string}`,
       marketId: String(body.marketId),
+      matchingPayloadCommitment: String(body.matchingPayloadCommitment) as `0x${string}`,
       noteNullifier: String(body.noteNullifier) as `0x${string}`,
       ownerCommitment: String(body.ownerCommitment) as `0x${string}`,
-      shareCommitment: String(body.shareCommitment) as `0x${string}`,
       sourceIntentCommitment: String(body.sourceIntentCommitment) as `0x${string}`,
       updatedAt: Number(body.updatedAt),
+    };
+  });
+}
+
+function parsePrivateMatchIntents(value: unknown): CommitExternalBatchSettlementRequest["privateMatchIntents"] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("privateMatchIntents must be an array");
+  return value.map((entry) => {
+    const body = requiredObject(entry, "privateMatchIntent");
+    return {
+      batchId: String(body.batchId),
+      intentCommitment: String(body.intentCommitment) as `0x${string}`,
+      limitPrice: BigInt(String(body.limitPrice)),
+      margin: BigInt(String(body.margin)),
+      marketId: String(body.marketId),
+      noteChangeCommitment: optionalHex(body.noteChangeCommitment) ?? ZERO_HEX,
+      noteNullifier: String(body.noteNullifier) as `0x${string}`,
+      ownerCommitment: String(body.ownerCommitment) as `0x${string}`,
+      signedSize: BigInt(String(body.signedSize)),
+      sourceIntentCommitment: optionalHex(body.sourceIntentCommitment),
     };
   });
 }

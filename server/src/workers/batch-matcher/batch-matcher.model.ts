@@ -1,10 +1,9 @@
-import type { Fill, Hex, MarketConfig, OrderLifecycleUpdate } from "@pnlx/protocol-types";
-import type { RecoveredIntent } from "@/workers/threshold-shares/threshold-shares.model";
+import type { Fill, Hex, MarketConfig, OrderLifecycleUpdate, PrivateMatchIntent } from "@pnlx/protocol-types";
 
 export interface MatchInput {
   batchId: string;
   market: MarketConfig;
-  intents: RecoveredIntent[];
+  intents: PrivateMatchIntent[];
 }
 
 export interface MatchResult {
@@ -13,7 +12,7 @@ export interface MatchResult {
   matchTranscriptDigest: Hex;
   marginChangeCommitments: Hex[];
   orderUpdates: OrderLifecycleUpdate[];
-  residuals: RecoveredIntent[];
+  residuals: PrivateMatchIntent[];
   spentNullifiers: Hex[];
   aggregateVolume: bigint;
   openInterestDelta: bigint;
