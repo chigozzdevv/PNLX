@@ -1,0 +1,110 @@
+name: pnlx
+
+x-pnlx-env: &pnlx-env
+  NODE_ENV: development
+  PROTOCOL_STORAGE_DRIVER: mongodb
+  MONGODB_URI: mongodb://mongo:27017/pnlx
+  MONGODB_DATABASE: pnlx
+  MONGODB_PROTOCOL_COLLECTION: protocol_state
+  JOB_QUEUE_DRIVER: bullmq
+  REDIS_URL: redis://redis:6379
+  MATCHER_PROVIDER: risc0
+  MATCHER_SERVICE_URL: http://matcher:4102
+  MATCHER_SERVICE_TOKEN: pnlx-matcher-dev-token
+  MATCHER_API_TOKEN: pnlx-matcher-dev-token
+  ASSET_CUSTODY_REQUIRED: "true"
+  AUTH_REQUIRED: "true"
+  PRIVATE_MATCHING_REQUIRED: "true"
+  STELLAR_ONCHAIN_RELAY: "true"
+  STELLAR_RELAYER_MODE: stellar-cli
+  INTENT_REGISTRY_ONCHAIN_REQUIRED: "true"
+  CONDITIONAL_ORDERS_ONCHAIN_REQUIRED: "true"
+  SETTLEMENTS_ONCHAIN_REQUIRED: "true"
+  ORACLE_ONCHAIN_REQUIRED: "true"
+  COLLATERAL_TOKEN_CONTRACT: ${COLLATERAL_TOKEN_CONTRACT:?COLLATERAL_TOKEN_CONTRACT must be a Soroban token contract id}
+  COLLATERAL_TOKEN_DIGEST: ${COLLATERAL_TOKEN_DIGEST:-}
+  STELLAR_NETWORK: ${STELLAR_NETWORK:-testnet}
+  STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org/}
+  STELLAR_SOURCE: ${STELLAR_SOURCE:-pnlx-testnet}
+  STELLAR_DEPLOYMENT_FILE: ${STELLAR_DEPLOYMENT_FILE:-deployments/testnet.json}
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build: .
+    env_file:
+      - .env
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      matcher:
+        condition: service_started
+    environment:
+      <<: *pnlx-env
+      PORT: "4000"
+    ports:
+      - "4000:4000"
+
+  matcher:
+    build: .
+    env_file:
+      - .env
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *pnlx-env
+      MATCHER_SERVICE_URL: ""
+      MATCHER_PORT: "4102"
+    command: ["bun", "server/src/matcher-server.ts"]
+    ports:
+      - "4102:4102"
+
+  client:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      NEXT_PUBLIC_PNLX_API_URL: http://localhost:4000
+      NEXT_PUBLIC_PNLX_PROVER_URL: http://localhost:4101
+    command: ["bun", "run", "--filter", "@pnlx/client", "dev", "--hostname", "0.0.0.0"]
+    ports:
+      - "3000:3000"
+
+volumes:
+  mongo-data:
+  redis-data:
