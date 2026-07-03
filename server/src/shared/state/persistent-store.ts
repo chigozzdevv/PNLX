@@ -18,11 +18,14 @@ import type {
   PendingAssetDepositRecord,
   PositionCloseRecord,
   PositionLifecycleRecord,
+  PrivateMatchIntent,
   ProofMeta,
   ResidualOrderRecord,
   WithdrawalRecord,
 } from "@pnlx/protocol-types";
 import { ProtocolStore } from "@/shared/state/store";
+
+const ZERO_HEX = "0x0" as Hex;
 
 interface ProtocolStoreSnapshot {
   accountEvents: [Hex, AccountEventRecord][];
@@ -42,6 +45,7 @@ interface ProtocolStoreSnapshot {
   positionCloses: [Hex, PositionCloseRecord][];
   positionCommitments: Hex[];
   positionLifecycle: [Hex, PositionLifecycleRecord][];
+  privateMatchIntents?: [Hex, PrivateMatchIntent][];
   proofs: string[];
   residualOrders: [Hex, ResidualOrderRecord][];
   settlements: [string, BatchSettlement][];
@@ -96,8 +100,8 @@ export class FileProtocolStore extends ProtocolStore {
     this.persist(() => super.addBatchExecutionRun(record));
   }
 
-  override addIntent(record: IntentRecord): void {
-    this.persist(() => super.addIntent(record));
+  override addIntent(record: IntentRecord, privateMatchIntent?: PrivateMatchIntent): void {
+    this.persist(() => super.addIntent(record, privateMatchIntent));
   }
 
   override cancelOrder(intentCommitment: Hex): OrderLifecycleRecord {
@@ -117,16 +121,19 @@ export class FileProtocolStore extends ProtocolStore {
     positionOpenings: PositionLifecycleRecord[] = [],
     residualOrders: ResidualOrderRecord[] = [],
     accountEvents: AccountEventRecord[] = [],
+    privateMatchIntents: PrivateMatchIntent[] = [],
   ): void {
-    this.persist(() => super.addSettlement(settlement, positionOpenings, residualOrders, accountEvents));
+    this.persist(() =>
+      super.addSettlement(settlement, positionOpenings, residualOrders, accountEvents, privateMatchIntents)
+    );
   }
 
   override addPositionOpening(record: PositionLifecycleRecord): void {
     this.persist(() => super.addPositionOpening(record));
   }
 
-  override addResidualOrder(record: ResidualOrderRecord): void {
-    this.persist(() => super.addResidualOrder(record));
+  override addResidualOrder(record: ResidualOrderRecord, privateMatchIntent?: PrivateMatchIntent): void {
+    this.persist(() => super.addResidualOrder(record, privateMatchIntent));
   }
 
   override addLiquidation(record: LiquidationRecord): void {
@@ -204,6 +211,7 @@ export class FileProtocolStore extends ProtocolStore {
     this.accountEvents.clear();
     this.accountEncryptionKeys.clear();
     this.pendingAssetDeposits.clear();
+    this.privateMatchIntents.clear();
 
     for (const [key, value] of snapshot.accountEvents ?? []) this.accountEvents.set(key, value);
     for (const [key, value] of snapshot.accountEncryptionKeys ?? []) this.accountEncryptionKeys.set(key, value);
@@ -216,10 +224,17 @@ export class FileProtocolStore extends ProtocolStore {
         ...value,
         batchDigest: value.batchDigest ?? "0x0",
         marketDigest: value.marketDigest ?? "0x0",
+        noteChangeCommitment: value.noteChangeCommitment ?? ZERO_HEX,
         ownerCommitmentField: value.ownerCommitmentField ?? "0x0",
       });
     }
     for (const [key, value] of snapshot.residualOrders ?? []) this.residualOrders.set(key, value);
+    for (const [key, value] of snapshot.privateMatchIntents ?? []) {
+      this.privateMatchIntents.set(key, {
+        ...value,
+        noteChangeCommitment: value.noteChangeCommitment ?? ZERO_HEX,
+      });
+    }
     for (const [key, value] of snapshot.orderLifecycle ?? []) this.orderLifecycle.set(key, value);
     for (const [key, value] of snapshot.positionLifecycle ?? []) this.positionLifecycle.set(key, value);
     for (const [key, value] of snapshot.markets) this.markets.set(key, value);
@@ -265,6 +280,7 @@ export class FileProtocolStore extends ProtocolStore {
       positionCloses: [...this.positionCloses.entries()],
       positionCommitments: [...this.positionCommitments],
       positionLifecycle: [...this.positionLifecycle.entries()],
+      privateMatchIntents: [...this.privateMatchIntents.entries()],
       proofs: [...this.proofs],
       residualOrders: [...this.residualOrders.entries()],
       settlements: [...this.settlements.entries()],

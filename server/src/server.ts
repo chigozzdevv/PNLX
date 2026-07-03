@@ -1,8 +1,8 @@
 import { loadEnv } from "@/config/env";
-import { createApp } from "@/app";
+import { createAppAsync } from "@/app";
 
 const env = loadEnv();
-const app = createApp();
+const app = await createAppAsync();
 
 Bun.serve({
   port: env.port,

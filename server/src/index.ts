@@ -1,4 +1,6 @@
 export * from "@/shared/state/store";
+export * from "@/shared/state/mongo-store";
+export * from "@/shared/state/protocol-snapshot";
 export * from "@/features/account-keys/account-keys.index";
 export * from "@/features/liquidation-automation/liquidation-automation.index";
 export * from "@/workers/batch-matcher/batch-matcher.index";
@@ -7,7 +9,6 @@ export * from "@/workers/executor/executor.index";
 export * from "@/workers/matcher/matcher.index";
 export * from "@/workers/funding-engine/funding-engine.index";
 export * from "@/workers/indexer/indexer.index";
-export * from "@/workers/threshold-shares/threshold-shares.index";
 export * from "@/workers/onchain/onchain.index";
 export * from "@/workers/prover/prover.index";
 export * from "@/workers/proof-coordinator/proof-coordinator.index";

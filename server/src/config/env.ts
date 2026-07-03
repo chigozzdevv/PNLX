@@ -22,16 +22,15 @@ export interface ServerEnv {
   intentRegistryOnchainRequired: boolean;
   liquidationAutomationEnabled: boolean;
   liquidationAutomationIntervalMs: number;
-  matchingBackend: "threshold-recovery" | "external-blind";
   matcherServiceUrl: string;
   matcherServiceToken: string;
   matcherApiToken: string;
   matcherProvider: "risc0";
   matcherPort: number;
+  mongodbCollection: string;
+  mongodbDatabase: string;
+  mongodbUri: string;
   marketId: string;
-  thresholdShareNodeIds: string[];
-  thresholdShareStoreDir: string;
-  thresholdShareThreshold: number;
   port: number;
   nodeEnv: string;
   oracleAssetAddress: string;
@@ -54,11 +53,7 @@ export interface ServerEnv {
   oracleTwapRecords: number;
   protocolAdminAddresses: string[];
   protocolAdminRequired: boolean;
-  protocolLiquidityEnabled: boolean;
-  protocolLiquidityMaxNotional: bigint;
-  protocolLiquidityOwner: string;
-  protocolLiquidityPublicKey: string;
-  protocolLiquidityQuoteSpreadBps: bigint;
+  protocolStorageDriver: "memory" | "file" | "mongodb";
   protocolStorePath: string;
   privateMatchingRequired: boolean;
   pythBtcUsdFeedId: string;
@@ -66,6 +61,8 @@ export interface ServerEnv {
   pythHermesUrl: string;
   smokeMarketSymbols: string[];
   relayStorePath: string;
+  redisUrl: string;
+  jobQueueDriver: "timer" | "bullmq";
   serverWitnessRoutesEnabled: boolean;
   settlementsOnchainRequired: boolean;
   stellarDeployerAddress: string;
@@ -116,16 +113,15 @@ export function loadEnv(): ServerEnv {
     intentRegistryOnchainRequired: booleanValue("INTENT_REGISTRY_ONCHAIN_REQUIRED", nodeEnv === "production"),
     liquidationAutomationEnabled: booleanValue("LIQUIDATION_AUTOMATION_ENABLED", persistentByDefault),
     liquidationAutomationIntervalMs: Number(value("LIQUIDATION_AUTOMATION_INTERVAL_MS", "5000")),
-    matchingBackend: matchingBackend(value("MATCHING_BACKEND", nodeEnv === "production" ? "external-blind" : "threshold-recovery")),
     matcherServiceUrl: value("MATCHER_SERVICE_URL", value("EXTERNAL_MATCHER_URL", "")),
     matcherServiceToken: value("MATCHER_SERVICE_TOKEN", value("EXTERNAL_MATCHER_TOKEN", "")),
     matcherApiToken: value("MATCHER_API_TOKEN", ""),
     matcherProvider: matcherProvider(value("MATCHER_PROVIDER", "risc0")),
     matcherPort: Number(value("MATCHER_PORT", "4102")),
+    mongodbCollection: value("MONGODB_PROTOCOL_COLLECTION", "protocol_state"),
+    mongodbDatabase: value("MONGODB_DATABASE", "pnlx"),
+    mongodbUri: value("MONGODB_URI", ""),
     marketId: value("PNLX_MARKET_ID", "xlm-usd-perp"),
-    thresholdShareNodeIds: listValue("THRESHOLD_SHARE_NODE_IDS", ["node-a", "node-b", "node-c"], { uppercase: false }),
-    thresholdShareStoreDir: value("THRESHOLD_SHARE_STORE_DIR", persistentByDefault ? join(runtimeDir, "threshold-shares") : ""),
-    thresholdShareThreshold: Number(value("THRESHOLD_SHARE_THRESHOLD", "2")),
     port: Number(process.env.PORT ?? 4000),
     nodeEnv,
     oracleAssetAddress: value("ORACLE_ASSET_ADDRESS", ""),
@@ -150,11 +146,10 @@ export function loadEnv(): ServerEnv {
     oracleTwapRecords: Number(value("ORACLE_TWAP_RECORDS", "1")),
     protocolAdminAddresses: listValue("PROTOCOL_ADMIN_ADDRESSES", []),
     protocolAdminRequired: booleanValue("PROTOCOL_ADMIN_REQUIRED", nodeEnv === "production"),
-    protocolLiquidityEnabled: booleanValue("PROTOCOL_LIQUIDITY_ENABLED", false),
-    protocolLiquidityMaxNotional: BigInt(value("PROTOCOL_LIQUIDITY_MAX_NOTIONAL", "50000")),
-    protocolLiquidityOwner: value("PROTOCOL_LIQUIDITY_OWNER", "pnlx-protocol-liquidity"),
-    protocolLiquidityPublicKey: value("PROTOCOL_LIQUIDITY_PUBLIC_KEY", ""),
-    protocolLiquidityQuoteSpreadBps: BigInt(value("PROTOCOL_LIQUIDITY_QUOTE_SPREAD_BPS", "10")),
+    protocolStorageDriver: protocolStorageDriver(value(
+      "PROTOCOL_STORAGE_DRIVER",
+      value("MONGODB_URI", "") ? "mongodb" : persistentByDefault ? "file" : "memory",
+    )),
     protocolStorePath: value(
       "PROTOCOL_STORE_PATH",
       persistentByDefault ? join(runtimeDir, "protocol-store.json") : "",
@@ -165,6 +160,8 @@ export function loadEnv(): ServerEnv {
     pythHermesUrl: value("PYTH_HERMES_URL", "https://hermes.pyth.network"),
     smokeMarketSymbols: listValue("PNLX_SMOKE_MARKETS", DEFAULT_SMOKE_MARKET_SYMBOLS),
     relayStorePath: value("RELAY_STORE_PATH", persistentByDefault ? join(runtimeDir, "relay-state.json") : ""),
+    redisUrl: value("REDIS_URL", ""),
+    jobQueueDriver: jobQueueDriver(value("JOB_QUEUE_DRIVER", value("REDIS_URL", "") ? "bullmq" : "timer")),
     serverWitnessRoutesEnabled: booleanValue("SERVER_WITNESS_ROUTES_ENABLED", nodeEnv === "test"),
     settlementsOnchainRequired: booleanValue("SETTLEMENTS_ONCHAIN_REQUIRED", nodeEnv === "production"),
     stellarDeployerAddress: value("STELLAR_DEPLOYER_ADDRESS", ""),
@@ -237,14 +234,19 @@ function optionalBigInt(key: string): bigint | undefined {
   return raw === undefined || raw === "" ? undefined : BigInt(raw);
 }
 
-function matchingBackend(value: string): ServerEnv["matchingBackend"] {
-  if (value === "threshold-recovery" || value === "external-blind") return value;
-  throw new Error("MATCHING_BACKEND must be threshold-recovery or external-blind");
-}
-
 function matcherProvider(value: string): ServerEnv["matcherProvider"] {
   if (value === "risc0") return value;
   throw new Error("MATCHER_PROVIDER must be risc0");
+}
+
+function protocolStorageDriver(value: string): ServerEnv["protocolStorageDriver"] {
+  if (value === "memory" || value === "file" || value === "mongodb") return value;
+  throw new Error("PROTOCOL_STORAGE_DRIVER must be memory, file, or mongodb");
+}
+
+function jobQueueDriver(value: string): ServerEnv["jobQueueDriver"] {
+  if (value === "timer" || value === "bullmq") return value;
+  throw new Error("JOB_QUEUE_DRIVER must be timer or bullmq");
 }
 
 function oraclePriceSource(value: string): "hermes" | "onchain-market" {

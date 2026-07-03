@@ -16,11 +16,13 @@ import type {
   PendingAssetDepositRecord,
   PositionCloseRecord,
   PositionLifecycleRecord,
+  PrivateMatchIntent,
   ProofMeta,
   ResidualOrderRecord,
   WithdrawalRecord,
 } from "@pnlx/protocol-types";
 import { EMPTY_ROOT, fieldMerkleProof, fieldMerkleRoot, merkleRoot } from "@pnlx/crypto";
+import { assertPrivateMatchIntent } from "@/workers/batch-matcher/private-intent";
 
 export class ProtocolStore {
   readonly marginCommitments = new Set<Hex>();
@@ -44,6 +46,7 @@ export class ProtocolStore {
   readonly accountEvents = new Map<Hex, AccountEventRecord>();
   readonly accountEncryptionKeys = new Map<Hex, AccountEncryptionKeyRecord>();
   readonly pendingAssetDeposits = new Map<Hex, PendingAssetDepositRecord>();
+  readonly privateMatchIntents = new Map<Hex, PrivateMatchIntent>();
   readonly proofs = new Set<string>();
 
   marginRoot(): Hex {
@@ -153,12 +156,19 @@ export class ProtocolStore {
     this.batchExecutionRuns.set(record.runId, record);
   }
 
-  addIntent(record: IntentRecord): void {
+  addIntent(record: IntentRecord, privateMatchIntent?: PrivateMatchIntent): void {
     if (this.intents.has(record.intentCommitment)) {
       throw new Error("intent commitment already exists");
     }
     if (!record.batchDigest || !record.marketDigest || !record.ownerCommitmentField) {
       throw new Error("intent public binding is required");
+    }
+    if (!record.matchingPayloadCommitment) {
+      throw new Error("intent matching payload commitment is required");
+    }
+    if (privateMatchIntent) {
+      assertPrivateMatchIntent(record, privateMatchIntent);
+      this.privateMatchIntents.set(record.intentCommitment, privateMatchIntent);
     }
     assertProof(this, record.proof);
     if (record.marginRoot !== this.marginMembershipRoot()) {
@@ -227,6 +237,7 @@ export class ProtocolStore {
     positionOpenings: PositionLifecycleRecord[] = [],
     residualOrders: ResidualOrderRecord[] = [],
     accountEvents: AccountEventRecord[] = [],
+    privateMatchIntents: PrivateMatchIntent[] = [],
   ): void {
     const key = `${settlement.marketId}:${settlement.batchId}`;
     if (this.settlements.has(key)) throw new Error("batch already settled");
@@ -247,8 +258,9 @@ export class ProtocolStore {
     for (const opening of positionOpenings) {
       this.addPositionOpening(opening);
     }
+    const privateByIntent = new Map(privateMatchIntents.map((payload) => [payload.intentCommitment, payload]));
     for (const residual of residualOrders) {
-      this.addResidualOrder(residual);
+      this.addResidualOrder(residual, privateByIntent.get(residual.intentCommitment));
     }
     for (const event of accountEvents) {
       this.addAccountEvent(event);
@@ -256,11 +268,15 @@ export class ProtocolStore {
     this.settlements.set(key, settlement);
   }
 
-  addResidualOrder(record: ResidualOrderRecord): void {
+  addResidualOrder(record: ResidualOrderRecord, privateMatchIntent?: PrivateMatchIntent): void {
     if (this.residualOrders.has(record.intentCommitment)) {
       throw new Error("residual order already exists");
     }
-    if (!record.shareCommitment) throw new Error("residual order share commitment is required");
+    if (!record.matchingPayloadCommitment) throw new Error("residual order matching payload commitment is required");
+    if (privateMatchIntent) {
+      assertPrivateMatchIntent(record, privateMatchIntent);
+      this.privateMatchIntents.set(record.intentCommitment, privateMatchIntent);
+    }
 
     this.residualOrders.set(record.intentCommitment, record);
     this.orderLifecycle.set(record.intentCommitment, {

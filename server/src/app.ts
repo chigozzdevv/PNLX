@@ -21,7 +21,8 @@ import { Router } from "@/shared/http/router";
 import { AuthService } from "@/features/auth/auth.service";
 import { LiquidationAutomationService } from "@/features/liquidation-automation/liquidation-automation.service";
 import { LiquidationsService } from "@/features/liquidations/liquidations.service";
-import { createExecutor } from "@/workers/executor/executor.worker";
+import { createExecutor, createExecutorAsync } from "@/workers/executor/executor.worker";
+import type { ExecutorService } from "@/workers/executor/executor.service";
 import { createBatchExecutor } from "@/workers/batch-executor/batch-executor.worker";
 import type { BatchExecutorService } from "@/workers/batch-executor/batch-executor.service";
 import { createMatcher } from "@/workers/matcher/matcher.worker";
@@ -32,11 +33,13 @@ import { OracleService } from "@/workers/oracle/oracle.service";
 import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createOnchainRelay } from "@/workers/onchain/onchain.worker";
 import { createProver } from "@/workers/prover/prover.worker";
-import { ProtocolLiquidityService } from "@/workers/protocol-liquidity/protocol-liquidity.service";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
+import { startBackgroundJobQueues, type BackgroundJobQueues } from "@/workers/jobs/background-queues";
 
 export interface AppRuntime {
   batchExecutor: BatchExecutorService;
+  backgroundJobs?: BackgroundJobQueues;
+  executor: ExecutorService;
   fundingEngine: FundingEngineService;
   liquidationAutomation: LiquidationAutomationService;
   router: Router;
@@ -46,20 +49,27 @@ export function createApp(): Router {
   return createAppRuntime().router;
 }
 
+export async function createAppAsync(): Promise<Router> {
+  return (await createAppRuntimeAsync()).router;
+}
+
 export function createAppRuntime(): AppRuntime {
   const env = loadEnv();
+  const executor = createExecutorForEnv(env);
+  return buildAppRuntime(env, executor);
+}
+
+export async function createAppRuntimeAsync(): Promise<AppRuntime> {
+  const env = loadEnv();
+  const executor = await createExecutorForEnvAsync(env);
+  return buildAppRuntime(env, executor);
+}
+
+function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorService): AppRuntime {
   const auth = new AuthService(env.stellarNetworkPassphrase, env.authStorePath || undefined);
   const router = new Router({
     authenticate: (request) => auth.authenticateRequest(request),
     protectMutations: env.authRequired,
-  });
-  const executor = createExecutor({
-    matchingBackend: env.matchingBackend,
-    thresholdShareNodeIds: env.thresholdShareNodeIds,
-    thresholdShareStoreDir: env.thresholdShareStoreDir || undefined,
-    thresholdShareThreshold: env.thresholdShareThreshold,
-    privateMatchingRequired: env.privateMatchingRequired,
-    storePath: env.protocolStorePath || undefined,
   });
   const prover = createProver();
   const deployment = env.stellarOnchainRelay
@@ -104,7 +114,7 @@ export function createAppRuntime(): AppRuntime {
     prover,
     onchain,
   );
-  if (env.privateMatchingRequired && env.matchingBackend === "external-blind" && !env.matcherServiceUrl) {
+  if (env.privateMatchingRequired && !env.matcherServiceUrl) {
     throw new Error("MATCHER_SERVICE_URL is required for private matcher service");
   }
   const matcher = env.matcherServiceUrl
@@ -113,23 +123,12 @@ export function createAppRuntime(): AppRuntime {
         url: env.matcherServiceUrl,
       })
     : createMatcher(executor);
-  const protocolLiquidity = env.protocolLiquidityEnabled
-    ? new ProtocolLiquidityService(executor, prover, {
-        enabled: true,
-        maxNotional: env.protocolLiquidityMaxNotional,
-        owner: env.protocolLiquidityOwner,
-        publicKey: env.protocolLiquidityPublicKey || undefined,
-        quoteSpreadBps: env.protocolLiquidityQuoteSpreadBps,
-        tokenDigest: env.collateralTokenDigest as `0x${string}`,
-      })
-    : undefined;
   const batchExecutor = createBatchExecutor(
     executor,
     matcher,
     {
       batchIdPrefix: env.batchExecutorPrefix,
       intervalMs: env.batchExecutorIntervalMs,
-      protocolLiquidity,
       settlementsOnchainRequired: env.settlementsOnchainRequired,
     },
     onchain,
@@ -175,12 +174,50 @@ export function createAppRuntime(): AppRuntime {
   if (env.fundingEngineEnabled) {
     fundingEngine.start();
   }
-  if (env.batchExecutorEnabled) {
+  let backgroundJobs: BackgroundJobQueues | undefined;
+  if (env.jobQueueDriver === "bullmq") {
+    backgroundJobs = startBackgroundJobQueues({
+      batchExecutor,
+      batchExecutorEnabled: env.batchExecutorEnabled,
+      batchExecutorIntervalMs: env.batchExecutorIntervalMs,
+      batchExecutorPrefix: env.batchExecutorPrefix,
+      liquidationAutomation,
+      liquidationAutomationEnabled: env.liquidationAutomationEnabled,
+      liquidationAutomationIntervalMs: env.liquidationAutomationIntervalMs,
+      redisUrl: env.redisUrl,
+    });
+  } else if (env.batchExecutorEnabled) {
     batchExecutor.start();
   }
-  if (env.liquidationAutomationEnabled) {
+  if (env.jobQueueDriver !== "bullmq" && env.liquidationAutomationEnabled) {
     liquidationAutomation.start();
   }
 
-  return { batchExecutor, fundingEngine, liquidationAutomation, router };
+  return { backgroundJobs, batchExecutor, executor, fundingEngine, liquidationAutomation, router };
+}
+
+function createExecutorForEnv(env: ReturnType<typeof loadEnv>): ExecutorService {
+  if (env.protocolStorageDriver === "mongodb") {
+    throw new Error("MongoDB protocol storage requires async app startup");
+  }
+  return createExecutor({
+    privateMatchingRequired: env.privateMatchingRequired,
+    storePath: env.protocolStorageDriver === "file" ? env.protocolStorePath || undefined : undefined,
+  });
+}
+
+async function createExecutorForEnvAsync(env: ReturnType<typeof loadEnv>): Promise<ExecutorService> {
+  if (env.protocolStorageDriver === "mongodb") {
+    if (!env.mongodbUri) throw new Error("MONGODB_URI is required when PROTOCOL_STORAGE_DRIVER=mongodb");
+    return createExecutorAsync({
+      mongo: {
+        collection: env.mongodbCollection,
+        database: env.mongodbDatabase,
+        documentId: env.stellarNetwork,
+        uri: env.mongodbUri,
+      },
+      privateMatchingRequired: env.privateMatchingRequired,
+    });
+  }
+  return createExecutorForEnv(env);
 }
