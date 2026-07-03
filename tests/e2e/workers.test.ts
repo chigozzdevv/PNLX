@@ -28,6 +28,7 @@ import {
   positionOpeningAccountEventDataCommitment,
   positionOpeningAccountEventId,
 } from "@/shared/protocol/account-event-binding";
+import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
 import { ProtocolStore } from "@/shared/state/store";
 import { createBatchExecutor } from "@/workers/batch-executor/batch-executor.worker";
 import { createExecutor } from "@/workers/executor/executor.worker";
@@ -40,9 +41,7 @@ import { createIndexer } from "@/workers/indexer/indexer.worker";
 import { createOnchainRelay } from "@/workers/onchain/onchain.worker";
 import { OracleService } from "@/workers/oracle/oracle.service";
 import type { SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
-import { ProtocolLiquidityService } from "@/workers/protocol-liquidity/protocol-liquidity.service";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
-import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
 
 describe("support workers", () => {
   test("defaults production oracle authority to on-chain market pricing", () => {
@@ -263,36 +262,38 @@ describe("support workers", () => {
     expect(second.store.pendingAssetDeposits.get(pendingCommitment)?.amount).toBe(1_000n);
   });
 
-  test("rejects threshold recovery when private matching is required", () => {
-    expect(() =>
-      createExecutor({
-        matchingBackend: "threshold-recovery",
-        privateMatchingRequired: true,
-      }),
-    ).toThrow("private matching requires MATCHING_BACKEND=external-blind");
+  test("accepts private matching required config with the RISC0 matcher path", () => {
+    expect(() => createExecutor({ privateMatchingRequired: true })).not.toThrow();
   });
 
-  test("threshold share storage allows identical retried shares", () => {
-    const shareStoreDir = join(mkdtempSync(join(tmpdir(), "pnlx-share-retry-")), "shares");
-    const committee = new ThresholdShareCommittee({
-      nodeIds: ["node-a", "node-b", "node-c"],
-      shareStoreDir,
-      threshold: 2,
-    });
-    const intent = matchedTradeIntent("share-retry", "long", {
-      batchId: "share-retry-batch",
-      limitPrice: 50_000n * PRICE_SCALE,
+  test("persists private match payloads beside sealed public intent records", () => {
+    const executor = createExecutor();
+    const market = {
       marketId: "btc-usd-perp",
-    });
-    const intentCommitment = commitIntent(intent);
-    const shareSets = committee.shareIntent(intent, intentCommitment);
+      oraclePrice: 50_000n * PRICE_SCALE,
+      maxLeverage: 10n,
+      initialMarginRate: 100_000n,
+      maintenanceMarginRate: 50_000n,
+      fundingIndex: 0n,
+    };
+    executor.addMarket(market);
+    const record = submitBackedIntent(executor, matchedTradeIntent("private-payload-retry", "long", {
+      batchId: "private-payload-batch",
+      limitPrice: 50_000n * PRICE_SCALE,
+      marketId: market.marketId,
+    }));
 
-    committee.distribute(shareSets);
-    expect(() => committee.distribute(shareSets)).not.toThrow();
+    expect(record.matchingPayloadCommitment).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(executor.store.privateMatchIntents.get(record.intentCommitment)).toMatchObject({
+      intentCommitment: record.intentCommitment,
+      limitPrice: 50_000n * PRICE_SCALE,
+      signedSize: 1n,
+    });
+    expect(JSON.stringify(record)).not.toContain((50_000n * PRICE_SCALE).toString());
   });
 
-  test("commits externally proven blind settlement transcripts without recovering shares", () => {
-    const executor = createExecutor({ matchingBackend: "external-blind" });
+  test("commits externally proven blind settlement transcripts without private payload recovery", () => {
+    const executor = createExecutor();
     const market = {
       marketId: "btc-usd-perp",
       oraclePrice: 50_000n * PRICE_SCALE,
@@ -311,7 +312,7 @@ describe("support workers", () => {
 
     expect(() =>
       executor.createBatchSettlement({ batchId: "external-batch", marketId: market.marketId }),
-    ).toThrow("external blind matching requires an externally proven settlement transcript");
+    ).toThrow("private match payload not found");
 
     const settlement = externalSettlement({
       batchId: "external-batch",
@@ -388,7 +389,7 @@ describe("support workers", () => {
   });
 
   test("indexes external settlements after a submitted verifier relay", () => {
-    const executor = createExecutor({ matchingBackend: "external-blind" });
+    const executor = createExecutor();
     const market = {
       marketId: "btc-usd-perp",
       oraclePrice: 50_000n * PRICE_SCALE,
@@ -459,8 +460,8 @@ describe("support workers", () => {
     expect(executor.store.accountEvents.size).toBe(2);
   });
 
-  test("accepts worker-produced RISC0 matcher transcripts through batch ingestion", () => {
-    const executor = createExecutor({ matchingBackend: "external-blind" });
+  test("accepts worker-produced RISC0 matcher transcripts through batch ingestion", async () => {
+    const executor = createExecutor();
     const market = {
       marketId: "btc-usd-perp",
       oraclePrice: 50_000n * PRICE_SCALE,
@@ -480,7 +481,7 @@ describe("support workers", () => {
       limitPrice: 49_500n * PRICE_SCALE,
       marketId: market.marketId,
     }));
-    const matcher = createMatcher(executor, {
+    const matcher = createProoflessMatcher(executor, {
       accountEventEncryptor: (payload) => `base64:test-encrypted:${payload.kind}`,
     });
     const service = new BatchesService(
@@ -508,7 +509,7 @@ describe("support workers", () => {
       { settlementsOnchainRequired: true },
     );
 
-    const transcript = matcher.createSettlementTranscript({
+    const transcript = await matcher.createSettlementTranscript({
       batchId: "worker-produced-batch",
       marketId: market.marketId,
     });
@@ -522,8 +523,8 @@ describe("support workers", () => {
     expect([...executor.store.orderLifecycle.values()].every((order) => order.status === "filled")).toBe(true);
   });
 
-  test("worker-produced external matcher transcripts encrypt owner events to registered account keys", () => {
-    const executor = createExecutor({ matchingBackend: "external-blind" });
+  test("worker-produced external matcher transcripts encrypt owner events to registered account keys", async () => {
+    const executor = createExecutor();
     const market = {
       marketId: "btc-usd-perp",
       oraclePrice: 50_000n * PRICE_SCALE,
@@ -553,9 +554,9 @@ describe("support workers", () => {
         updatedAt: now,
       });
     }
-    const matcher = createMatcher(executor);
+    const matcher = createProoflessMatcher(executor);
 
-    const transcript = matcher.createSettlementTranscript({
+    const transcript = await matcher.createSettlementTranscript({
       batchId: "encrypted-worker-batch",
       marketId: market.marketId,
     });
@@ -568,8 +569,8 @@ describe("support workers", () => {
     expect(transcript.settlement.proof.proofSystem).toBe("risc0-groth16");
   });
 
-  test("worker-produced matcher carries forward open market intents across batches", () => {
-    const executor = createExecutor({ matchingBackend: "external-blind" });
+  test("worker-produced matcher carries forward open market intents across batches", async () => {
+    const executor = createExecutor();
     const market = {
       marketId: "btc-usd-perp",
       oraclePrice: 50_000n * PRICE_SCALE,
@@ -610,7 +611,7 @@ describe("support workers", () => {
       });
     }
 
-    const transcript = createProoflessMatcher(executor).createSettlementTranscript({
+    const transcript = await createProoflessMatcher(executor).createSettlementTranscript({
       batchId: "current-open-batch",
       marketId: market.marketId,
     });
@@ -661,7 +662,7 @@ describe("support workers", () => {
 
   test("matcher app produces transcripts from a separate persisted matcher process view", async () => {
     const storePath = join(mkdtempSync(join(tmpdir(), "pnlx-remote-matcher-")), "protocol-store.json");
-    const executor = createExecutor({ matchingBackend: "external-blind", storePath });
+    const executor = createExecutor({ storePath });
     const market = {
       marketId: "btc-usd-perp",
       oraclePrice: 50_000n * PRICE_SCALE,
@@ -692,8 +693,9 @@ describe("support workers", () => {
     }
 
     const matcherApp = createMatcherApp({
-      thresholdShareNodeIds: ["node-a", "node-b", "node-c"],
-      thresholdShareThreshold: 2,
+      signerConfig: {
+        proofs: prooflessProofs(),
+      },
       storePath,
       token: "matcher-token",
     });
@@ -710,14 +712,17 @@ describe("support workers", () => {
         method: "POST",
       }),
     );
-    expect(response.status).toBe(201);
-    const transcript = (await response.json()) as Record<string, unknown>;
+    const responseText = await response.text();
+    if (response.status !== 201) {
+      throw new Error(`matcher app failed with ${response.status}: ${responseText}`);
+    }
+    const transcript = JSON.parse(responseText) as Record<string, unknown>;
     expect((transcript.accountEvents as unknown[])).toHaveLength(2);
     expect(JSON.stringify(transcript.accountEvents)).not.toContain("positionNullifier");
   });
 
   test("batch executor automatically settles crossed private orders through matcher service", async () => {
-    const executor = createExecutor({ matchingBackend: "external-blind" });
+    const executor = createExecutor();
     const market = {
       marketId: "btc-usd-perp",
       oraclePrice: 50_000n * PRICE_SCALE,
@@ -747,7 +752,7 @@ describe("support workers", () => {
         updatedAt: now,
       });
     }
-    const matcher = createMatcher(executor);
+    const matcher = createProoflessMatcher(executor);
     const batchExecutor = createBatchExecutor(
       executor,
       matcher,
@@ -790,7 +795,7 @@ describe("support workers", () => {
   });
 
   test("batch executor commits locally when optional on-chain settlement relay fails", async () => {
-    const executor = createExecutor({ matchingBackend: "external-blind" });
+    const executor = createExecutor();
     const market = {
       marketId: "btc-usd-perp",
       oraclePrice: 50_000n * PRICE_SCALE,
@@ -844,7 +849,7 @@ describe("support workers", () => {
   });
 
   test("batch executor records skipped runs without mutating settlement state", async () => {
-    const executor = createExecutor({ matchingBackend: "external-blind" });
+    const executor = createExecutor();
     const market = {
       marketId: "btc-usd-perp",
       oraclePrice: 50_000n * PRICE_SCALE,
@@ -884,70 +889,6 @@ describe("support workers", () => {
     expect(executor.store.settlements.size).toBe(0);
     expect(executor.store.batchExecutionRuns.size).toBe(1);
     expect(executor.store.orderLifecycle.get(long.intentCommitment)?.status).toBe("open");
-  });
-
-  test("batch executor fills market-style orders against protocol liquidity", async () => {
-    const executor = createExecutor({ matchingBackend: "external-blind" });
-    const market = {
-      marketId: "btc-usd-perp",
-      oraclePrice: 50_000n * PRICE_SCALE,
-      maxLeverage: 10n,
-      initialMarginRate: 100_000n,
-      maintenanceMarginRate: 50_000n,
-      fundingIndex: 0n,
-    };
-    executor.addMarket(market);
-    const userLong = submitBackedIntent(executor, matchedTradeIntent("protocol-liquidity-user-long", "long", {
-      batchId: "ui-protocol-liquidity-long",
-      limitPrice: 50_250n * PRICE_SCALE,
-      marketId: market.marketId,
-    }));
-    executor.store.upsertAccountEncryptionKey({
-      algorithm: "ecdh-p256-aes-gcm",
-      createdAt: 1,
-      ownerCommitment: userLong.ownerCommitment,
-      publicKey: rawP256PublicKey(),
-      updatedAt: 1,
-    });
-
-    const protocolLiquidity = new ProtocolLiquidityService(executor, {
-      proveIntentValidity(input: { intent: TradeIntent }) {
-        return intentValidity(executor, input.intent);
-      },
-    } as never, {
-      enabled: true,
-      maxNotional: 50_000n,
-      owner: "pnlx-protocol-liquidity-test",
-      publicKey: rawP256PublicKey(),
-      quoteSpreadBps: 10n,
-      tokenDigest: digestToFieldHex("asset:usdc"),
-    });
-    const batchExecutor = createBatchExecutor(
-      executor,
-      createProoflessMatcher(executor),
-      {
-        batchIdPrefix: "runner",
-        intervalMs: 1000,
-        protocolLiquidity,
-        settlementsOnchainRequired: false,
-      },
-    );
-
-    const result = await batchExecutor.runOnce({ marketId: market.marketId, now: 9010 });
-    const lpOrders = [...executor.store.orderLifecycle.values()].filter((order) =>
-      order.batchId.startsWith("lp-")
-    );
-
-    expect(result.results).toHaveLength(1);
-    expect(result.results[0].record.reason).toBeUndefined();
-    expect(result.results[0].record.status).toBe("settled");
-    expect(result.results[0].record.fillCount).toBe(2);
-    expect(executor.store.settlements.size).toBe(1);
-    expect(executor.store.positionLifecycle.size).toBe(2);
-    expect(executor.store.orderLifecycle.get(userLong.intentCommitment)?.status).toBe("filled");
-    expect(lpOrders).toHaveLength(2);
-    expect(lpOrders.some((order) => order.status === "filled")).toBe(true);
-    expect(lpOrders.some((order) => order.status === "open")).toBe(true);
   });
 
   test("runs bounded funding engine cycles from market oracle price", () => {
@@ -1412,7 +1353,8 @@ describe("support workers", () => {
       ownerCommitmentField: intentOwnerCommitmentField(hashFields("owner", ["intent-relay"])),
       intentCommitment: hashFields("intent", ["intent-relay"]),
       proof: proof("intent-validity"),
-      shareCommitment: hashFields("shares", ["intent-relay"]),
+      matchingPayloadCommitment: hashFields("matching-payload", ["intent-relay"]),
+      noteChangeCommitment: "0x0" as Hex,
       noteNullifier: hashFields("nullifier", ["intent-relay"]),
     };
 
@@ -1425,7 +1367,7 @@ describe("support workers", () => {
     expect(calls[0]).toContain(hashFields("batch-id", [record.batchId]).slice(2));
     expect(calls[0]).toContain(hashFields("market-id", [record.marketId]).slice(2));
     expect(calls[0]).toContain(record.intentCommitment.slice(2));
-    expect(calls[0]).toContain(record.shareCommitment.slice(2));
+    expect(calls[0]).toContain(record.matchingPayloadCommitment.slice(2));
     expect(calls[1]).toContain("intent-registry-contract");
     expect(calls[1]).toContain("cancel");
     expect(calls[1]).toContain(record.intentCommitment.slice(2));
@@ -3213,10 +3155,12 @@ function backedIntent(seed: string, executor: ReturnType<typeof createExecutor>)
     batchId: "intent-finality-batch",
     limitPrice: 50_000n * PRICE_SCALE,
     margin: 1_000n,
-    marketId,
-    noteNullifier: hashFields("note-nullifier", [seed]),
-    owner: `G${seed.toUpperCase().replace(/[^A-Z0-9]/g, "").padEnd(55, "A").slice(0, 55)}`,
-    side: "long",
+	    marketId,
+	    noteNullifier: hashFields("note-nullifier", [seed]),
+	    nonce: `${seed}-nonce`,
+	    owner: `G${seed.toUpperCase().replace(/[^A-Z0-9]/g, "").padEnd(55, "A").slice(0, 55)}`,
+	    salt: `${seed}-salt`,
+	    side: "long",
     size: 1n,
   };
 }
@@ -3230,10 +3174,12 @@ function matchedTradeIntent(
     batchId: options.batchId,
     limitPrice: options.limitPrice,
     margin: 10_000n,
-    marketId: options.marketId,
-    noteNullifier: hashFields("note-nullifier", [seed]),
-    owner: `G${seed.toUpperCase().replace(/[^A-Z0-9]/g, "").padEnd(55, "A").slice(0, 55)}`,
-    side,
+	    marketId: options.marketId,
+	    noteNullifier: hashFields("note-nullifier", [seed]),
+	    nonce: `${seed}-nonce`,
+	    owner: `G${seed.toUpperCase().replace(/[^A-Z0-9]/g, "").padEnd(55, "A").slice(0, 55)}`,
+	    salt: `${seed}-salt`,
+	    side,
     size: 1n,
   };
 }
@@ -3259,6 +3205,7 @@ function intentValidity(
     intentCommitment,
     marketDigest: binding.marketDigest,
     marginRoot: executor.store.marginMembershipRoot(),
+    noteChangeCommitment: "0x0",
     noteCommitment,
     noteNullifier: intent.noteNullifier,
     ownerCommitmentField: binding.ownerCommitmentField,
@@ -3296,11 +3243,12 @@ function intentRecord(seed: string, marketId: string, marginRoot: Hex, batchId =
     marketDigest: hashFields("market-digest", [marketId]),
     marketId,
     marginRoot,
+    noteChangeCommitment: "0x0",
     noteNullifier: hashFields("note-nullifier", [seed]),
     ownerCommitment: hashFields("owner", [seed]),
     ownerCommitmentField: hashFields("owner-field", [seed]),
     proof: proof("intent-validity"),
-    shareCommitment: hashFields("share-commitment", [seed]),
+    matchingPayloadCommitment: hashFields("matching-payload", [seed]),
   };
 }
 
@@ -3329,14 +3277,36 @@ function externalSettlement(input: {
     settlementDigest: hashFields("external-settlement", [input.batchId]),
     spentNullifiers: input.spentNullifiers,
   };
-  return {
+  const publicInputHash = batchSettlementPublicInputHash({
     ...draft,
     proof: proof("batch-match"),
+  });
+  return {
+    ...draft,
+    proof: {
+      ...proof("batch-match"),
+      imageId: hashFields("risc0-image", [input.batchId]),
+      journalDigest: publicInputHash,
+      proofDigest: hashFields("risc0-seal", [input.batchId]),
+      proofSystem: "risc0-groth16",
+      publicInputHash,
+      sealDigest: hashFields("risc0-seal", [input.batchId]),
+    },
   };
 }
 
-function createProoflessMatcher(executor: ReturnType<typeof createExecutor>): MatcherService {
-  return new MatcherService(executor.store, executor.committee, {
+function createProoflessMatcher(
+  executor: ReturnType<typeof createExecutor>,
+  config: ConstructorParameters<typeof MatcherService>[2] = {},
+): MatcherService {
+  return new MatcherService(executor.store, prooflessProofs(), config);
+}
+
+function prooflessProofs(): ConstructorParameters<typeof MatcherService>[1] {
+  return {
+    artifactFor() {
+      return undefined;
+    },
     createSettlement(input: SettlementProofInput): BatchSettlement {
       const draft = {
         aggregateVolume: input.match.aggregateVolume,
@@ -3354,16 +3324,29 @@ function createProoflessMatcher(executor: ReturnType<typeof createExecutor>): Ma
         settlementDigest: hashFields("test-settlement", [input.batchId, input.newRoot]),
         spentNullifiers: input.match.spentNullifiers,
       };
-      return {
+      const publicInputHash = batchSettlementPublicInputHash({
         ...draft,
         proof: proof("batch-match"),
+      });
+      const sealDigest = hashFields("risc0-seal", [input.batchId, input.newRoot]);
+      return {
+        ...draft,
+        proof: {
+          ...proof("batch-match"),
+          imageId: hashFields("risc0-image", [input.batchId]),
+          journalDigest: publicInputHash,
+          proofDigest: sealDigest,
+          proofSystem: "risc0-groth16",
+          publicInputHash,
+          sealDigest,
+        },
       };
     },
-  } as never);
+  } as never;
 }
 
 function externalBatchFixture(seed: string) {
-  const executor = createExecutor({ matchingBackend: "external-blind" });
+  const executor = createExecutor();
   const market = {
     marketId: "btc-usd-perp",
     oraclePrice: 50_000n * PRICE_SCALE,

@@ -3,6 +3,7 @@ import {
   circuitDisclosureCommitment,
   commitConditionalOrder,
   commitIntent,
+  type FieldMerkleProof,
   fieldMerkleProof,
   fieldMerkleRoot,
   hashFields,
@@ -12,7 +13,7 @@ import { PRICE_SCALE, settleClose } from "@pnlx/market-math";
 import { circuitKey } from "@pnlx/proof-system";
 import type { Hex, ProofMeta, TradeIntent } from "@pnlx/protocol-types";
 import { createCircuitMarginNote, createCircuitPositionNote } from "@pnlx/sdk";
-import { createECDH, generateKeyPairSync, sign } from "node:crypto";
+import { createECDH, generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +21,6 @@ import { createApp, createAppRuntime } from "@/app";
 import { encodeStellarPublicKey, stellarSignedMessageHash } from "@/features/auth/auth.service";
 import { createMatcherApp } from "@/workers/matcher/matcher.app";
 import { createExecutor } from "@/workers/executor/executor.worker";
-import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
 import { ProverService } from "@/workers/prover/prover.service";
 import {
   RISC0_BATCH_MATCH_CIRCUIT_KEY,
@@ -33,14 +33,17 @@ process.env.COLLATERAL_TOKEN_CONTRACT = "";
 process.env.COLLATERAL_TOKEN_DIGEST = "";
 process.env.FUNDING_ENGINE_ENABLED = "false";
 process.env.MATCHER_PROVIDER = "risc0";
-process.env.MATCHING_BACKEND = "threshold-recovery";
 process.env.PRIVATE_MATCHING_REQUIRED = "false";
 process.env.SERVER_WITNESS_ROUTES_ENABLED = "true";
 process.env.STELLAR_ONCHAIN_RELAY = "false";
 process.env.STELLAR_RELAYER_MODE = "local";
-process.env.THRESHOLD_SHARE_STORE_DIR = "";
 
-type TestKeyPair = ReturnType<typeof generateKeyPairSync>;
+type CircuitMarginNote = ReturnType<typeof createCircuitMarginNote>;
+type MarginMembershipProof = Pick<FieldMerkleProof, "indices" | "root" | "siblings">;
+type TestKeyPair = {
+  privateKey: KeyObject;
+  publicKey: KeyObject;
+};
 
 function body(data: unknown): BodyInit {
   return JSON.stringify(data, (_key, value) => (typeof value === "bigint" ? value.toString() : value));
@@ -138,7 +141,7 @@ async function submitIntentRequest(
   return app.handle(
     new Request("http://pnlx.local/intents", {
       method: "POST",
-      body: body({ ...intent, validity }),
+      body: body({ intent, validity }),
       headers,
     }),
   );
@@ -174,17 +177,31 @@ async function proveAndSubmitIntentRequest(
   );
 }
 
-function buildSharedIntent(
+function tradeIntentFromBody(input: Record<string, unknown>): TradeIntent {
+  return {
+    batchId: String(input.batchId),
+    limitPrice: BigInt(String(input.limitPrice)),
+    margin: BigInt(String(input.margin)),
+    marketId: String(input.marketId),
+    nonce: String(input.nonce),
+    noteNullifier: String(input.noteNullifier) as Hex,
+    owner: String(input.owner),
+    salt: String(input.salt),
+    side: input.side === "short" ? "short" : "long",
+    size: BigInt(String(input.size)),
+  };
+}
+
+function buildPrivateIntent(
   prover: ProverService,
-  committee: ThresholdShareCommittee,
   input: {
     batchId: string;
     limitPrice: bigint;
     margin: bigint;
     marketId: string;
-    membershipProof: Record<string, unknown>;
+    membershipProof: MarginMembershipProof;
     nonce: string;
-    note: Record<string, unknown>;
+    note: CircuitMarginNote;
     owner: string;
     salt: string;
     side: "long" | "short";
@@ -206,11 +223,14 @@ function buildSharedIntent(
   const validity = prover.proveIntentValidity({
     assetDigest: input.note.assetDigest as Hex,
     blinding: input.note.blinding as Hex,
+    changeBlinding: "0x0",
+    changeRhoDigest: "0x0",
     currentBatch: 1n,
     expiryBatch: 2n,
     intent,
     marginRoot: input.membershipProof.root as Hex,
     noteAmount: BigInt(String(input.note.amount)),
+    noteChangeCommitment: "0x0",
     noteCommitment: input.note.commitment as Hex,
     ownerDigest: input.note.ownerDigest as Hex,
     pathIndices: input.membershipProof.indices as boolean[],
@@ -218,12 +238,6 @@ function buildSharedIntent(
     rhoDigest: input.note.rhoDigest as Hex,
     spendSecretDigest: input.note.spendSecretDigest as Hex,
   });
-  const shareSets = committee.shareIntent(intent, validity.intentCommitment);
-  const shareCommitment = committee.shareCommitment(
-    "intent-shares",
-    validity.intentCommitment,
-    shareSets,
-  );
   const record = {
     batchDigest: validity.batchDigest,
     batchId: intent.batchId,
@@ -231,17 +245,16 @@ function buildSharedIntent(
     marketDigest: validity.marketDigest,
     marketId: intent.marketId,
     marginRoot: validity.marginRoot,
+    noteChangeCommitment: validity.noteChangeCommitment,
     noteNullifier: validity.noteNullifier,
     ownerCommitment: ownerCommitment(intent.owner),
     ownerCommitmentField: validity.ownerCommitmentField,
     proof: validity.proof,
-    shareCommitment,
   };
 
   return {
     intent,
     record,
-    shareSets,
     validity,
   };
 }
@@ -276,7 +289,7 @@ async function depositCircuitMarginNote(
   const deposit = (await depositResponse.json()) as Record<string, Record<string, unknown>>;
   return {
     note,
-    membershipProof: deposit.note.membershipProof as Record<string, unknown>,
+    membershipProof: deposit.note.membershipProof as MarginMembershipProof,
   };
 }
 
@@ -285,28 +298,28 @@ function createSettledPositionWitness(input: {
   entryPrice: bigint;
   fillIndex: number;
   fundingIndex: bigint;
-  intent: Record<string, unknown>;
+  intent: TradeIntent;
   margin: bigint;
   owner: string;
   side: "long" | "short";
   size: bigint;
 }) {
   const intentCommitment = commitIntent({
-    batchId: String(input.intent.batchId),
-    marketId: String(input.intent.marketId),
-    owner: String(input.intent.owner),
+    batchId: input.intent.batchId,
+    marketId: input.intent.marketId,
+    owner: input.intent.owner,
     side: input.side,
     size: input.size,
-    limitPrice: BigInt(String(input.intent.limitPrice)),
+    limitPrice: input.intent.limitPrice,
     margin: input.margin,
-    noteNullifier: String(input.intent.noteNullifier) as Hex,
-    nonce: String(input.intent.nonce),
-    salt: String(input.intent.salt),
+    noteNullifier: input.intent.noteNullifier,
+    nonce: input.intent.nonce,
+    salt: input.intent.salt,
   });
   const owner = ownerCommitment(input.owner);
   const rho = `${intentCommitment}:position:${input.fillIndex}`;
   const position = createCircuitPositionNote({
-    marketId: String(input.intent.marketId),
+    marketId: input.intent.marketId,
     side: input.side,
     size: input.size,
     entryPrice: input.entryPrice,
@@ -327,10 +340,6 @@ async function createCloseableLongPositionFixture(
   clientProver: ProverService,
   suffix: string,
 ) {
-  const clientCommittee = new ThresholdShareCommittee({
-    nodeIds: ["node-a", "node-b", "node-c"],
-    threshold: 2,
-  });
   const market = {
     marketId: `btc-usd-perp-${suffix}`,
     oraclePrice: 50_000n * PRICE_SCALE,
@@ -373,7 +382,7 @@ async function createCloseableLongPositionFixture(
     shortNote.note.commitment as Hex,
   ];
   const batchId = `${suffix}-batch`;
-  const long = buildSharedIntent(clientProver, clientCommittee, {
+  const long = buildPrivateIntent(clientProver, {
     batchId,
     limitPrice: 51_000n * PRICE_SCALE,
     margin: 12_000n,
@@ -386,7 +395,7 @@ async function createCloseableLongPositionFixture(
     side: "long",
     size: 1n,
   });
-  const short = buildSharedIntent(clientProver, clientCommittee, {
+  const short = buildPrivateIntent(clientProver, {
     batchId,
     limitPrice: 49_000n * PRICE_SCALE,
     margin: 12_000n,
@@ -400,8 +409,8 @@ async function createCloseableLongPositionFixture(
     size: 1n,
   });
 
-  await post("/intents/shared", long);
-  await post("/intents/shared", short);
+  await post("/intents", long);
+  await post("/intents", short);
   const settlement = await post("/batches/settle", { batchId, marketId: market.marketId });
   const positionCommitments = settlement.settlement.newCommitments as Hex[];
   const closeMarkPrice = 56_000n * PRICE_SCALE;
@@ -626,11 +635,9 @@ describe("server api", () => {
 
   test("reports RISC0 matcher readiness for private matcher service", async () => {
     const previousRequired = process.env.PRIVATE_MATCHING_REQUIRED;
-    const previousBackend = process.env.MATCHING_BACKEND;
     const previousMatcherUrl = process.env.MATCHER_SERVICE_URL;
     const previousLegacyMatcherUrl = process.env.EXTERNAL_MATCHER_URL;
     process.env.PRIVATE_MATCHING_REQUIRED = "true";
-    process.env.MATCHING_BACKEND = "external-blind";
     process.env.MATCHER_SERVICE_URL = "https://matcher.pnlx.local";
     delete process.env.EXTERNAL_MATCHER_URL;
     try {
@@ -647,7 +654,6 @@ describe("server api", () => {
       expect(matching.issues).toEqual([]);
     } finally {
       restoreEnv("PRIVATE_MATCHING_REQUIRED", previousRequired);
-      restoreEnv("MATCHING_BACKEND", previousBackend);
       restoreEnv("MATCHER_SERVICE_URL", previousMatcherUrl);
       restoreEnv("EXTERNAL_MATCHER_URL", previousLegacyMatcherUrl);
     }
@@ -655,11 +661,9 @@ describe("server api", () => {
 
   test("fails closed when private matching lacks a matcher service", () => {
     const previousPrivate = process.env.PRIVATE_MATCHING_REQUIRED;
-    const previousBackend = process.env.MATCHING_BACKEND;
     const previousUrl = process.env.MATCHER_SERVICE_URL;
     const previousLegacyUrl = process.env.EXTERNAL_MATCHER_URL;
     process.env.PRIVATE_MATCHING_REQUIRED = "true";
-    process.env.MATCHING_BACKEND = "external-blind";
     process.env.MATCHER_SERVICE_URL = "";
     delete process.env.EXTERNAL_MATCHER_URL;
 
@@ -669,21 +673,15 @@ describe("server api", () => {
       );
     } finally {
       restoreEnv("PRIVATE_MATCHING_REQUIRED", previousPrivate);
-      restoreEnv("MATCHING_BACKEND", previousBackend);
       restoreEnv("MATCHER_SERVICE_URL", previousUrl);
       restoreEnv("EXTERNAL_MATCHER_URL", previousLegacyUrl);
     }
   });
 
-  test("serves RISC0 matcher settlement transcripts from persisted threshold shares", async () => {
-    const shareDir = mkdtempSync(join(tmpdir(), "pnlx-matcher-provider-shares-"));
+  test("serves RISC0 matcher settlement transcripts from persisted private match payloads", async () => {
     const storePath = join(mkdtempSync(join(tmpdir(), "pnlx-risc0-matcher-store-")), "protocol-store.json");
-    const executor = createExecutor({ storePath, thresholdShareStoreDir: shareDir });
+    const executor = createExecutor({ storePath });
     const clientProver = new ProverService();
-    const clientCommittee = new ThresholdShareCommittee({
-      nodeIds: ["node-a", "node-b", "node-c"],
-      threshold: 2,
-    });
     const market = {
       marketId: "btc-usd-perp-matcher-provider",
       oraclePrice: 50_000n * PRICE_SCALE,
@@ -713,7 +711,7 @@ describe("server api", () => {
     const leaves = [longNote.commitment as Hex, shortNote.commitment as Hex];
     for (const commitment of leaves) executor.deposit(commitment);
 
-    const long = buildSharedIntent(clientProver, clientCommittee, {
+    const long = buildPrivateIntent(clientProver, {
       batchId: "matcher-provider-batch",
       limitPrice: 51_000n * PRICE_SCALE,
       margin: 12_000n,
@@ -726,7 +724,7 @@ describe("server api", () => {
       side: "long",
       size: 1n,
     });
-    const short = buildSharedIntent(clientProver, clientCommittee, {
+    const short = buildPrivateIntent(clientProver, {
       batchId: "matcher-provider-batch",
       limitPrice: 49_000n * PRICE_SCALE,
       margin: 12_000n,
@@ -741,8 +739,8 @@ describe("server api", () => {
     });
     executor.store.recordProof(long.validity.proof);
     executor.store.recordProof(short.validity.proof);
-    executor.submitSharedIntent(long);
-    executor.submitSharedIntent(short);
+    executor.submitIntent({ intent: long.intent, validity: long.validity });
+    executor.submitIntent({ intent: short.intent, validity: short.validity });
     executor.store.upsertAccountEncryptionKey({
       algorithm: "ecdh-p256-aes-gcm",
       createdAt: 1,
@@ -759,9 +757,6 @@ describe("server api", () => {
     });
 
     const provider = createMatcherApp({
-      thresholdShareNodeIds: ["node-a", "node-b", "node-c"],
-      thresholdShareStoreDir: shareDir,
-      thresholdShareThreshold: 2,
       storePath,
       token: "provider-secret",
     });
@@ -2153,7 +2148,7 @@ describe("server api", () => {
     expect(JSON.stringify(positionsResult)).not.toContain("positionNullifier");
   });
 
-  test("submits client-shared intents without plaintext order terms and settles them", async () => {
+  test("submits private intents without plaintext response terms and settles them", async () => {
     const app = createApp();
     const market = {
       marketId: "btc-usd-perp",
@@ -2172,10 +2167,6 @@ describe("server api", () => {
     );
 
     const clientProver = new ProverService();
-    const clientCommittee = new ThresholdShareCommittee({
-      nodeIds: ["node-a", "node-b", "node-c"],
-      threshold: 2,
-    });
     const longNote = await depositCircuitMarginNote(app, {
       assetId: "usdc",
       amount: 12_000n,
@@ -2204,8 +2195,8 @@ describe("server api", () => {
       sharedMarginLeaves,
       shortNote.note.commitment as Hex,
     );
-    const batchId = "shared-intent-batch";
-    const long = buildSharedIntent(clientProver, clientCommittee, {
+    const batchId = "private-intent-batch";
+    const long = buildPrivateIntent(clientProver, {
       batchId,
       limitPrice: 51_000n * PRICE_SCALE,
       margin: 12_000n,
@@ -2218,7 +2209,7 @@ describe("server api", () => {
       side: "long",
       size: 1n,
     });
-    const short = buildSharedIntent(clientProver, clientCommittee, {
+    const short = buildPrivateIntent(clientProver, {
       batchId,
       limitPrice: 49_000n * PRICE_SCALE,
       margin: 12_000n,
@@ -2233,7 +2224,7 @@ describe("server api", () => {
     });
 
     const longResponse = await app.handle(
-      new Request("http://pnlx.local/intents/shared", {
+      new Request("http://pnlx.local/intents", {
         method: "POST",
         body: body(long),
         headers: { "content-type": "application/json" },
@@ -2247,7 +2238,7 @@ describe("server api", () => {
     expect(longText).not.toContain("12000");
 
     const shortResponse = await app.handle(
-      new Request("http://pnlx.local/intents/shared", {
+      new Request("http://pnlx.local/intents", {
         method: "POST",
         body: body(short),
         headers: { "content-type": "application/json" },
@@ -2595,7 +2586,7 @@ describe("server api", () => {
     );
     expect(runResponse.status).toBe(201);
     const run = (await runResponse.json()) as Record<string, unknown>;
-    const jobs = run.jobs as Record<string, Record<string, unknown>>[];
+    const jobs = run.jobs as Array<{ job: Record<string, unknown>; status: string }>;
     expect(jobs).toHaveLength(1);
     expect(jobs[0].status).toBe("executed");
     expect((jobs[0].job as Record<string, unknown>).status).toBe("executed");
@@ -2739,6 +2730,8 @@ describe("server api", () => {
       nonce: "api-intent-2",
       salt: "api-intent-bob-salt",
     };
+    const aliceTradeIntent = tradeIntentFromBody(intent);
+    const bobTradeIntent = tradeIntentFromBody(bobIntent);
     const bobIntentResponse = await submitIntentRequest(
       app,
       bobIntent,
@@ -2767,10 +2760,10 @@ describe("server api", () => {
 
     const alicePosition = createSettledPositionWitness({
       allCommitments: positionCommitments,
-      entryPrice: 51_000n * PRICE_SCALE,
-      fillIndex: 0,
-      fundingIndex: 155n,
-      intent,
+	      entryPrice: 51_000n * PRICE_SCALE,
+	      fillIndex: 0,
+	      fundingIndex: 155n,
+	      intent: aliceTradeIntent,
       margin: 12_000n,
       owner: "alice",
       side: "long",
@@ -2778,10 +2771,10 @@ describe("server api", () => {
     });
     const bobPosition = createSettledPositionWitness({
       allCommitments: positionCommitments,
-      entryPrice: 51_000n * PRICE_SCALE,
-      fillIndex: 1,
-      fundingIndex: 155n,
-      intent: bobIntent,
+	      entryPrice: 51_000n * PRICE_SCALE,
+	      fillIndex: 1,
+	      fundingIndex: 155n,
+	      intent: bobTradeIntent,
       margin: 12_000n,
       owner: "bob",
       side: "short",

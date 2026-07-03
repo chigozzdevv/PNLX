@@ -1,10 +1,10 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { commitIntent, hashFields, intentBindingFields } from "@pnlx/crypto";
 import { PRICE_SCALE } from "@pnlx/market-math";
-import type { BatchSettlement, Hex, IntentValidityRecord, MarketConfig, ProofMeta, TradeIntent } from "@pnlx/protocol-types";
+import type { BatchSettlement, Hex, IntentValidityRecord, MarketConfig, PrivateMatchIntent, ProofMeta, TradeIntent } from "@pnlx/protocol-types";
 import { createMarginNote } from "@pnlx/sdk";
 import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
 import type { MatchResult } from "@/workers/batch-matcher/batch-matcher.model";
@@ -13,7 +13,6 @@ import type { ExecutorService } from "@/workers/executor/executor.service";
 import { createIndexer } from "@/workers/indexer/indexer.worker";
 import { createMatcher } from "@/workers/matcher/matcher.worker";
 import type { SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
-import type { RecoveredIntent } from "@/workers/threshold-shares/threshold-shares.model";
 import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
 
 describe("private orderbook residuals", () => {
@@ -85,9 +84,9 @@ describe("private orderbook residuals", () => {
         sourceIntentCommitment: hashFields("intent", ["residual-long"]),
       }),
     ]);
-    expect(first.residuals[0].intentCommitment).toBe(
-      first.orderUpdates.find((update) => update.status === "partially-filled")?.residualCommitment,
-    );
+    const firstResidualUpdate = first.orderUpdates.find((update) => update.status === "partially-filled");
+    if (!firstResidualUpdate?.residualCommitment) throw new Error("missing residual commitment");
+    expect(first.residuals[0].intentCommitment).toBe(firstResidualUpdate.residualCommitment);
     expect(first.residuals[0].noteNullifier).not.toBe(hashFields("nullifier", ["residual-long"]));
 
     const second = matcher.match({
@@ -138,17 +137,22 @@ describe("private orderbook residuals", () => {
     const residualCommitment = firstSettlement.orderUpdates.find(
       (update) => update.intentCommitment === aliceCommitment,
     )?.residualCommitment;
+    if (!residualCommitment) throw new Error("missing residual commitment");
 
     expect(residualCommitment).toMatch(/^0x[0-9a-f]{64}$/);
     expect(firstExecutor.store.orderLifecycle.get(aliceCommitment)?.status).toBe("partially-filled");
     expect(firstExecutor.store.residualOrders.size).toBe(1);
-    const sealedResidual = firstExecutor.store.residualOrders.get(residualCommitment!)!;
-    expect(sealedResidual.shareCommitment).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(sealedResidual.signedSize).toBeUndefined();
-    expect(sealedResidual.limitPrice).toBeUndefined();
-    expect(sealedResidual.margin).toBeUndefined();
-    expect(readFileSync(storePath, "utf8")).not.toContain("5200000000000");
-    expect(readFileSync(storePath, "utf8")).not.toContain("24000");
+    const sealedResidual = firstExecutor.store.residualOrders.get(residualCommitment)!;
+    expect(sealedResidual.matchingPayloadCommitment).toMatch(/^0x[0-9a-f]{64}$/);
+    expect("signedSize" in sealedResidual).toBe(false);
+    expect("limitPrice" in sealedResidual).toBe(false);
+    expect("margin" in sealedResidual).toBe(false);
+    expect(firstExecutor.store.privateMatchIntents.get(residualCommitment)).toMatchObject({
+      intentCommitment: residualCommitment,
+      limitPrice: 52_000n * PRICE_SCALE,
+      margin: 12_000n,
+      signedSize: 1n,
+    });
     expect(firstExecutor.store.spentNullifiers.has(alice.note.nullifier as Hex)).toBe(true);
     expect(firstExecutor.store.spentNullifiers.has(bob.note.nullifier as Hex)).toBe(true);
 
@@ -163,7 +167,7 @@ describe("private orderbook residuals", () => {
       side: "short",
       size: 1n,
     });
-    const residual = secondExecutor.store.residualOrders.get(residualCommitment!)!;
+    const residual = secondExecutor.store.residualOrders.get(residualCommitment)!;
     const beforeSecondOrders = createIndexer(secondExecutor.store).ordersFor(
       residual.ownerCommitment,
     );
@@ -183,7 +187,7 @@ describe("private orderbook residuals", () => {
       residualCommitment,
       commitIntent(carol.intent),
     ]);
-    expect(secondExecutor.store.orderLifecycle.get(residualCommitment!)?.status).toBe("filled");
+    expect(secondExecutor.store.orderLifecycle.get(residualCommitment)?.status).toBe("filled");
     expect(secondExecutor.store.orderLifecycle.get(commitIntent(carol.intent))?.status).toBe("filled");
     expect(secondSettlement.spentNullifiers).toContain(residual.noteNullifier);
     expect(secondSettlement.spentNullifiers).toContain(carol.note.nullifier as Hex);
@@ -191,7 +195,7 @@ describe("private orderbook residuals", () => {
   });
 
   test("settles an external private batch with RISC0 receipt metadata", async () => {
-    const executor = createExecutor({ matchingBackend: "external-blind" });
+    const executor = createExecutor();
     const market = testMarket();
     executor.addMarket(market);
     backedIntent(executor, {
@@ -215,6 +219,7 @@ describe("private orderbook residuals", () => {
 
     const matcher = createMatcher(executor, {
       accountEventEncryptor: (payload) => JSON.stringify(payload, bigintStringify),
+      proofs: fastSettlementProofs() as never,
     });
     const transcript = await matcher.createSettlementTranscript({
       batchId: "risc0-flow",
@@ -260,13 +265,16 @@ describe("private orderbook residuals", () => {
 });
 
 function installFastSettlementProofs(executor: ExecutorService): void {
-  (executor as unknown as { proofs: unknown }).proofs = {
+  (executor as unknown as { proofs: unknown }).proofs = fastSettlementProofs();
+}
+
+function fastSettlementProofs() {
+  return {
     artifactFor() {
       return undefined;
     },
     createSettlement(input: SettlementProofInput): BatchSettlement {
-      const proof = proofMeta("batch-match", [input.batchId, input.market.marketId, input.newRoot]);
-      return {
+      const draft = {
         aggregateVolume: input.match.aggregateVolume,
         batchId: input.batchId,
         fillCount: input.match.fills.length,
@@ -278,7 +286,6 @@ function installFastSettlementProofs(executor: ExecutorService): void {
         oldRoot: input.oldRoot,
         openInterestDelta: input.match.openInterestDelta,
         orderUpdates: input.match.orderUpdates,
-        proof,
         residualSize: input.match.residualSize,
         settlementDigest: hashFields("settlement", [
           input.batchId,
@@ -286,6 +293,23 @@ function installFastSettlementProofs(executor: ExecutorService): void {
           input.match.orderUpdates,
         ]),
         spentNullifiers: input.match.spentNullifiers,
+      };
+      const publicInputHash = batchSettlementPublicInputHash({
+        ...draft,
+        proof: proofMeta("batch-match", [input.batchId, input.market.marketId, input.newRoot]),
+      });
+      const sealDigest = hashFields("risc0-seal", [input.batchId, input.market.marketId, input.newRoot]);
+      return {
+        ...draft,
+        proof: {
+          ...proofMeta("batch-match", [input.batchId, input.market.marketId, input.newRoot]),
+          imageId: hashFields("risc0-image", [input.batchId, input.market.marketId]),
+          journalDigest: publicInputHash,
+          proofDigest: sealDigest,
+          proofSystem: "risc0-groth16",
+          publicInputHash,
+          sealDigest,
+        },
       };
     },
   };
@@ -350,6 +374,7 @@ function createIntentValidity(
     intentCommitment,
     marketDigest: binding.marketDigest,
     marginRoot,
+    noteChangeCommitment: "0x0",
     noteCommitment,
     noteNullifier: intent.noteNullifier,
     ownerCommitmentField: binding.ownerCommitmentField,
@@ -363,13 +388,14 @@ function recoveredIntent(
   size: bigint,
   limitPrice: bigint,
   margin: bigint,
-): RecoveredIntent {
+): PrivateMatchIntent {
   return {
     batchId: "matcher-test",
     intentCommitment: hashFields("intent", [id]),
     limitPrice,
     margin,
     marketId: "btc-usd-perp",
+    noteChangeCommitment: "0x0",
     noteNullifier: hashFields("nullifier", [id]),
     ownerCommitment: hashFields("owner", [id]),
     signedSize: side === "long" ? size : -size,

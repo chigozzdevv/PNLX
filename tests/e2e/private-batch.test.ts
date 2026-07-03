@@ -1,28 +1,26 @@
 import { describe, expect, test } from "bun:test";
-import { commitIntent, hashFields, intentBindingFields, ownerCommitment, recoverSecret } from "@pnlx/crypto";
+import { commitIntent, hashFields, intentBindingFields, ownerCommitment } from "@pnlx/crypto";
 import { PRICE_SCALE, RATE_SCALE } from "@pnlx/market-math";
 import { circuitKey, loadCircuit } from "@pnlx/proof-system";
-import type { Hex, IntentValidityRecord, MarketConfig, ProofMeta, TradeIntent } from "@pnlx/protocol-types";
+import type { BatchSettlement, Hex, IntentValidityRecord, MarketConfig, PrivateMatchIntent, ProofMeta, TradeIntent } from "@pnlx/protocol-types";
 import { createMarginNote } from "@pnlx/sdk";
 import { readFileSync } from "node:fs";
 import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
-import type { RecoveredIntent } from "@/workers/threshold-shares/threshold-shares.model";
 import { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
-import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
+import type { SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
 import { createExecutor } from "@/workers/executor/executor.worker";
 import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
+import { MatcherService } from "@/workers/matcher/matcher.service";
 
 describe("private batch settlement", () => {
-  test("keeps raw match fill handling outside the executor boundary", () => {
+  test("uses the private matcher payload path", () => {
     const source = readFileSync(
       "server/src/workers/executor/executor.service.ts",
       "utf8",
     );
 
-    expect(source).not.toContain("match.fills");
-    expect(source).not.toContain("match.residuals");
-    expect(source).not.toContain("createPositionOpenings");
-    expect(source).toContain("createSettlementTranscript");
+    expect(source).toContain("privateMatchIntents");
+    expect(source).toContain("matchingPayloadCommitment");
   });
 
   test("matches crossed orders at maker price", () => {
@@ -131,34 +129,87 @@ describe("private batch settlement", () => {
     expect(result.spentNullifiers).toContain(hashFields("nullifier", ["partial-long"]));
   });
 
-  test("does not match plaintext residual fallback without threshold shares", () => {
-    const committee = new ThresholdShareCommittee({
-      nodeIds: ["node-a", "node-b", "node-c"],
-      threshold: 2,
+  test("records proven private note change after filling a larger deposited note", () => {
+    const executor = createExecutor();
+    installFastSettlementProofs(executor);
+    const market = testMarket();
+    executor.addMarket(market);
+    const changeCommitment = hashFields("note-change", ["alice-larger-note"]);
+    const aliceNote = createMarginNote({
+      assetId: "usdc",
+      amount: 40_000n,
+      owner: "alice",
+      spendSecret: "alice-change-spend",
+      rho: "alice-change-rho",
+      blinding: "alice-change-blind",
     });
+    const bobNote = createMarginNote({
+      assetId: "usdc",
+      amount: 12_000n,
+      owner: "bob",
+      spendSecret: "bob-change-spend",
+      rho: "bob-change-rho",
+      blinding: "bob-change-blind",
+    });
+
+    submitBackedIntent(executor, {
+      batchId: "batch-note-change",
+      marketId: market.marketId,
+      owner: "alice",
+      side: "long",
+      size: 1n,
+      limitPrice: 52_000n * PRICE_SCALE,
+      margin: 12_000n,
+      noteNullifier: aliceNote.nullifier as Hex,
+      nonce: "alice-change-intent",
+      salt: "alice-change-salt",
+    }, changeCommitment);
+    submitBackedIntent(executor, {
+      batchId: "batch-note-change",
+      marketId: market.marketId,
+      owner: "bob",
+      side: "short",
+      size: 1n,
+      limitPrice: 49_000n * PRICE_SCALE,
+      margin: 12_000n,
+      noteNullifier: bobNote.nullifier as Hex,
+      nonce: "bob-change-intent",
+      salt: "bob-change-salt",
+    });
+
+    const settlement = executor.settleBatch({
+      batchId: "batch-note-change",
+      marketId: market.marketId,
+    });
+
+    expect(settlement.marginChangeCommitments).toContain(changeCommitment);
+    expect(executor.store.marginCommitments.has(changeCommitment)).toBe(true);
+  });
+
+  test("does not match residual orders without a private match payload", () => {
+    const executor = createExecutor();
+    installFastSettlementProofs(executor);
+    const market = testMarket();
+    executor.addMarket(market);
     const legacyPlaintextResidual = {
       batchId: "legacy-batch",
       createdAt: 1,
       intentCommitment: hashFields("legacy-residual", ["intent"]),
-      limitPrice: 52_000n * PRICE_SCALE,
-      margin: 12_000n,
-      marketId: "btc-usd-perp",
+      marketId: market.marketId,
       noteNullifier: hashFields("legacy-residual", ["nullifier"]),
       ownerCommitment: ownerCommitment("legacy-residual"),
-      shareCommitment: hashFields("legacy-residual", ["shares"]),
-      signedSize: 1n,
+      matchingPayloadCommitment: hashFields("legacy-residual", ["private-payload"]),
       sourceIntentCommitment: hashFields("legacy-residual", ["source"]),
       updatedAt: 1,
     };
+    executor.store.addResidualOrder(legacyPlaintextResidual);
 
     expect(() =>
-      committee.matchBatch({
+      executor.settleBatch({
         batchId: "next-batch",
-        market: testMarket(),
-        records: [],
-        residuals: [legacyPlaintextResidual as never],
+        marketId: market.marketId,
       }),
-    ).toThrow("not enough shares to recover intent");
+    ).toThrow("private match payload not found");
   });
 
   test("reports nonnegative residual size for short-heavy partial fills", () => {
@@ -211,6 +262,7 @@ describe("private batch settlement", () => {
 
   test("settles crossed long and short intents without storing plaintext intents", () => {
     const executor = createExecutor();
+    installFastSettlementProofs(executor);
 
     const market: MarketConfig = {
       marketId: "btc-usd-perp",
@@ -276,12 +328,13 @@ describe("private batch settlement", () => {
     expect(aliceStored?.intentCommitment).toBe(aliceCommitment);
     expect(JSON.stringify(aliceStored)).not.toContain("long");
     expect(JSON.stringify(aliceStored)).not.toContain("51000");
-
-    const firstNodeShare = executor.committee.nodes[0].get(aliceCommitment);
-    expect(firstNodeShare).toBeTruthy();
-    expect(() => recoverSecret([firstNodeShare!.signedSize])).toThrow();
-    expect("recoverIntent" in executor.committee).toBe(false);
-    expect("matcher" in executor).toBe(false);
+    const alicePrivatePayload = executor.store.privateMatchIntents.get(aliceCommitment);
+    expect(alicePrivatePayload).toMatchObject({
+      intentCommitment: aliceCommitment,
+      limitPrice: 51_000n * PRICE_SCALE,
+      signedSize: 1n,
+    });
+    expect("committee" in executor).toBe(false);
 
     const settlement = executor.settleBatch({
       batchId: "batch-1",
@@ -325,6 +378,7 @@ describe("private batch settlement", () => {
 
   test("excludes cancelled orders from private settlement", () => {
     const executor = createExecutor();
+    installFastSettlementProofs(executor);
     const market = testMarket();
     executor.addMarket(market);
 
@@ -419,8 +473,233 @@ describe("private batch settlement", () => {
     expect(executor.store.orderLifecycle.get(shortCommitment)?.status).toBe("filled");
   });
 
+  test("settles only intents from the requested batch", () => {
+    const executor = createExecutor();
+    installFastSettlementProofs(executor);
+    const market = testMarket();
+    executor.addMarket(market);
+
+    const staleLongNote = createMarginNote({
+      assetId: "usdc",
+      amount: 20_000n,
+      owner: "stale-long",
+      spendSecret: "stale-long-spend",
+      rho: "stale-long-rho",
+      blinding: "stale-long-blind",
+    });
+    const staleShortNote = createMarginNote({
+      assetId: "usdc",
+      amount: 20_000n,
+      owner: "stale-short",
+      spendSecret: "stale-short-spend",
+      rho: "stale-short-rho",
+      blinding: "stale-short-blind",
+    });
+    const activeLongNote = createMarginNote({
+      assetId: "usdc",
+      amount: 20_000n,
+      owner: "batch-long",
+      spendSecret: "batch-long-spend",
+      rho: "batch-long-rho",
+      blinding: "batch-long-blind",
+    });
+    const activeShortNote = createMarginNote({
+      assetId: "usdc",
+      amount: 20_000n,
+      owner: "batch-short",
+      spendSecret: "batch-short-spend",
+      rho: "batch-short-rho",
+      blinding: "batch-short-blind",
+    });
+
+    for (const note of [staleLongNote, staleShortNote, activeLongNote, activeShortNote]) {
+      executor.deposit(note.commitment as Hex);
+    }
+
+    submitBackedIntent(executor, {
+      batchId: "stale-open-batch",
+      marketId: market.marketId,
+      owner: "stale-long",
+      side: "long",
+      size: 10n,
+      limitPrice: 60_000n * PRICE_SCALE,
+      margin: 1_000n,
+      noteNullifier: staleLongNote.nullifier as Hex,
+      nonce: "stale-long-intent",
+      salt: "stale-long-salt",
+    });
+    submitBackedIntent(executor, {
+      batchId: "stale-open-batch",
+      marketId: market.marketId,
+      owner: "stale-short",
+      side: "short",
+      size: 10n,
+      limitPrice: 40_000n * PRICE_SCALE,
+      margin: 1_000n,
+      noteNullifier: staleShortNote.nullifier as Hex,
+      nonce: "stale-short-intent",
+      salt: "stale-short-salt",
+    });
+
+    const activeLong: TradeIntent = {
+      batchId: "requested-batch",
+      marketId: market.marketId,
+      owner: "batch-long",
+      side: "long",
+      size: 1n,
+      limitPrice: 51_000n * PRICE_SCALE,
+      margin: 12_000n,
+      noteNullifier: activeLongNote.nullifier as Hex,
+      nonce: "batch-long-intent",
+      salt: "batch-long-salt",
+    };
+    const activeShort: TradeIntent = {
+      batchId: "requested-batch",
+      marketId: market.marketId,
+      owner: "batch-short",
+      side: "short",
+      size: 1n,
+      limitPrice: 49_000n * PRICE_SCALE,
+      margin: 12_000n,
+      noteNullifier: activeShortNote.nullifier as Hex,
+      nonce: "batch-short-intent",
+      salt: "batch-short-salt",
+    };
+    submitBackedIntent(executor, activeLong);
+    submitBackedIntent(executor, activeShort);
+
+    const settlement = executor.settleBatch({
+      batchId: "requested-batch",
+      marketId: market.marketId,
+    });
+
+    expect(settlement.orderUpdates.map((update) => update.intentCommitment)).toEqual([
+      commitIntent(activeLong),
+      commitIntent(activeShort),
+    ]);
+    expect(settlement.spentNullifiers).not.toContain(staleLongNote.nullifier as Hex);
+    expect(settlement.spentNullifiers).not.toContain(staleShortNote.nullifier as Hex);
+    expect(executor.store.orderLifecycle.get(commitIntent(activeLong))?.status).toBe("filled");
+    expect(executor.store.orderLifecycle.get(commitIntent(activeShort))?.status).toBe("filled");
+  });
+
+  test("matcher service settles only intents from the requested batch", async () => {
+    const executor = createExecutor();
+    const market = testMarket();
+    executor.addMarket(market);
+
+    const staleLongNote = createMarginNote({
+      assetId: "usdc",
+      amount: 20_000n,
+      owner: "matcher-stale-long",
+      spendSecret: "matcher-stale-long-spend",
+      rho: "matcher-stale-long-rho",
+      blinding: "matcher-stale-long-blind",
+    });
+    const staleShortNote = createMarginNote({
+      assetId: "usdc",
+      amount: 20_000n,
+      owner: "matcher-stale-short",
+      spendSecret: "matcher-stale-short-spend",
+      rho: "matcher-stale-short-rho",
+      blinding: "matcher-stale-short-blind",
+    });
+    const activeLongNote = createMarginNote({
+      assetId: "usdc",
+      amount: 20_000n,
+      owner: "matcher-batch-long",
+      spendSecret: "matcher-batch-long-spend",
+      rho: "matcher-batch-long-rho",
+      blinding: "matcher-batch-long-blind",
+    });
+    const activeShortNote = createMarginNote({
+      assetId: "usdc",
+      amount: 20_000n,
+      owner: "matcher-batch-short",
+      spendSecret: "matcher-batch-short-spend",
+      rho: "matcher-batch-short-rho",
+      blinding: "matcher-batch-short-blind",
+    });
+
+    for (const note of [staleLongNote, staleShortNote, activeLongNote, activeShortNote]) {
+      executor.deposit(note.commitment as Hex);
+    }
+
+    submitBackedIntent(executor, {
+      batchId: "matcher-stale-open-batch",
+      marketId: market.marketId,
+      owner: "matcher-stale-long",
+      side: "long",
+      size: 10n,
+      limitPrice: 60_000n * PRICE_SCALE,
+      margin: 1_000n,
+      noteNullifier: staleLongNote.nullifier as Hex,
+      nonce: "matcher-stale-long-intent",
+      salt: "matcher-stale-long-salt",
+    });
+    submitBackedIntent(executor, {
+      batchId: "matcher-stale-open-batch",
+      marketId: market.marketId,
+      owner: "matcher-stale-short",
+      side: "short",
+      size: 10n,
+      limitPrice: 40_000n * PRICE_SCALE,
+      margin: 1_000n,
+      noteNullifier: staleShortNote.nullifier as Hex,
+      nonce: "matcher-stale-short-intent",
+      salt: "matcher-stale-short-salt",
+    });
+
+    const activeLong: TradeIntent = {
+      batchId: "matcher-requested-batch",
+      marketId: market.marketId,
+      owner: "matcher-batch-long",
+      side: "long",
+      size: 1n,
+      limitPrice: 51_000n * PRICE_SCALE,
+      margin: 12_000n,
+      noteNullifier: activeLongNote.nullifier as Hex,
+      nonce: "matcher-batch-long-intent",
+      salt: "matcher-batch-long-salt",
+    };
+    const activeShort: TradeIntent = {
+      batchId: "matcher-requested-batch",
+      marketId: market.marketId,
+      owner: "matcher-batch-short",
+      side: "short",
+      size: 1n,
+      limitPrice: 49_000n * PRICE_SCALE,
+      margin: 12_000n,
+      noteNullifier: activeShortNote.nullifier as Hex,
+      nonce: "matcher-batch-short-intent",
+      salt: "matcher-batch-short-salt",
+    };
+    submitBackedIntent(executor, activeLong);
+    submitBackedIntent(executor, activeShort);
+
+    const matcher = new MatcherService(
+      executor.store,
+      createFastSettlementProofs() as ProofCoordinatorService,
+      {
+        accountEventEncryptor: () => "encrypted-test-event",
+      },
+    );
+    const transcript = await matcher.createSettlementTranscript({
+      batchId: "matcher-requested-batch",
+      marketId: market.marketId,
+    });
+
+    expect(new Set(transcript.settlement.orderUpdates.map((update) => update.intentCommitment))).toEqual(new Set([
+      commitIntent(activeLong),
+      commitIntent(activeShort),
+    ]));
+    expect(transcript.settlement.spentNullifiers).not.toContain(staleLongNote.nullifier as Hex);
+    expect(transcript.settlement.spentNullifiers).not.toContain(staleShortNote.nullifier as Hex);
+  });
+
   test("rejects trades above market max leverage even when initial margin would pass", () => {
     const executor = createExecutor();
+    installFastSettlementProofs(executor);
 
     const market: MarketConfig = {
       marketId: "btc-usd-perp",
@@ -489,6 +768,7 @@ describe("private batch settlement", () => {
 
   test("rejects non-crossing private order batches", () => {
     const executor = createExecutor();
+    installFastSettlementProofs(executor);
     const market: MarketConfig = {
       marketId: "btc-usd-perp",
       oraclePrice: 50_000n * PRICE_SCALE,
@@ -551,6 +831,7 @@ describe("private batch settlement", () => {
 
   test("settles partial crossed liquidity and reports residual size", () => {
     const executor = createExecutor();
+    installFastSettlementProofs(executor);
     const market: MarketConfig = {
       marketId: "btc-usd-perp",
       oraclePrice: 50_000n * PRICE_SCALE,
@@ -642,13 +923,18 @@ function testMarket(): MarketConfig {
   };
 }
 
-function submitBackedIntent(executor: ReturnType<typeof createExecutor>, intent: TradeIntent): void {
-  executor.submitIntent({ intent, validity: createIntentValidity(executor, intent) });
+function submitBackedIntent(
+  executor: ReturnType<typeof createExecutor>,
+  intent: TradeIntent,
+  noteChangeCommitment: Hex = "0x0",
+): void {
+  executor.submitIntent({ intent, validity: createIntentValidity(executor, intent, noteChangeCommitment) });
 }
 
 function createIntentValidity(
   executor: ReturnType<typeof createExecutor>,
   intent: TradeIntent,
+  noteChangeCommitment: Hex = "0x0",
 ): IntentValidityRecord {
   const circuit = loadCircuit(process.cwd(), "intent-validity");
   const intentCommitment = commitIntent(intent);
@@ -665,12 +951,14 @@ function createIntentValidity(
       marginRoot,
       noteCommitment,
       intent.noteNullifier,
+      noteChangeCommitment,
     ]),
     proofDigest: hashFields("intent-validity-proof", [
       intentCommitment,
       marginRoot,
       noteCommitment,
       intent.noteNullifier,
+      noteChangeCommitment,
     ]),
   };
   executor.store.recordProof(proof);
@@ -680,11 +968,71 @@ function createIntentValidity(
     expiryBatch: 2n,
     intentCommitment,
     marketDigest: binding.marketDigest,
+    noteChangeCommitment,
     noteCommitment,
     marginRoot,
     noteNullifier: intent.noteNullifier,
     ownerCommitmentField: binding.ownerCommitmentField,
     proof,
+  };
+}
+
+function installFastSettlementProofs(executor: ReturnType<typeof createExecutor>): void {
+  (executor as unknown as { proofs: unknown }).proofs = createFastSettlementProofs();
+}
+
+function createFastSettlementProofs(): Pick<ProofCoordinatorService, "artifactFor" | "createSettlement"> {
+  return {
+    artifactFor() {
+      return undefined;
+    },
+    createSettlement(input: SettlementProofInput): BatchSettlement {
+      const draft = {
+        aggregateVolume: input.match.aggregateVolume,
+        batchId: input.batchId,
+        fillCount: input.match.fills.length,
+        matchTranscriptDigest: input.match.matchTranscriptDigest,
+        marginChangeCommitments: input.match.marginChangeCommitments,
+        marketId: input.market.marketId,
+        newCommitments: input.match.fills.map((fill) => fill.positionCommitment),
+        newRoot: input.newRoot,
+        oldRoot: input.oldRoot,
+        openInterestDelta: input.match.openInterestDelta,
+        orderUpdates: input.match.orderUpdates,
+        residualSize: input.match.residualSize,
+        settlementDigest: hashFields("test-settlement", [input.batchId, input.newRoot]),
+        spentNullifiers: input.match.spentNullifiers,
+      };
+      const publicInputHash = batchSettlementPublicInputHash({
+        ...draft,
+        proof: proofMeta("batch-match", [input.batchId]),
+      });
+      const sealDigest = hashFields("risc0-seal", [input.batchId, input.newRoot]);
+      return {
+        ...draft,
+        proof: {
+          ...proofMeta("batch-match", [input.batchId]),
+          imageId: hashFields("risc0-image", [input.batchId]),
+          journalDigest: publicInputHash,
+          proofDigest: sealDigest,
+          proofSystem: "risc0-groth16",
+          publicInputHash,
+          sealDigest,
+        },
+      };
+    },
+  };
+}
+
+function proofMeta(label: string, fields: unknown[]): ProofMeta {
+  const digest = hashFields(label, fields);
+  return {
+    circuitHash: hashFields("circuit-hash", [label]),
+    circuitId: label,
+    circuitKey: hashFields("circuit-key", [label]),
+    proofDigest: hashFields("proof-digest", [digest]),
+    publicInputHash: hashFields("public-input", [digest]),
+    verifierHash: hashFields("verifier", [label]),
   };
 }
 
@@ -695,7 +1043,8 @@ function recoveredIntent(
   limitPrice: bigint,
   noteNullifier = hashFields("nullifier", [id]),
   margin = 12_000n * size,
-): RecoveredIntent {
+  noteChangeCommitment: Hex = "0x0",
+): PrivateMatchIntent {
   const intentCommitment = hashFields("intent", [id]);
   return {
     batchId: "matcher-test",
@@ -703,6 +1052,7 @@ function recoveredIntent(
     limitPrice,
     margin,
     marketId: "btc-usd-perp",
+    noteChangeCommitment,
     noteNullifier,
     ownerCommitment: hashFields("owner", [id]),
     signedSize: side === "long" ? size : -size,

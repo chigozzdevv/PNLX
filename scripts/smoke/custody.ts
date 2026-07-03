@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { createPrivateKey, sign } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ownerCommitment } from "@pnlx/crypto";
 import { createCircuitMarginNote } from "@pnlx/sdk";
-import { createApp } from "@/app";
+import { createAppAsync } from "@/app";
 import { loadEnv, type ServerEnv } from "@/config/env";
 import { stellarSignedMessageHash } from "@/features/auth/auth.service";
 import { ProverService } from "@/workers/prover/prover.service";
@@ -92,19 +93,24 @@ async function runCustodySmoke(options: CustodySmokeOptions): Promise<Record<str
   const deployment = await import("@/workers/onchain/deployment").then((module) =>
     module.loadDeploymentRegistry(configured.stellarDeploymentFile),
   );
+  if (!deployment) throw new Error("deployment registry is not configured");
   const shieldedPool = deployment.contracts["shielded-pool"];
   if (!shieldedPool) throw new Error("deployment missing shielded-pool contract");
   const tokenDigest = tokenDigestFor(shieldedPool, token, source, configured);
   process.env.COLLATERAL_TOKEN_DIGEST = tokenDigest;
 
+  const createdAt = Date.now();
+  const spendSecret = `custody-smoke-spend-${createdAt}`;
+  const rho = `custody-smoke-rho-${createdAt}`;
+  const blindingSeed = `custody-smoke-blind-${createdAt}`;
   const note = createCircuitMarginNote({
     assetDigest: tokenDigest,
     assetId: "usdc",
     amount: options.amount,
     owner: from,
-    spendSecret: `custody-smoke-spend-${Date.now()}`,
-    rho: `custody-smoke-rho-${Date.now()}`,
-    blinding: `custody-smoke-blind-${Date.now()}`,
+    spendSecret,
+    rho,
+    blinding: blindingSeed,
   });
   const depositProof = new ProverService().proveDepositNote({
     amount: options.amount,
@@ -114,7 +120,7 @@ async function runCustodySmoke(options: CustodySmokeOptions): Promise<Record<str
     rhoDigest: note.rhoDigest,
     tokenDigest: note.assetDigest,
   });
-  const app = createApp();
+  const app = await createAppAsync();
   const authHeaders = await authHeadersFor(app, source, from, configured);
   const health = await get(app, "/health");
   const prepared = await post(app, "/notes/deposit-asset/prepare-proven", {
@@ -169,6 +175,26 @@ async function runCustodySmoke(options: CustodySmokeOptions): Promise<Record<str
   if (!nativeAssetFeesIncluded && before.trader - after.trader !== options.amount) {
     throw new Error(`trader token debit ${before.trader - after.trader} did not match deposit ${options.amount}`);
   }
+  const savedMakerNote = saveMakerNote({
+    amount: options.amount,
+    blinding: note.blinding,
+    blindingSeed,
+    commitment: note.commitment,
+    createdAt,
+    depositTxHash: String((relay.relay as Record<string, unknown>).txHash ?? ""),
+    noteNullifier: note.noteNullifier,
+    ownerCommitment: ownerCommitment(from),
+    ownerDigest: note.ownerDigest,
+    rho,
+    rhoDigest: note.rhoDigest,
+    shieldedPool,
+    source,
+    spendSecret,
+    spendSecretDigest: note.spendSecretDigest,
+    token,
+    tokenDigest: note.assetDigest,
+    walletAddress: from,
+  });
 
   return {
     amount: options.amount,
@@ -182,6 +208,14 @@ async function runCustodySmoke(options: CustodySmokeOptions): Promise<Record<str
     from,
     health,
     mode: "live-wallet-deposit",
+    makerNote: {
+      amount: savedMakerNote.amount,
+      commitment: savedMakerNote.commitment,
+      file: makerNotesPath(),
+      noteNullifier: savedMakerNote.noteNullifier,
+      ownerCommitment: savedMakerNote.ownerCommitment,
+      status: savedMakerNote.status,
+    },
     noteCommitment: note.commitment,
     prepared: summarizePreparedDeposit(prepared),
     relay: summarizeRelay(relay.relay as Record<string, unknown>),
@@ -199,6 +233,80 @@ async function runCustodySmoke(options: CustodySmokeOptions): Promise<Record<str
         : before.trader - after.trader === options.amount,
     },
   };
+}
+
+function saveMakerNote(input: {
+  amount: bigint;
+  blinding: string;
+  blindingSeed: string;
+  commitment: string;
+  createdAt: number;
+  depositTxHash: string;
+  noteNullifier: string;
+  ownerCommitment: string;
+  ownerDigest: string;
+  rho: string;
+  rhoDigest: string;
+  shieldedPool: string;
+  source: string;
+  spendSecret: string;
+  spendSecretDigest: string;
+  token: string;
+  tokenDigest: string;
+  walletAddress: string;
+}): Record<string, string | number> {
+  const path = makerNotesPath();
+  mkdirSync(join(path, ".."), { recursive: true });
+  const existing = readMakerNotes(path);
+  const note = {
+    amount: input.amount.toString(),
+    assetDigest: input.tokenDigest,
+    blinding: input.blinding,
+    blindingSeed: input.blindingSeed,
+    commitment: input.commitment,
+    createdAt: input.createdAt,
+    depositTxHash: input.depositTxHash,
+    noteNullifier: input.noteNullifier,
+    ownerCommitment: input.ownerCommitment,
+    ownerDigest: input.ownerDigest,
+    rho: input.rho,
+    rhoDigest: input.rhoDigest,
+    shieldedPool: input.shieldedPool,
+    source: input.source,
+    spendSecret: input.spendSecret,
+    spendSecretDigest: input.spendSecretDigest,
+    status: "available",
+    token: input.token,
+    updatedAt: Date.now(),
+    walletAddress: input.walletAddress,
+  };
+  writeFileSync(
+    path,
+    `${JSON.stringify([
+      note,
+      ...existing.filter((entry) => entry.commitment !== note.commitment),
+    ], null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  return note;
+}
+
+function readMakerNotes(path: string): Array<Record<string, string | number>> {
+  if (!existsSync(path)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is Record<string, string | number> =>
+          Boolean(entry && typeof entry === "object" && "commitment" in entry)
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function makerNotesPath(): string {
+  return join(process.env.PNLX_RUNTIME_DIR || ".pnlx", "maker-notes.json");
 }
 
 function signPreparedXdr(prepared: Record<string, unknown>, source: string, env: ServerEnv): string {
@@ -428,7 +536,9 @@ function tokenDigestFor(
   return parseHex32(output, `token digest for ${token}`);
 }
 
-async function get(app: ReturnType<typeof createApp>, path: string): Promise<Record<string, unknown>> {
+type SmokeApp = Awaited<ReturnType<typeof createAppAsync>>;
+
+async function get(app: SmokeApp, path: string): Promise<Record<string, unknown>> {
   const response = await app.handle(new Request(`http://pnlx.local${path}`));
   const text = await response.text();
   if (!response.ok) throw new Error(`${path} failed: ${response.status} ${text}`);
@@ -436,7 +546,7 @@ async function get(app: ReturnType<typeof createApp>, path: string): Promise<Rec
 }
 
 async function post(
-  app: ReturnType<typeof createApp>,
+  app: SmokeApp,
   path: string,
   data: unknown,
   headers: Record<string, string> = { "content-type": "application/json" },
@@ -454,7 +564,7 @@ async function post(
 }
 
 async function authHeadersFor(
-  app: ReturnType<typeof createApp>,
+  app: SmokeApp,
   source: string,
   address: string,
   env: ServerEnv,

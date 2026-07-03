@@ -32,6 +32,8 @@ export function createLocalClientProverHandler(root = process.cwd()) {
         const record = prover.proveIntentValidity({
           assetDigest: requiredHex(input.assetDigest, "assetDigest"),
           blinding: requiredHex(input.blinding, "blinding"),
+          changeBlinding: optionalHex(input.changeBlinding) ?? "0x0",
+          changeRhoDigest: optionalHex(input.changeRhoDigest) ?? "0x0",
           currentBatch: BigInt(String(input.currentBatch)),
           expiryBatch: BigInt(String(input.expiryBatch)),
           intent: {
@@ -48,6 +50,7 @@ export function createLocalClientProverHandler(root = process.cwd()) {
           },
           marginRoot: requiredHex(input.marginRoot, "marginRoot"),
           noteAmount: BigInt(String(input.noteAmount)),
+          noteChangeCommitment: optionalHex(input.noteChangeCommitment) ?? "0x0",
           noteCommitment: requiredHex(input.noteCommitment, "noteCommitment"),
           ownerDigest: requiredHex(input.ownerDigest, "ownerDigest"),
           pathIndices: requiredBooleanArray(input.pathIndices, "pathIndices"),
@@ -164,6 +167,11 @@ function requiredHex(value: unknown, field: string): `0x${string}` {
   const raw = requiredString(value, field);
   if (!raw.startsWith("0x")) throw new Error(`${field} must be hex`);
   return raw as `0x${string}`;
+}
+
+function optionalHex(value: unknown): `0x${string}` | undefined {
+  if (value === undefined || value === "") return undefined;
+  return requiredHex(value, "hex");
 }
 
 function requiredHexArray(value: unknown, field: string): `0x${string}`[] {

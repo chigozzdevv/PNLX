@@ -114,7 +114,7 @@ describe("public and owner indexer", () => {
       .toMatchObject({
         createdAt: expect.any(Number),
         isResidual: false,
-        shareCommitment: filled.shareCommitment,
+        matchingPayloadCommitment: filled.matchingPayloadCommitment,
         updatedAt: expect.any(Number),
       });
     expect(orders.find((order) => order.intentCommitment === partial.intentCommitment)?.residualCommitment)
@@ -178,11 +178,12 @@ function intentRecord(
     marketDigest: digestToFieldHex(`market:${marketId}`),
     marginRoot,
     marketId,
+    noteChangeCommitment: "0x0",
     noteNullifier: hashFields("note-nullifier", [label]),
     ownerCommitment: owner,
     ownerCommitmentField: intentOwnerCommitmentField(owner),
     proof,
-    shareCommitment: hashFields("shares", [label]),
+    matchingPayloadCommitment: hashFields("matching-payload", [label]),
   };
 }
 

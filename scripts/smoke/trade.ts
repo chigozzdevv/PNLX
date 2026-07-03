@@ -1,12 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { createECDH } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { createECDH, createPrivateKey, sign } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import {
   commitConditionalOrder,
-  fieldMerkleProof,
-  fieldMerkleRoot,
   hashFields,
   ownerCommitment,
 } from "@pnlx/crypto";
@@ -22,13 +21,15 @@ import type {
   ProofMeta,
   TradeIntent,
 } from "@pnlx/protocol-types";
-import { createApp } from "@/app";
+import { createAppRuntimeAsync } from "@/app";
 import { getSupportedPerpAsset, type SupportedPerpAsset } from "@/config/assets";
 import { loadEnv } from "@/config/env";
-import { FileProtocolStore } from "@/shared/state/persistent-store";
-import { ProofArtifactRegistry } from "@/shared/proofs/artifact-registry";
-import { ThresholdShareCommittee } from "@/workers/threshold-shares/threshold-shares.service";
+import { stellarSignedMessageHash } from "@/features/auth/auth.service";
 import { ProverService } from "@/workers/prover/prover.service";
+
+const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+const ED25519_SECRET_KEY_VERSION = 18 << 3;
+const ED25519_PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
 
 interface Deployment {
   contracts: Record<string, string>;
@@ -68,19 +69,47 @@ type MarginMembershipProof = {
   root: Hex;
   siblings: Hex[];
 };
-type PositionMembershipProof = MarginMembershipProof;
+type OraclePublishContext = Pick<MarketSmokeContext, "asset" | "oraclePrice" | "oraclePublishTime">;
+type SmokeAuthSession = {
+  address: string;
+  headers: Record<string, string>;
+  ownerCommitment: Hex;
+  source: string;
+  token: string;
+};
+type StoredMakerNote = {
+  amount: string;
+  assetDigest: Hex;
+  blinding: Hex;
+  blindingSeed?: string;
+  commitment: Hex;
+  createdAt: number;
+  noteNullifier: Hex;
+  ownerCommitment: Hex;
+  ownerDigest: Hex;
+  rho?: string;
+  rhoDigest: Hex;
+  shieldedPool: string;
+  source: string;
+  spendSecret?: string;
+  spendSecretDigest: Hex;
+  status: "available" | "locked" | "spent";
+  token: string;
+  updatedAt: number;
+  walletAddress: string;
+  depositTxHash?: Hex | string;
+  lockedByIntentCommitment?: Hex;
+};
 
-const serverOnly = process.argv.includes("--server-only");
 configureSmokeEnvironment();
 const env = loadEnv();
-const app = createApp();
+const runtime = await createAppRuntimeAsync();
+const app = runtime.router;
 const clientProver = new ProverService();
-const clientCommittee = new ThresholdShareCommittee({
-  nodeIds: ["node-a", "node-b", "node-c"],
-  threshold: 2,
-});
+const makerSource = argValue("--maker-source") ?? process.env.PNLX_MAKER_SOURCE ?? "pnlx-maker";
+const adminSession = await authSessionFor(env.stellarSource);
+const makerSession = await authSessionFor(makerSource);
 const marketAssets = resolveMarketAssets();
-const knownPositionCommitments: Hex[] = loadKnownPositionCommitments(env.protocolStorePath);
 const results = [];
 
 for (const asset of marketAssets) {
@@ -104,23 +133,6 @@ async function runMarketSmoke(asset: SupportedPerpAsset): Promise<Record<string,
   const startedAt = Date.now();
   const batchId = `batch-${asset.symbol.toLowerCase()}-${Date.now()}`;
   const marketId = asset.marketId;
-  const alice = createCircuitMarginNote({
-    assetId: "usdc",
-    amount: 40_000n,
-    owner: `${asset.symbol.toLowerCase()}-alice`,
-    spendSecret: `alice-${batchId}`,
-    rho: `alice-rho-${batchId}`,
-    blinding: `alice-blind-${batchId}`,
-  });
-  const bob = createCircuitMarginNote({
-    assetId: "usdc",
-    amount: 40_000n,
-    owner: `${asset.symbol.toLowerCase()}-bob`,
-    spendSecret: `bob-${batchId}`,
-    rho: `bob-rho-${batchId}`,
-    blinding: `bob-blind-${batchId}`,
-  });
-
   const marketPayload = {
     feedId: `0x${feedIdFor(asset)}`,
     marketId,
@@ -129,23 +141,26 @@ async function runMarketSmoke(asset: SupportedPerpAsset): Promise<Record<string,
     maintenanceMarginRate: asset.maintenanceMarginRate.toString(),
     fundingIndex: "0",
   };
-  const marketResponse = await postCreateOrRefreshMarket(marketPayload);
+  const marketResponse = await postCreateOrRefreshMarket(asset, marketPayload);
   const market = marketResponse.market as Record<string, string>;
   const oracle = marketResponse.oracle as Record<string, string | number>;
   const oraclePrice = BigInt(market.oraclePrice);
   const oraclePublishTime = Number(oracle.publishTime);
-  const size = tradeSize(oraclePrice);
-  const margin = tradeMargin(size, oraclePrice, asset.maxLeverage);
+  const [longNote, shortNote] = await ensureLiveMakerNotes(asset);
+  const margin = minBigInt(BigInt(longNote.amount), BigInt(shortNote.amount));
+  const size = tradeSizeForMargin(margin, oraclePrice, asset.maxLeverage);
   const notional = tradeNotional(size, oraclePrice);
   const leverageBps = effectiveLeverageBps(notional, margin);
   const entryPrice = oraclePrice;
   const longLimitPrice = oraclePrice;
   const shortLimitPrice = oraclePrice;
+  const alice = noteForProof(longNote);
+  const bob = noteForProof(shortNote);
 
   const aliceIntent = intent(
     asset,
     batchId,
-    "alice",
+    makerSession.address,
     "long",
     alice.noteNullifier as Hex,
     size,
@@ -155,44 +170,49 @@ async function runMarketSmoke(asset: SupportedPerpAsset): Promise<Record<string,
   const bobIntent = intent(
     asset,
     batchId,
-    "bob",
+    makerSession.address,
     "short",
     bob.noteNullifier as Hex,
     size,
     margin,
     shortLimitPrice,
   );
-  const aliceDeposit = await depositCircuitNote(alice);
+  const aliceDeposit = await marginMembership(alice.commitment as Hex);
   const aliceValidity = proveIntentValidity(aliceIntent, alice, aliceDeposit);
-  const aliceRecord = await submitSharedIntent(aliceIntent, aliceValidity);
+  const aliceRecord = await submitPrivateIntent(aliceIntent, aliceValidity);
+  lockMakerNote(longNote.commitment, aliceRecord.intentCommitment);
 
-  const bobDeposit = await depositCircuitNote(bob);
+  const bobDeposit = await marginMembership(bob.commitment as Hex);
   const bobValidity = proveIntentValidity(bobIntent, bob, bobDeposit);
-  const bobRecord = await submitSharedIntent(bobIntent, bobValidity);
-  await registerAccountKey(aliceRecord.ownerCommitment);
-  await registerAccountKey(bobRecord.ownerCommitment);
+  const bobRecord = await submitPrivateIntent(bobIntent, bobValidity);
+  lockMakerNote(shortNote.commitment, bobRecord.intentCommitment);
+  await registerAccountKey(makerSession.ownerCommitment);
+  await waitForExternalMatcherPersistence();
 
   const settleStartedAt = Date.now();
-  const settlementResult = await settleBatch(batchId, marketId);
+  let settlementResult: Record<string, unknown>;
+  try {
+    settlementResult = await settleBatch(batchId, marketId);
+  } catch (error) {
+    unlockMakerNotes([aliceRecord.intentCommitment, bobRecord.intentCommitment]);
+    throw error;
+  }
   const settlement = settlementResult.settlement as Record<string, unknown>;
+  spendLockedMakerNotes([aliceRecord.intentCommitment, bobRecord.intentCommitment]);
   const settlementMs = Date.now() - settleStartedAt;
   const closeStartedAt = Date.now();
   const close = await closeLongTakeProfit({
     asset,
     aliceRecord,
     batchId,
+    ownerAddress: makerSession.address,
     entryPrice,
     fundingIndex: BigInt(market.fundingIndex ?? "0"),
     margin,
     marketId,
-    priorPositionCommitments: [...knownPositionCommitments],
     settlement,
     size,
   });
-  knownPositionCommitments.push(
-    ...parseHexList(settlement.newCommitments, "settlement.newCommitments"),
-    close.newPositionCommitment,
-  );
   const closeMs = Date.now() - closeStartedAt;
   const serverSettlementMs = Date.now() - startedAt;
   const context = {
@@ -206,7 +226,7 @@ async function runMarketSmoke(asset: SupportedPerpAsset): Promise<Record<string,
     oraclePublishTime,
     settlement,
   };
-  const chain = serverOnly ? undefined : pushOnChain(context);
+  const chain = verifyLiveChain(context);
 
   return {
     symbol: asset.symbol,
@@ -255,45 +275,256 @@ async function runMarketSmoke(asset: SupportedPerpAsset): Promise<Record<string,
 
 function configureSmokeEnvironment(): void {
   const baseEnv = loadEnv();
-  const usesExternalMatcher =
-    baseEnv.matchingBackend === "external-blind" && Boolean(baseEnv.matcherServiceUrl);
-  const runtimeDir = serverOnly
-    ? mkdtempSync(join(tmpdir(), "pnlx-smoke-"))
-    : smokeRuntimeDir(baseEnv);
-  process.env.ASSET_CUSTODY_REQUIRED = "false";
-  process.env.AUTH_REQUIRED = "false";
-  process.env.FUNDING_ENGINE_ENABLED = process.env.FUNDING_ENGINE_ENABLED || "false";
-  process.env.SERVER_WITNESS_ROUTES_ENABLED = "true";
-  process.env.STELLAR_ONCHAIN_RELAY = "false";
-  process.env.STELLAR_RELAYER_MODE = "local";
-  process.env.PROTOCOL_STORE_PATH ??= usesExternalMatcher && baseEnv.protocolStorePath
-    ? baseEnv.protocolStorePath
-    : join(runtimeDir, "protocol-store.json");
-  process.env.RELAY_STORE_PATH ??= usesExternalMatcher && baseEnv.relayStorePath
-    ? baseEnv.relayStorePath
-    : join(runtimeDir, "relay-store.json");
-  process.env.AUTH_STORE_PATH ??= usesExternalMatcher && baseEnv.authStorePath
-    ? baseEnv.authStorePath
-    : join(runtimeDir, "auth-store.json");
-}
-
-function smokeRuntimeDir(baseEnv: ReturnType<typeof loadEnv>): string {
-  if (process.env.PNLX_SMOKE_RUNTIME_DIR) return process.env.PNLX_SMOKE_RUNTIME_DIR;
-
   const deployment = readDeploymentFile(baseEnv);
-  const key = hashFields("smoke-runtime", [
-    baseEnv.stellarNetwork,
-    baseEnv.stellarDeploymentFile,
-    deployment.contracts["position-state"],
-    deployment.contracts["batch-settlement"],
-  ]).slice(2, 14);
-  return join(".pnlx", "smoke", `${baseEnv.stellarNetwork}-${key}`);
+  process.env.ASSET_CUSTODY_REQUIRED = "true";
+  process.env.AUTH_REQUIRED = "true";
+  process.env.SERVER_WITNESS_ROUTES_ENABLED = "false";
+  process.env.STELLAR_ONCHAIN_RELAY = "true";
+  process.env.STELLAR_RELAYER_MODE = "stellar-cli";
+  process.env.ORACLE_CONTRACT_ID ||= deployment.contracts["price-oracle"] ?? "";
 }
 
-async function depositCircuitNote(note: CircuitMarginNote): Promise<MarginMembershipProof> {
-  const deposit = await post("/notes/deposit", { commitment: note.commitment });
-  const result = deposit.note as { membershipProof: MarginMembershipProof };
-  return result.membershipProof;
+async function ensureLiveMakerNotes(asset: SupportedPerpAsset): Promise<[StoredMakerNote, StoredMakerNote]> {
+  let notes = availableMakerNotes();
+  if (notes.length < 2) {
+    const largest = notes.sort((left, right) => Number(BigInt(right.amount) - BigInt(left.amount)))[0];
+    if (!largest) throw new Error("no available maker notes; run smoke:custody first");
+    console.error(`[smoke] ${asset.symbol}: splitting maker note ${largest.commitment}`);
+    await splitMakerNote(largest);
+    notes = availableMakerNotes();
+  }
+  if (notes.length < 2) {
+    throw new Error("live trade needs two available maker notes after split");
+  }
+  return [notes[0], notes[1]];
+}
+
+async function splitMakerNote(note: StoredMakerNote): Promise<void> {
+  if (!note.spendSecret) throw new Error(`maker note ${note.commitment} is missing spendSecret`);
+  const noteAmount = BigInt(note.amount);
+  const withdrawAmount = noteAmount / 2n;
+  const changeAmount = noteAmount - withdrawAmount;
+  if (withdrawAmount <= 0n || changeAmount <= 0n) {
+    throw new Error(`maker note ${note.commitment} is too small to split`);
+  }
+
+  const membership = await marginMembership(note.commitment);
+  const changeNote = createCircuitMarginNote({
+    amount: changeAmount,
+    assetDigest: note.assetDigest,
+    assetId: "usdc",
+    owner: note.walletAddress,
+    spendSecret: note.spendSecret,
+    rho: randomLabel("maker-change-rho"),
+    blinding: randomLabel("maker-change-blind"),
+  });
+  const recipientDigest = addressDigestFor(note.walletAddress);
+  const withdrawal = clientProver.proveWithdrawal({
+    assetDigest: note.assetDigest,
+    blinding: note.blinding,
+    changeBlinding: changeNote.blinding,
+    changeRhoDigest: changeNote.rhoDigest,
+    noteAmount,
+    noteCommitment: note.commitment,
+    nullifier: note.noteNullifier,
+    ownerDigest: note.ownerDigest,
+    pathIndices: membership.indices,
+    pathSiblings: membership.siblings,
+    recipient: recipientDigest,
+    rhoDigest: note.rhoDigest,
+    root: membership.root,
+    spendSecretDigest: note.spendSecretDigest,
+    tokenDigest: note.assetDigest,
+    withdrawAmount,
+  });
+  await post("/notes/withdraw-asset/proven", {
+    ...withdrawal,
+    recipientAddress: note.walletAddress,
+    recipientDigest,
+    token: note.token,
+  }, makerSession.headers);
+
+  const deposited = await depositMakerNote({
+    amount: withdrawAmount,
+    assetDigest: note.assetDigest,
+    source: note.source || makerSource,
+    token: note.token,
+    walletAddress: note.walletAddress,
+  });
+  saveMakerNotes([
+    {
+      ...note,
+      status: "spent",
+      updatedAt: Date.now(),
+    },
+    storedNoteFromCircuit(changeNote, {
+      shieldedPool: note.shieldedPool,
+      source: note.source,
+      spendSecret: note.spendSecret,
+      status: "available",
+      token: note.token,
+      walletAddress: note.walletAddress,
+    }),
+    deposited,
+    ...readMakerNotes().filter((entry) => entry.commitment !== note.commitment),
+  ]);
+}
+
+async function depositMakerNote(input: {
+  amount: bigint;
+  assetDigest?: Hex;
+  source: string;
+  token: string;
+  walletAddress: string;
+}): Promise<StoredMakerNote> {
+  const spendSecret = randomLabel("maker-deposit-spend");
+  const note = createCircuitMarginNote({
+    amount: input.amount,
+    assetDigest: input.assetDigest ?? (env.collateralTokenDigest as Hex),
+    assetId: "usdc",
+    owner: input.walletAddress,
+    spendSecret,
+    rho: randomLabel("maker-deposit-rho"),
+    blinding: randomLabel("maker-deposit-blind"),
+  });
+  const depositProof = clientProver.proveDepositNote({
+    amount: input.amount,
+    blinding: note.blinding,
+    commitment: note.commitment,
+    ownerDigest: note.ownerDigest,
+    rhoDigest: note.rhoDigest,
+    tokenDigest: note.assetDigest,
+  });
+  await post("/notes/deposit-asset/proven", {
+    amount: input.amount,
+    commitment: note.commitment,
+    depositProof,
+    from: input.walletAddress,
+    source: input.source,
+    token: input.token,
+  }, makerSession.headers);
+  return storedNoteFromCircuit(note, {
+    shieldedPool: readDeployment().contracts["shielded-pool"],
+    source: input.source,
+    spendSecret,
+    status: "available",
+    token: input.token,
+    walletAddress: input.walletAddress,
+  });
+}
+
+function storedNoteFromCircuit(
+  note: CircuitMarginNote,
+  input: {
+    shieldedPool: string;
+    source: string;
+    spendSecret: string;
+    status: StoredMakerNote["status"];
+    token: string;
+    walletAddress: string;
+  },
+): StoredMakerNote {
+  const now = Date.now();
+  return {
+    amount: note.amount.toString(),
+    assetDigest: note.assetDigest as Hex,
+    blinding: note.blinding as Hex,
+    commitment: note.commitment as Hex,
+    createdAt: now,
+    noteNullifier: note.noteNullifier as Hex,
+    ownerCommitment: ownerCommitment(input.walletAddress),
+    ownerDigest: note.ownerDigest as Hex,
+    rhoDigest: note.rhoDigest as Hex,
+    shieldedPool: input.shieldedPool,
+    source: input.source,
+    spendSecret: input.spendSecret,
+    spendSecretDigest: note.spendSecretDigest as Hex,
+    status: input.status,
+    token: input.token,
+    updatedAt: now,
+    walletAddress: input.walletAddress,
+  };
+}
+
+function noteForProof(note: StoredMakerNote): CircuitMarginNote {
+  return {
+    amount: BigInt(note.amount),
+    assetDigest: note.assetDigest,
+    blinding: note.blinding,
+    commitment: note.commitment,
+    noteNullifier: note.noteNullifier,
+    ownerDigest: note.ownerDigest,
+    rhoDigest: note.rhoDigest,
+    spendSecretDigest: note.spendSecretDigest,
+  };
+}
+
+async function marginMembership(commitment: Hex): Promise<MarginMembershipProof> {
+  const response = await get(`/notes/membership?commitment=${encodeURIComponent(commitment)}`, makerSession.headers);
+  const note = response.note as { membershipProof: MarginMembershipProof };
+  return note.membershipProof;
+}
+
+function availableMakerNotes(): StoredMakerNote[] {
+  return readMakerNotes()
+    .filter((note) => note.status === "available")
+    .filter((note) => note.walletAddress === makerSession.address)
+    .sort((left, right) => Number(BigInt(left.amount) - BigInt(right.amount)));
+}
+
+function lockMakerNote(commitment: Hex, intentCommitment: Hex): void {
+  saveMakerNotes(
+    readMakerNotes().map((note) =>
+      note.commitment === commitment
+        ? { ...note, lockedByIntentCommitment: intentCommitment, status: "locked", updatedAt: Date.now() }
+        : note,
+    ),
+  );
+}
+
+function spendLockedMakerNotes(intentCommitments: Hex[]): void {
+  const intents = new Set(intentCommitments);
+  saveMakerNotes(
+    readMakerNotes().map((note) =>
+      note.lockedByIntentCommitment && intents.has(note.lockedByIntentCommitment)
+        ? { ...note, status: "spent", updatedAt: Date.now() }
+        : note,
+    ),
+  );
+}
+
+function unlockMakerNotes(intentCommitments: Hex[]): void {
+  const intents = new Set(intentCommitments);
+  saveMakerNotes(
+    readMakerNotes().map((note) =>
+      note.lockedByIntentCommitment && intents.has(note.lockedByIntentCommitment)
+        ? {
+            ...note,
+            lockedByIntentCommitment: undefined,
+            status: "available",
+            updatedAt: Date.now(),
+          }
+        : note,
+    ),
+  );
+}
+
+function readMakerNotes(): StoredMakerNote[] {
+  const path = makerNotesPath();
+  if (!existsSync(path)) return [];
+  return (JSON.parse(readFileSync(path, "utf8")) as StoredMakerNote[]).filter((note) => note.commitment);
+}
+
+function saveMakerNotes(notes: StoredMakerNote[]): void {
+  const path = makerNotesPath();
+  mkdirSync(join(path, ".."), { recursive: true });
+  const byCommitment = new Map<string, StoredMakerNote>();
+  for (const note of notes) byCommitment.set(note.commitment, note);
+  writeFileSync(path, `${JSON.stringify([...byCommitment.values()], null, 2)}\n`, { mode: 0o600 });
+}
+
+function makerNotesPath(): string {
+  return join(process.env.PNLX_RUNTIME_DIR || ".pnlx", "maker-notes.json");
 }
 
 function proveIntentValidity(
@@ -307,8 +538,11 @@ function proveIntentValidity(
     expiryBatch: 2n,
     assetDigest: note.assetDigest,
     blinding: note.blinding,
+    changeBlinding: "0x0",
+    changeRhoDigest: "0x0",
     marginRoot: membershipProof.root,
     noteAmount: note.amount,
+    noteChangeCommitment: "0x0",
     noteCommitment: note.commitment,
     ownerDigest: note.ownerDigest,
     pathIndices: membershipProof.indices,
@@ -318,33 +552,23 @@ function proveIntentValidity(
   });
 }
 
-async function submitSharedIntent(
+async function submitPrivateIntent(
   tradeIntent: TradeIntent,
   validity: IntentValidityRecord,
 ): Promise<IntentRecord> {
-  const shareSets = clientCommittee.shareIntent(tradeIntent, validity.intentCommitment);
-  const shareCommitment = clientCommittee.shareCommitment(
-    "intent-shares",
-    validity.intentCommitment,
-    shareSets,
-  );
-  return await post("/intents/shared", {
-    record: {
-      batchDigest: validity.batchDigest,
-      batchId: tradeIntent.batchId,
-      intentCommitment: validity.intentCommitment,
-      marketDigest: validity.marketDigest,
-      marketId: tradeIntent.marketId,
-      marginRoot: validity.marginRoot,
-      noteNullifier: validity.noteNullifier,
-      ownerCommitment: ownerCommitment(tradeIntent.owner),
-      ownerCommitmentField: validity.ownerCommitmentField,
-      proof: validity.proof,
-      shareCommitment,
+  return await post("/intents", {
+    intent: {
+      ...tradeIntent,
+      limitPrice: tradeIntent.limitPrice.toString(),
+      margin: tradeIntent.margin.toString(),
+      size: tradeIntent.size.toString(),
     },
-    shareSets,
-    validity,
-  }) as unknown as IntentRecord;
+    validity: {
+      ...validity,
+      currentBatch: validity.currentBatch.toString(),
+      expiryBatch: validity.expiryBatch.toString(),
+    },
+  }, makerSession.headers) as unknown as IntentRecord;
 }
 
 async function registerAccountKey(owner: Hex): Promise<void> {
@@ -352,32 +576,98 @@ async function registerAccountKey(owner: Hex): Promise<void> {
     algorithm: "ecdh-p256-aes-gcm",
     ownerCommitment: owner,
     publicKey: rawP256PublicKey(),
-  });
+  }, makerSession.headers);
+}
+
+async function waitForExternalMatcherPersistence(): Promise<void> {
+  if (!env.matcherServiceUrl || env.protocolStorageDriver !== "mongodb") return;
+  await new Promise((resolve) => setTimeout(resolve, 750));
 }
 
 async function settleBatch(batchId: string, marketId: string): Promise<Record<string, unknown>> {
-  if (env.matchingBackend !== "external-blind") {
-    return post("/batches/settle", { batchId, marketId });
-  }
   if (!env.matcherServiceUrl) {
-    throw new Error("MATCHER_SERVICE_URL is required for external-blind smoke settlement");
+    return post("/batches/settle", { batchId, marketId }, adminSession.headers);
   }
   const transcript = await requestMatcherSettlement(batchId, marketId);
-  return post("/batches/settle-external", transcript);
+  return post("/batches/settle-external", transcript, adminSession.headers);
 }
 
 async function requestMatcherSettlement(batchId: string, marketId: string): Promise<Record<string, unknown>> {
-  const response = await fetch(new URL("/match/settlement", env.matcherServiceUrl), {
-    body: JSON.stringify({ batchId, marketId }),
-    headers: {
-      "content-type": "application/json",
+  const timeoutMs = smokeMatcherTimeoutMs();
+  const startedAt = Date.now();
+  let response: { status: number; text: string };
+  try {
+    response = await postJsonUrl(new URL("/match/settlement", env.matcherServiceUrl), {
+      batchId,
+      marketId,
+    }, {
       ...(env.matcherServiceToken ? { authorization: `Bearer ${env.matcherServiceToken}` } : {}),
-    },
-    method: "POST",
+    }, timeoutMs);
+  } catch (error) {
+    throw new Error(
+      `/match/settlement failed after ${Date.now() - startedAt}ms; set PNLX_SMOKE_MATCHER_TIMEOUT_MS to wait longer\n${String(
+        error,
+      )}`,
+    );
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`/match/settlement failed: ${response.status} ${response.text}`);
+  }
+  return JSON.parse(response.text) as Record<string, unknown>;
+}
+
+function postJsonUrl(
+  url: URL,
+  data: unknown,
+  headers: Record<string, string>,
+  timeoutMs: number,
+): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(serialize(data));
+    const transport = url.protocol === "https:" ? httpsRequest : httpRequest;
+    try {
+      const request = transport({
+        hostname: url.hostname,
+        method: "POST",
+        path: `${url.pathname}${url.search}`,
+        port: url.port || (url.protocol === "https:" ? 443 : 80),
+        protocol: url.protocol,
+        headers: {
+          "content-length": Buffer.byteLength(body).toString(),
+          "content-type": "application/json",
+          ...headers,
+        },
+        timeout: timeoutMs,
+      }, (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        response.on("end", () => {
+          resolve({
+            status: response.statusCode ?? 0,
+            text: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      });
+      request.on("error", reject);
+      request.on("timeout", () => {
+        request.destroy(new Error(`matcher request timed out after ${timeoutMs}ms`));
+      });
+      request.write(body);
+      request.end();
+    } catch (error) {
+      reject(error);
+    }
   });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`/match/settlement failed: ${response.status} ${text}`);
-  return JSON.parse(text) as Record<string, unknown>;
+}
+
+function smokeMatcherTimeoutMs(): number {
+  const raw = process.env.PNLX_SMOKE_MATCHER_TIMEOUT_MS;
+  if (!raw) return 30 * 60 * 1000;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`PNLX_SMOKE_MATCHER_TIMEOUT_MS must be a positive integer, got ${raw}`);
+  }
+  return parsed;
 }
 
 async function closeLongTakeProfit(input: {
@@ -388,7 +678,7 @@ async function closeLongTakeProfit(input: {
   fundingIndex: bigint;
   margin: bigint;
   marketId: string;
-  priorPositionCommitments: Hex[];
+  ownerAddress: string;
   settlement: Record<string, unknown>;
   size: bigint;
 }): Promise<{
@@ -405,8 +695,7 @@ async function closeLongTakeProfit(input: {
   const markPrice = (input.entryPrice * 106n) / 100n;
   const triggerPrice = (input.entryPrice * 105n) / 100n;
   const positionCommitments = parseHexList(input.settlement.newCommitments, "settlement.newCommitments");
-  const currentPositionCommitments = [...input.priorPositionCommitments, ...positionCommitments];
-  const position = settledLongPosition(input, positionCommitments, currentPositionCommitments);
+  const position = settledLongPosition(input, positionCommitments);
   const positionNullifier = position.position.positionNullifier as Hex;
   const witness: ConditionalOrderWitness = {
     marketId: input.marketId,
@@ -420,6 +709,11 @@ async function closeLongTakeProfit(input: {
     salt: `${input.asset.symbol.toLowerCase()}-alice-tp-${input.batchId}`,
   };
   const closeCommitment = commitConditionalOrder(witness);
+  publishOraclePriceOnChain({
+    asset: input.asset,
+    oraclePrice: markPrice,
+    oraclePublishTime: Math.floor(Date.now() / 1000),
+  });
   await post("/markets/update", {
     marketId: input.marketId,
     oraclePrice: markPrice,
@@ -427,14 +721,14 @@ async function closeLongTakeProfit(input: {
     initialMarginRate: input.asset.initialMarginRate,
     maintenanceMarginRate: input.asset.maintenanceMarginRate,
     fundingIndex: input.fundingIndex,
-  });
+  }, adminSession.headers);
   await post("/conditional-orders", {
     marketId: input.marketId,
     positionNullifier,
     closeCommitment,
-  });
+  }, makerSession.headers);
   const triggerRecord = clientProver.proveConditionalClose(witness);
-  const triggerResponse = await post("/conditional-orders/trigger-proven", triggerRecord);
+  const triggerResponse = await post("/conditional-orders/trigger-proven", triggerRecord, makerSession.headers);
   const conditionalClose = triggerResponse.conditionalClose as ConditionalOrderRecord;
 
   const closeSettlement = settleClose({
@@ -449,15 +743,20 @@ async function closeLongTakeProfit(input: {
   const marginOutput = createCircuitMarginNote({
     assetId: "usdc",
     amount: closeSettlement.newMargin,
-    owner: ownerCommitment(`${input.asset.symbol.toLowerCase()}-alice`),
+    owner: input.aliceRecord.ownerCommitment,
     spendSecret: `${positionNullifier}:close-margin-spend`,
     rho: `${positionNullifier}:close-margin-rho`,
     blinding: `${positionNullifier}:close-margin-blinding`,
   });
+  const closeContext = await positionCloseContext({
+    newPositionCommitment: position.newPositionCommitment,
+    ownerCommitment: input.aliceRecord.ownerCommitment,
+    positionCommitment: position.position.commitment as Hex,
+  });
   const provenClose = clientProver.provePositionClose({
     marketId: input.marketId,
     positionCommitment: position.position.commitment,
-    positionRoot: position.membershipProof.root,
+    positionRoot: closeContext.positionRoot,
     positionNullifier,
     closeCommitment,
     side: "long",
@@ -473,7 +772,7 @@ async function closeLongTakeProfit(input: {
     remainingMargin: 0n,
     marginOutputAmount: closeSettlement.newMargin,
     newPositionCommitment: position.newPositionCommitment,
-    newPositionRoot: position.newPositionRoot,
+    newPositionRoot: closeContext.newPositionRoot,
     marginOutputCommitment: marginOutput.commitment,
     marketDigest: position.position.marketDigest,
     ownerDigest: position.position.ownerDigest,
@@ -485,10 +784,10 @@ async function closeLongTakeProfit(input: {
     marginOutputAssetDigest: marginOutput.assetDigest,
     marginOutputRhoDigest: marginOutput.rhoDigest,
     marginOutputBlinding: marginOutput.blinding,
-    pathIndices: position.membershipProof.indices,
-    pathSiblings: position.membershipProof.siblings,
+    pathIndices: closeContext.membershipProof.indices,
+    pathSiblings: closeContext.membershipProof.siblings,
   });
-  const closeResponse = await post("/position-closes/proven", provenClose);
+  const closeResponse = await post("/position-closes/proven", provenClose, makerSession.headers);
   const positionClose = closeResponse.positionClose as PositionCloseRecord;
 
   return {
@@ -504,6 +803,34 @@ async function closeLongTakeProfit(input: {
   };
 }
 
+async function positionCloseContext(input: {
+  newPositionCommitment: Hex;
+  ownerCommitment: Hex;
+  positionCommitment: Hex;
+}): Promise<{
+  membershipProof: MarginMembershipProof;
+  newPositionRoot: Hex;
+  positionRoot: Hex;
+}> {
+  const params = new URLSearchParams({
+    newPositionCommitment: input.newPositionCommitment,
+    ownerCommitment: input.ownerCommitment,
+    positionCommitment: input.positionCommitment,
+  });
+  const response = await get(`/position-closes/context?${params.toString()}`, makerSession.headers);
+  const context = response.context as Record<string, unknown>;
+  const proof = context.membershipProof as Record<string, unknown>;
+  return {
+    membershipProof: {
+      indices: parseBooleanList(proof.indices, "positionCloseContext.membershipProof.indices"),
+      root: String(proof.root) as Hex,
+      siblings: parseHexList(proof.siblings, "positionCloseContext.membershipProof.siblings"),
+    },
+    newPositionRoot: String(context.newPositionRoot) as Hex,
+    positionRoot: String(context.positionRoot) as Hex,
+  };
+}
+
 function settledLongPosition(
   input: {
     aliceRecord: IntentRecord;
@@ -512,14 +839,12 @@ function settledLongPosition(
     fundingIndex: bigint;
     margin: bigint;
     marketId: string;
+    ownerAddress: string;
     size: bigint;
   },
   positionCommitments: Hex[],
-  currentPositionCommitments: Hex[],
 ): {
-  membershipProof: PositionMembershipProof;
   newPositionCommitment: Hex;
-  newPositionRoot: Hex;
   newPosition: ReturnType<typeof createCircuitPositionNote>;
   position: ReturnType<typeof createCircuitPositionNote>;
 } {
@@ -528,7 +853,7 @@ function settledLongPosition(
   }
 
   const fillIndex = 0;
-  const owner = ownerCommitment(`${input.asset.symbol.toLowerCase()}-alice`);
+  const owner = input.aliceRecord.ownerCommitment;
   const rho = `${input.aliceRecord.intentCommitment}:position:${fillIndex}`;
   const position = createCircuitPositionNote({
     marketId: input.marketId,
@@ -560,9 +885,7 @@ function settledLongPosition(
   });
   const newPositionCommitment = newPosition.commitment as Hex;
   return {
-    membershipProof: fieldMerkleProof(currentPositionCommitments, position.commitment as Hex),
     newPositionCommitment,
-    newPositionRoot: fieldMerkleRoot([...currentPositionCommitments, newPositionCommitment]),
     newPosition,
     position,
   };
@@ -573,15 +896,15 @@ function parseHexList(value: unknown, field: string): Hex[] {
   return value.map((entry) => String(entry) as Hex);
 }
 
+function parseBooleanList(value: unknown, field: string): boolean[] {
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
+  return value.map((entry) => entry === true || entry === "true");
+}
+
 function rawP256PublicKey(): string {
   const ecdh = createECDH("prime256v1");
   ecdh.generateKeys();
   return ecdh.getPublicKey().toString("base64url");
-}
-
-function loadKnownPositionCommitments(storePath: string): Hex[] {
-  if (!storePath || !existsSync(storePath)) return [];
-  return [...new FileProtocolStore(storePath).positionCommitments];
 }
 
 function intent(
@@ -597,57 +920,169 @@ function intent(
   return {
     batchId,
     marketId: asset.marketId,
-    owner: `${asset.symbol.toLowerCase()}-${owner}`,
+    owner,
     side,
     size,
     limitPrice,
     margin,
     noteNullifier,
-    nonce: `${owner}-${batchId}`,
-    salt: `${owner}-salt-${batchId}`,
+    nonce: `${side}-${batchId}-${noteNullifier}`,
+    salt: `${side}-salt-${batchId}-${noteNullifier}`,
   };
 }
 
-async function post(path: string, data: unknown): Promise<Record<string, unknown>> {
+async function get(
+  path: string,
+  headers: Record<string, string> = adminSession.headers,
+): Promise<Record<string, unknown>> {
   const response = await app.handle(
     new Request(`http://pnlx.local${path}`, {
-      method: "POST",
-      body: JSON.stringify(serialize(data)),
-      headers: { "content-type": "application/json" },
+      headers,
     }),
   );
   const text = await response.text();
+  await flushProtocolStore();
   if (!response.ok) throw new Error(`${path} failed: ${response.status} ${text}`);
   return JSON.parse(text) as Record<string, unknown>;
 }
 
-async function postCreateOrRefreshMarket(data: Record<string, string>): Promise<Record<string, unknown>> {
+async function post(
+  path: string,
+  data: unknown,
+  headers: Record<string, string> = adminSession.headers,
+): Promise<Record<string, unknown>> {
+  const response = await app.handle(
+    new Request(`http://pnlx.local${path}`, {
+      method: "POST",
+      body: JSON.stringify(serialize(data)),
+      headers,
+    }),
+  );
+  const text = await response.text();
+  await flushProtocolStore();
+  if (!response.ok) throw new Error(`${path} failed: ${response.status} ${text}`);
+  return JSON.parse(text) as Record<string, unknown>;
+}
+
+async function flushProtocolStore(): Promise<void> {
+  const flush = (runtime.executor.store as { flush?: () => Promise<void> }).flush;
+  if (flush) await flush.call(runtime.executor.store);
+}
+
+async function postPublic(path: string, data: unknown): Promise<Record<string, unknown>> {
+  return post(path, data, { "content-type": "application/json" });
+}
+
+async function authSessionFor(source: string): Promise<SmokeAuthSession> {
+  if (/^G[A-Z0-9]{55}$/.test(source)) {
+    throw new Error(`auth source must be a local Stellar key alias, got public address ${source}`);
+  }
+  const address = resolveSourceAddress(source);
+  const secret = runStellar(["keys", "secret", source]).trim();
+  const challenge = await postPublic("/auth/challenge", {
+    address,
+    domain: "pnlx.local",
+    uri: "http://pnlx.local",
+  });
+  const message = String(challenge.message);
+  const signature = sign(null, stellarSignedMessageHash(message), privateKeyFromStellarSecret(secret)).toString("base64");
+  const session = await postPublic("/auth/session", {
+    address,
+    nonce: challenge.nonce,
+    signature,
+  });
+  const token = String(session.token);
+  return {
+    address,
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    ownerCommitment: String(session.ownerCommitment) as Hex,
+    source,
+    token,
+  };
+}
+
+async function postCreateOrRefreshMarket(
+  asset: SupportedPerpAsset,
+  data: Record<string, string>,
+): Promise<Record<string, unknown>> {
+  const oracle = await latestHermesPrice(data.feedId as Hex);
+  publishOraclePriceOnChain({
+    asset,
+    oraclePrice: BigInt(oracle.price),
+    oraclePublishTime: Number(oracle.publishTime),
+  });
+  const market = {
+    fundingIndex: data.fundingIndex,
+    initialMarginRate: data.initialMarginRate,
+    maintenanceMarginRate: data.maintenanceMarginRate,
+    marketId: data.marketId,
+    maxLeverage: data.maxLeverage,
+    oraclePrice: oracle.price.toString(),
+  };
   try {
-    return await post("/markets/oracle", data);
+    const created = await post("/markets", market);
+    return {
+      market: created.market,
+      oracle,
+    };
   } catch (error) {
     if (!String((error as Error).message).includes("market already exists")) throw error;
-    return post("/markets/oracle/refresh", {
-      feedId: data.feedId,
-      marketId: data.marketId,
-    });
+    const refreshed = await post("/markets/update", market);
+    return {
+      market: refreshed.market,
+      oracle,
+    };
   }
 }
 
-function pushOnChain(context: MarketSmokeContext): Record<string, unknown> {
-  console.error(`[smoke] ${context.asset.symbol}: pushing settlement on-chain`);
+async function latestHermesPrice(feedId: Hex): Promise<Record<string, bigint | number | string>> {
+  const url = new URL("/v2/updates/price/latest", env.pythHermesUrl);
+  url.searchParams.append("ids[]", feedId.slice(2));
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`pyth price fetch failed: ${response.status}`);
+  const body = await response.json() as {
+    parsed?: Array<{
+      id: string;
+      price: {
+        conf: string;
+        expo: number;
+        price: string;
+        publish_time: number;
+      };
+    }>;
+  };
+  const parsed = body.parsed?.find((entry) => entry.id === feedId.slice(2));
+  if (!parsed) throw new Error("pyth feed missing from response");
+  const price = scalePythPrice(BigInt(parsed.price.price), parsed.price.expo);
+  const confidence = scalePythPrice(BigInt(parsed.price.conf), parsed.price.expo);
+  if (price <= 0n) throw new Error("pyth price must be positive");
+  return {
+    confidence,
+    confidenceBps: (confidence * 10_000n) / (price < 0n ? -price : price),
+    feedId,
+    price,
+    publishTime: parsed.price.publish_time,
+    source: "hermes",
+  };
+}
+
+function publishOraclePriceOnChain(context: OraclePublishContext): void {
+  console.error(`[smoke] ${context.asset.symbol}: publishing oracle price on-chain`);
+  const deployment = readDeployment();
+  const oracleContract = activeOracleContract(deployment);
+  pushAdapterPrice(deployment, oracleContract, context);
+}
+
+function verifyLiveChain(context: MarketSmokeContext): Record<string, unknown> {
+  console.error(`[smoke] ${context.asset.symbol}: verifying live Stellar settlement`);
   const startedAt = Date.now();
   const deployment = readDeployment();
   const proof = context.settlement.proof as unknown as ProofMeta;
   const batchKey = bytes32(hashFields("batch-id", [context.batchId]));
   const marketKey = bytes32(hashFields("market-id", [context.marketId]));
-
-  const oracleContract = activeOracleContract(deployment);
-  assertPositionRootAligned(deployment, context);
-  pushAdapterPrice(deployment, oracleContract, context);
-  upsertMarket(deployment, marketKey, oracleContract, context.asset);
-
-  submitIntent(deployment, context.aliceRecord);
-  submitIntent(deployment, context.bobRecord);
 
   if (proof.proofSystem !== "risc0-groth16") {
     throw new Error("batch settlement must use a RISC0 Groth16 matcher proof");
@@ -656,73 +1091,20 @@ function pushOnChain(context: MarketSmokeContext): Record<string, unknown> {
   if (!risc0Verifier) {
     throw new Error("deployment is missing batch-match-risc0-verifier");
   }
-  const artifact = new ProofArtifactRegistry().get(proof);
-  if (!artifact) throw new Error("RISC0 batch proof artifact is missing from the proof registry");
-  invoke(risc0Verifier, "verify_and_record", [
-    "--seal-file-path",
-    artifact.proofPath,
-    "--image_id",
-    bytes32(requiredProofField(proof.imageId, "imageId")),
-    "--journal_digest",
-    bytes32(requiredProofField(proof.journalDigest ?? proof.publicInputHash, "journalDigest")),
-    "--proof_digest",
-    bytes32(requiredProofField(proof.sealDigest ?? proof.proofDigest, "sealDigest")),
-  ]);
+
   waitForProof(deployment, proof);
-
-  invoke(deployment.contracts["batch-settlement"], "settle", [
-    "--batch_id",
-    batchKey,
-    "--market_id",
-    marketKey,
-    "--old_root",
-    bytes32(String(context.settlement.oldRoot)),
-    "--new_root",
-    bytes32(String(context.settlement.newRoot)),
-    "--settlement_digest",
-    bytes32(String(context.settlement.settlementDigest)),
-    "--proof",
-    JSON.stringify({
-      circuit_hash: bytes32(proof.circuitHash),
-      circuit_id: bytes32(proof.circuitKey),
-      proof_digest: bytes32(proof.proofDigest),
-      public_input_hash: bytes32(proof.publicInputHash),
-      verifier_hash: bytes32(proof.verifierHash),
-    }),
-    "--filled_intents",
-    JSON.stringify(
-      (context.settlement.orderUpdates as Array<{ intentCommitment: string }>).map((update) =>
-        bytes32(update.intentCommitment),
-      ),
-    ),
-    "--new_commitments",
-    JSON.stringify(
-      (context.settlement.newCommitments as string[]).map((commitment) => bytes32(commitment)),
-    ),
-    "--margin_change_commitments",
-    JSON.stringify(
-      (context.settlement.marginChangeCommitments as string[]).map((commitment) =>
-        bytes32(commitment),
-      ),
-    ),
-    "--spent_nullifiers",
-    JSON.stringify(
-      (context.settlement.spentNullifiers as string[]).map((nullifier) => bytes32(nullifier)),
-    ),
-    "--volume",
-    String(context.settlement.aggregateVolume),
-    "--residual",
-    String(context.settlement.residualSize),
-  ]);
-
   waitForSettlement(deployment, batchKey, marketKey);
-  pushCloseOnChain(deployment, oracleContract, marketKey, context);
+  waitForProof(deployment, context.close.conditionalClose.proof);
+  waitForProof(deployment, context.close.positionClose.proof);
+  waitForPositionClose(deployment, context.close.closeCommitment);
 
   return {
     deployment: env.stellarDeploymentFile,
     batchSettlement: deployment.contracts["batch-settlement"],
     batchProofVerifier: risc0Verifier,
-    oracleContract,
+    conditionalOrder: deployment.contracts["conditional-order"],
+    positionClose: deployment.contracts["position-close"],
+    oracleContract: activeOracleContract(deployment),
     oracleKind: env.oracleKind,
     oracleAsset:
       context.asset.oracleAssetType === "stellar"
@@ -730,95 +1112,8 @@ function pushOnChain(context: MarketSmokeContext): Record<string, unknown> {
         : context.asset.oracleAssetSymbol,
     closeSettled: "true",
     isSettled: "true",
-    settlementMs: Date.now() - startedAt,
+    verificationMs: Date.now() - startedAt,
   };
-}
-
-function pushCloseOnChain(
-  deployment: Deployment,
-  oracleContract: string,
-  marketKey: string,
-  context: MarketSmokeContext,
-): void {
-  console.error(`[smoke] ${context.asset.symbol}: pushing conditional close on-chain`);
-  const closePriceContext = {
-    ...context,
-    oraclePrice: context.close.markPrice,
-    oraclePublishTime: Math.floor(Date.now() / 1000),
-  };
-  pushAdapterPrice(deployment, oracleContract, closePriceContext);
-  upsertMarket(deployment, marketKey, oracleContract, context.asset);
-
-  invoke(deployment.contracts["conditional-order"], "register", [
-    "--market_id",
-    marketKey,
-    "--position_nullifier",
-    bytes32(context.close.positionNullifier),
-    "--close_commitment",
-    bytes32(context.close.closeCommitment),
-  ]);
-
-  verifyAndRecord(
-    deployment,
-    "conditional-close-proof-verifier",
-    context.close.conditionalClose.proof,
-    proofArtifactDir("conditional-close", [
-      context.close.positionNullifier,
-      context.close.closeCommitment,
-      context.close.markPrice,
-    ]),
-  );
-  waitForProof(deployment, context.close.conditionalClose.proof);
-
-  invoke(deployment.contracts["conditional-order"], "trigger", [
-    "--market_id",
-    marketKey,
-    "--position_nullifier",
-    bytes32(context.close.positionNullifier),
-    "--close_commitment",
-    bytes32(context.close.closeCommitment),
-    "--mark_price",
-    context.close.markPrice.toString(),
-    "--proof",
-    proofMetaArg(context.close.conditionalClose.proof),
-  ]);
-
-  verifyAndRecord(
-    deployment,
-    "position-close-proof-verifier",
-    context.close.positionClose.proof,
-    proofArtifactDir("position-close", [
-      context.close.positionNullifier,
-      context.close.closeCommitment,
-      context.close.markPrice,
-    ]),
-  );
-  waitForProof(deployment, context.close.positionClose.proof);
-
-  invoke(deployment.contracts["position-close"], "settle", [
-    "--market_id",
-    marketKey,
-    "--position_root",
-    bytes32(context.close.positionClose.positionRoot),
-    "--position_commitment",
-    bytes32(context.close.positionClose.positionCommitment),
-    "--position_nullifier",
-    bytes32(context.close.positionClose.positionNullifier),
-    "--close_commitment",
-    bytes32(context.close.positionClose.closeCommitment),
-    "--mark_price",
-    context.close.positionClose.markPrice.toString(),
-    "--new_position_commitment",
-    bytes32(context.close.positionClose.newPositionCommitment),
-    "--new_position_root",
-    bytes32(context.close.positionClose.newPositionRoot),
-    "--margin_output_commitment",
-    bytes32(context.close.positionClose.marginOutputCommitment),
-    "--proof",
-    proofMetaArg(context.close.positionClose.proof),
-  ]);
-
-  waitForPositionClose(deployment, context.close.closeCommitment);
 }
 
 function activeOracleContract(deployment: Deployment): string {
@@ -828,7 +1123,7 @@ function activeOracleContract(deployment: Deployment): string {
 function pushAdapterPrice(
   deployment: Deployment,
   oracleContract: string,
-  context: MarketSmokeContext,
+  context: OraclePublishContext,
 ): void {
   if (oracleContract !== deployment.contracts["price-oracle"]) return;
 
@@ -878,80 +1173,6 @@ function pushAdapterPrice(
   );
 }
 
-function upsertMarket(
-  deployment: Deployment,
-  marketKey: string,
-  oracleContract: string,
-  asset: SupportedPerpAsset,
-): void {
-  if (!oracleContract) {
-    throw new Error("missing ORACLE_CONTRACT_ID for on-chain SEP-40 oracle settlement");
-  }
-  const isStellarAsset = asset.oracleAssetType === "stellar";
-  const oracleAsset = isStellarAsset ? asset.oracleAssetAddress : asset.oracleAssetSymbol;
-  const isBeam = env.oracleKind === "beam";
-  if (!oracleAsset) {
-    throw new Error(`missing oracle asset for ${asset.symbol}`);
-  }
-  if (isBeam && !env.oracleBeamFeeToken) {
-    throw new Error("missing ORACLE_BEAM_FEE_TOKEN for ReflectorBeam oracle settlement");
-  }
-
-  const method = isBeam
-    ? isStellarAsset
-      ? "upsert_beam_stellar"
-      : "upsert_beam_other"
-    : isStellarAsset
-      ? "upsert_stellar"
-      : "upsert_other";
-  const args = [
-    "--market_id",
-    marketKey,
-    "--oracle_contract",
-    oracleContract,
-    "--oracle_asset",
-    oracleAsset,
-  ];
-  if (isBeam) {
-    args.push("--beam_fee_token", env.oracleBeamFeeToken);
-  } else {
-    args.push("--oracle_kind", env.oracleKind);
-  }
-  args.push(
-    "--oracle_max_age",
-    String(env.oraclePriceMaxAgeSeconds),
-    "--oracle_twap_records",
-    String(env.oracleTwapRecords),
-    "--price_decimals",
-    String(env.oraclePriceDecimals),
-    "--max_leverage",
-    asset.maxLeverage.toString(),
-    "--initial_rate",
-    asset.initialMarginRate.toString(),
-    "--maintenance_rate",
-    asset.maintenanceMarginRate.toString(),
-    "--funding_index",
-    "0",
-    "--active",
-    "true",
-  );
-
-  invoke(deployment.contracts.market, method, args);
-}
-
-function submitIntent(deployment: Deployment, record: IntentRecord): void {
-  invoke(deployment.contracts["intent-registry"], "submit", [
-    "--batch_id",
-    bytes32(hashFields("batch-id", [record.batchId])),
-    "--market_id",
-    bytes32(hashFields("market-id", [record.marketId])),
-    "--intent_commitment",
-    bytes32(record.intentCommitment),
-    "--share_commitment",
-    bytes32(record.shareCommitment),
-  ]);
-}
-
 function waitForProof(deployment: Deployment, proof: ProofMeta): void {
   for (let attempt = 1; attempt <= 12; attempt += 1) {
     console.error(`[stellar] has_proof attempt ${attempt}`);
@@ -970,11 +1191,6 @@ function waitForProof(deployment: Deployment, proof: ProofMeta): void {
   }
 
   throw new Error(`proof was not recorded for ${proof.publicInputHash}`);
-}
-
-function requiredProofField(value: Hex | undefined, label: string): Hex {
-  if (!value) throw new Error(`proof is missing ${label}`);
-  return value;
 }
 
 function waitForSettlement(deployment: Deployment, batchKey: string, marketKey: string): void {
@@ -1007,55 +1223,10 @@ function waitForPositionClose(deployment: Deployment, closeCommitment: Hex): voi
   throw new Error(`position close was not settled for ${closeCommitment}`);
 }
 
-function verifyAndRecord(
-  deployment: Deployment,
-  verifierAuthority: string,
-  proof: ProofMeta,
-  artifactDir: string,
-): void {
-  invoke(deployment.verifiers[verifierAuthority], "verify_and_record", [
-    "--public_inputs-file-path",
-    join(artifactDir, "public_inputs"),
-    "--proof_bytes-file-path",
-    join(artifactDir, "proof"),
-    "--public_input_hash",
-    bytes32(proof.publicInputHash),
-    "--proof_digest",
-    bytes32(proof.proofDigest),
-  ]);
-}
-
-function proofArtifactDir(circuit: "conditional-close" | "position-close", fields: unknown[]): string {
-  return join(
-    process.cwd(),
-    `circuits/${circuit}/target/bb`,
-    `${circuit}-${hashFields("proof-artifact", fields).slice(2, 18)}`,
-  );
-}
-
-function assertPositionRootAligned(deployment: Deployment, context: MarketSmokeContext): void {
-  const chainRoot = currentPositionRoot(deployment);
-  const localOldRoot = normalizeRoot(String(context.settlement.oldRoot));
-  if (chainRoot === localOldRoot) return;
-
-  throw new Error(
-    [
-      "local smoke position root does not match deployed position-state current_root",
-      `market=${context.marketId}`,
-      `batch=${context.batchId}`,
-      `localOldRoot=${localOldRoot}`,
-      `chainCurrentRoot=${chainRoot}`,
-      `deployment=${env.stellarDeploymentFile}`,
-      "Use the matching PROTOCOL_STORE_PATH/PNLX_SMOKE_RUNTIME_DIR, or deploy a fresh position-state/batch-settlement set before running a live smoke.",
-    ].join("\n"),
-  );
-}
-
-function currentPositionRoot(deployment: Deployment): Hex {
-  const output = invoke(deployment.contracts["position-state"], "current_root", []);
-  const root = output.match(/\b[0-9a-fA-F]{64}\b/)?.[0];
-  if (!root) throw new Error(`could not parse position-state current_root\n${output}`);
-  return normalizeRoot(root);
+function addressDigestFor(address: string): Hex {
+  const deployment = readDeployment();
+  const output = invoke(deployment.contracts["shielded-pool"], "token_digest", ["--token", address]);
+  return parseHex32(output, `address digest for ${address}`);
 }
 
 function publisherSources(deployment: Deployment): { address: string; source: string }[] {
@@ -1069,19 +1240,24 @@ function publisherSources(deployment: Deployment): { address: string; source: st
 
 function resolveSourceAddress(source: string): string {
   if (/^G[A-Z0-9]{55}$/.test(source)) return source;
-  const result = spawnSync("stellar", ["keys", "address", source], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 30_000,
-  });
-  const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
-  if (result.status !== 0) {
-    throw new Error(`could not resolve publisher source ${source}\n${output}`);
-  }
+  const output = runStellar(["keys", "address", source]);
   const address = output.match(/\bG[A-Z0-9]{55}\b/)?.[0];
   if (!address) throw new Error(`could not parse publisher address for ${source}`);
   return address;
+}
+
+function runStellar(command: string[]): string {
+  const result = spawnSync("stellar", command, {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 120_000,
+  });
+  const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
+  if (result.status !== 0) {
+    throw new Error(`stellar ${command.join(" ")} failed\n${output}`);
+  }
+  return output;
 }
 
 function readDeployment(): Deployment {
@@ -1103,7 +1279,9 @@ function invoke(contractId: string, method: string, args: string[]): string {
 }
 
 function invokeFromSource(source: string, contractId: string, method: string, args: string[]): string {
-  const send = new Set(["current_root", "has_proof", "is_settled"]).has(method) ? "no" : "yes";
+  const send = new Set(["current_root", "has_proof", "is_settled", "token_digest"]).has(method)
+    ? "no"
+    : "yes";
   const command = [
     "stellar",
     "contract",
@@ -1178,9 +1356,10 @@ function feedIdFor(asset: SupportedPerpAsset): string {
   return env.pythFeedIds[asset.symbol] ?? asset.pythFeedId;
 }
 
-function tradeSize(price: bigint): bigint {
-  const targetNotionalUsd = 1_000n;
-  const size = (targetNotionalUsd * PRICE_SCALE + price - 1n) / price;
+function tradeSizeForMargin(margin: bigint, price: bigint, leverage: bigint): bigint {
+  const safeLeverage = leverage > 2n ? leverage / 2n : 1n;
+  const notional = margin * safeLeverage;
+  const size = (notional * PRICE_SCALE) / price;
   return size > 0n ? size : 1n;
 }
 
@@ -1188,8 +1367,9 @@ function tradeNotional(size: bigint, price: bigint): bigint {
   return (size * price) / PRICE_SCALE;
 }
 
-function tradeMargin(size: bigint, price: bigint, leverage: bigint): bigint {
-  return ceilDiv(tradeNotional(size, price), leverage);
+function scalePythPrice(value: bigint, expo: number): bigint {
+  if (expo >= 0) return value * 10n ** BigInt(expo) * PRICE_SCALE;
+  return (value * PRICE_SCALE) / 10n ** BigInt(-expo);
 }
 
 function effectiveLeverageBps(notional: bigint, margin: bigint): bigint {
@@ -1197,8 +1377,8 @@ function effectiveLeverageBps(notional: bigint, margin: bigint): bigint {
   return (notional * 10_000n) / margin;
 }
 
-function ceilDiv(value: bigint, divisor: bigint): bigint {
-  return (value + divisor - 1n) / divisor;
+function minBigInt(left: bigint, right: bigint): bigint {
+  return left < right ? left : right;
 }
 
 function sleep(ms: number): void {
@@ -1218,18 +1398,10 @@ function bytes32(hex: string): string {
   return hex.startsWith("0x") ? hex.slice(2) : hex;
 }
 
-function normalizeRoot(hex: string): Hex {
-  return `0x${bytes32(hex).toLowerCase().padStart(64, "0")}` as Hex;
-}
-
-function proofMetaArg(proof: ProofMeta): string {
-  return JSON.stringify({
-    circuit_hash: bytes32(proof.circuitHash),
-    circuit_id: bytes32(proof.circuitKey),
-    proof_digest: bytes32(proof.proofDigest),
-    public_input_hash: bytes32(proof.publicInputHash),
-    verifier_hash: bytes32(proof.verifierHash),
-  });
+function parseHex32(output: string, label: string): Hex {
+  const value = output.match(/(?:0x)?[0-9a-fA-F]{64}/)?.[0];
+  if (!value) throw new Error(`could not parse ${label}\n${output}`);
+  return value.startsWith("0x") ? (value.toLowerCase() as Hex) : (`0x${value.toLowerCase()}` as Hex);
 }
 
 function formatUsd(price: bigint): string {
@@ -1255,4 +1427,65 @@ function rateLabel(rate: bigint): string {
   const whole = bps / 100n;
   const frac = (bps % 100n).toString().padStart(2, "0");
   return `${whole}.${frac}%`;
+}
+
+function argValue(name: string): string | undefined {
+  const prefix = `${name}=`;
+  const direct = process.argv.find((entry) => entry.startsWith(prefix));
+  if (direct) return direct.slice(prefix.length);
+  const index = process.argv.indexOf(name);
+  return index >= 0 ? process.argv[index + 1] : undefined;
+}
+
+function randomLabel(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function privateKeyFromStellarSecret(secret: string) {
+  const decoded = base32Decode(secret.trim());
+  if (decoded.length !== 35) throw new Error("invalid stellar secret length");
+  const payload = decoded.subarray(0, 33);
+  const checksum = decoded.subarray(33);
+  const expected = crc16Xmodem(payload);
+  if (checksum[0] !== (expected & 0xff) || checksum[1] !== (expected >> 8)) {
+    throw new Error("invalid stellar secret checksum");
+  }
+  if (payload[0] !== ED25519_SECRET_KEY_VERSION) {
+    throw new Error("invalid stellar secret version");
+  }
+  return createPrivateKey({
+    key: Buffer.concat([ED25519_PKCS8_PREFIX, payload.subarray(1)]),
+    format: "der",
+    type: "pkcs8",
+  });
+}
+
+function base32Decode(value: string): Buffer {
+  let bits = 0;
+  let bitCount = 0;
+  const bytes: number[] = [];
+
+  for (const char of value.replace(/=+$/g, "").toUpperCase()) {
+    const index = BASE32_ALPHABET.indexOf(char);
+    if (index < 0) throw new Error("invalid stellar secret character");
+    bits = (bits << 5) | index;
+    bitCount += 5;
+    while (bitCount >= 8) {
+      bytes.push((bits >> (bitCount - 8)) & 0xff);
+      bitCount -= 8;
+    }
+  }
+
+  return Buffer.from(bytes);
+}
+
+function crc16Xmodem(value: Buffer): number {
+  let crc = 0;
+  for (const byte of value) {
+    crc ^= byte << 8;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+    }
+  }
+  return crc;
 }
