@@ -62,9 +62,9 @@ export interface ServerOwnerOrderSnapshot {
   createdAt: number;
   intentCommitment: Hex;
   isResidual: boolean;
+  matchingPayloadCommitment: Hex;
   marketId: string;
   residualCommitment?: Hex;
-  shareCommitment: Hex;
   sourceIntentCommitment?: Hex;
   status: "open" | "filled" | "partially-filled" | "cancelled";
   updatedAt: number;
@@ -119,13 +119,14 @@ export interface ServerIntentRecord {
   marketId: string;
   ownerCommitment: Hex;
   intentCommitment: Hex;
-  shareCommitment: Hex;
+  matchingPayloadCommitment: Hex;
   noteNullifier: Hex;
 }
 
 export interface AccountSnapshot {
   address: string;
   accountValue: number | null;
+  availableShieldedUsdc: number | null;
   cash: number | null;
   lockedMargin: number;
   livePnl: number;

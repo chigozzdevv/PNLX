@@ -16,8 +16,8 @@ const questions = [
   },
   {
     answer:
-      "Matching is designed around MPC-backed batch execution, while settlement is verified with ZK proofs and finalized through Soroban contracts on Stellar.",
-    question: "Where do MPC and ZK fit?",
+      "The matcher runs private batch execution off-chain and publishes a RISC0-backed settlement proof. Soroban finalizes only the proof-bound outcome.",
+    question: "Where does ZK fit?",
   },
   {
     answer:

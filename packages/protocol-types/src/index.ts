@@ -53,6 +53,19 @@ export interface TradeIntent {
   salt: string;
 }
 
+export interface PrivateMatchIntent {
+  batchId: string;
+  intentCommitment: Hex;
+  limitPrice: bigint;
+  margin: bigint;
+  marketId: string;
+  noteChangeCommitment: Hex;
+  noteNullifier: Hex;
+  ownerCommitment: Hex;
+  signedSize: bigint;
+  sourceIntentCommitment?: Hex;
+}
+
 export interface IntentRecord {
   batchId: string;
   batchDigest: Hex;
@@ -62,8 +75,9 @@ export interface IntentRecord {
   ownerCommitmentField: Hex;
   ownerCommitment: Hex;
   intentCommitment: Hex;
+  matchingPayloadCommitment: Hex;
+  noteChangeCommitment: Hex;
   proof: ProofMeta;
-  shareCommitment: Hex;
   noteNullifier: Hex;
 }
 
@@ -88,9 +102,9 @@ export interface ResidualOrderRecord {
   createdAt: number;
   intentCommitment: Hex;
   marketId: string;
+  matchingPayloadCommitment: Hex;
   noteNullifier: Hex;
   ownerCommitment: Hex;
-  shareCommitment: Hex;
   sourceIntentCommitment: Hex;
   updatedAt: number;
 }
@@ -117,11 +131,14 @@ export interface PositionLifecycleRecord {
 export interface IntentValidityWitness {
   assetDigest: Hex;
   blinding: Hex;
+  changeBlinding: Hex;
+  changeRhoDigest: Hex;
   currentBatch: bigint;
   expiryBatch: bigint;
   intent: TradeIntent;
   marginRoot: Hex;
   noteAmount: bigint;
+  noteChangeCommitment: Hex;
   noteCommitment: Hex;
   ownerDigest: Hex;
   pathIndices: boolean[];
@@ -136,6 +153,7 @@ export interface IntentValidityRecord {
   expiryBatch: bigint;
   intentCommitment: Hex;
   marketDigest: Hex;
+  noteChangeCommitment: Hex;
   noteCommitment: Hex;
   marginRoot: Hex;
   noteNullifier: Hex;
@@ -448,17 +466,4 @@ export interface AccountEncryptionKeyRecord {
   ownerCommitment: Hex;
   publicKey: string;
   updatedAt: number;
-}
-
-export interface FieldShare {
-  x: bigint;
-  y: bigint;
-}
-
-export interface IntentShares {
-  intentCommitment: Hex;
-  nodeId: string;
-  signedSize: FieldShare;
-  limitPrice: FieldShare;
-  margin: FieldShare;
 }

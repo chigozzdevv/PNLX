@@ -18,6 +18,7 @@ export interface IntentValidityRecord {
   intentCommitment: Hex;
   marketDigest: Hex;
   marginRoot: Hex;
+  noteChangeCommitment: Hex;
   noteCommitment: Hex;
   noteNullifier: Hex;
   ownerCommitmentField: Hex;
@@ -56,6 +57,8 @@ export interface ClientProofProvider {
     assetDigest: Hex;
     batchId: string;
     blinding: Hex;
+    changeBlinding: Hex;
+    changeRhoDigest: Hex;
     currentBatch: bigint;
     expiryBatch: bigint;
     limitPrice: bigint;
@@ -64,6 +67,7 @@ export interface ClientProofProvider {
     marketId: string;
     nonce: string;
     noteAmount: bigint;
+    noteChangeCommitment: Hex;
     noteCommitment: Hex;
     noteNullifier: Hex;
     owner: string;

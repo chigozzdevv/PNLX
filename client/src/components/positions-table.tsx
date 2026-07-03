@@ -172,7 +172,7 @@ function OrdersView({ orders }: { orders: ServerOwnerOrderSnapshot[] }) {
         <span>Residual</span>
         <span>Batch</span>
         <span>Updated</span>
-        <span>Shares</span>
+        <span>Matcher</span>
         <span />
       </div>
 
@@ -186,7 +186,7 @@ function OrdersView({ orders }: { orders: ServerOwnerOrderSnapshot[] }) {
           <span>{order.residualCommitment ? shortAddress(order.residualCommitment) : "--"}</span>
           <span>{order.batchId}</span>
           <span>{formatTime(order.updatedAt)}</span>
-          <span>{shortAddress(order.shareCommitment)}</span>
+          <span>{shortAddress(order.matchingPayloadCommitment)}</span>
           <span />
         </div>
       ))}

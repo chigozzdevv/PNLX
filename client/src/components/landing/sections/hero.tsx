@@ -2,7 +2,7 @@ import { ArrowRight } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 
-const signalItems = ["Private Margin", "MPC Matching", "ZK Settlement", "Soroban-Native"];
+const signalItems = ["Private Margin", "RISC0 Matching", "ZK Settlement", "Soroban-Native"];
 
 export function LandingHero() {
   return (

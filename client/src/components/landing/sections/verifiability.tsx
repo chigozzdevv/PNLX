@@ -1,6 +1,6 @@
 const trustLayerItems = [
   "Commitments/nullifiers",
-  "MPC-backed batch execution",
+  "RISC0-backed batch execution",
   "ZK margin, liquidation, and position circuits",
   "Soroban settlement",
   "Public aggregate market data",

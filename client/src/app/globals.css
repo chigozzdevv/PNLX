@@ -799,6 +799,16 @@ button:disabled {
   font-size: 18px;
 }
 
+.field-label .field-balance {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .privacy-note {
   display: inline-flex;
   align-items: center;
@@ -1111,6 +1121,21 @@ button:disabled {
   color: white;
   font-size: 15px;
   font-weight: 950;
+}
+
+.secondary-ticket-button {
+  min-height: 34px;
+  border: 1px solid rgba(39, 214, 139, 0.22);
+  border-radius: 6px;
+  background: rgba(39, 214, 139, 0.1);
+  color: var(--accent-green);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.secondary-ticket-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .primary-trade-button[data-side="long"] {

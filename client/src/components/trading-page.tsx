@@ -10,7 +10,7 @@ import { PositionsTable, type PositionsTableView } from "@/components/positions-
 import { PriceChart } from "@/components/price-chart";
 import { shortAddress } from "@/lib/format";
 import { closePosition } from "@/lib/position-close";
-import { submitTradeIntent } from "@/lib/trade-submit";
+import { depositPrivateMargin, submitTradeIntent } from "@/lib/trade-submit";
 import { useMarketCandles, type CandleInterval } from "@/lib/use-market-candles";
 import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useTradingData } from "@/lib/use-trading-data";
@@ -163,6 +163,15 @@ export function TradingPage() {
             <OrderTicket
               connected={Boolean(wallet.session)}
               key={liveSelectedMarket.marketId}
+              privateBalance={trading.data.account.availableShieldedUsdc}
+              onDeposit={async (input) => {
+                if (!wallet.session) throw new Error("Connect a wallet first");
+                await depositPrivateMargin({
+                  ...input,
+                  session: wallet.session,
+                });
+                setRefreshKey((value) => value + 1);
+              }}
               market={liveSelectedMarket}
               onSubmit={async (input: OrderTicketSubmitInput) => {
                 if (!wallet.session) throw new Error("Connect a wallet first");
@@ -179,7 +188,7 @@ export function TradingPage() {
                     intentCommitment: result.intent.intentCommitment,
                     isResidual: false,
                     marketId: result.intent.marketId,
-                    shareCommitment: result.intent.shareCommitment,
+                    matchingPayloadCommitment: result.intent.matchingPayloadCommitment,
                     status: "open",
                     updatedAt: submittedAt,
                   },

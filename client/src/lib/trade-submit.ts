@@ -11,14 +11,17 @@ import {
 import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
 import { createCircuitMarginNote, randomLabel } from "@/lib/private-note";
 import {
-  buildSharedIntentPayload,
-  getSharedIntentMpcConfig,
-  type IntentValidityForSharedSubmit,
-} from "@/lib/shared-intent";
+  lockPrivateMarginNote,
+  savePendingPrivateMarginChange,
+  savePrivateMarginNote,
+  selectPrivateMarginNote,
+} from "@/lib/private-margin-notes";
 import type { Hex, MarketDisplay, ServerIntentRecord, Side } from "@/types/trading";
 import type { WalletSession } from "@/lib/wallet-auth";
+import type { ServerProofMeta } from "@/types/trading";
 
 const PRICE_SCALE = 100_000_000;
+const ZERO_HEX = "0x0" as Hex;
 
 export type TradeSubmitStage = "hashing" | "shielding" | "signing" | "proving" | "matching" | "done";
 
@@ -36,11 +39,19 @@ interface DepositNoteResponse {
   };
 }
 
+interface MarginMembershipResponse {
+  note: DepositNoteResponse["note"] & {
+    commitment: Hex;
+    marginRoot: Hex;
+    membershipRoot: Hex;
+  };
+}
+
 interface ProveAndSubmitIntentResponse {
   intent: ServerIntentRecord;
 }
 
-type SharedIntentResponse = ServerIntentRecord | { intent: ServerIntentRecord };
+type IntentSubmitResponse = ServerIntentRecord | { intent: ServerIntentRecord };
 
 interface HealthResponse {
   custody: {
@@ -70,6 +81,19 @@ export interface SubmitTradeIntentInput {
 export interface SubmitTradeIntentResult {
   intent: ServerIntentRecord;
   protocolSize: bigint;
+}
+
+export interface DepositPrivateMarginInput {
+  amount: number;
+  collateralAsset: "USDC";
+  onProgress?: (stage: TradeSubmitStage) => void;
+  proofProvider?: ClientProofProvider;
+  session: WalletSession;
+}
+
+export interface DepositPrivateMarginResult {
+  amount: bigint;
+  commitment: Hex;
 }
 
 export async function submitTradeIntent(input: SubmitTradeIntentInput): Promise<SubmitTradeIntentResult> {
@@ -169,15 +193,6 @@ async function submitDevWitnessTradeIntent(
   const submittedIntent = intentRecordFromResponse(response);
   markProgress(input, "matching");
 
-  storePrivateTradeNote({
-    amount: input.marginProtocol.toString(),
-    commitment: note.commitment,
-    createdAt: Date.now(),
-    intentCommitment: submittedIntent.intentCommitment,
-    marketId: input.market.marketId,
-    noteNullifier: note.noteNullifier,
-    ownerCommitment: input.session.ownerCommitment,
-  });
   storePendingConditionalStrategy(submittedIntent.intentCommitment, input);
   markProgress(input, "done");
 
@@ -210,24 +225,24 @@ async function submitCustodySharedTradeIntent(
   }
 
   markProgress(input, "shielding");
-  const prepared = await prepareWalletAssetDeposit({
+  const note = selectPrivateMarginNote({
     amount: input.marginProtocol,
     assetDigest: input.collateralTokenDigest,
-    assetId: input.collateralAsset.toLowerCase(),
-    proofProvider,
-    session: input.session,
-    token: input.collateralToken,
+    ownerCommitment: input.session.ownerCommitment,
   });
-  markProgress(input, "signing");
-  const relay = await signAndRelayPreparedDeposit({
-    prepared: prepared.prepared,
-    session: input.session,
-  });
-  const finalized = await finalizeWalletAssetDeposit({
-    prepared: prepared.prepared,
-    relay,
-    session: input.session,
-  });
+  const noteAmount = BigInt(note.amount);
+  const changeAmount = noteAmount - input.marginProtocol;
+  const changeNote = changeAmount > 0n
+    ? await createCircuitMarginNote({
+        amount: changeAmount,
+        assetDigest: note.assetDigest,
+        blinding: randomLabel("change-blind"),
+        owner: input.session.address,
+        rho: randomLabel("change-rho"),
+        spendSecret: randomLabel("change-spend"),
+      })
+    : undefined;
+  const membership = await freshMarginMembership(note.commitment, input.session.token);
   markProgress(input, "proving");
   const intent = {
     batchId: `ui-${Date.now()}-${input.market.marketId}`,
@@ -235,7 +250,7 @@ async function submitCustodySharedTradeIntent(
     margin: input.marginProtocol,
     marketId: input.market.marketId,
     nonce: randomLabel("nonce"),
-    noteNullifier: prepared.note.noteNullifier,
+    noteNullifier: note.noteNullifier,
     owner: input.session.address,
     salt: randomLabel("salt"),
     side: input.side,
@@ -243,53 +258,70 @@ async function submitCustodySharedTradeIntent(
   };
   const validity = await registerProofBundle(
     await proofProvider.intentValidity({
-      assetDigest: prepared.note.assetDigest,
+      assetDigest: note.assetDigest,
       batchId: intent.batchId,
-      blinding: prepared.note.blinding,
+      blinding: note.blinding,
+      changeBlinding: changeNote?.blinding ?? ZERO_HEX,
+      changeRhoDigest: changeNote?.rhoDigest ?? ZERO_HEX,
       currentBatch: 1n,
       expiryBatch: 2n,
       limitPrice: intent.limitPrice,
       margin: intent.margin,
-      marginRoot: finalized.membershipProof.root,
+      marginRoot: membership.membershipProof.root,
       marketId: intent.marketId,
       nonce: intent.nonce,
-      noteAmount: prepared.note.amount,
-      noteCommitment: prepared.note.commitment,
-      noteNullifier: prepared.note.noteNullifier,
+      noteAmount,
+      noteChangeCommitment: changeNote?.commitment ?? ZERO_HEX,
+      noteCommitment: note.commitment,
+      noteNullifier: note.noteNullifier,
       owner: intent.owner,
-      ownerDigest: prepared.note.ownerDigest,
-      pathIndices: finalized.membershipProof.indices,
-      pathSiblings: finalized.membershipProof.siblings,
-      rhoDigest: prepared.note.rhoDigest,
+      ownerDigest: note.ownerDigest,
+      pathIndices: membership.membershipProof.indices,
+      pathSiblings: membership.membershipProof.siblings,
+      rhoDigest: note.rhoDigest,
       salt: intent.salt,
       side: intent.side,
       size: intent.size,
-      spendSecretDigest: prepared.note.spendSecretDigest,
+      spendSecretDigest: note.spendSecretDigest,
     }),
     input.session.token,
   );
-  const payload = await buildSharedIntentPayload({
-    intent,
-    mpc: await getSharedIntentMpcConfig(input.session.token),
-    validity: normalizeIntentValidity(validity),
-  });
+  const validityRecord = normalizeIntentValidity(validity);
   markProgress(input, "matching");
-  const response = await pnlxPost<SharedIntentResponse>(
-    "/intents/shared",
-    payload,
+  const response = await pnlxPost<IntentSubmitResponse>(
+    "/intents",
+    {
+      intent: {
+        ...intent,
+        limitPrice: intent.limitPrice.toString(),
+        margin: intent.margin.toString(),
+        size: intent.size.toString(),
+      },
+      validity: {
+        ...validityRecord,
+        currentBatch: validityRecord.currentBatch.toString(),
+        expiryBatch: validityRecord.expiryBatch.toString(),
+      },
+    },
     input.session.token,
   );
   const submittedIntent = intentRecordFromResponse(response);
-
-  storePrivateTradeNote({
-    amount: input.marginProtocol.toString(),
-    commitment: prepared.note.commitment,
-    createdAt: Date.now(),
-    intentCommitment: submittedIntent.intentCommitment,
-    marketId: input.market.marketId,
-    noteNullifier: prepared.note.noteNullifier,
-    ownerCommitment: input.session.ownerCommitment,
-  });
+  if (changeNote) {
+    savePendingPrivateMarginChange({
+      amount: changeNote.amount.toString(),
+      assetDigest: changeNote.assetDigest,
+      blinding: changeNote.blinding,
+      commitment: changeNote.commitment,
+      lockedByIntentCommitment: submittedIntent.intentCommitment,
+      noteNullifier: changeNote.noteNullifier,
+      ownerCommitment: input.session.ownerCommitment,
+      ownerDigest: changeNote.ownerDigest,
+      rhoDigest: changeNote.rhoDigest,
+      spendSecretDigest: changeNote.spendSecretDigest,
+      walletAddress: input.session.address,
+    });
+  }
+  lockPrivateMarginNote(note.commitment, submittedIntent.intentCommitment);
   storePendingConditionalStrategy(submittedIntent.intentCommitment, input);
   markProgress(input, "done");
 
@@ -299,7 +331,62 @@ async function submitCustodySharedTradeIntent(
   };
 }
 
-function intentRecordFromResponse(response: ProveAndSubmitIntentResponse | SharedIntentResponse): ServerIntentRecord {
+export async function depositPrivateMargin(input: DepositPrivateMarginInput): Promise<DepositPrivateMarginResult> {
+  const amount = toPositiveInteger(input.amount, "Private margin");
+  const proofProvider = input.proofProvider ?? defaultClientProofProvider();
+  if (!proofProvider) throw new Error("Client proof provider is not configured");
+
+  markProgress(input, "shielding");
+  const health = await pnlxGet<HealthResponse>("/health", input.session.token);
+  if (!health.custody.required) {
+    throw new Error("Asset custody is not enabled");
+  }
+  if (!health.custody.collateralAsset.tokenContract) {
+    throw new Error("Collateral token contract is not configured");
+  }
+  if (!health.custody.collateralAsset.tokenDigest) {
+    throw new Error("Collateral token digest is not configured");
+  }
+
+  const prepared = await prepareWalletAssetDeposit({
+    amount,
+    assetDigest: health.custody.collateralAsset.tokenDigest,
+    assetId: input.collateralAsset.toLowerCase(),
+    proofProvider,
+    session: input.session,
+    token: health.custody.collateralAsset.tokenContract,
+  });
+  markProgress(input, "signing");
+  const relay = await signAndRelayPreparedDeposit({
+    prepared: prepared.prepared,
+    session: input.session,
+  });
+  await finalizeWalletAssetDeposit({
+    prepared: prepared.prepared,
+    relay,
+    session: input.session,
+  });
+  savePrivateMarginNote({
+    amount: prepared.note.amount.toString(),
+    assetDigest: prepared.note.assetDigest,
+    blinding: prepared.note.blinding,
+    commitment: prepared.note.commitment,
+    noteNullifier: prepared.note.noteNullifier,
+    ownerCommitment: input.session.ownerCommitment,
+    ownerDigest: prepared.note.ownerDigest,
+    rhoDigest: prepared.note.rhoDigest,
+    spendSecretDigest: prepared.note.spendSecretDigest,
+    walletAddress: input.session.address,
+  });
+  markProgress(input, "done");
+
+  return {
+    amount,
+    commitment: prepared.note.commitment,
+  };
+}
+
+function intentRecordFromResponse(response: ProveAndSubmitIntentResponse | IntentSubmitResponse): ServerIntentRecord {
   const candidate = response && typeof response === "object" && "intent" in response
     ? response.intent
     : response;
@@ -357,16 +444,37 @@ function normalizeIntentValidity(input: {
   intentCommitment: Hex;
   marketDigest: Hex;
   marginRoot: Hex;
+  noteChangeCommitment: Hex;
   noteCommitment: Hex;
   noteNullifier: Hex;
   ownerCommitmentField: Hex;
-  proof: IntentValidityForSharedSubmit["proof"];
-}): IntentValidityForSharedSubmit {
+  proof: ServerProofMeta;
+}): {
+  batchDigest: Hex;
+  currentBatch: bigint;
+  expiryBatch: bigint;
+  intentCommitment: Hex;
+  marketDigest: Hex;
+  marginRoot: Hex;
+  noteChangeCommitment: Hex;
+  noteCommitment: Hex;
+  noteNullifier: Hex;
+  ownerCommitmentField: Hex;
+  proof: ServerProofMeta;
+} {
   return {
     ...input,
     currentBatch: BigInt(input.currentBatch),
     expiryBatch: BigInt(input.expiryBatch),
   };
+}
+
+async function freshMarginMembership(commitment: Hex, token?: string): Promise<MarginMembershipResponse["note"]> {
+  const response = await pnlxGet<MarginMembershipResponse>(
+    `/notes/membership?commitment=${encodeURIComponent(commitment)}`,
+    token,
+  );
+  return response.note;
 }
 
 function protocolSizeFromTicket(margin: number, leverage: number, price: number): bigint {
@@ -384,22 +492,6 @@ function toPrice(value: number): bigint {
   const scaled = BigInt(Math.round(value * PRICE_SCALE));
   if (scaled <= 0n) throw new Error("Price must be positive");
   return scaled;
-}
-
-function storePrivateTradeNote(note: {
-  amount: string;
-  commitment: Hex;
-  createdAt: number;
-  intentCommitment: Hex;
-  marketId: string;
-  noteNullifier: Hex;
-  ownerCommitment: Hex;
-}): void {
-  if (typeof window === "undefined") return;
-  const key = "pnlx.private.trade-notes";
-  const existing = window.localStorage.getItem(key);
-  const notes = existing ? JSON.parse(existing) as unknown[] : [];
-  window.localStorage.setItem(key, JSON.stringify([...notes, note]));
 }
 
 function storePendingConditionalStrategy(

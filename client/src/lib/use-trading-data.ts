@@ -7,6 +7,7 @@ import {
   type PrivateAccountEventPayload,
 } from "@/lib/account-encryption";
 import { pnlxGet } from "@/lib/pnlx-api";
+import { privateSpendableBalance, reconcilePrivateMarginNotes } from "@/lib/private-margin-notes";
 import { priceFromOracleString, rateFromMicroBps } from "@/lib/format";
 import type {
   AccountSnapshot,
@@ -84,6 +85,7 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
   );
   if (session && portfolio) {
     void syncPrivateConditionalOrders(session, portfolio.accountEvents);
+    reconcilePrivateMarginNotes({ orders: portfolio.orders });
   }
   const privateOpenings = new Map(
     (session && portfolio ? await decryptPrivateOpenings(session, portfolio.accountEvents) : [])
@@ -94,13 +96,14 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
     const opening = privateOpenings.get(position.positionCommitment);
     return total + usdcAmount(opening?.margin);
   }, 0) ?? 0;
+  const spendablePrivateMargin = session ? usdcAmount(privateSpendableBalance(session.ownerCommitment).toString()) : 0;
   const markets = canonicalMarkets(marketsResponse.markets).map((market) =>
     marketDisplayFromServer(market, publicMarkets.get(market.marketId)),
   );
   const marketPrices = new Map(markets.map((market) => [market.marketId, market.price]));
 
   return {
-    account: accountFromServer(session, portfolio, lockedMargin),
+    account: accountFromServer(session, portfolio, lockedMargin, spendablePrivateMargin),
     accountEventCount: portfolio?.accountEvents.length ?? 0,
     activity: portfolio?.activities ?? [],
     markets,
@@ -179,16 +182,19 @@ function accountFromServer(
   session: WalletSession | null,
   portfolio: ServerPortfolioSnapshot | undefined,
   lockedMargin = 0,
+  spendablePrivateMargin = 0,
 ): AccountSnapshot {
+  const privateTotal = lockedMargin + spendablePrivateMargin;
   return {
     address: session?.address ?? "",
-    accountValue: lockedMargin > 0 ? lockedMargin : null,
-    cash: null,
+    accountValue: privateTotal > 0 ? privateTotal : null,
+    availableShieldedUsdc: spendablePrivateMargin > 0 ? spendablePrivateMargin : null,
+    cash: spendablePrivateMargin > 0 ? spendablePrivateMargin : null,
     lockedMargin,
     livePnl: 0,
     marginRoot: portfolio?.publicState.marginRoot ?? portfolio?.publicState.marginMembershipRoot ?? ZERO_ROOT,
     privacyMode: "shielded",
-    shieldedUsdc: lockedMargin > 0 ? lockedMargin : null,
+    shieldedUsdc: privateTotal > 0 ? privateTotal : null,
   };
 }
 

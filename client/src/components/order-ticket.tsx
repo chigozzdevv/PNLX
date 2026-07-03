@@ -10,8 +10,10 @@ import type { MarketDisplay, OrderDraft, Side } from "@/types/trading";
 interface OrderTicketProps {
   connected?: boolean;
   market: MarketDisplay;
+  onDeposit?: (input: OrderTicketDepositInput) => Promise<void>;
   onSubmit?: (input: OrderTicketSubmitInput) => Promise<SubmitTradeIntentResult>;
   order: OrderDraft;
+  privateBalance?: number | null;
 }
 
 export interface OrderTicketSubmitInput {
@@ -27,9 +29,22 @@ export interface OrderTicketSubmitInput {
   takeProfitPrice?: number | null;
 }
 
+export interface OrderTicketDepositInput {
+  amount: number;
+  collateralAsset: "USDC";
+  onProgress?: (stage: TradeSubmitStage) => void;
+}
+
 type ConditionMode = "percent" | "price";
 
-export function OrderTicket({ connected = false, market, onSubmit, order }: OrderTicketProps) {
+export function OrderTicket({
+  connected = false,
+  market,
+  onDeposit,
+  onSubmit,
+  order,
+  privateBalance,
+}: OrderTicketProps) {
   const [side, setSide] = useState<Side>(order.side);
   const [orderType, setOrderType] = useState<"market" | "limit">("market");
   const [tpSlEnabled, setTpSlEnabled] = useState(false);
@@ -38,6 +53,7 @@ export function OrderTicket({ connected = false, market, onSubmit, order }: Orde
   const [submitStage, setSubmitStage] = useState<TradeSubmitStage | undefined>();
   const [submitSuccess, setSubmitSuccess] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
+  const [depositing, setDepositing] = useState(false);
   const [margin, setMargin] = useState(order.collateral);
   const [limitPrice, setLimitPrice] = useState(market.price);
   const [slippagePercent, setSlippagePercent] = useState(0.5);
@@ -59,7 +75,8 @@ export function OrderTicket({ connected = false, market, onSubmit, order }: Orde
   const stopLossPnl = estimatePnl(side, size, activePrice, stopLossPrice);
   const takeProfitPercent = percentFromPnl("tp", takeProfitPnl, margin);
   const stopLossPercent = percentFromPnl("sl", stopLossPnl, margin);
-  const canSubmit = connected && Boolean(onSubmit) && !submitting;
+  const canSubmit = connected && Boolean(onSubmit) && !submitting && !depositing;
+  const canDeposit = connected && Boolean(onDeposit) && !depositing && margin > 0;
   const liquidationPrice = useMemo(() => {
     const riskMove = leverage > 0 ? 1 / leverage - market.maintenanceMarginRate : 0;
     return side === "long" ? activePrice * (1 - riskMove) : activePrice * (1 + riskMove);
@@ -126,6 +143,36 @@ export function OrderTicket({ connected = false, market, onSubmit, order }: Orde
       setSubmitError(error instanceof Error ? error.message : "Trade submission failed");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function depositMargin() {
+    if (!connected) {
+      setSubmitError("Connect a wallet first");
+      return;
+    }
+    if (!onDeposit) {
+      setSubmitError("Deposit is not configured");
+      return;
+    }
+
+    setSubmitError(undefined);
+    setSubmitSuccess(undefined);
+    setSubmitStage("shielding");
+    setDepositing(true);
+    try {
+      await onDeposit({
+        amount: margin,
+        collateralAsset: order.collateralAsset,
+        onProgress: setSubmitStage,
+      });
+      setSubmitStage("done");
+      setSubmitSuccess(`${formatUsd(margin, { maximumFractionDigits: 2 })} deposited`);
+    } catch (error) {
+      setSubmitStage(undefined);
+      setSubmitError(error instanceof Error ? error.message : "Deposit failed");
+    } finally {
+      setDepositing(false);
     }
   }
 
@@ -214,6 +261,11 @@ export function OrderTicket({ connected = false, market, onSubmit, order }: Orde
       <div className="ticket-field">
         <div className="field-label">
           <span>Private Margin</span>
+          <strong className="field-balance">
+            {privateBalance === null || privateBalance === undefined
+              ? "Private"
+              : formatUsd(privateBalance, { maximumFractionDigits: 2 })}
+          </strong>
         </div>
         <div className="field-control">
           <input
@@ -227,6 +279,14 @@ export function OrderTicket({ connected = false, market, onSubmit, order }: Orde
             {order.collateralAsset}
           </div>
         </div>
+        <button
+          className="secondary-ticket-button"
+          disabled={!canDeposit}
+          type="button"
+          onClick={depositMargin}
+        >
+          {depositing ? "Depositing" : "Deposit"}
+        </button>
       </div>
 
       <div className="ticket-field">
