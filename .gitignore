@@ -1,6 +1,7 @@
 node_modules/
 .env
 .pnlx/
+.pnlx-*/
 .cache/
 .next/
 client/.next/
