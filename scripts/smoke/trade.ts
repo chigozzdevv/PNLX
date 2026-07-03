@@ -110,6 +110,7 @@ const makerSource = argValue("--maker-source") ?? process.env.PNLX_MAKER_SOURCE 
 const adminSession = await authSessionFor(env.stellarSource);
 const makerSession = await authSessionFor(makerSource);
 const marketAssets = resolveMarketAssets();
+const smokeTradeMargin = parseSmokeTradeMargin();
 const results = [];
 
 for (const asset of marketAssets) {
@@ -146,8 +147,8 @@ async function runMarketSmoke(asset: SupportedPerpAsset): Promise<Record<string,
   const oracle = marketResponse.oracle as Record<string, string | number>;
   const oraclePrice = BigInt(market.oraclePrice);
   const oraclePublishTime = Number(oracle.publishTime);
-  const [longNote, shortNote] = await ensureLiveMakerNotes(asset);
-  const margin = minBigInt(BigInt(longNote.amount), BigInt(shortNote.amount));
+  const [longNote, shortNote] = await ensureLiveMakerNotes(asset, smokeTradeMargin);
+  const margin = smokeTradeMargin ?? minBigInt(BigInt(longNote.amount), BigInt(shortNote.amount));
   const size = tradeSizeForMargin(margin, oraclePrice, asset.maxLeverage);
   const notional = tradeNotional(size, oraclePrice);
   const leverageBps = effectiveLeverageBps(notional, margin);
@@ -209,6 +210,7 @@ async function runMarketSmoke(asset: SupportedPerpAsset): Promise<Record<string,
     entryPrice,
     fundingIndex: BigInt(market.fundingIndex ?? "0"),
     margin,
+    marginAssetDigest: alice.assetDigest as Hex,
     marketId,
     settlement,
     size,
@@ -284,25 +286,39 @@ function configureSmokeEnvironment(): void {
   process.env.ORACLE_CONTRACT_ID ||= deployment.contracts["price-oracle"] ?? "";
 }
 
-async function ensureLiveMakerNotes(asset: SupportedPerpAsset): Promise<[StoredMakerNote, StoredMakerNote]> {
+async function ensureLiveMakerNotes(
+  asset: SupportedPerpAsset,
+  targetMargin?: bigint,
+): Promise<[StoredMakerNote, StoredMakerNote]> {
   let notes = availableMakerNotes();
-  if (notes.length < 2) {
-    const largest = notes.sort((left, right) => Number(BigInt(right.amount) - BigInt(left.amount)))[0];
+  const usableNotes = () =>
+    targetMargin
+      ? availableMakerNotes().filter((note) => BigInt(note.amount) === targetMargin)
+      : availableMakerNotes();
+
+  while (usableNotes().length < 2) {
+    const largest = notes
+      .filter((note) => !targetMargin || BigInt(note.amount) > targetMargin)
+      .sort((left, right) => Number(BigInt(right.amount) - BigInt(left.amount)))[0];
     if (!largest) throw new Error("no available maker notes; run smoke:custody first");
-    console.error(`[smoke] ${asset.symbol}: splitting maker note ${largest.commitment}`);
-    await splitMakerNote(largest);
+    console.error(
+      `[smoke] ${asset.symbol}: splitting maker note ${largest.commitment}` +
+        (targetMargin ? ` for margin ${targetMargin}` : ""),
+    );
+    await splitMakerNote(largest, targetMargin);
     notes = availableMakerNotes();
   }
+  notes = usableNotes();
   if (notes.length < 2) {
     throw new Error("live trade needs two available maker notes after split");
   }
   return [notes[0], notes[1]];
 }
 
-async function splitMakerNote(note: StoredMakerNote): Promise<void> {
+async function splitMakerNote(note: StoredMakerNote, targetAmount?: bigint): Promise<void> {
   if (!note.spendSecret) throw new Error(`maker note ${note.commitment} is missing spendSecret`);
   const noteAmount = BigInt(note.amount);
-  const withdrawAmount = noteAmount / 2n;
+  const withdrawAmount = targetAmount ?? noteAmount / 2n;
   const changeAmount = noteAmount - withdrawAmount;
   if (withdrawAmount <= 0n || changeAmount <= 0n) {
     throw new Error(`maker note ${note.commitment} is too small to split`);
@@ -670,6 +686,15 @@ function smokeMatcherTimeoutMs(): number {
   return parsed;
 }
 
+function parseSmokeTradeMargin(): bigint | undefined {
+  const raw = argValue("--margin") ?? process.env.PNLX_SMOKE_TRADE_MARGIN ?? "2000000";
+  const parsed = BigInt(raw);
+  if (parsed <= 0n) {
+    throw new Error(`smoke trade margin must be positive, got ${raw}`);
+  }
+  return parsed;
+}
+
 async function closeLongTakeProfit(input: {
   aliceRecord: IntentRecord;
   asset: SupportedPerpAsset;
@@ -677,6 +702,7 @@ async function closeLongTakeProfit(input: {
   entryPrice: bigint;
   fundingIndex: bigint;
   margin: bigint;
+  marginAssetDigest: Hex;
   marketId: string;
   ownerAddress: string;
   settlement: Record<string, unknown>;
@@ -741,9 +767,10 @@ async function closeLongTakeProfit(input: {
     fee: 0n,
   });
   const marginOutput = createCircuitMarginNote({
+    assetDigest: input.marginAssetDigest,
     assetId: "usdc",
     amount: closeSettlement.newMargin,
-    owner: input.aliceRecord.ownerCommitment,
+    owner: input.ownerAddress,
     spendSecret: `${positionNullifier}:close-margin-spend`,
     rho: `${positionNullifier}:close-margin-rho`,
     blinding: `${positionNullifier}:close-margin-blinding`,
@@ -789,6 +816,17 @@ async function closeLongTakeProfit(input: {
   });
   const closeResponse = await post("/position-closes/proven", provenClose, makerSession.headers);
   const positionClose = closeResponse.positionClose as PositionCloseRecord;
+  saveMakerNotes([
+    storedNoteFromCircuit(marginOutput, {
+      shieldedPool: readDeployment().contracts["shielded-pool"],
+      source: makerSource,
+      spendSecret: `${positionNullifier}:close-margin-spend`,
+      status: "available",
+      token: env.collateralTokenContract,
+      walletAddress: input.ownerAddress,
+    }),
+    ...readMakerNotes(),
+  ]);
 
   return {
     closeCommitment,
