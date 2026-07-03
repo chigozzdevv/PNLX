@@ -15,7 +15,7 @@ pub enum DataKey {
 pub struct IntentMeta {
     pub batch_id: BytesN<32>,
     pub market_id: BytesN<32>,
-    pub share_commitment: BytesN<32>,
+    pub matching_payload_commitment: BytesN<32>,
 }
 
 #[contract]
@@ -28,7 +28,7 @@ impl IntentRegistry {
         batch_id: BytesN<32>,
         market_id: BytesN<32>,
         intent_commitment: BytesN<32>,
-        share_commitment: BytesN<32>,
+        matching_payload_commitment: BytesN<32>,
     ) {
         let intent_key = DataKey::Intent(intent_commitment.clone());
         if env.storage().persistent().has(&intent_key) {
@@ -38,7 +38,7 @@ impl IntentRegistry {
         let meta = IntentMeta {
             batch_id: batch_id.clone(),
             market_id: market_id.clone(),
-            share_commitment,
+            matching_payload_commitment,
         };
         env.storage().persistent().set(&intent_key, &meta);
         env.storage()

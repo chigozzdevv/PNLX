@@ -125,12 +125,12 @@ impl BatchSettlement {
             volume,
             &proof,
         );
-        validate_active_intents(&env, &filled_intents);
-
         let batch_key = DataKey::Batch(batch_id, market_id.clone());
         if env.storage().persistent().has(&batch_key) {
             panic!("batch settled");
         }
+        validate_active_intents(&env, &filled_intents);
+        consume_filled_intents(&env, &filled_intents);
         let oracle = checked_market_price(&env, &market_id);
         advance_position_root(&env, &old_root, &new_root);
 
@@ -179,6 +179,19 @@ fn validate_active_intents(env: &Env, filled_intents: &Vec<BytesN<32>>) {
             panic!("inactive intent");
         }
         seen.push_back(intent);
+    }
+}
+
+fn consume_filled_intents(env: &Env, filled_intents: &Vec<BytesN<32>>) {
+    let registry_id: Address = env
+        .storage()
+        .persistent()
+        .get(&DataKey::IntentRegistry)
+        .unwrap_or_else(|| panic!("not initialized"));
+    let registry = IntentRegistryClient::new(env, &registry_id);
+
+    for intent in filled_intents.iter() {
+        registry.cancel(&intent);
     }
 }
 
@@ -392,15 +405,17 @@ mod tests {
         let old_root = BytesN::from_array(&env, &[3; 32]);
         let new_root = BytesN::from_array(&env, &[4; 32]);
         let proof = proof(&env);
+        let intent_registry = setup_intent_registry(&env, false);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
             &setup_position_state(&env, &id, &old_root),
-            &setup_intent_registry(&env, false),
+            &intent_registry,
             &circuit(&env),
         );
 
+        let filled = filled_intents(&env);
         client.settle(
             &batch,
             &market,
@@ -408,7 +423,7 @@ mod tests {
             &new_root,
             &settlement_digest(&env),
             &proof,
-            &filled_intents(&env),
+            &filled,
             &new_commitments(&env),
             &margin_change_commitments(&env),
             &spent_nullifiers(&env),
@@ -417,6 +432,11 @@ mod tests {
         );
         assert!(client.is_settled(&batch, &market));
         assert!(client.has_root(&new_root));
+        let registry = IntentRegistryClient::new(&env, &intent_registry);
+        for intent in filled.iter() {
+            assert!(!registry.is_active_intent(&intent));
+            assert!(registry.is_cancelled(&intent));
+        }
     }
 
     #[test]

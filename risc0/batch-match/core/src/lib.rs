@@ -39,6 +39,7 @@ pub struct RecoveredIntent {
     pub limit_price: String,
     pub margin: String,
     pub market_id: String,
+    pub note_change_commitment: String,
     pub note_nullifier: String,
     pub owner_commitment: String,
     pub signed_size: String,
@@ -488,7 +489,7 @@ fn create_residuals(request: &ProofRequest, orders: &[BookOrder]) -> Vec<Residua
 }
 
 fn create_margin_change_commitments(orders: &[BookOrder]) -> Vec<String> {
-    orders
+    let mut commitments = orders
         .iter()
         .filter(|order| order.filled > 0 && order.remaining > 0)
         .map(|order| {
@@ -511,7 +512,14 @@ fn create_margin_change_commitments(orders: &[BookOrder]) -> Vec<String> {
                 ],
             )
         })
-        .collect()
+        .collect::<Vec<_>>();
+    commitments.extend(
+        orders
+            .iter()
+            .filter(|order| order.filled > 0 && order.intent.note_change_commitment != "0x0")
+            .map(|order| order.intent.note_change_commitment.clone()),
+    );
+    commitments
 }
 
 fn residual_commitment(order: &BookOrder) -> String {

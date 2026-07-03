@@ -5,13 +5,18 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+alloy = { version = "1.0.34", default-features = false, features = ["signer-local"] }
 anyhow.workspace = true
+boundless-market = { version = "2.0.1", default-features = false }
+clap = { version = "4.5", features = ["derive", "env", "string"] }
 hex.workspace = true
 pnlx-risc0-batch-match-core = { path = "../core" }
 pnlx-risc0-methods = { path = "../methods" }
-risc0-ethereum-contracts.workspace = true
-risc0-zkvm = { workspace = true, features = ["prove", "disable-dev-mode"] }
+risc0-zkvm = { workspace = true, features = ["client", "std"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2.5"
