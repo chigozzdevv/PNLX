@@ -6,8 +6,14 @@ import {
   syncPrivateConditionalOrders,
   type PrivateAccountEventPayload,
 } from "@/lib/account-encryption";
+import { protocolBaseToDisplay, protocolUsdcToDisplay } from "@/lib/asset-units";
 import { pnlxGet } from "@/lib/pnlx-api";
-import { privateSpendableBalance, reconcilePrivateMarginNotes } from "@/lib/private-margin-notes";
+import {
+  privatePendingBalance,
+  privateReservedBalance,
+  privateSpendableBalance,
+  reconcilePrivateMarginNotes,
+} from "@/lib/private-margin-notes";
 import { priceFromOracleString, rateFromMicroBps } from "@/lib/format";
 import type {
   AccountSnapshot,
@@ -42,10 +48,24 @@ const SUPPORTED_MARKET_IDS = new Set(SUPPORTED_MARKET_ORDER);
 
 export function useTradingData(session: WalletSession | null, refreshKey = 0): TradingDataState {
   const emptyData = useMemo(() => emptyLiveData(session), [session]);
+  const [privateNotesVersion, setPrivateNotesVersion] = useState(0);
   const [state, setState] = useState<TradingDataState>({
     data: emptyData,
     loading: true,
   });
+
+  useEffect(() => {
+    function refreshPrivateNotes() {
+      setPrivateNotesVersion((value) => value + 1);
+    }
+
+    window.addEventListener("pnlx:private-margin-notes", refreshPrivateNotes);
+    window.addEventListener("storage", refreshPrivateNotes);
+    return () => {
+      window.removeEventListener("pnlx:private-margin-notes", refreshPrivateNotes);
+      window.removeEventListener("storage", refreshPrivateNotes);
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -67,19 +87,21 @@ export function useTradingData(session: WalletSession | null, refreshKey = 0): T
     return () => {
       active = false;
     };
-  }, [emptyData, refreshKey, session]);
+  }, [emptyData, privateNotesVersion, refreshKey, session]);
 
   return state;
 }
 
 async function loadTradingData(session: WalletSession | null): Promise<TradingLiveData> {
-  const marketsResponse = await pnlxGet<MarketsResponse>("/markets", session?.token);
-  const portfolio = session
-    ? (await pnlxGet<PortfolioResponse>(
-        `/portfolio?ownerCommitment=${encodeURIComponent(session.ownerCommitment)}`,
-        session.token,
-      )).portfolio
-    : undefined;
+  const [marketsResponse, portfolio] = await Promise.all([
+    pnlxGet<MarketsResponse>("/markets", session?.token),
+    session
+      ? pnlxGet<PortfolioResponse>(
+          `/portfolio?ownerCommitment=${encodeURIComponent(session.ownerCommitment)}`,
+          session.token,
+        ).then((response) => response.portfolio)
+      : Promise.resolve(undefined),
+  ]);
   const publicMarkets = new Map(
     (portfolio?.publicState.markets ?? []).map((market) => [market.marketId, market]),
   );
@@ -91,19 +113,22 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
     (session && portfolio ? await decryptPrivateOpenings(session, portfolio.accountEvents) : [])
       .map((payload) => [payload.opening.positionCommitment, payload.opening]),
   );
-  const lockedMargin = portfolio?.positions.reduce((total, position) => {
+  const positionLockedMargin = portfolio?.positions.reduce((total, position) => {
     if (position.status !== "open") return total;
     const opening = privateOpenings.get(position.positionCommitment);
     return total + usdcAmount(opening?.margin);
   }, 0) ?? 0;
   const spendablePrivateMargin = session ? usdcAmount(privateSpendableBalance(session.ownerCommitment).toString()) : 0;
+  const reservedPrivateMargin = session ? usdcAmount(privateReservedBalance(session.ownerCommitment).toString()) : 0;
+  const pendingPrivateMargin = session ? usdcAmount(privatePendingBalance(session.ownerCommitment).toString()) : 0;
+  const lockedMargin = positionLockedMargin + reservedPrivateMargin;
   const markets = canonicalMarkets(marketsResponse.markets).map((market) =>
     marketDisplayFromServer(market, publicMarkets.get(market.marketId)),
   );
   const marketPrices = new Map(markets.map((market) => [market.marketId, market.price]));
 
   return {
-    account: accountFromServer(session, portfolio, lockedMargin, spendablePrivateMargin),
+    account: accountFromServer(session, portfolio, lockedMargin, spendablePrivateMargin, pendingPrivateMargin),
     accountEventCount: portfolio?.accountEvents.length ?? 0,
     activity: portfolio?.activities ?? [],
     markets,
@@ -149,8 +174,12 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
     }) ?? [],
     ticker: markets.map((market) => ({
       change: market.change24h,
+      fundingRate: market.netRateLong,
       lastPrice: market.price,
+      marketId: market.marketId,
+      openInterest: market.openInterestLong + market.openInterestShort,
       pair: market.pair,
+      volume24h: market.volume24h,
     })),
   };
 }
@@ -183,18 +212,20 @@ function accountFromServer(
   portfolio: ServerPortfolioSnapshot | undefined,
   lockedMargin = 0,
   spendablePrivateMargin = 0,
+  pendingPrivateMargin = 0,
 ): AccountSnapshot {
-  const privateTotal = lockedMargin + spendablePrivateMargin;
+  const privateTotal = lockedMargin + spendablePrivateMargin + pendingPrivateMargin;
   return {
     address: session?.address ?? "",
-    accountValue: privateTotal > 0 ? privateTotal : null,
-    availableShieldedUsdc: spendablePrivateMargin > 0 ? spendablePrivateMargin : null,
-    cash: spendablePrivateMargin > 0 ? spendablePrivateMargin : null,
+    accountValue: privateTotal,
+    availableShieldedUsdc: spendablePrivateMargin,
+    cash: spendablePrivateMargin,
     lockedMargin,
     livePnl: 0,
     marginRoot: portfolio?.publicState.marginRoot ?? portfolio?.publicState.marginMembershipRoot ?? ZERO_ROOT,
+    pendingShieldedUsdc: pendingPrivateMargin,
     privacyMode: "shielded",
-    shieldedUsdc: privateTotal > 0 ? privateTotal : null,
+    shieldedUsdc: privateTotal,
   };
 }
 
@@ -218,9 +249,7 @@ async function decryptPrivateOpenings(
 }
 
 function usdcAmount(value: string | undefined): number {
-  if (!value) return 0;
-  const amount = Number(BigInt(value));
-  return Number.isFinite(amount) ? amount : 0;
+  return protocolUsdcToDisplay(value);
 }
 
 function priceAmount(value: string | undefined): number | undefined {
@@ -229,9 +258,7 @@ function priceAmount(value: string | undefined): number | undefined {
 }
 
 function baseAmount(value: string | undefined): number {
-  if (!value) return 0;
-  const amount = Number(BigInt(value));
-  return Number.isFinite(amount) ? amount : 0;
+  return protocolBaseToDisplay(value);
 }
 
 function marketDisplayFromServer(
@@ -240,8 +267,8 @@ function marketDisplayFromServer(
 ): MarketDisplay {
   const baseAsset = baseAssetFromMarketId(market.marketId);
   const price = priceFromOracleString(market.oraclePrice);
-  const aggregateVolume = publicMarket ? Number(BigInt(publicMarket.aggregateVolume)) : 0;
-  const grossOpenInterest = publicMarket ? Number(BigInt(publicMarket.grossOpenInterest)) : 0;
+  const aggregateVolume = publicMarket ? baseAmount(publicMarket.aggregateVolume) : 0;
+  const grossOpenInterest = publicMarket ? baseAmount(publicMarket.grossOpenInterest) : 0;
   const pending = publicMarket?.pendingIntentCount ?? 0;
 
   return {
@@ -253,8 +280,8 @@ function marketDisplayFromServer(
     maintenanceMarginRate: rateFromMicroBps(market.maintenanceMarginRate),
     marketId: market.marketId,
     maxLeverage: Number(BigInt(market.maxLeverage)),
-    netRateLong: 0,
-    netRateShort: 0,
+    netRateLong: null,
+    netRateShort: null,
     openInterestLong: grossOpenInterest / 2,
     openInterestShort: grossOpenInterest / 2,
     oraclePrice: market.oraclePrice,

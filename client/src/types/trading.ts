@@ -131,6 +131,7 @@ export interface AccountSnapshot {
   lockedMargin: number;
   livePnl: number;
   marginRoot: Hex;
+  pendingShieldedUsdc: number;
   privacyMode: "shielded";
   shieldedUsdc: number | null;
 }
@@ -146,8 +147,8 @@ export interface MarketDisplay {
   change24h: number;
   openInterestLong: number;
   openInterestShort: number;
-  netRateLong: number;
-  netRateShort: number;
+  netRateLong: number | null;
+  netRateShort: number | null;
   volume24h: number;
   fundingIndex: string;
   maxLeverage: number;
@@ -204,8 +205,12 @@ export interface PositionRow {
 
 export interface TickerItem {
   lastPrice?: number;
+  fundingRate?: number | null;
+  marketId?: string;
+  openInterest?: number;
   pair: string;
   change: number;
+  volume24h?: number;
 }
 
 export interface TradingLiveData {

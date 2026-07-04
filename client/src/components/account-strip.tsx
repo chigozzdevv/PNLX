@@ -1,4 +1,4 @@
-import { Activity, LockKeyhole, ShieldCheck, WalletCards } from "lucide-react";
+import { Activity, Clock3, LockKeyhole, ShieldCheck, WalletCards } from "lucide-react";
 import { formatUsd, shortAddress } from "@/lib/format";
 import type { AccountSnapshot } from "@/types/trading";
 
@@ -18,14 +18,23 @@ export function AccountStrip({
   const cards = [
     {
       icon: WalletCards,
-      label: "Shielded USDC",
-      value: account.shieldedUsdc === null ? "Private" : formatUsd(account.shieldedUsdc),
+      label: "Available Collateral",
+      value: formatUsd(account.availableShieldedUsdc ?? 0),
     },
     {
       icon: LockKeyhole,
-      label: "Locked Margin",
+      label: "Locked Collateral",
       value: formatUsd(account.lockedMargin),
     },
+    ...(account.pendingShieldedUsdc > 0
+      ? [
+          {
+            icon: Clock3,
+            label: "Pending Collateral",
+            value: formatUsd(account.pendingShieldedUsdc),
+          },
+        ]
+      : []),
     {
       icon: Activity,
       label: "Open Trades",
@@ -33,7 +42,7 @@ export function AccountStrip({
     },
     {
       icon: ShieldCheck,
-      label: "Events",
+      label: "Activity",
       value: String(accountEventCount + ordersCount),
     },
   ];

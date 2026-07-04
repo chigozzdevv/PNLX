@@ -9,14 +9,16 @@ import { OrderTicket } from "@/components/order-ticket";
 import { PositionsTable, type PositionsTableView } from "@/components/positions-table";
 import { PriceChart } from "@/components/price-chart";
 import { shortAddress } from "@/lib/format";
+import { cancelOrder } from "@/lib/order-cancel";
 import { closePosition } from "@/lib/position-close";
+import { reconcilePrivateMarginNotes } from "@/lib/private-margin-notes";
 import { depositPrivateMargin, submitTradeIntent } from "@/lib/trade-submit";
 import { useMarketCandles, type CandleInterval } from "@/lib/use-market-candles";
 import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useTradingData } from "@/lib/use-trading-data";
 import { useWalletSession } from "@/lib/use-wallet-session";
 import type { OrderTicketSubmitInput } from "@/components/order-ticket";
-import type { MarketDisplay, OrderDraft, PositionRow, ServerOwnerOrderSnapshot } from "@/types/trading";
+import type { MarketDisplay, OrderDraft, PositionRow, ServerOwnerOrderSnapshot, TickerItem } from "@/types/trading";
 
 const SELECTED_MARKET_STORAGE_KEY = "pnlx:selected-market-id:v2";
 const DEFAULT_MARKET_ID = "xlm-usd-perp";
@@ -26,14 +28,18 @@ export function TradingPage() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [tableView, setTableView] = useState<PositionsTableView>("positions");
   const [closingPositionId, setClosingPositionId] = useState<string | undefined>();
+  const [cancellingOrderId, setCancellingOrderId] = useState<string | undefined>();
   const [positionActionMessage, setPositionActionMessage] = useState<
     { tone: "error" | "success"; text: string } | undefined
   >();
+  const [optimisticCancelledOrders, setOptimisticCancelledOrders] = useState<Map<string, number>>(
+    () => new Map(),
+  );
   const [pendingOrders, setPendingOrders] = useState<ServerOwnerOrderSnapshot[]>([]);
   const trading = useTradingData(wallet.session, refreshKey);
   const ticker = useMarketTicker(trading.data.ticker);
   const [selectedMarketId, setSelectedMarketId] = useState(readStoredMarketId);
-  const [chartInterval, setChartInterval] = useState<CandleInterval>("1m");
+  const [chartInterval, setChartInterval] = useState<CandleInterval>("15m");
   const markets = trading.data.markets;
   const activeMarketId = markets.some((market) => market.marketId === selectedMarketId)
     ? selectedMarketId
@@ -52,14 +58,30 @@ export function TradingPage() {
       price: latestClose,
     };
   }, [candles.candles, selectedMarket]);
-  const orderDraft = liveSelectedMarket ? orderDraftFromMarket(liveSelectedMarket) : undefined;
+  const tickerByMarketId = useMemo(
+    () => new Map(ticker.ticker.flatMap((item) => (item.marketId ? [[item.marketId, item]] : []))),
+    [ticker.ticker],
+  );
+  const displaySelectedMarket = useMemo(() => {
+    if (!liveSelectedMarket) return undefined;
+    return enrichMarketWithTicker(liveSelectedMarket, tickerByMarketId.get(liveSelectedMarket.marketId));
+  }, [liveSelectedMarket, tickerByMarketId]);
+  const orderDraft = displaySelectedMarket ? orderDraftFromMarket(displaySelectedMarket) : undefined;
   const orders = useMemo(() => {
     const liveIds = new Set(trading.data.orders.map((order) => order.intentCommitment));
     return [
       ...pendingOrders.filter((order) => !liveIds.has(order.intentCommitment)),
       ...trading.data.orders,
-    ];
-  }, [pendingOrders, trading.data.orders]);
+    ].map((order) =>
+      optimisticCancelledOrders.has(order.intentCommitment)
+        ? {
+            ...order,
+            status: "cancelled" as const,
+            updatedAt: Math.max(order.updatedAt, optimisticCancelledOrders.get(order.intentCommitment) ?? 0),
+          }
+        : order,
+    );
+  }, [optimisticCancelledOrders, pendingOrders, trading.data.orders]);
   const hasPendingOrders = orders.some((order) => order.status === "open" || order.status === "partially-filled");
   const handleSelectMarket = useCallback((marketId: string) => {
     setSelectedMarketId(marketId);
@@ -100,6 +122,49 @@ export function TradingPage() {
     }
   }, [marketById, wallet.session]);
 
+  const handleCancelOrder = useCallback(async (order: ServerOwnerOrderSnapshot) => {
+    if (!wallet.session) {
+      setPositionActionMessage({ tone: "error", text: "Connect a wallet first" });
+      return;
+    }
+
+    setCancellingOrderId(order.intentCommitment);
+    setPositionActionMessage(undefined);
+    try {
+      const cancelled = await cancelOrder({
+        intentCommitment: order.intentCommitment,
+        token: wallet.session.token,
+      });
+      setPendingOrders((current) =>
+        current.filter((item) => item.intentCommitment !== order.intentCommitment),
+      );
+      setOptimisticCancelledOrders((current) => {
+        const next = new Map(current);
+        next.set(cancelled.intentCommitment, Date.now());
+        return next;
+      });
+      reconcilePrivateMarginNotes({
+        orders: [{
+          intentCommitment: cancelled.intentCommitment,
+          status: "cancelled",
+        }],
+      });
+      setPositionActionMessage({
+        tone: "success",
+        text: `Cancelled ${shortAddress(cancelled.intentCommitment)}`,
+      });
+      setTableView("orders");
+      setRefreshKey((value) => value + 1);
+    } catch (error) {
+      setPositionActionMessage({
+        tone: "error",
+        text: error instanceof Error ? error.message : "Order cancel failed",
+      });
+    } finally {
+      setCancellingOrderId(undefined);
+    }
+  }, [wallet.session]);
+
   useEffect(() => {
     if (!wallet.session || !hasPendingOrders) return;
     const timer = window.setInterval(() => {
@@ -116,10 +181,10 @@ export function TradingPage() {
     >
       <main className="trade-grid">
         <section className="main-column">
-          {liveSelectedMarket ? (
+          {displaySelectedMarket ? (
             <MarketHeader
               markets={markets}
-              selectedMarket={liveSelectedMarket}
+              selectedMarket={displaySelectedMarket}
               onSelectMarket={handleSelectMarket}
             />
           ) : null}
@@ -149,8 +214,10 @@ export function TradingPage() {
             activity={trading.data.activity}
             accountEventCount={trading.data.accountEventCount}
             activeView={tableView}
+            cancellingOrderId={cancellingOrderId}
             closingPositionId={closingPositionId}
             loading={trading.loading}
+            onCancelOrder={handleCancelOrder}
             onClosePosition={handleClosePosition}
             onViewChange={setTableView}
             orders={orders}
@@ -159,11 +226,11 @@ export function TradingPage() {
         </section>
 
         <aside className="order-column">
-          {liveSelectedMarket && orderDraft ? (
+          {displaySelectedMarket && orderDraft ? (
             <OrderTicket
+              availableCollateral={trading.data.account.availableShieldedUsdc}
               connected={Boolean(wallet.session)}
-              key={liveSelectedMarket.marketId}
-              privateBalance={trading.data.account.availableShieldedUsdc}
+              key={displaySelectedMarket.marketId}
               onDeposit={async (input) => {
                 if (!wallet.session) throw new Error("Connect a wallet first");
                 await depositPrivateMargin({
@@ -172,12 +239,12 @@ export function TradingPage() {
                 });
                 setRefreshKey((value) => value + 1);
               }}
-              market={liveSelectedMarket}
+              market={displaySelectedMarket}
               onSubmit={async (input: OrderTicketSubmitInput) => {
                 if (!wallet.session) throw new Error("Connect a wallet first");
                 const result = await submitTradeIntent({
                   ...input,
-                  market: liveSelectedMarket,
+                  market: displaySelectedMarket,
                   session: wallet.session,
                 });
                 const submittedAt = Date.now();
@@ -232,4 +299,33 @@ function orderDraftFromMarket(market: MarketDisplay): OrderDraft {
     stopLossPrice: null,
     takeProfitPrice: null,
   };
+}
+
+function enrichMarketWithTicker(market: MarketDisplay, ticker?: TickerItem): MarketDisplay {
+  if (!ticker) return market;
+  const protocolOpenInterest = market.openInterestLong + market.openInterestShort;
+  const feedOpenInterest = positiveNumber(ticker.openInterest);
+  const displayOpenInterest = protocolOpenInterest > 0 ? protocolOpenInterest : feedOpenInterest;
+  const feedFunding = finiteNumberOrNull(ticker.fundingRate);
+
+  return {
+    ...market,
+    change24h: typeof ticker.change === "number" ? ticker.change : market.change24h,
+    netRateLong: market.netRateLong ?? feedFunding,
+    netRateShort: market.netRateShort ?? (feedFunding === null ? null : -feedFunding),
+    openInterestLong: displayOpenInterest > 0 ? displayOpenInterest / 2 : market.openInterestLong,
+    openInterestShort: displayOpenInterest > 0 ? displayOpenInterest / 2 : market.openInterestShort,
+    price: ticker.lastPrice ?? market.price,
+    volume24h: market.volume24h > 0 ? market.volume24h : (ticker.volume24h ?? market.volume24h),
+  };
+}
+
+function positiveNumber(value: unknown): number {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function finiteNumberOrNull(value: unknown): number | null {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }

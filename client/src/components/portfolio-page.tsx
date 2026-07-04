@@ -8,7 +8,9 @@ interface PortfolioPageProps {
   closingPositionId?: string;
   loading?: boolean;
   onClosePosition?: (position: PositionRow) => Promise<void> | void;
+  onWithdrawCollateral?: () => Promise<void> | void;
   trading: TradingLiveData;
+  withdrawingCollateral?: boolean;
 }
 
 export function PortfolioPage({
@@ -16,10 +18,14 @@ export function PortfolioPage({
   closingPositionId,
   loading = false,
   onClosePosition,
+  onWithdrawCollateral,
   trading,
+  withdrawingCollateral = false,
 }: PortfolioPageProps) {
   const openPositions = trading.positions.filter((position) => position.status === "open").length;
   const livePnl = trading.positions.reduce((total, position) => total + (position.unrealizedPnl ?? 0), 0);
+  const accountValue = trading.account.accountValue ?? 0;
+  const availableCollateral = trading.account.availableShieldedUsdc ?? 0;
 
   return (
     <main className="portfolio-page">
@@ -33,7 +39,19 @@ export function PortfolioPage({
       <section className="portfolio-kpis">
         <div className="portfolio-kpi">
           <span>Account Value</span>
-          <strong>{trading.account.accountValue === null ? "Private" : formatUsd(trading.account.accountValue)}</strong>
+          <strong>{formatUsd(accountValue)}</strong>
+        </div>
+        <div className="portfolio-kpi portfolio-kpi-with-action">
+          <span>Available Collateral</span>
+          <strong>{formatUsd(availableCollateral)}</strong>
+          <button
+            className="secondary-ticket-button portfolio-kpi-action"
+            disabled={!onWithdrawCollateral || withdrawingCollateral || availableCollateral <= 0}
+            type="button"
+            onClick={() => onWithdrawCollateral?.()}
+          >
+            {withdrawingCollateral ? "Withdrawing" : "Withdraw"}
+          </button>
         </div>
         <div className="portfolio-kpi">
           <span>Live PnL</span>

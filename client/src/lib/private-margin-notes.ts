@@ -28,6 +28,35 @@ export function privateSpendableBalance(ownerCommitment?: Hex): bigint {
     .reduce((total, note) => total + BigInt(note.amount), 0n);
 }
 
+export function privateReservedBalance(ownerCommitment?: Hex): bigint {
+  const notes = privateMarginNotes(ownerCommitment);
+  const pendingChangeByIntent = new Map<Hex, bigint>();
+  for (const note of notes) {
+    if (note.status !== "pending" || !note.lockedByIntentCommitment) continue;
+    pendingChangeByIntent.set(
+      note.lockedByIntentCommitment,
+      (pendingChangeByIntent.get(note.lockedByIntentCommitment) ?? 0n) + BigInt(note.amount),
+    );
+  }
+
+  return notes
+    .filter((note) => note.status === "locked")
+    .reduce((total, note) => {
+      const amount = BigInt(note.amount);
+      const pendingChange = note.lockedByIntentCommitment
+        ? (pendingChangeByIntent.get(note.lockedByIntentCommitment) ?? 0n)
+        : 0n;
+      const reserved = amount > pendingChange ? amount - pendingChange : 0n;
+      return total + reserved;
+    }, 0n);
+}
+
+export function privatePendingBalance(ownerCommitment?: Hex): bigint {
+  return privateMarginNotes(ownerCommitment)
+    .filter((note) => note.status === "pending")
+    .reduce((total, note) => total + BigInt(note.amount), 0n);
+}
+
 export function privateMarginNotes(ownerCommitment?: Hex): StoredPrivateMarginNote[] {
   if (typeof window === "undefined") return [];
   const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -78,6 +107,20 @@ export function selectPrivateMarginNote(input: {
   throw new Error("Deposit private USDC before trading");
 }
 
+export function selectWithdrawablePrivateMarginNote(input: {
+  assetDigest?: Hex;
+  ownerCommitment: Hex;
+}): StoredPrivateMarginNote {
+  const candidates = privateMarginNotes(input.ownerCommitment)
+    .filter((note) => note.status === "available")
+    .filter((note) => !input.assetDigest || note.assetDigest === input.assetDigest)
+    .sort((a, b) => Number(BigInt(b.amount) - BigInt(a.amount)));
+  const note = candidates[0];
+  if (note) return note;
+
+  throw new Error("No available collateral to withdraw");
+}
+
 export function lockPrivateMarginNote(commitment: Hex, intentCommitment: Hex): void {
   writeNotes(
     privateMarginNotes().map((note) =>
@@ -86,6 +129,20 @@ export function lockPrivateMarginNote(commitment: Hex, intentCommitment: Hex): v
             ...note,
             lockedByIntentCommitment: intentCommitment,
             status: "locked",
+            updatedAt: Date.now(),
+          }
+        : note,
+    ),
+  );
+}
+
+export function markPrivateMarginNoteSpent(commitment: Hex): void {
+  writeNotes(
+    privateMarginNotes().map((note) =>
+      note.commitment === commitment
+        ? {
+            ...note,
+            status: "spent" as const,
             updatedAt: Date.now(),
           }
         : note,

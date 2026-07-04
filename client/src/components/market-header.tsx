@@ -21,6 +21,10 @@ const ASSET_LOGOS: Record<string, string> = {
 export function MarketHeader({ markets, selectedMarket, onSelectMarket }: MarketHeaderProps) {
   const [open, setOpen] = useState(false);
   const totalOpenInterest = selectedMarket.openInterestLong + selectedMarket.openInterestShort;
+  const fundingRate =
+    selectedMarket.netRateLong === null || selectedMarket.netRateShort === null
+      ? "-- / --"
+      : `${formatPct(selectedMarket.netRateLong, 4)} / ${formatPct(selectedMarket.netRateShort, 4)}`;
   const stats = [
     {
       label: "Open Interest",
@@ -32,7 +36,7 @@ export function MarketHeader({ markets, selectedMarket, onSelectMarket }: Market
     },
     {
       label: "Funding Rate",
-      value: `${formatPct(selectedMarket.netRateLong, 4)} / ${formatPct(selectedMarket.netRateShort, 4)}`,
+      value: fundingRate,
       mixed: true,
     },
     {

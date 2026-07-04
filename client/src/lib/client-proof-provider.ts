@@ -38,6 +38,16 @@ export interface PositionCloseRecord {
   proof: ServerProofMeta;
 }
 
+export interface WithdrawalRecord {
+  changeCommitment: Hex;
+  nullifier: Hex;
+  proof: ServerProofMeta;
+  recipient: Hex;
+  root: Hex;
+  tokenDigest: Hex;
+  withdrawAmount: string;
+}
+
 export interface ProofBundle<T> {
   artifact: ClientProofArtifactRegistration;
   record: T;
@@ -115,6 +125,25 @@ export interface ClientProofProvider {
     size: bigint;
     spendSecretDigest: Hex;
   }): Promise<ProofBundle<PositionCloseRecord>>;
+
+  withdraw(input: {
+    assetDigest: Hex;
+    blinding: Hex;
+    changeBlinding: Hex;
+    changeRhoDigest: Hex;
+    noteAmount: bigint;
+    noteCommitment: Hex;
+    nullifier: Hex;
+    ownerDigest: Hex;
+    pathIndices: boolean[];
+    pathSiblings: Hex[];
+    recipient: Hex;
+    rhoDigest: Hex;
+    root: Hex;
+    spendSecretDigest: Hex;
+    tokenDigest: Hex;
+    withdrawAmount: bigint;
+  }): Promise<ProofBundle<WithdrawalRecord>>;
 }
 
 export function defaultClientProofProvider(): ClientProofProvider | undefined {
@@ -143,6 +172,10 @@ class HttpClientProofProvider implements ClientProofProvider {
 
   positionClose(input: Parameters<ClientProofProvider["positionClose"]>[0]) {
     return this.post<PositionCloseRecord>("/position-close", stringifyBigInts(input));
+  }
+
+  withdraw(input: Parameters<ClientProofProvider["withdraw"]>[0]) {
+    return this.post<WithdrawalRecord>("/withdraw", stringifyBigInts(input));
   }
 
   private async post<T>(path: string, data: Record<string, unknown>): Promise<ProofBundle<T>> {

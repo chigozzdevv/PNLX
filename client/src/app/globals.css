@@ -224,7 +224,7 @@ button:disabled {
 
 .trade-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(320px, 20vw, 380px);
+  grid-template-columns: minmax(0, 1fr) clamp(360px, 24vw, 430px);
   align-items: start;
   gap: 8px;
   max-width: 100%;
@@ -239,7 +239,7 @@ button:disabled {
 
 .account-strip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
   gap: 8px;
   min-width: 0;
 }
@@ -294,7 +294,7 @@ button:disabled {
 
 .portfolio-kpis {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -319,6 +319,23 @@ button:disabled {
   color: white;
   font-size: 22px;
   font-weight: 950;
+}
+
+.portfolio-kpi-with-action {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.portfolio-kpi-with-action span,
+.portfolio-kpi-with-action strong {
+  grid-column: 1;
+}
+
+.portfolio-kpi-action {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-width: 104px;
+  padding: 0 14px;
 }
 
 .order-column {
@@ -520,14 +537,14 @@ button:disabled {
   gap: 8px;
   min-width: 0;
   max-width: 100%;
-  min-height: min(680px, calc(100vh - 286px));
+  min-height: min(600px, calc(100vh - 286px));
 }
 
 .chart-panel {
   display: grid;
   min-width: 0;
   max-width: 100%;
-  grid-template-rows: auto minmax(540px, 1fr);
+  grid-template-rows: auto minmax(460px, 1fr);
   overflow: hidden;
 }
 
@@ -593,7 +610,7 @@ button:disabled {
 .chart-canvas {
   position: relative;
   max-width: 100%;
-  min-height: 540px;
+  min-height: 460px;
   overflow: hidden;
   background:
     linear-gradient(90deg, rgba(255, 255, 255, 0.024) 1px, transparent 1px) 0 0 / 64px 64px,
@@ -807,6 +824,51 @@ button:disabled {
   font-weight: 900;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.field-label .field-balance-warning {
+  color: var(--accent-orange);
+}
+
+.field-balance-group {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.field-topup-button {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(39, 214, 139, 0.28);
+  border-radius: 999px;
+  background: rgba(39, 214, 139, 0.11);
+  color: var(--accent-green);
+}
+
+.field-topup-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.ticket-funding-field {
+  position: relative;
+}
+
+.funding-dropdown {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 10px;
+}
+
+.funding-submit-button {
+  width: 100%;
 }
 
 .privacy-note {
@@ -1158,22 +1220,26 @@ button:disabled {
 .trade-progress {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 5px;
+  gap: 7px;
   min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 9px;
 }
 
 .trade-progress-step {
   display: grid;
   min-width: 0;
-  gap: 5px;
+  gap: 6px;
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 950;
   text-align: center;
 }
 
 .trade-progress-step span {
-  height: 4px;
+  height: 6px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
 }
@@ -1199,15 +1265,17 @@ button:disabled {
 .ticket-message {
   min-width: 0;
   max-width: 100%;
-  max-height: 58px;
+  min-height: 44px;
+  max-height: 128px;
   overflow: auto;
   overflow-wrap: anywhere;
   border: 1px solid var(--line);
   border-radius: 6px;
-  padding: 9px 10px;
-  font-size: 12px;
-  font-weight: 850;
-  line-height: 1.35;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 12px;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.45;
   scrollbar-width: thin;
   word-break: break-word;
 }
@@ -3396,7 +3464,7 @@ button:disabled {
 
 @media (max-width: 1500px) {
   .trade-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(318px, 350px);
+    grid-template-columns: minmax(0, 1fr) minmax(350px, 400px);
   }
 
 }

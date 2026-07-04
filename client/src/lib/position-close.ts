@@ -9,8 +9,10 @@ import {
   circuitPositionNullifier,
   createCircuitMarginCommitment,
   digestToFieldHex,
+  fieldHashPair,
   randomLabel,
 } from "@/lib/private-note";
+import { savePrivateMarginNote } from "@/lib/private-margin-notes";
 import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
 import type { Hex, MarketDisplay, PositionRow, Side } from "@/types/trading";
 import type { WalletSession } from "@/lib/wallet-auth";
@@ -183,6 +185,20 @@ export async function closePosition(input: ClosePositionInput): Promise<Position
     proven,
     input.session.token,
   );
+  if (closeSettlement.newMargin > 0n) {
+    savePrivateMarginNote({
+      amount: closeSettlement.newMargin.toString(),
+      assetDigest: marginOutputAssetDigest,
+      blinding: marginOutputBlinding,
+      commitment: marginOutputCommitment,
+      noteNullifier: fieldHashPair(ZERO_HEX, marginOutputRhoDigest),
+      ownerCommitment: input.session.ownerCommitment,
+      ownerDigest: positionSecrets.ownerDigest,
+      rhoDigest: marginOutputRhoDigest,
+      spendSecretDigest: ZERO_HEX,
+      walletAddress: input.session.address,
+    });
+  }
   return response.positionClose;
 }
 

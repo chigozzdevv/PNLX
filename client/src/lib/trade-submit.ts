@@ -16,11 +16,13 @@ import {
   savePrivateMarginNote,
   selectPrivateMarginNote,
 } from "@/lib/private-margin-notes";
+import { usdcToProtocolAmount } from "@/lib/asset-units";
 import type { Hex, MarketDisplay, ServerIntentRecord, Side } from "@/types/trading";
 import type { WalletSession } from "@/lib/wallet-auth";
 import type { ServerProofMeta } from "@/types/trading";
 
-const PRICE_SCALE = 100_000_000;
+const PRICE_SCALE = 100_000_000n;
+const LEVERAGE_SCALE = 1_000_000n;
 const ZERO_HEX = "0x0" as Hex;
 
 export type TradeSubmitStage = "hashing" | "shielding" | "signing" | "proving" | "matching" | "done";
@@ -98,11 +100,11 @@ export interface DepositPrivateMarginResult {
 
 export async function submitTradeIntent(input: SubmitTradeIntentInput): Promise<SubmitTradeIntentResult> {
   markProgress(input, "hashing");
-  const margin = toPositiveInteger(input.margin, "Private margin");
+  const margin = usdcToProtocolAmount(input.margin, "Margin");
   const limitPrice = toPrice(input.limitPrice);
   const sizingPrice = input.sizingPrice ?? input.limitPrice;
   const entryPrice = toPrice(sizingPrice);
-  const protocolSize = protocolSizeFromTicket(input.margin, input.leverage, sizingPrice);
+  const protocolSize = protocolSizeFromTicket(margin, input.leverage, sizingPrice);
   if (protocolSize < 1n) {
     throw new Error("Increase private margin; this market currently requires at least 1 base contract");
   }
@@ -332,7 +334,7 @@ async function submitCustodySharedTradeIntent(
 }
 
 export async function depositPrivateMargin(input: DepositPrivateMarginInput): Promise<DepositPrivateMarginResult> {
-  const amount = toPositiveInteger(input.amount, "Private margin");
+  const amount = usdcToProtocolAmount(input.amount, "Collateral");
   const proofProvider = input.proofProvider ?? defaultClientProofProvider();
   if (!proofProvider) throw new Error("Client proof provider is not configured");
 
@@ -477,19 +479,17 @@ async function freshMarginMembership(commitment: Hex, token?: string): Promise<M
   return response.note;
 }
 
-function protocolSizeFromTicket(margin: number, leverage: number, price: number): bigint {
-  if (margin <= 0 || leverage <= 0 || price <= 0) return 0n;
-  return BigInt(Math.floor((margin * leverage) / price));
-}
-
-function toPositiveInteger(value: number, label: string): bigint {
-  const rounded = BigInt(Math.round(value));
-  if (rounded <= 0n) throw new Error(`${label} must be positive`);
-  return rounded;
+function protocolSizeFromTicket(margin: bigint, leverage: number, price: number): bigint {
+  if (margin <= 0n || leverage <= 0 || price <= 0) return 0n;
+  const priceProtocol = toPrice(price);
+  const leverageProtocol = BigInt(Math.round(leverage * Number(LEVERAGE_SCALE)));
+  const notional = (margin * leverageProtocol) / LEVERAGE_SCALE;
+  const size = (notional * PRICE_SCALE) / priceProtocol;
+  return size > 0n ? size : 0n;
 }
 
 function toPrice(value: number): bigint {
-  const scaled = BigInt(Math.round(value * PRICE_SCALE));
+  const scaled = BigInt(Math.round(value * Number(PRICE_SCALE)));
   if (scaled <= 0n) throw new Error("Price must be positive");
   return scaled;
 }

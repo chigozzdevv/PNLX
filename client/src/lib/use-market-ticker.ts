@@ -7,8 +7,12 @@ import type { TickerItem } from "@/types/trading";
 interface TickerResponse {
   ticker: Array<{
     change24h: number;
+    fundingRate?: number | null;
+    marketId?: string;
+    openInterest?: number;
     pair: string;
     price?: number;
+    volume24h?: number;
   }>;
   fetchedAt?: number;
 }
@@ -65,8 +69,12 @@ export function useMarketTicker(fallback: TickerItem[]): MarketTickerState {
             current.ticker,
             response.ticker.map((item) => ({
               change: item.change24h,
+              fundingRate: item.fundingRate ?? null,
               lastPrice: item.price,
+              marketId: item.marketId,
+              openInterest: item.openInterest,
               pair: item.pair,
+              volume24h: item.volume24h,
             })),
           ),
           updatedAt: response.fetchedAt ?? Date.now(),
@@ -166,8 +174,10 @@ function tickerFromMessage(raw: unknown): TickerItem | undefined {
 
     const price = firstFinite([message.data.ctx.markPx, message.data.ctx.midPx, message.data.ctx.oraclePx]);
     const previous = firstFinite([message.data.ctx.prevDayPx]);
+    const funding = optionalFinite(message.data.ctx.funding);
     return {
       change: previous && previous > 0 ? ((price - previous) / previous) * 100 : 0,
+      fundingRate: funding === undefined ? undefined : funding * 100,
       lastPrice: price,
       pair: `${message.data.coin}/USD`,
     };
@@ -209,4 +219,10 @@ function firstFinite(values: unknown[]): number {
     if (Number.isFinite(number)) return number;
   }
   return 0;
+}
+
+function optionalFinite(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
 }

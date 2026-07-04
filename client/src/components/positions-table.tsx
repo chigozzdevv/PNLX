@@ -13,8 +13,10 @@ interface PositionsTableProps {
   activeView?: PositionsTableView;
   loading?: boolean;
   closingPositionId?: string;
+  cancellingOrderId?: string;
   actionMessage?: { tone: "error" | "success"; text: string };
   onClosePosition?: (position: PositionRow) => Promise<void> | void;
+  onCancelOrder?: (order: ServerOwnerOrderSnapshot) => Promise<void> | void;
   onViewChange?: (view: PositionsTableView) => void;
   orders?: ServerOwnerOrderSnapshot[];
   positions: PositionRow[];
@@ -26,10 +28,12 @@ export type PositionsTableView = TableView;
 export function PositionsTable({
   accountEventCount = 0,
   actionMessage,
+  cancellingOrderId,
   activity = [],
   activeView,
   closingPositionId,
   loading = false,
+  onCancelOrder,
   onClosePosition,
   onViewChange,
   orders = [],
@@ -84,7 +88,7 @@ export function PositionsTable({
             positions={positions}
           />
         ) : view === "orders" ? (
-          <OrdersView orders={orders} />
+          <OrdersView cancellingOrderId={cancellingOrderId} onCancelOrder={onCancelOrder} orders={orders} />
         ) : (
           <HistoryView activity={activity} />
         )}
@@ -160,7 +164,15 @@ function PositionsView({
   );
 }
 
-function OrdersView({ orders }: { orders: ServerOwnerOrderSnapshot[] }) {
+function OrdersView({
+  cancellingOrderId,
+  onCancelOrder,
+  orders,
+}: {
+  cancellingOrderId?: string;
+  onCancelOrder?: (order: ServerOwnerOrderSnapshot) => Promise<void> | void;
+  orders: ServerOwnerOrderSnapshot[];
+}) {
   return (
     <>
       <div className="positions-head">
@@ -187,7 +199,20 @@ function OrdersView({ orders }: { orders: ServerOwnerOrderSnapshot[] }) {
           <span>{order.batchId}</span>
           <span>{formatTime(order.updatedAt)}</span>
           <span>{shortAddress(order.matchingPayloadCommitment)}</span>
-          <span />
+          <span>
+            {order.status === "open" || order.status === "partially-filled" ? (
+              <button
+                className="row-action-button"
+                disabled={!onCancelOrder || cancellingOrderId === order.intentCommitment}
+                type="button"
+                onClick={() => onCancelOrder?.(order)}
+              >
+                {cancellingOrderId === order.intentCommitment ? "Canceling" : "Cancel"}
+              </button>
+            ) : (
+              "--"
+            )}
+          </span>
         </div>
       ))}
     </>

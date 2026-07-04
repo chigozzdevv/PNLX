@@ -56,10 +56,24 @@ export function AppShell({ account, activeView, children, wallet }: AppShellProp
 
           <div className="wallet-area ml-auto">
             {connected ? (
-              <div className="header-balance" aria-label="Shielded USDC balance">
-                <span>USDC</span>
-                <strong>{account.shieldedUsdc === null ? "Private" : formatUsd(account.shieldedUsdc)}</strong>
-              </div>
+              <>
+                <div className="header-balance" aria-label="Available collateral">
+                  <span>Available</span>
+                  <strong>{formatUsd(account.availableShieldedUsdc ?? 0)}</strong>
+                </div>
+                {account.lockedMargin > 0 ? (
+                  <div className="header-balance" aria-label="Locked collateral">
+                    <span>Locked</span>
+                    <strong>{formatUsd(account.lockedMargin)}</strong>
+                  </div>
+                ) : null}
+                {account.pendingShieldedUsdc > 0 ? (
+                  <div className="header-balance" aria-label="Pending collateral">
+                    <span>Pending</span>
+                    <strong>{formatUsd(account.pendingShieldedUsdc)}</strong>
+                  </div>
+                ) : null}
+              </>
             ) : null}
             <button
               className={`wallet-button account-button ${connected ? "account-button-connected" : ""} ${

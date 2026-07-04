@@ -1,19 +1,19 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { CircleDollarSign } from "lucide-react";
-import { useMemo, useState } from "react";
+import { CircleDollarSign, Plus } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { formatNumber, formatUsd, shortAddress } from "@/lib/format";
 import type { SubmitTradeIntentResult, TradeSubmitStage } from "@/lib/trade-submit";
 import type { MarketDisplay, OrderDraft, Side } from "@/types/trading";
 
 interface OrderTicketProps {
+  availableCollateral?: number | null;
   connected?: boolean;
   market: MarketDisplay;
   onDeposit?: (input: OrderTicketDepositInput) => Promise<void>;
   onSubmit?: (input: OrderTicketSubmitInput) => Promise<SubmitTradeIntentResult>;
   order: OrderDraft;
-  privateBalance?: number | null;
 }
 
 export interface OrderTicketSubmitInput {
@@ -36,14 +36,15 @@ export interface OrderTicketDepositInput {
 }
 
 type ConditionMode = "percent" | "price";
+const MARGIN_STORAGE_PREFIX = "pnlx.order-ticket.margin.v1";
 
 export function OrderTicket({
+  availableCollateral,
   connected = false,
   market,
   onDeposit,
   onSubmit,
   order,
-  privateBalance,
 }: OrderTicketProps) {
   const [side, setSide] = useState<Side>(order.side);
   const [orderType, setOrderType] = useState<"market" | "limit">("market");
@@ -54,7 +55,9 @@ export function OrderTicket({
   const [submitSuccess, setSubmitSuccess] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
   const [depositing, setDepositing] = useState(false);
-  const [margin, setMargin] = useState(order.collateral);
+  const [fundingOpen, setFundingOpen] = useState(false);
+  const [margin, setMargin] = useState(() => readStoredMargin(market.marketId, order.collateral));
+  const [fundAmount, setFundAmount] = useState(() => readStoredMargin(market.marketId, order.collateral));
   const [limitPrice, setLimitPrice] = useState(market.price);
   const [slippagePercent, setSlippagePercent] = useState(0.5);
   const [leverage, setLeverage] = useState(Math.min(order.leverage, market.maxLeverage));
@@ -75,12 +78,21 @@ export function OrderTicket({
   const stopLossPnl = estimatePnl(side, size, activePrice, stopLossPrice);
   const takeProfitPercent = percentFromPnl("tp", takeProfitPnl, margin);
   const stopLossPercent = percentFromPnl("sl", stopLossPnl, margin);
-  const canSubmit = connected && Boolean(onSubmit) && !submitting && !depositing;
-  const canDeposit = connected && Boolean(onDeposit) && !depositing && margin > 0;
+  const availableCollateralValue = availableCollateral ?? 0;
+  const hasFundedCollateral = availableCollateralValue > 0;
+  const hasEnoughCollateral = availableCollateralValue >= margin;
+  const canSubmit = connected && Boolean(onSubmit) && !submitting && !depositing && margin > 0 && hasEnoughCollateral;
+  const canDeposit = connected && Boolean(onDeposit) && !submitting && !depositing && fundAmount > 0;
+  const primaryDisabled = !canSubmit;
+  const primaryBusy = submitting || depositing;
   const liquidationPrice = useMemo(() => {
     const riskMove = leverage > 0 ? 1 / leverage - market.maintenanceMarginRate : 0;
     return side === "long" ? activePrice * (1 - riskMove) : activePrice * (1 + riskMove);
   }, [activePrice, leverage, market.maintenanceMarginRate, side]);
+
+  useEffect(() => {
+    writeStoredMargin(market.marketId, margin);
+  }, [margin, market.marketId]);
 
   function selectSide(nextSide: Side) {
     setSide(nextSide);
@@ -107,6 +119,18 @@ export function OrderTicket({
 
   function updateStopLossPercent(value: number) {
     setStopLossPrice(priceFromPercent("sl", side, activePrice, value, leverage));
+  }
+
+  function updateMargin(value: number) {
+    const next = Math.max(value || 0, 0);
+    setMargin(next);
+    setFundAmount(next);
+  }
+
+  function updateFundAmount(value: number) {
+    const next = Math.max(value || 0, 0);
+    setFundAmount(next);
+    if (!hasFundedCollateral) setMargin(next);
   }
 
   async function submitOrder() {
@@ -146,7 +170,15 @@ export function OrderTicket({
     }
   }
 
-  async function depositMargin() {
+  async function primaryAction() {
+    if (!connected) {
+      setSubmitError("Connect a wallet first");
+      return;
+    }
+    await submitOrder();
+  }
+
+  async function depositMargin(amount = fundAmount) {
     if (!connected) {
       setSubmitError("Connect a wallet first");
       return;
@@ -158,16 +190,15 @@ export function OrderTicket({
 
     setSubmitError(undefined);
     setSubmitSuccess(undefined);
-    setSubmitStage("shielding");
+    setSubmitStage(undefined);
     setDepositing(true);
     try {
       await onDeposit({
-        amount: margin,
+        amount,
         collateralAsset: order.collateralAsset,
-        onProgress: setSubmitStage,
       });
-      setSubmitStage("done");
-      setSubmitSuccess(`${formatUsd(margin, { maximumFractionDigits: 2 })} deposited`);
+      setFundingOpen(false);
+      setSubmitSuccess(`${formatUsd(amount, { maximumFractionDigits: 2 })} deposited`);
     } catch (error) {
       setSubmitStage(undefined);
       setSubmitError(error instanceof Error ? error.message : "Deposit failed");
@@ -175,6 +206,31 @@ export function OrderTicket({
       setDepositing(false);
     }
   }
+
+  const fundingDropdown = fundingOpen ? (
+    <div className="funding-dropdown">
+      <div className="field-control">
+        <input
+          aria-label="Funding amount"
+          inputMode="decimal"
+          value={fundAmount}
+          onChange={(event) => updateFundAmount(Number(event.target.value) || 0)}
+        />
+        <div className="asset-pill">
+          <CircleDollarSign size={18} />
+          {order.collateralAsset}
+        </div>
+      </div>
+      <button
+        className="secondary-ticket-button funding-submit-button"
+        disabled={!canDeposit}
+        type="button"
+        onClick={() => depositMargin()}
+      >
+        {depositing ? "Depositing" : "Deposit"}
+      </button>
+    </div>
+  ) : null;
 
   return (
     <section className="panel order-ticket">
@@ -260,33 +316,37 @@ export function OrderTicket({
 
       <div className="ticket-field">
         <div className="field-label">
-          <span>Private Margin</span>
-          <strong className="field-balance">
-            {privateBalance === null || privateBalance === undefined
-              ? "Private"
-              : formatUsd(privateBalance, { maximumFractionDigits: 2 })}
-          </strong>
+          <span>Margin</span>
+          <div className="field-balance-group">
+            <strong className={`field-balance ${hasEnoughCollateral ? "" : "field-balance-warning"}`}>
+              Available {formatUsd(availableCollateralValue, { maximumFractionDigits: 2 })}
+            </strong>
+            <button
+              aria-expanded={fundingOpen}
+              aria-label="Top up available collateral"
+              className="field-topup-button"
+              disabled={!connected || !onDeposit || depositing || submitting}
+              title="Top up collateral"
+              type="button"
+              onClick={() => setFundingOpen((open) => !open)}
+            >
+              <Plus size={14} />
+            </button>
+          </div>
         </div>
         <div className="field-control">
           <input
-            aria-label="Private margin"
+            aria-label="Margin"
             inputMode="decimal"
             value={margin}
-            onChange={(event) => setMargin(Math.max(Number(event.target.value) || 0, 0))}
+            onChange={(event) => updateMargin(Number(event.target.value) || 0)}
           />
           <div className="asset-pill">
             <CircleDollarSign size={18} />
             {order.collateralAsset}
           </div>
         </div>
-        <button
-          className="secondary-ticket-button"
-          disabled={!canDeposit}
-          type="button"
-          onClick={depositMargin}
-        >
-          {depositing ? "Depositing" : "Deposit"}
-        </button>
+        {fundingDropdown}
       </div>
 
       <div className="ticket-field">
@@ -393,13 +453,23 @@ export function OrderTicket({
       <motion.button
         className="primary-trade-button"
         data-side={side}
-        disabled={!canSubmit}
+        disabled={primaryDisabled}
         type="button"
-        onClick={submitOrder}
+        onClick={primaryAction}
         whileHover={{ y: -1 }}
         whileTap={{ scale: 0.99 }}
       >
-        {!connected ? "Connect Wallet" : submitting ? "Submitting" : side === "long" ? "Submit Long" : "Submit Short"}
+        {!connected
+          ? "Connect Wallet"
+            : primaryBusy
+              ? depositing
+                ? "Depositing"
+                : "Submitting"
+            : !hasEnoughCollateral
+              ? "Top up first"
+              : side === "long"
+                ? "Submit Long"
+                : "Submit Short"}
       </motion.button>
 
       <TradeProgress stage={submitStage} />
@@ -414,7 +484,7 @@ export function OrderTicket({
       <div className="ticket-summary">
         <SummaryRow label="Position Size" value={`${formatNumber(size, 6)} ${market.baseAsset}`} />
         <SummaryRow label="Exposure" value={formatUsd(exposure, { maximumFractionDigits: 2 })} />
-        <SummaryRow label="Private Margin" value={formatUsd(margin, { maximumFractionDigits: 2 })} />
+        <SummaryRow label="Margin" value={formatUsd(margin, { maximumFractionDigits: 2 })} />
         <SummaryRow label="Leverage" value={`${formatNumber(leverage, 2)}x`} />
         <SummaryRow label="Liquidation Price" value={formatNumber(liquidationPrice, market.price < 10 ? 4 : 1)} />
         {orderType === "market" ? (
@@ -590,4 +660,19 @@ function formatInputNumber(value: number) {
   }
 
   return Number(value.toFixed(2));
+}
+
+function readStoredMargin(marketId: string, fallback: number): number {
+  if (typeof window === "undefined") return fallback;
+  const stored = Number(window.localStorage.getItem(marginStorageKey(marketId)));
+  return Number.isFinite(stored) && stored > 0 ? stored : fallback;
+}
+
+function writeStoredMargin(marketId: string, value: number): void {
+  if (typeof window === "undefined" || !Number.isFinite(value) || value <= 0) return;
+  window.localStorage.setItem(marginStorageKey(marketId), String(value));
+}
+
+function marginStorageKey(marketId: string): string {
+  return `${MARGIN_STORAGE_PREFIX}:${marketId}`;
 }
