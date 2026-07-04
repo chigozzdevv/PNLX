@@ -98,6 +98,28 @@ export function createLocalClientProverHandler(root = process.cwd()) {
         });
         return json(proofBundle(prover, record, record.proof));
       }
+      if (request.method === "POST" && url.pathname === "/withdraw") {
+        const input = await request.json() as Record<string, unknown>;
+        const record = prover.proveWithdrawal({
+          assetDigest: requiredHex(input.assetDigest, "assetDigest"),
+          blinding: requiredHex(input.blinding, "blinding"),
+          changeBlinding: optionalHex(input.changeBlinding),
+          changeRhoDigest: optionalHex(input.changeRhoDigest),
+          noteAmount: BigInt(String(input.noteAmount)),
+          noteCommitment: requiredHex(input.noteCommitment, "noteCommitment"),
+          nullifier: requiredHex(input.nullifier, "nullifier"),
+          ownerDigest: requiredHex(input.ownerDigest, "ownerDigest"),
+          pathIndices: requiredBooleanArray(input.pathIndices, "pathIndices"),
+          pathSiblings: requiredHexArray(input.pathSiblings, "pathSiblings"),
+          recipient: requiredHex(input.recipient, "recipient"),
+          rhoDigest: requiredHex(input.rhoDigest, "rhoDigest"),
+          root: requiredHex(input.root, "root"),
+          spendSecretDigest: requiredHex(input.spendSecretDigest, "spendSecretDigest"),
+          tokenDigest: requiredHex(input.tokenDigest, "tokenDigest"),
+          withdrawAmount: BigInt(String(input.withdrawAmount)),
+        });
+        return json(proofBundle(prover, record, record.proof));
+      }
       return cors(Response.json({ error: "not found" }, { status: 404 }));
     } catch (error) {
       const message = error instanceof Error ? error.message : "local prover error";
