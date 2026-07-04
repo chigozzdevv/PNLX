@@ -36,6 +36,7 @@ export interface MarketCandle {
 
 export interface MarketTickerItem {
   change24h: number;
+  fundingRate: number | null;
   marketId: string;
   openInterest: number;
   pair: string;

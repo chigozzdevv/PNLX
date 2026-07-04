@@ -464,9 +464,11 @@ function parseHyperliquidTicker(payload: unknown): MarketTickerItem[] {
     const previous = finiteNumber(context.prevDayPx, "previous price");
     const change24h = previous > 0 ? ((price - previous) / previous) * 100 : 0;
     const configured = SUPPORTED_PERP_ASSETS[symbol];
+    const fundingRate = optionalFiniteNumber(context.funding);
 
     return [{
       change24h,
+      fundingRate: fundingRate === null ? null : fundingRate * 100,
       marketId: configured?.marketId ?? `${symbol.toLowerCase()}-usd-perp`,
       openInterest: finiteNumber(context.openInterest ?? 0, "open interest"),
       pair: configured?.displaySymbol ?? `${symbol}/USD`,
@@ -475,6 +477,12 @@ function parseHyperliquidTicker(payload: unknown): MarketTickerItem[] {
       volume24h: finiteNumber(context.dayNtlVlm ?? 0, "24h volume"),
     }];
   });
+}
+
+function optionalFiniteNumber(value: unknown): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function numberArray(value: unknown, label: string): number[] {

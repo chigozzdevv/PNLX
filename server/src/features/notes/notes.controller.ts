@@ -21,6 +21,12 @@ export class NotesController {
     return json({ note: this.notes.membership(commitment as `0x${string}`) });
   }
 
+  addressDigest(request: Request): Response {
+    const address = new URL(request.url).searchParams.get("address");
+    if (!address) throw new Error("address is required");
+    return json({ digest: this.notes.addressDigest(address) });
+  }
+
   async deposit(request: Request): Promise<Response> {
     const body = await readJson<Record<string, string>>(request);
     return json({ note: this.notes.deposit(parseDepositNote(body)) }, 201);

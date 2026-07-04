@@ -17,6 +17,7 @@ export function registerNotesRoute(
 ): void {
   const controller = new NotesController(new NotesService(executor, prover, env, onchain, relayer));
   router.add("GET", "/notes/membership", (request) => controller.membership(request), { auth: true });
+  router.add("GET", "/notes/address-digest", (request) => controller.addressDigest(request), { auth: true });
   router.add("POST", "/notes/deposit-asset/prepare-proven", (request) =>
     controller.prepareDepositAssetProven(request),
   );

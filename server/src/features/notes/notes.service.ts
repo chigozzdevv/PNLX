@@ -63,6 +63,10 @@ export class NotesService {
     };
   }
 
+  addressDigest(address: string): Hex {
+    return this.requireOnchain().tokenDigest(address);
+  }
+
   prepareDepositAsset(
     input: AssetDepositNoteInput,
     authenticated?: string,
@@ -203,14 +207,21 @@ export class NotesService {
 
   withdrawAsset(input: WithdrawAssetNoteInput): WithdrawAssetNoteResult {
     this.assertCollateralToken(input.token);
-    this.assertWithdrawalRoot(input.root);
-    const withdrawal = this.prover.proveWithdrawal(input);
+    const onchainRelay = this.requireOnchain();
+    const recipientDigest = onchainRelay.tokenDigest(input.recipientAddress);
+    const request = {
+      ...input,
+      recipient: recipientDigest,
+      recipientDigest,
+    };
+    this.assertWithdrawalRoot(request.root);
+    const withdrawal = this.prover.proveWithdrawal(request);
     const record = {
       ...withdrawal,
-      recipientAddress: input.recipientAddress,
-      token: input.token,
+      recipientAddress: request.recipientAddress,
+      token: request.token,
     };
-    const onchain = this.requireOnchain().withdrawAsset(record);
+    const onchain = onchainRelay.withdrawAsset(record);
     this.assertSubmittedCustodyRelay(onchain, "withdraw_asset");
     this.executor.store.recordProof(record.proof);
     this.executor.store.addWithdrawal(record);

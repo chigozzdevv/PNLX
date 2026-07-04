@@ -76,6 +76,9 @@ export function parseWithdrawNote(input: Record<string, unknown>): WithdrawNoteI
 }
 
 export function parseWithdrawAssetNote(input: Record<string, unknown>): WithdrawAssetNoteInput {
+  const recipientAddress = required(input.recipientAddress, "recipientAddress");
+  const recipientDigest =
+    optionalHex(input.recipientDigest) ?? optionalHex(input.recipient) ?? (`0x${"0".repeat(64)}` as `0x${string}`);
   return {
     assetDigest: required(input.assetDigest, "assetDigest") as `0x${string}`,
     blinding: required(input.blinding, "blinding") as `0x${string}`,
@@ -90,9 +93,9 @@ export function parseWithdrawAssetNote(input: Record<string, unknown>): Withdraw
     root: required(input.root, "root") as `0x${string}`,
     rhoDigest: required(input.rhoDigest, "rhoDigest") as `0x${string}`,
     nullifier: required(input.nullifier, "nullifier") as `0x${string}`,
-    recipient: required(input.recipientDigest, "recipientDigest") as `0x${string}`,
-    recipientAddress: required(input.recipientAddress, "recipientAddress"),
-    recipientDigest: required(input.recipientDigest, "recipientDigest") as `0x${string}`,
+    recipient: recipientDigest,
+    recipientAddress,
+    recipientDigest,
     spendSecretDigest: required(input.spendSecretDigest, "spendSecretDigest") as `0x${string}`,
     token: required(input.token, "token"),
     tokenDigest: required(input.tokenDigest, "tokenDigest") as `0x${string}`,
