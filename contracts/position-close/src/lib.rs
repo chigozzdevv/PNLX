@@ -6,7 +6,10 @@ use market_interface::MarketClient;
 use position_state_interface::PositionStateClient;
 use proof_ledger_interface::ProofLedgerClient;
 use soroban_sdk::{
-    contract, contractimpl, contracttype, crypto::bn254::Bn254Fr, Address, Bytes, BytesN, Env, U256,
+    auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
+    contract, contractimpl, contracttype,
+    crypto::bn254::Bn254Fr,
+    Address, Bytes, BytesN, Env, IntoVal, Symbol, Val, Vec, U256,
 };
 
 const PRICE_SCALE: u128 = 100_000_000;
@@ -247,13 +250,52 @@ fn spend_and_advance_position(
         .unwrap_or_else(|| panic!("not initialized"));
     let position_state = PositionStateClient::new(env, &position_state_id);
     let writer = env.current_contract_address();
+    authorize_as_writer(
+        env,
+        position_state_id.clone(),
+        "spend_position",
+        Vec::from_array(
+            env,
+            [
+                writer.clone().into_val(env),
+                position_root.clone().into_val(env),
+                position_commitment.clone().into_val(env),
+                position_nullifier.clone().into_val(env),
+            ],
+        ),
+    );
     position_state.spend_position(
         &writer,
         position_root,
         position_commitment,
         position_nullifier,
     );
+    authorize_as_writer(
+        env,
+        position_state_id,
+        "advance_root",
+        Vec::from_array(
+            env,
+            [
+                writer.clone().into_val(env),
+                position_root.clone().into_val(env),
+                new_position_root.clone().into_val(env),
+            ],
+        ),
+    );
     position_state.advance_root(&writer, position_root, new_position_root);
+}
+
+fn authorize_as_writer(env: &Env, contract: Address, fn_name: &str, args: Vec<Val>) {
+    let invocation = InvokerContractAuthEntry::Contract(SubContractInvocation {
+        context: ContractContext {
+            contract,
+            fn_name: Symbol::new(env, fn_name),
+            args,
+        },
+        sub_invocations: Vec::new(env),
+    });
+    env.authorize_as_current_contract(Vec::from_array(env, [invocation]));
 }
 
 fn validate_oracle_mark_price(env: &Env, market_id: &BytesN<32>, mark_price: i128) {
@@ -416,7 +458,6 @@ mod tests {
     };
     use governance::{Governance, GovernanceClient};
     use market::{Market, MarketClient};
-    use test_oracle::{TestOracle, TestOracleClient};
     use oracle_interface::OracleAsset;
     use position_state::{PositionState, PositionStateClient};
     use proof_ledger::{ProofLedger, ProofLedgerClient};
@@ -425,6 +466,7 @@ mod tests {
         testutils::{Address as _, Ledger},
         Address, BytesN, Env, Symbol,
     };
+    use test_oracle::{TestOracle, TestOracleClient};
 
     struct ProtocolSetup {
         conditional_authority: Address,

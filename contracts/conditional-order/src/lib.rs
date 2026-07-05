@@ -299,7 +299,6 @@ mod tests {
     use super::{ConditionalOrder, ConditionalOrderClient, ProofMeta};
     use governance::{Governance, GovernanceClient};
     use market::{Market, MarketClient};
-    use test_oracle::{TestOracle, TestOracleClient};
     use oracle_interface::OracleAsset;
     use proof_ledger::{ProofLedger, ProofLedgerClient};
     use soroban_sdk::{
@@ -307,6 +306,7 @@ mod tests {
         testutils::{Address as _, Ledger},
         Address, BytesN, Env, Symbol,
     };
+    use test_oracle::{TestOracle, TestOracleClient};
 
     #[test]
     fn registers_and_triggers_conditional_order() {

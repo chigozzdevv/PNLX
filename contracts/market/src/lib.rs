@@ -464,13 +464,13 @@ mod tests {
 
     use super::{Market, MarketClient, MarketConfig};
     use governance::{Governance, GovernanceClient};
-    use test_oracle::{TestOracle, TestOracleClient};
     use oracle_interface::{OracleAsset, PriceData};
     use soroban_sdk::{
         symbol_short,
         testutils::{Address as _, Ledger},
         Address, BytesN, Env, Symbol, Vec,
     };
+    use test_oracle::{TestOracle, TestOracleClient};
 
     #[test]
     fn stores_market_and_reads_fresh_sep40_price() {

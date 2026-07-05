@@ -34,12 +34,16 @@ impl Risc0ProofVerifier {
         if env.storage().instance().has(&DataKey::Governance) {
             panic!("already initialized");
         }
-        env.storage().instance().set(&DataKey::Governance, &governance);
+        env.storage()
+            .instance()
+            .set(&DataKey::Governance, &governance);
         env.storage()
             .instance()
             .set(&DataKey::ProofLedger, &proof_ledger);
         env.storage().instance().set(&DataKey::Router, &router);
-        env.storage().instance().set(&DataKey::CircuitId, &circuit_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::CircuitId, &circuit_id);
         env.storage()
             .instance()
             .set(&DataKey::VerifierHash, &verifier_hash);

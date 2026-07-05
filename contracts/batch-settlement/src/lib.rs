@@ -6,8 +6,10 @@ use market_interface::{MarketClient, MarketPrice};
 use position_state_interface::PositionStateClient;
 use proof_ledger_interface::ProofLedgerClient;
 use soroban_sdk::{
-    contract, contractimpl, contracttype, crypto::bn254::Bn254Fr, Address, Bytes, BytesN, Env, Vec,
-    U256,
+    auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
+    contract, contractimpl, contracttype,
+    crypto::bn254::Bn254Fr,
+    Address, Bytes, BytesN, Env, IntoVal, Symbol, Val, Vec, U256,
 };
 
 const MAX_PUBLIC_ITEMS: u32 = 8;
@@ -214,11 +216,33 @@ fn advance_position_root(env: &Env, old_root: &BytesN<32>, new_root: &BytesN<32>
         .persistent()
         .get(&DataKey::PositionState)
         .unwrap_or_else(|| panic!("not initialized"));
-    PositionStateClient::new(env, &position_state_id).advance_root(
-        &env.current_contract_address(),
-        old_root,
-        new_root,
+    let writer = env.current_contract_address();
+    authorize_as_writer(
+        env,
+        position_state_id.clone(),
+        "advance_root",
+        Vec::from_array(
+            env,
+            [
+                writer.clone().into_val(env),
+                old_root.clone().into_val(env),
+                new_root.clone().into_val(env),
+            ],
+        ),
     );
+    PositionStateClient::new(env, &position_state_id).advance_root(&writer, old_root, new_root);
+}
+
+fn authorize_as_writer(env: &Env, contract: Address, fn_name: &str, args: Vec<Val>) {
+    let invocation = InvokerContractAuthEntry::Contract(SubContractInvocation {
+        context: ContractContext {
+            contract,
+            fn_name: Symbol::new(env, fn_name),
+            args,
+        },
+        sub_invocations: Vec::new(env),
+    });
+    env.authorize_as_current_contract(Vec::from_array(env, [invocation]));
 }
 
 fn validate_proof(env: &Env, proof: &ProofMeta) {
@@ -385,7 +409,6 @@ mod tests {
     use governance::{Governance, GovernanceClient};
     use intent_registry::{IntentRegistry, IntentRegistryClient};
     use market::{Market, MarketClient};
-    use test_oracle::{TestOracle, TestOracleClient};
     use oracle_interface::OracleAsset;
     use position_state::{PositionState, PositionStateClient};
     use proof_ledger::{ProofLedger, ProofLedgerClient};
@@ -394,6 +417,7 @@ mod tests {
         testutils::{Address as _, Ledger},
         Address, BytesN, Env, Symbol, Vec,
     };
+    use test_oracle::{TestOracle, TestOracleClient};
 
     #[test]
     fn settles_batch() {

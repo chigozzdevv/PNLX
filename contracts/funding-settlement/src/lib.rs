@@ -4,7 +4,10 @@ use governance_interface::GovernanceClient;
 use market_interface::MarketClient;
 use proof_ledger_interface::ProofLedgerClient;
 use soroban_sdk::{
-    contract, contractimpl, contracttype, crypto::bn254::Bn254Fr, Address, Bytes, BytesN, Env, U256,
+    auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
+    contract, contractimpl, contracttype,
+    crypto::bn254::Bn254Fr,
+    Address, Bytes, BytesN, Env, IntoVal, Symbol, Val, Vec, U256,
 };
 
 #[derive(Clone)]
@@ -123,12 +126,23 @@ impl FundingSettlement {
             .persistent()
             .get(&DataKey::MarketContract)
             .unwrap_or_else(|| panic!("not initialized"));
-        MarketClient::new(&env, &market_contract).advance_funding(
-            &env.current_contract_address(),
-            &market_id,
-            &old_index,
-            &new_index,
+        let updater = env.current_contract_address();
+        authorize_as_updater(
+            &env,
+            market_contract.clone(),
+            "advance_funding",
+            Vec::from_array(
+                &env,
+                [
+                    updater.clone().into_val(&env),
+                    market_id.clone().into_val(&env),
+                    old_index.into_val(&env),
+                    new_index.into_val(&env),
+                ],
+            ),
         );
+        MarketClient::new(&env, &market_contract)
+            .advance_funding(&updater, &market_id, &old_index, &new_index);
         env.storage().persistent().set(
             &key,
             &FundingSettlementMeta {
@@ -150,6 +164,18 @@ impl FundingSettlement {
             .persistent()
             .has(&DataKey::Funding(market_id, old_index, new_index))
     }
+}
+
+fn authorize_as_updater(env: &Env, contract: Address, fn_name: &str, args: Vec<Val>) {
+    let invocation = InvokerContractAuthEntry::Contract(SubContractInvocation {
+        context: ContractContext {
+            contract,
+            fn_name: Symbol::new(env, fn_name),
+            args,
+        },
+        sub_invocations: Vec::new(env),
+    });
+    env.authorize_as_current_contract(Vec::from_array(env, [invocation]));
 }
 
 fn validate_oracle_mark_price(env: &Env, market_id: &BytesN<32>, mark_price: i128) {
@@ -299,7 +325,6 @@ mod tests {
     use super::{FundingSettlement, FundingSettlementClient, ProofMeta};
     use governance::{Governance, GovernanceClient};
     use market::{Market, MarketClient};
-    use test_oracle::{TestOracle, TestOracleClient};
     use oracle_interface::OracleAsset;
     use proof_ledger::{ProofLedger, ProofLedgerClient};
     use soroban_sdk::{
@@ -307,6 +332,7 @@ mod tests {
         testutils::{Address as _, Ledger},
         Address, BytesN, Env, Symbol,
     };
+    use test_oracle::{TestOracle, TestOracleClient};
 
     #[test]
     fn settles_funding_update() {
