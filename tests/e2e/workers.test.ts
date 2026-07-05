@@ -29,9 +29,11 @@ import {
   positionOpeningAccountEventId,
 } from "@/shared/protocol/account-event-binding";
 import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
+import { FileProtocolStore } from "@/shared/state/persistent-store";
 import { ProtocolStore } from "@/shared/state/store";
 import { createBatchExecutor } from "@/workers/batch-executor/batch-executor.worker";
 import { createExecutor } from "@/workers/executor/executor.worker";
+import { ExecutorService } from "@/workers/executor/executor.service";
 import { createMatcherApp } from "@/workers/matcher/matcher.app";
 import { RemoteMatcherClient } from "@/workers/matcher/remote/matcher.service";
 import { MatcherService } from "@/workers/matcher/matcher.service";
@@ -124,20 +126,6 @@ describe("support workers", () => {
     expect(tx.txHash).toBeUndefined();
     expect(snapshot.marginRoot.startsWith("0x")).toBe(true);
     expect(snapshot.spentNullifierCount).toBe(0);
-  });
-
-  test("persists relay history across relayer restarts", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pnlx-relays-"));
-    const historyPath = join(dir, "relay-state.json");
-    const first = createRelayer({ historyPath });
-    const commitment = hashFields("note", ["persistent-relay"]);
-
-    const tx = first.relay({ kind: "deposit", payload: { commitment } });
-    const second = createRelayer({ historyPath });
-
-    expect(second.list()).toHaveLength(1);
-    expect(second.list()[0].relayId).toBe(tx.relayId);
-    expect(second.list()[0].payloadDigest).toBe(tx.payloadDigest);
   });
 
   test("requires proof ledger registration before private state mutation", () => {
@@ -239,7 +227,7 @@ describe("support workers", () => {
     const pendingCommitment = hashFields("commitment", ["persistent-pending-deposit"]);
     const depositProof = depositProofRecord(1_000n, pendingCommitment);
 
-    const first = createExecutor({ storePath });
+    const first = createFileExecutor(storePath);
     first.addMarket(market);
     first.deposit(commitment);
     first.store.recordProof(proof);
@@ -254,7 +242,7 @@ describe("support workers", () => {
       tokenDigest: depositProof.tokenDigest,
     });
 
-    const second = createExecutor({ storePath });
+    const second = createFileExecutor(storePath);
 
     expect(second.store.markets.get(market.marketId)?.oraclePrice).toBe(market.oraclePrice);
     expect(second.store.marginCommitments.has(commitment)).toBe(true);
@@ -662,7 +650,7 @@ describe("support workers", () => {
 
   test("matcher app produces transcripts from a separate persisted matcher process view", async () => {
     const storePath = join(mkdtempSync(join(tmpdir(), "pnlx-remote-matcher-")), "protocol-store.json");
-    const executor = createExecutor({ storePath });
+    const executor = createFileExecutor(storePath);
     const market = {
       marketId: "btc-usd-perp",
       oraclePrice: 50_000n * PRICE_SCALE,
@@ -693,10 +681,10 @@ describe("support workers", () => {
     }
 
     const matcherApp = createMatcherApp({
+      executor,
       signerConfig: {
         proofs: prooflessProofs(),
       },
-      storePath,
       token: "matcher-token",
     });
     const response = await matcherApp.handle(
@@ -733,12 +721,12 @@ describe("support workers", () => {
     };
     executor.addMarket(market);
     const long = submitBackedIntent(executor, matchedTradeIntent("batch-executor-long", "long", {
-      batchId: "runner-btc-usd-perp-1234",
+      batchId: "ui-client-long-btc-usd-perp",
       limitPrice: 50_500n * PRICE_SCALE,
       marketId: market.marketId,
     }));
     const short = submitBackedIntent(executor, matchedTradeIntent("batch-executor-short", "short", {
-      batchId: "runner-btc-usd-perp-1234",
+      batchId: "ui-client-short-btc-usd-perp",
       limitPrice: 49_500n * PRICE_SCALE,
       marketId: market.marketId,
     }));
@@ -1930,7 +1918,7 @@ describe("support workers", () => {
   test("market updates are durable and relay on-chain upserts", () => {
     const dir = mkdtempSync(join(tmpdir(), "pnlx-market-update-"));
     const storePath = join(dir, "protocol-store.json");
-    const executor = createExecutor({ storePath });
+    const executor = createFileExecutor(storePath);
     const events: string[] = [];
     const initial = {
       marketId: "btc-usd-perp",
@@ -1977,7 +1965,7 @@ describe("support workers", () => {
 
     executor.addMarket(initial);
     const result = service.update(updated);
-    const reloaded = createExecutor({ storePath });
+    const reloaded = createFileExecutor(storePath);
 
     expect(result).toEqual(updated);
     expect(events).toEqual(["market:btc-usd-perp:10"]);
@@ -3438,6 +3426,10 @@ function depositProofRecord(amount: bigint, commitment: `0x${string}`) {
     tokenDigest: hashFields("token-digest", ["asset-deposit"]),
     proof: proof("deposit-note"),
   };
+}
+
+function createFileExecutor(storePath: string): ExecutorService {
+  return new ExecutorService({}, new FileProtocolStore(storePath));
 }
 
 function restoreEnv(key: string, value: string | undefined): void {

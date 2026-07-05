@@ -9,11 +9,12 @@ import { createMarginNote } from "@pnlx/sdk";
 import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
 import type { MatchResult } from "@/workers/batch-matcher/batch-matcher.model";
 import { createExecutor } from "@/workers/executor/executor.worker";
-import type { ExecutorService } from "@/workers/executor/executor.service";
+import { ExecutorService } from "@/workers/executor/executor.service";
 import { createIndexer } from "@/workers/indexer/indexer.worker";
 import { createMatcher } from "@/workers/matcher/matcher.worker";
 import type { SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
 import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
+import { FileProtocolStore } from "@/shared/state/persistent-store";
 
 describe("private orderbook residuals", () => {
   test("matches crossed private orders by price-time priority at maker price", () => {
@@ -105,7 +106,7 @@ describe("private orderbook residuals", () => {
 
   test("persists residual orders and fills them in a later batch", () => {
     const storePath = join(mkdtempSync(join(tmpdir(), "pnlx-orderbook-")), "store.json");
-    const firstExecutor = createExecutor({ storePath });
+    const firstExecutor = createFileExecutor(storePath);
     installFastSettlementProofs(firstExecutor);
     const market = testMarket();
     firstExecutor.addMarket(market);
@@ -156,7 +157,7 @@ describe("private orderbook residuals", () => {
     expect(firstExecutor.store.spentNullifiers.has(alice.note.nullifier as Hex)).toBe(true);
     expect(firstExecutor.store.spentNullifiers.has(bob.note.nullifier as Hex)).toBe(true);
 
-    const secondExecutor = createExecutor({ storePath });
+    const secondExecutor = createFileExecutor(storePath);
     installFastSettlementProofs(secondExecutor);
     const carol = backedIntent(secondExecutor, {
       batchId: "batch-2",
@@ -244,7 +245,7 @@ describe("private orderbook residuals", () => {
 
   test("persists cancelled order lifecycle state", () => {
     const storePath = join(mkdtempSync(join(tmpdir(), "pnlx-order-cancel-")), "store.json");
-    const executor = createExecutor({ storePath });
+    const executor = createFileExecutor(storePath);
     executor.addMarket(testMarket());
     const alice = backedIntent(executor, {
       batchId: "cancel-batch",
@@ -259,7 +260,7 @@ describe("private orderbook residuals", () => {
 
     expect(executor.store.cancelOrder(intentCommitment).status).toBe("cancelled");
 
-    const reloaded = createExecutor({ storePath });
+    const reloaded = createFileExecutor(storePath);
     expect(reloaded.store.orderLifecycle.get(intentCommitment)?.status).toBe("cancelled");
   });
 });
@@ -423,6 +424,10 @@ function proofMeta(label: string, fields: unknown[]): ProofMeta {
     publicInputHash: hashFields("public-input", [digest]),
     verifierHash: hashFields("verifier", [label]),
   };
+}
+
+function createFileExecutor(storePath: string): ExecutorService {
+  return new ExecutorService({}, new FileProtocolStore(storePath));
 }
 
 function bigintStringify(_key: string, value: unknown): unknown {

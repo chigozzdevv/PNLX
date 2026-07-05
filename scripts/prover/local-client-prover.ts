@@ -130,12 +130,14 @@ export function createLocalClientProverHandler(root = process.cwd()) {
 
 if (import.meta.main) {
   const port = Number(process.env.PNLX_CLIENT_PROVER_PORT ?? DEFAULT_PORT);
+  const hostname = process.env.PNLX_CLIENT_PROVER_HOST ?? "127.0.0.1";
   const server = Bun.serve({
+    hostname,
     port,
     fetch: createLocalClientProverHandler(process.cwd()),
   });
 
-  console.log(`PNLX local client prover listening on http://127.0.0.1:${server.port}`);
+  console.log(`PNLX local client prover listening on http://${hostname}:${server.port}`);
 }
 
 function proofBundle(prover: ProverService, record: unknown, proof: ProofMeta) {

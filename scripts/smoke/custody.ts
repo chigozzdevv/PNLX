@@ -1,14 +1,16 @@
 import { spawnSync } from "node:child_process";
 import { createPrivateKey, sign } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { ownerCommitment } from "@pnlx/crypto";
 import { createCircuitMarginNote } from "@pnlx/sdk";
 import { createAppAsync } from "@/app";
 import { loadEnv, type ServerEnv } from "@/config/env";
 import { stellarSignedMessageHash } from "@/features/auth/auth.service";
 import { ProverService } from "@/workers/prover/prover.service";
+import {
+  makerNoteStorageLabel,
+  readMakerNotes,
+  saveMakerNotes,
+} from "@/shared/maker-note-store";
 
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const ED25519_SECRET_KEY_VERSION = 18 << 3;
@@ -19,6 +21,7 @@ interface CustodySmokeOptions {
   asset?: string;
   deployAsset: boolean;
   from?: string;
+  noteAmount?: bigint;
   prepareOnly: boolean;
   source?: string;
   token?: string;
@@ -30,6 +33,9 @@ interface CustodyRuntime {
   token: string;
 }
 
+type PreparedCustodyDeposit = Awaited<ReturnType<typeof prepareCustodyDeposit>>;
+type FinalizedCustodyDeposit = Awaited<ReturnType<typeof finalizeCustodyDeposit>>;
+
 if (import.meta.main) {
   const result = await runCustodySmoke(parseCustodySmokeOptions());
   console.log(JSON.stringify(result, bigintReplacer, 2));
@@ -37,10 +43,11 @@ if (import.meta.main) {
 
 export function parseCustodySmokeOptions(argv = process.argv.slice(2)): CustodySmokeOptions {
   return {
-    amount: BigInt(value(argv, "--amount", "1000000")),
+    amount: BigInt(value(argv, "--amount", "10000000")),
     asset: optionalValue(argv, "--asset"),
     deployAsset: flag(argv, "--deploy-asset"),
     from: optionalValue(argv, "--from"),
+    noteAmount: optionalBigInt(argv, "--note-amount"),
     prepareOnly: flag(argv, "--prepare-only"),
     source: optionalValue(argv, "--source"),
     token: optionalValue(argv, "--token"),
@@ -98,47 +105,43 @@ async function runCustodySmoke(options: CustodySmokeOptions): Promise<Record<str
   if (!shieldedPool) throw new Error("deployment missing shielded-pool contract");
   const tokenDigest = tokenDigestFor(shieldedPool, token, source, configured);
   process.env.COLLATERAL_TOKEN_DIGEST = tokenDigest;
+  const noteAmounts = splitCustodyNoteAmounts(options.amount, options.noteAmount);
 
-  const createdAt = Date.now();
-  const spendSecret = `custody-smoke-spend-${createdAt}`;
-  const rho = `custody-smoke-rho-${createdAt}`;
-  const blindingSeed = `custody-smoke-blind-${createdAt}`;
-  const note = createCircuitMarginNote({
-    assetDigest: tokenDigest,
-    assetId: "usdc",
-    amount: options.amount,
-    owner: from,
-    spendSecret,
-    rho,
-    blinding: blindingSeed,
-  });
-  const depositProof = new ProverService().proveDepositNote({
-    amount: options.amount,
-    blinding: note.blinding,
-    commitment: note.commitment,
-    ownerDigest: note.ownerDigest,
-    rhoDigest: note.rhoDigest,
-    tokenDigest: note.assetDigest,
-  });
   const app = await createAppAsync();
   const authHeaders = await authHeadersFor(app, source, from, configured);
   const health = await get(app, "/health");
-  const prepared = await post(app, "/notes/deposit-asset/prepare-proven", {
-    amount: options.amount,
-    commitment: note.commitment,
-    depositProof,
-    from,
-    source,
-    token,
-  }, authHeaders);
+
   if (options.prepareOnly) {
+    const preparedDeposits: PreparedCustodyDeposit[] = [];
+    for (let index = 0; index < noteAmounts.length; index += 1) {
+      const prepared = await prepareCustodyDeposit({
+        amount: noteAmounts[index],
+        app,
+        authHeaders,
+        from,
+        index,
+        source,
+        token,
+        tokenDigest,
+      });
+      preparedDeposits.push(prepared);
+    }
+    const first = preparedDeposits[0];
     return {
       amount: options.amount,
       from,
       health,
       mode: "prepare-only",
-      noteCommitment: note.commitment,
-      prepared: summarizePreparedDeposit(prepared),
+      noteAmount: options.noteAmount,
+      noteAmounts,
+      noteCommitment: first.note.commitment,
+      noteCommitments: preparedDeposits.map((deposit) => deposit.note.commitment),
+      prepared: summarizePreparedDeposit(first.prepared),
+      preparedDeposits: preparedDeposits.map((deposit) => ({
+        amount: deposit.amount,
+        noteCommitment: deposit.note.commitment,
+        prepared: summarizePreparedDeposit(deposit.prepared),
+      })),
       shieldedPool,
       source,
       token,
@@ -146,55 +149,46 @@ async function runCustodySmoke(options: CustodySmokeOptions): Promise<Record<str
   }
 
   const before = readBalances(token, from, shieldedPool, configured);
-  const signedXdr = signPreparedXdr(prepared, source, configured);
-  const relay = await post(app, "/relays/signed-xdr", {
-    commitment: preparedPendingField(prepared, "commitment"),
-    expectedTxHash: preparedPendingField(prepared, "preparedTxHash"),
-    preparedXdrDigest: preparedPendingField(prepared, "preparedXdrDigest"),
-    xdr: signedXdr,
-  }, authHeaders);
-  const deposit = await post(app, "/notes/deposit-asset/finalize", {
-    amount: options.amount,
-    commitment: note.commitment,
-    depositProof,
-    from,
-    relayId: String((relay.relay as Record<string, unknown>).relayId),
-    token,
-  }, authHeaders);
-  const after = waitForCustodyBalances(token, from, shieldedPool, before, options.amount, configured);
+  let latestBefore = before;
+  const depositedNotes: FinalizedCustodyDeposit[] = [];
+  for (let index = 0; index < noteAmounts.length; index += 1) {
+    console.error(`[custody] depositing maker note ${index + 1}/${noteAmounts.length} amount=${noteAmounts[index]}`);
+    const prepared = await prepareCustodyDeposit({
+      amount: noteAmounts[index],
+      app,
+      authHeaders,
+      from,
+      index,
+      source,
+      token,
+      tokenDigest,
+    });
+    const deposited = await finalizeCustodyDeposit({
+      app,
+      authHeaders,
+      before: latestBefore,
+      configured,
+      from,
+      prepared,
+      shieldedPool,
+      source,
+      token,
+    });
+    depositedNotes.push(deposited);
+    latestBefore = deposited.after;
+  }
+  const after = latestBefore;
   const poolDelta = after.pool - before.pool;
   const traderDelta = after.trader - before.trader;
   const nativeAssetFeesIncluded = token === assetContractId("native", configured);
-  const hasCommitment = waitForPoolCommitment(shieldedPool, note.commitment, source, configured);
-  if (!hasCommitment) {
-    throw new Error(`shielded pool did not record commitment ${note.commitment}`);
-  }
   if (poolDelta !== options.amount) {
-    throw new Error(`shielded pool balance delta ${poolDelta} did not match deposit ${options.amount}`);
+    throw new Error(`shielded pool total balance delta ${poolDelta} did not match deposit ${options.amount}`);
   }
   if (!nativeAssetFeesIncluded && before.trader - after.trader !== options.amount) {
-    throw new Error(`trader token debit ${before.trader - after.trader} did not match deposit ${options.amount}`);
+    throw new Error(`trader total token debit ${before.trader - after.trader} did not match deposit ${options.amount}`);
   }
-  const savedMakerNote = saveMakerNote({
-    amount: options.amount,
-    blinding: note.blinding,
-    blindingSeed,
-    commitment: note.commitment,
-    createdAt,
-    depositTxHash: String((relay.relay as Record<string, unknown>).txHash ?? ""),
-    noteNullifier: note.noteNullifier,
-    ownerCommitment: ownerCommitment(from),
-    ownerDigest: note.ownerDigest,
-    rho,
-    rhoDigest: note.rhoDigest,
-    shieldedPool,
-    source,
-    spendSecret,
-    spendSecretDigest: note.spendSecretDigest,
-    token,
-    tokenDigest: note.assetDigest,
-    walletAddress: from,
-  });
+  const firstDeposit = depositedNotes[0];
+  if (!firstDeposit) throw new Error("custody smoke did not finalize any maker notes");
 
   return {
     amount: options.amount,
@@ -204,26 +198,49 @@ async function runCustodySmoke(options: CustodySmokeOptions): Promise<Record<str
       poolDelta,
       traderDelta,
     },
-    deposit: summarizeFinalizedDeposit(deposit),
+    deposit: summarizeFinalizedDeposit(firstDeposit.deposit),
     from,
     health,
     mode: "live-wallet-deposit",
+    noteAmount: options.noteAmount,
+    noteAmounts,
+    noteCount: depositedNotes.length,
     makerNote: {
-      amount: savedMakerNote.amount,
-      commitment: savedMakerNote.commitment,
-      file: makerNotesPath(),
-      noteNullifier: savedMakerNote.noteNullifier,
-      ownerCommitment: savedMakerNote.ownerCommitment,
-      status: savedMakerNote.status,
+      amount: firstDeposit.savedMakerNote.amount,
+      commitment: firstDeposit.savedMakerNote.commitment,
+      noteNullifier: firstDeposit.savedMakerNote.noteNullifier,
+      ownerCommitment: firstDeposit.savedMakerNote.ownerCommitment,
+      status: firstDeposit.savedMakerNote.status,
+      store: makerNoteStorageLabel(),
     },
-    noteCommitment: note.commitment,
-    prepared: summarizePreparedDeposit(prepared),
-    relay: summarizeRelay(relay.relay as Record<string, unknown>),
+    makerNotes: depositedNotes.map((deposited) => ({
+      amount: deposited.savedMakerNote.amount,
+      commitment: deposited.savedMakerNote.commitment,
+      noteNullifier: deposited.savedMakerNote.noteNullifier,
+      ownerCommitment: deposited.savedMakerNote.ownerCommitment,
+      status: deposited.savedMakerNote.status,
+      store: makerNoteStorageLabel(),
+    })),
+    noteCommitment: firstDeposit.prepared.note.commitment,
+    noteCommitments: depositedNotes.map((deposited) => deposited.prepared.note.commitment),
+    prepared: summarizePreparedDeposit(firstDeposit.prepared.prepared),
+    preparedDeposits: depositedNotes.map((deposited) => ({
+      amount: deposited.prepared.amount,
+      noteCommitment: deposited.prepared.note.commitment,
+      prepared: summarizePreparedDeposit(deposited.prepared.prepared),
+    })),
+    relay: summarizeRelay(firstDeposit.relay.relay as Record<string, unknown>),
+    relays: depositedNotes.map((deposited) => summarizeRelay(deposited.relay.relay as Record<string, unknown>)),
     shieldedPool,
     source,
     token,
     verified: {
-      commitment: hasCommitment,
+      commitment: depositedNotes.every((deposited) => deposited.hasCommitment),
+      commitments: depositedNotes.map((deposited) => ({
+        amount: deposited.prepared.amount,
+        commitment: deposited.prepared.note.commitment,
+        recorded: deposited.hasCommitment,
+      })),
       poolReceivedAmount: poolDelta === options.amount,
       traderDebitedAtLeastAmount: nativeAssetFeesIncluded
         ? "native asset balance includes fees/reserves; pool delta is authoritative"
@@ -235,7 +252,160 @@ async function runCustodySmoke(options: CustodySmokeOptions): Promise<Record<str
   };
 }
 
-function saveMakerNote(input: {
+async function prepareCustodyDeposit(input: {
+  amount: bigint;
+  app: SmokeApp;
+  authHeaders: Record<string, string>;
+  from: string;
+  index: number;
+  source: string;
+  token: string;
+  tokenDigest: `0x${string}`;
+}) {
+  const createdAt = Date.now();
+  const seed = `${createdAt}-${input.index + 1}`;
+  const spendSecret = `custody-smoke-spend-${seed}`;
+  const rho = `custody-smoke-rho-${seed}`;
+  const blindingSeed = `custody-smoke-blind-${seed}`;
+  const note = createCircuitMarginNote({
+    assetDigest: input.tokenDigest,
+    assetId: "usdc",
+    amount: input.amount,
+    owner: input.from,
+    spendSecret,
+    rho,
+    blinding: blindingSeed,
+  });
+  const depositProof = new ProverService().proveDepositNote({
+    amount: input.amount,
+    blinding: note.blinding,
+    commitment: note.commitment,
+    ownerDigest: note.ownerDigest,
+    rhoDigest: note.rhoDigest,
+    tokenDigest: note.assetDigest,
+  });
+  const prepared = await post(input.app, "/notes/deposit-asset/prepare-proven", {
+    amount: input.amount,
+    commitment: note.commitment,
+    depositProof,
+    from: input.from,
+    source: input.source,
+    token: input.token,
+  }, input.authHeaders);
+
+  return {
+    amount: input.amount,
+    blindingSeed,
+    createdAt,
+    depositProof,
+    note,
+    prepared,
+    rho,
+    spendSecret,
+  };
+}
+
+async function finalizeCustodyDeposit(input: {
+  app: SmokeApp;
+  authHeaders: Record<string, string>;
+  before: { pool: bigint; trader: bigint };
+  configured: ServerEnv;
+  from: string;
+  prepared: PreparedCustodyDeposit;
+  shieldedPool: string;
+  source: string;
+  token: string;
+}) {
+  const signedXdr = signPreparedXdr(input.prepared.prepared, input.source, input.configured);
+  const relay = await post(input.app, "/relays/signed-xdr", {
+    commitment: preparedPendingField(input.prepared.prepared, "commitment"),
+    expectedTxHash: preparedPendingField(input.prepared.prepared, "preparedTxHash"),
+    preparedXdrDigest: preparedPendingField(input.prepared.prepared, "preparedXdrDigest"),
+    xdr: signedXdr,
+  }, input.authHeaders);
+  const deposit = await post(input.app, "/notes/deposit-asset/finalize", {
+    amount: input.prepared.amount,
+    commitment: input.prepared.note.commitment,
+    depositProof: input.prepared.depositProof,
+    from: input.from,
+    relayId: String((relay.relay as Record<string, unknown>).relayId),
+    token: input.token,
+  }, input.authHeaders);
+  const after = waitForCustodyBalances(
+    input.token,
+    input.from,
+    input.shieldedPool,
+    input.before,
+    input.prepared.amount,
+    input.configured,
+  );
+  const nativeAssetFeesIncluded = input.token === assetContractId("native", input.configured);
+  const poolDelta = after.pool - input.before.pool;
+  const traderDebit = input.before.trader - after.trader;
+  const hasCommitment = waitForPoolCommitment(
+    input.shieldedPool,
+    input.prepared.note.commitment,
+    input.source,
+    input.configured,
+  );
+  if (!hasCommitment) {
+    throw new Error(`shielded pool did not record commitment ${input.prepared.note.commitment}`);
+  }
+  if (poolDelta !== input.prepared.amount) {
+    throw new Error(`shielded pool balance delta ${poolDelta} did not match deposit ${input.prepared.amount}`);
+  }
+  if (!nativeAssetFeesIncluded && traderDebit !== input.prepared.amount) {
+    throw new Error(`trader token debit ${traderDebit} did not match deposit ${input.prepared.amount}`);
+  }
+  const savedMakerNote = await saveMakerNote({
+    amount: input.prepared.amount,
+    blinding: input.prepared.note.blinding,
+    blindingSeed: input.prepared.blindingSeed,
+    commitment: input.prepared.note.commitment,
+    createdAt: input.prepared.createdAt,
+    depositTxHash: String((relay.relay as Record<string, unknown>).txHash ?? ""),
+    noteNullifier: input.prepared.note.noteNullifier,
+    ownerCommitment: ownerCommitment(input.from),
+    ownerDigest: input.prepared.note.ownerDigest,
+    rho: input.prepared.rho,
+    rhoDigest: input.prepared.note.rhoDigest,
+    shieldedPool: input.shieldedPool,
+    source: input.source,
+    spendSecret: input.prepared.spendSecret,
+    spendSecretDigest: input.prepared.note.spendSecretDigest,
+    token: input.token,
+    tokenDigest: input.prepared.note.assetDigest,
+    walletAddress: input.from,
+  });
+
+  return {
+    after,
+    deposit,
+    hasCommitment,
+    prepared: input.prepared,
+    relay,
+    savedMakerNote,
+  };
+}
+
+export function splitCustodyNoteAmounts(amount: bigint, noteAmount?: bigint): bigint[] {
+  if (amount <= 0n) throw new Error("custody smoke amount must be positive");
+  if (noteAmount === undefined) return [amount];
+  if (noteAmount <= 0n) throw new Error("custody smoke note amount must be positive");
+  if (noteAmount > amount) throw new Error("custody smoke note amount cannot exceed total amount");
+  if (noteAmount === amount) return [amount];
+
+  const notes: bigint[] = [];
+  let remaining = amount;
+  while (remaining > 0n) {
+    const next = remaining > noteAmount ? noteAmount : remaining;
+    notes.push(next);
+    remaining -= next;
+  }
+  return notes;
+}
+
+async function saveMakerNote(input: {
   amount: bigint;
   blinding: string;
   blindingSeed: string;
@@ -254,10 +424,8 @@ function saveMakerNote(input: {
   token: string;
   tokenDigest: string;
   walletAddress: string;
-}): Record<string, string | number> {
-  const path = makerNotesPath();
-  mkdirSync(join(path, ".."), { recursive: true });
-  const existing = readMakerNotes(path);
+}): Promise<Record<string, string | number>> {
+  const existing = await readMakerNotes();
   const note = {
     amount: input.amount.toString(),
     assetDigest: input.tokenDigest,
@@ -280,33 +448,11 @@ function saveMakerNote(input: {
     updatedAt: Date.now(),
     walletAddress: input.walletAddress,
   };
-  writeFileSync(
-    path,
-    `${JSON.stringify([
+  await saveMakerNotes([
       note,
       ...existing.filter((entry) => entry.commitment !== note.commitment),
-    ], null, 2)}\n`,
-    { mode: 0o600 },
-  );
+  ]);
   return note;
-}
-
-function readMakerNotes(path: string): Array<Record<string, string | number>> {
-  if (!existsSync(path)) return [];
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    return Array.isArray(parsed)
-      ? parsed.filter((entry): entry is Record<string, string | number> =>
-          Boolean(entry && typeof entry === "object" && "commitment" in entry)
-        )
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function makerNotesPath(): string {
-  return join(process.env.PNLX_RUNTIME_DIR || ".pnlx", "maker-notes.json");
 }
 
 function signPreparedXdr(prepared: Record<string, unknown>, source: string, env: ServerEnv): string {
@@ -395,14 +541,10 @@ function preparedPendingField(prepared: Record<string, unknown>, field: string):
 }
 
 function configureCustodySmokeEnvironment(options: CustodySmokeOptions): ServerEnv {
-  const runtimeDir = mkdtempSync(join(tmpdir(), "pnlx-custody-smoke-"));
   process.env.ASSET_CUSTODY_REQUIRED = "true";
   process.env.STELLAR_ONCHAIN_RELAY = "true";
   process.env.STELLAR_RELAYER_MODE = "stellar-cli";
   process.env.FUNDING_ENGINE_ENABLED = process.env.FUNDING_ENGINE_ENABLED || "false";
-  process.env.PROTOCOL_STORE_PATH ??= join(runtimeDir, "protocol-store.json");
-  process.env.RELAY_STORE_PATH ??= join(runtimeDir, "relay-store.json");
-  process.env.AUTH_STORE_PATH ??= join(runtimeDir, "auth-store.json");
   if (options.source) process.env.STELLAR_SOURCE = options.source;
   if (options.token) process.env.COLLATERAL_TOKEN_CONTRACT = options.token;
   return loadEnv();
@@ -510,7 +652,7 @@ function waitForPoolCommitment(
   source: string,
   env: ServerEnv,
 ): boolean {
-  for (let attempt = 1; attempt <= 12; attempt += 1) {
+  for (let attempt = 1; attempt <= 30; attempt += 1) {
     try {
       if (hasPoolCommitment(shieldedPool, commitment, source, env)) return true;
     } catch (error) {
@@ -712,6 +854,11 @@ function optionalValue(argv: string[], name: string): string | undefined {
   if (entry) return entry.slice(name.length + 1);
   const index = argv.indexOf(name);
   return index >= 0 ? argv[index + 1] : undefined;
+}
+
+function optionalBigInt(argv: string[], name: string): bigint | undefined {
+  const parsed = optionalValue(argv, name);
+  return parsed === undefined ? undefined : BigInt(parsed);
 }
 
 function value(argv: string[], name: string, fallback: string): string {

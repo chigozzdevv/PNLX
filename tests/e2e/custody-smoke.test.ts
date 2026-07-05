@@ -2,16 +2,18 @@ import { describe, expect, test } from "bun:test";
 import {
   custodyReadinessIssues,
   parseCustodySmokeOptions,
+  splitCustodyNoteAmounts,
 } from "../../scripts/smoke/custody";
 
 describe("custody smoke helpers", () => {
   test("parses explicit custody smoke options", () => {
     const options = parseCustodySmokeOptions([
-      "--amount=2500000",
+      "--amount=25000000",
       "--asset",
       "native",
       "--deploy-asset",
       "--from=GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      "--note-amount=10000000",
       "--prepare-only",
       "--source",
       "pnlx-trader",
@@ -19,13 +21,28 @@ describe("custody smoke helpers", () => {
       "CCOLLATERAL",
     ]);
 
-    expect(options.amount).toBe(2_500_000n);
+    expect(options.amount).toBe(25_000_000n);
     expect(options.asset).toBe("native");
     expect(options.deployAsset).toBe(true);
     expect(options.from).toBe("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF");
+    expect(options.noteAmount).toBe(10_000_000n);
     expect(options.prepareOnly).toBe(true);
     expect(options.source).toBe("pnlx-trader");
     expect(options.token).toBe("CCOLLATERAL");
+  });
+
+  test("splits custody deposits into maker-note denominations", () => {
+    expect(splitCustodyNoteAmounts(40_000_000n, 20_000_000n)).toEqual([
+      20_000_000n,
+      20_000_000n,
+    ]);
+    expect(splitCustodyNoteAmounts(25_000_000n, 10_000_000n)).toEqual([
+      10_000_000n,
+      10_000_000n,
+      5_000_000n,
+    ]);
+    expect(splitCustodyNoteAmounts(10_000_000n, 10_000_000n)).toEqual([10_000_000n]);
+    expect(splitCustodyNoteAmounts(10_000_000n)).toEqual([10_000_000n]);
   });
 
   test("reports missing live custody prerequisites", () => {

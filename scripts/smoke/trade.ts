@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createECDH, createPrivateKey, sign } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { join } from "node:path";
@@ -26,6 +26,10 @@ import { getSupportedPerpAsset, type SupportedPerpAsset } from "@/config/assets"
 import { loadEnv } from "@/config/env";
 import { stellarSignedMessageHash } from "@/features/auth/auth.service";
 import { ProverService } from "@/workers/prover/prover.service";
+import {
+  readMakerNotes,
+  saveMakerNotes,
+} from "@/shared/maker-note-store";
 
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const ED25519_SECRET_KEY_VERSION = 18 << 3;
@@ -181,12 +185,12 @@ async function runMarketSmoke(asset: SupportedPerpAsset): Promise<Record<string,
   const aliceDeposit = await marginMembership(alice.commitment as Hex);
   const aliceValidity = proveIntentValidity(aliceIntent, alice, aliceDeposit);
   const aliceRecord = await submitPrivateIntent(aliceIntent, aliceValidity);
-  lockMakerNote(longNote.commitment, aliceRecord.intentCommitment);
+  await lockMakerNote(longNote.commitment, aliceRecord.intentCommitment);
 
   const bobDeposit = await marginMembership(bob.commitment as Hex);
   const bobValidity = proveIntentValidity(bobIntent, bob, bobDeposit);
   const bobRecord = await submitPrivateIntent(bobIntent, bobValidity);
-  lockMakerNote(shortNote.commitment, bobRecord.intentCommitment);
+  await lockMakerNote(shortNote.commitment, bobRecord.intentCommitment);
   await registerAccountKey(makerSession.ownerCommitment);
   await waitForExternalMatcherPersistence();
 
@@ -195,11 +199,11 @@ async function runMarketSmoke(asset: SupportedPerpAsset): Promise<Record<string,
   try {
     settlementResult = await settleBatch(batchId, marketId);
   } catch (error) {
-    unlockMakerNotes([aliceRecord.intentCommitment, bobRecord.intentCommitment]);
+    await unlockMakerNotes([aliceRecord.intentCommitment, bobRecord.intentCommitment]);
     throw error;
   }
   const settlement = settlementResult.settlement as Record<string, unknown>;
-  spendLockedMakerNotes([aliceRecord.intentCommitment, bobRecord.intentCommitment]);
+  await spendLockedMakerNotes([aliceRecord.intentCommitment, bobRecord.intentCommitment]);
   const settlementMs = Date.now() - settleStartedAt;
   const closeStartedAt = Date.now();
   const close = await closeLongTakeProfit({
@@ -290,143 +294,18 @@ async function ensureLiveMakerNotes(
   asset: SupportedPerpAsset,
   targetMargin?: bigint,
 ): Promise<[StoredMakerNote, StoredMakerNote]> {
-  let notes = availableMakerNotes();
-  const usableNotes = () =>
-    targetMargin
-      ? availableMakerNotes().filter((note) => BigInt(note.amount) === targetMargin)
-      : availableMakerNotes();
-
-  while (usableNotes().length < 2) {
-    const largest = notes
-      .filter((note) => !targetMargin || BigInt(note.amount) > targetMargin)
-      .sort((left, right) => Number(BigInt(right.amount) - BigInt(left.amount)))[0];
-    if (!largest) throw new Error("no available maker notes; run smoke:custody first");
-    console.error(
-      `[smoke] ${asset.symbol}: splitting maker note ${largest.commitment}` +
-        (targetMargin ? ` for margin ${targetMargin}` : ""),
-    );
-    await splitMakerNote(largest, targetMargin);
-    notes = availableMakerNotes();
-  }
-  notes = usableNotes();
+  const available = await availableMakerNotes();
+  const notes = targetMargin
+    ? available.filter((note) => BigInt(note.amount) === targetMargin)
+    : available;
   if (notes.length < 2) {
-    throw new Error("live trade needs two available maker notes after split");
+    const target = targetMargin ? ` of ${targetMargin}` : "";
+    throw new Error(
+      `${asset.symbol} smoke needs two available maker notes${target}; ` +
+        "seed exact notes with smoke:custody --amount=<total> --note-amount=<trade-margin>",
+    );
   }
   return [notes[0], notes[1]];
-}
-
-async function splitMakerNote(note: StoredMakerNote, targetAmount?: bigint): Promise<void> {
-  if (!note.spendSecret) throw new Error(`maker note ${note.commitment} is missing spendSecret`);
-  const noteAmount = BigInt(note.amount);
-  const withdrawAmount = targetAmount ?? noteAmount / 2n;
-  const changeAmount = noteAmount - withdrawAmount;
-  if (withdrawAmount <= 0n || changeAmount <= 0n) {
-    throw new Error(`maker note ${note.commitment} is too small to split`);
-  }
-
-  const membership = await marginMembership(note.commitment);
-  const changeNote = createCircuitMarginNote({
-    amount: changeAmount,
-    assetDigest: note.assetDigest,
-    assetId: "usdc",
-    owner: note.walletAddress,
-    spendSecret: note.spendSecret,
-    rho: randomLabel("maker-change-rho"),
-    blinding: randomLabel("maker-change-blind"),
-  });
-  const recipientDigest = addressDigestFor(note.walletAddress);
-  const withdrawal = clientProver.proveWithdrawal({
-    assetDigest: note.assetDigest,
-    blinding: note.blinding,
-    changeBlinding: changeNote.blinding,
-    changeRhoDigest: changeNote.rhoDigest,
-    noteAmount,
-    noteCommitment: note.commitment,
-    nullifier: note.noteNullifier,
-    ownerDigest: note.ownerDigest,
-    pathIndices: membership.indices,
-    pathSiblings: membership.siblings,
-    recipient: recipientDigest,
-    rhoDigest: note.rhoDigest,
-    root: membership.root,
-    spendSecretDigest: note.spendSecretDigest,
-    tokenDigest: note.assetDigest,
-    withdrawAmount,
-  });
-  await post("/notes/withdraw-asset/proven", {
-    ...withdrawal,
-    recipientAddress: note.walletAddress,
-    recipientDigest,
-    token: note.token,
-  }, makerSession.headers);
-
-  const deposited = await depositMakerNote({
-    amount: withdrawAmount,
-    assetDigest: note.assetDigest,
-    source: note.source || makerSource,
-    token: note.token,
-    walletAddress: note.walletAddress,
-  });
-  saveMakerNotes([
-    {
-      ...note,
-      status: "spent",
-      updatedAt: Date.now(),
-    },
-    storedNoteFromCircuit(changeNote, {
-      shieldedPool: note.shieldedPool,
-      source: note.source,
-      spendSecret: note.spendSecret,
-      status: "available",
-      token: note.token,
-      walletAddress: note.walletAddress,
-    }),
-    deposited,
-    ...readMakerNotes().filter((entry) => entry.commitment !== note.commitment),
-  ]);
-}
-
-async function depositMakerNote(input: {
-  amount: bigint;
-  assetDigest?: Hex;
-  source: string;
-  token: string;
-  walletAddress: string;
-}): Promise<StoredMakerNote> {
-  const spendSecret = randomLabel("maker-deposit-spend");
-  const note = createCircuitMarginNote({
-    amount: input.amount,
-    assetDigest: input.assetDigest ?? (env.collateralTokenDigest as Hex),
-    assetId: "usdc",
-    owner: input.walletAddress,
-    spendSecret,
-    rho: randomLabel("maker-deposit-rho"),
-    blinding: randomLabel("maker-deposit-blind"),
-  });
-  const depositProof = clientProver.proveDepositNote({
-    amount: input.amount,
-    blinding: note.blinding,
-    commitment: note.commitment,
-    ownerDigest: note.ownerDigest,
-    rhoDigest: note.rhoDigest,
-    tokenDigest: note.assetDigest,
-  });
-  await post("/notes/deposit-asset/proven", {
-    amount: input.amount,
-    commitment: note.commitment,
-    depositProof,
-    from: input.walletAddress,
-    source: input.source,
-    token: input.token,
-  }, makerSession.headers);
-  return storedNoteFromCircuit(note, {
-    shieldedPool: readDeployment().contracts["shielded-pool"],
-    source: input.source,
-    spendSecret,
-    status: "available",
-    token: input.token,
-    walletAddress: input.walletAddress,
-  });
 }
 
 function storedNoteFromCircuit(
@@ -481,16 +360,16 @@ async function marginMembership(commitment: Hex): Promise<MarginMembershipProof>
   return note.membershipProof;
 }
 
-function availableMakerNotes(): StoredMakerNote[] {
-  return readMakerNotes()
+async function availableMakerNotes(): Promise<StoredMakerNote[]> {
+  return (await readMakerNotes() as StoredMakerNote[])
     .filter((note) => note.status === "available")
     .filter((note) => note.walletAddress === makerSession.address)
     .sort((left, right) => Number(BigInt(left.amount) - BigInt(right.amount)));
 }
 
-function lockMakerNote(commitment: Hex, intentCommitment: Hex): void {
-  saveMakerNotes(
-    readMakerNotes().map((note) =>
+async function lockMakerNote(commitment: Hex, intentCommitment: Hex): Promise<void> {
+  await saveMakerNotes(
+    (await readMakerNotes() as StoredMakerNote[]).map((note) =>
       note.commitment === commitment
         ? { ...note, lockedByIntentCommitment: intentCommitment, status: "locked", updatedAt: Date.now() }
         : note,
@@ -498,10 +377,10 @@ function lockMakerNote(commitment: Hex, intentCommitment: Hex): void {
   );
 }
 
-function spendLockedMakerNotes(intentCommitments: Hex[]): void {
+async function spendLockedMakerNotes(intentCommitments: Hex[]): Promise<void> {
   const intents = new Set(intentCommitments);
-  saveMakerNotes(
-    readMakerNotes().map((note) =>
+  await saveMakerNotes(
+    (await readMakerNotes() as StoredMakerNote[]).map((note) =>
       note.lockedByIntentCommitment && intents.has(note.lockedByIntentCommitment)
         ? { ...note, status: "spent", updatedAt: Date.now() }
         : note,
@@ -509,10 +388,10 @@ function spendLockedMakerNotes(intentCommitments: Hex[]): void {
   );
 }
 
-function unlockMakerNotes(intentCommitments: Hex[]): void {
+async function unlockMakerNotes(intentCommitments: Hex[]): Promise<void> {
   const intents = new Set(intentCommitments);
-  saveMakerNotes(
-    readMakerNotes().map((note) =>
+  await saveMakerNotes(
+    (await readMakerNotes() as StoredMakerNote[]).map((note) =>
       note.lockedByIntentCommitment && intents.has(note.lockedByIntentCommitment)
         ? {
             ...note,
@@ -523,24 +402,6 @@ function unlockMakerNotes(intentCommitments: Hex[]): void {
         : note,
     ),
   );
-}
-
-function readMakerNotes(): StoredMakerNote[] {
-  const path = makerNotesPath();
-  if (!existsSync(path)) return [];
-  return (JSON.parse(readFileSync(path, "utf8")) as StoredMakerNote[]).filter((note) => note.commitment);
-}
-
-function saveMakerNotes(notes: StoredMakerNote[]): void {
-  const path = makerNotesPath();
-  mkdirSync(join(path, ".."), { recursive: true });
-  const byCommitment = new Map<string, StoredMakerNote>();
-  for (const note of notes) byCommitment.set(note.commitment, note);
-  writeFileSync(path, `${JSON.stringify([...byCommitment.values()], null, 2)}\n`, { mode: 0o600 });
-}
-
-function makerNotesPath(): string {
-  return join(process.env.PNLX_RUNTIME_DIR || ".pnlx", "maker-notes.json");
 }
 
 function proveIntentValidity(
@@ -596,7 +457,7 @@ async function registerAccountKey(owner: Hex): Promise<void> {
 }
 
 async function waitForExternalMatcherPersistence(): Promise<void> {
-  if (!env.matcherServiceUrl || env.protocolStorageDriver !== "mongodb") return;
+  if (!env.matcherServiceUrl) return;
   await new Promise((resolve) => setTimeout(resolve, 750));
 }
 
@@ -687,7 +548,7 @@ function smokeMatcherTimeoutMs(): number {
 }
 
 function parseSmokeTradeMargin(): bigint | undefined {
-  const raw = argValue("--margin") ?? process.env.PNLX_SMOKE_TRADE_MARGIN ?? "2000000";
+  const raw = argValue("--margin") ?? process.env.PNLX_SMOKE_TRADE_MARGIN ?? "10000000";
   const parsed = BigInt(raw);
   if (parsed <= 0n) {
     throw new Error(`smoke trade margin must be positive, got ${raw}`);
@@ -816,7 +677,7 @@ async function closeLongTakeProfit(input: {
   });
   const closeResponse = await post("/position-closes/proven", provenClose, makerSession.headers);
   const positionClose = closeResponse.positionClose as PositionCloseRecord;
-  saveMakerNotes([
+  await saveMakerNotes([
     storedNoteFromCircuit(marginOutput, {
       shieldedPool: readDeployment().contracts["shielded-pool"],
       source: makerSource,
@@ -825,7 +686,7 @@ async function closeLongTakeProfit(input: {
       token: env.collateralTokenContract,
       walletAddress: input.ownerAddress,
     }),
-    ...readMakerNotes(),
+    ...(await readMakerNotes()),
   ]);
 
   return {
@@ -1451,7 +1312,9 @@ function formatUsd(price: bigint): string {
 function formatUsdAmount(amount: bigint): string {
   const sign = amount < 0n ? "-" : "";
   const absolute = amount < 0n ? -amount : amount;
-  return `${sign}${absolute}.00`;
+  const whole = absolute / 10_000_000n;
+  const fraction = ((absolute % 10_000_000n) / 100_000n).toString().padStart(2, "0");
+  return `${sign}${whole}.${fraction}`;
 }
 
 function formatLeverage(leverageBps: bigint): string {
@@ -1473,10 +1336,6 @@ function argValue(name: string): string | undefined {
   if (direct) return direct.slice(prefix.length);
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] : undefined;
-}
-
-function randomLabel(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function privateKeyFromStellarSecret(secret: string) {

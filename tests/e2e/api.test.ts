@@ -11,7 +11,7 @@ import {
 } from "@pnlx/crypto";
 import { PRICE_SCALE, settleClose } from "@pnlx/market-math";
 import { circuitKey } from "@pnlx/proof-system";
-import type { Hex, ProofMeta, TradeIntent } from "@pnlx/protocol-types";
+import type { BatchSettlement, Hex, ProofMeta, TradeIntent } from "@pnlx/protocol-types";
 import { createCircuitMarginNote, createCircuitPositionNote } from "@pnlx/sdk";
 import { createECDH, generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
@@ -20,8 +20,13 @@ import { join } from "node:path";
 import { createApp, createAppRuntime } from "@/app";
 import { encodeStellarPublicKey, stellarSignedMessageHash } from "@/features/auth/auth.service";
 import { createMatcherApp } from "@/workers/matcher/matcher.app";
+import { MatcherService } from "@/workers/matcher/matcher.service";
 import { createExecutor } from "@/workers/executor/executor.worker";
+import { ExecutorService } from "@/workers/executor/executor.service";
+import { FileProtocolStore } from "@/shared/state/persistent-store";
+import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
 import { ProverService } from "@/workers/prover/prover.service";
+import type { SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
 import {
   RISC0_BATCH_MATCH_CIRCUIT_KEY,
   RISC0_STELLAR_VERIFIER_HASH,
@@ -680,7 +685,7 @@ describe("server api", () => {
 
   test("serves RISC0 matcher settlement transcripts from persisted private match payloads", async () => {
     const storePath = join(mkdtempSync(join(tmpdir(), "pnlx-risc0-matcher-store-")), "protocol-store.json");
-    const executor = createExecutor({ storePath });
+    const executor = createFileExecutor(storePath);
     const clientProver = new ProverService();
     const market = {
       marketId: "btc-usd-perp-matcher-provider",
@@ -757,7 +762,10 @@ describe("server api", () => {
     });
 
     const provider = createMatcherApp({
-      storePath,
+      executor,
+      signerConfig: {
+        proofs: prooflessProofs(),
+      },
       token: "provider-secret",
     });
     const response = await provider.handle(
@@ -788,7 +796,7 @@ describe("server api", () => {
     expect(JSON.stringify(transcript)).not.toContain("matcher-provider-long-spend");
   });
 
-  test("requires on-chain market oracle authority when production oracle mode is enabled", async () => {
+  test("requires on-chain relay and oracle contract when production oracle mode is enabled", async () => {
     const previousRequired = process.env.ORACLE_ONCHAIN_REQUIRED;
     const previousSource = process.env.ORACLE_PRICE_SOURCE;
     const previousRelay = process.env.STELLAR_ONCHAIN_RELAY;
@@ -807,7 +815,10 @@ describe("server api", () => {
       expect(health.oracle.source).toBe("hermes");
       expect(health.oracle.onchainRequired).toBe(true);
       expect(health.oracle.issues as string[]).toContain(
-        "ORACLE_PRICE_SOURCE=onchain-market is required for production oracle authority",
+        "STELLAR_ONCHAIN_RELAY must be enabled for on-chain oracle reads",
+      );
+      expect(health.oracle.issues as string[]).toContain(
+        "ORACLE_CONTRACT_ID is required for on-chain oracle settlement",
       );
 
       const marketResponse = await app.handle(
@@ -826,7 +837,7 @@ describe("server api", () => {
       expect(marketResponse.status).toBe(500);
       expect(await marketResponse.json()).toEqual({
         error:
-          "oracle not ready for production authority: ORACLE_PRICE_SOURCE=onchain-market is required for production oracle authority",
+          "oracle not ready for production authority: STELLAR_ONCHAIN_RELAY must be enabled for on-chain oracle reads",
       });
     } finally {
       restoreEnv("ORACLE_ONCHAIN_REQUIRED", previousRequired);
@@ -1091,19 +1102,14 @@ describe("server api", () => {
     }
   });
 
-  test("persists signed auth sessions across app restarts", async () => {
+  test("authenticates signed sessions without file-backed auth state", async () => {
     const previousRequired = process.env.AUTH_REQUIRED;
-    const previousStore = process.env.AUTH_STORE_PATH;
     const previousAdmin = process.env.PROTOCOL_ADMIN_ADDRESSES;
     process.env.AUTH_REQUIRED = "true";
     process.env.PROTOCOL_ADMIN_ADDRESSES = "";
-    const authStorePath = join(mkdtempSync(join(tmpdir(), "pnlx-auth-")), "auth-state.json");
-    process.env.AUTH_STORE_PATH = authStorePath;
     try {
-      const first = createApp();
-      const { address, token } = await createSignedSession(first);
-      expect(readFileSync(authStorePath, "utf8")).not.toContain(token);
-      const restarted = createApp();
+      const app = createApp();
+      const { address, token } = await createSignedSession(app);
       const market = {
         marketId: "btc-usd-perp",
         oraclePrice: 50_000n * PRICE_SCALE,
@@ -1113,7 +1119,7 @@ describe("server api", () => {
         fundingIndex: 0n,
       };
 
-      const response = await restarted.handle(
+      const response = await app.handle(
         new Request("http://pnlx.local/markets", {
           method: "POST",
           body: body(market),
@@ -1125,7 +1131,7 @@ describe("server api", () => {
       );
 
       expect(response.status).toBe(201);
-      const currentSession = await restarted.handle(
+      const currentSession = await app.handle(
         new Request("http://pnlx.local/auth/session", {
           headers: {
             authorization: `Bearer ${token}`,
@@ -1141,11 +1147,6 @@ describe("server api", () => {
         delete process.env.AUTH_REQUIRED;
       } else {
         process.env.AUTH_REQUIRED = previousRequired;
-      }
-      if (previousStore === undefined) {
-        delete process.env.AUTH_STORE_PATH;
-      } else {
-        process.env.AUTH_STORE_PATH = previousStore;
       }
       restoreEnv("PROTOCOL_ADMIN_ADDRESSES", previousAdmin);
     }
@@ -1500,86 +1501,67 @@ describe("server api", () => {
     }
   });
 
-  test("persists encrypted account events and serves portfolio snapshots", async () => {
-    const previousStore = process.env.PROTOCOL_STORE_PATH;
-    process.env.PROTOCOL_STORE_PATH = join(
-      mkdtempSync(join(tmpdir(), "pnlx-account-events-")),
-      "protocol-store.json",
+  test("serves encrypted account events and portfolio snapshots", async () => {
+    const app = createApp();
+    const ownerCommitment = hashFields("owner", ["encrypted-portfolio"]);
+    const event = {
+      ciphertext: "base64:jwe-client-encrypted-position-history",
+      dataCommitment: hashFields("account-event-data", ["position-open"]),
+      eventId: hashFields("account-event", ["position-open"]),
+      ownerCommitment,
+    };
+
+    const createResponse = await app.handle(
+      new Request("http://pnlx.local/account-events", {
+        method: "POST",
+        body: body(event),
+        headers: { "content-type": "application/json" },
+      }),
     );
-    try {
-      const first = createApp();
-      const ownerCommitment = hashFields("owner", ["encrypted-portfolio"]);
-      const event = {
-        ciphertext: "base64:jwe-client-encrypted-position-history",
-        dataCommitment: hashFields("account-event-data", ["position-open"]),
-        eventId: hashFields("account-event", ["position-open"]),
-        ownerCommitment,
-      };
+    expect(createResponse.status).toBe(201);
 
-      const createResponse = await first.handle(
-        new Request("http://pnlx.local/account-events", {
-          method: "POST",
-          body: body(event),
-          headers: { "content-type": "application/json" },
-        }),
-      );
-      expect(createResponse.status).toBe(201);
+    const eventsResponse = await app.handle(
+      new Request(`http://pnlx.local/account-events?ownerCommitment=${ownerCommitment}`),
+    );
+    expect(eventsResponse.status).toBe(200);
+    const eventsResult = (await eventsResponse.json()) as Record<string, unknown>;
+    const accountEvents = eventsResult.accountEvents as Record<string, unknown>[];
+    expect(accountEvents).toHaveLength(1);
+    expect(accountEvents[0].ciphertext).toBe(event.ciphertext);
 
-      const restarted = createApp();
-      const eventsResponse = await restarted.handle(
-        new Request(`http://pnlx.local/account-events?ownerCommitment=${ownerCommitment}`),
-      );
-      expect(eventsResponse.status).toBe(200);
-      const eventsResult = (await eventsResponse.json()) as Record<string, unknown>;
-      const accountEvents = eventsResult.accountEvents as Record<string, unknown>[];
-      expect(accountEvents).toHaveLength(1);
-      expect(accountEvents[0].ciphertext).toBe(event.ciphertext);
+    const portfolioResponse = await app.handle(
+      new Request(`http://pnlx.local/portfolio?ownerCommitment=${ownerCommitment}`),
+    );
+    expect(portfolioResponse.status).toBe(200);
+    const portfolioResult = (await portfolioResponse.json()) as Record<string, Record<string, unknown>>;
+    const portfolio = portfolioResult.portfolio;
+    const publicState = portfolio.publicState as Record<string, unknown>;
+    expect((portfolio.accountEvents as unknown[])).toHaveLength(1);
+    expect(publicState.accountEventCount).toBe(1);
+    expect(JSON.stringify(portfolio)).not.toContain("position-open");
 
-      const portfolioResponse = await restarted.handle(
-        new Request(`http://pnlx.local/portfolio?ownerCommitment=${ownerCommitment}`),
-      );
-      expect(portfolioResponse.status).toBe(200);
-      const portfolioResult = (await portfolioResponse.json()) as Record<string, Record<string, unknown>>;
-      const portfolio = portfolioResult.portfolio;
-      const publicState = portfolio.publicState as Record<string, unknown>;
-      expect((portfolio.accountEvents as unknown[])).toHaveLength(1);
-      expect(publicState.accountEventCount).toBe(1);
-      expect(JSON.stringify(portfolio)).not.toContain("position-open");
+    const balancesResponse = await app.handle(
+      new Request(`http://pnlx.local/portfolio/balances?ownerCommitment=${ownerCommitment}`),
+    );
+    expect(balancesResponse.status).toBe(200);
+    const balancesResult = (await balancesResponse.json()) as Record<string, Record<string, unknown>>;
+    expect((balancesResult.balances.accountEvents as unknown[])).toHaveLength(1);
+    expect(balancesResult.balances.serverReadableBalance).toBe(false);
+    expect(balancesResult.balances.privateByDefault).toBe(true);
+    expect(JSON.stringify(balancesResult)).not.toContain("position-open");
 
-      const balancesResponse = await restarted.handle(
-        new Request(`http://pnlx.local/portfolio/balances?ownerCommitment=${ownerCommitment}`),
-      );
-      expect(balancesResponse.status).toBe(200);
-      const balancesResult = (await balancesResponse.json()) as Record<string, Record<string, unknown>>;
-      expect((balancesResult.balances.accountEvents as unknown[])).toHaveLength(1);
-      expect(balancesResult.balances.serverReadableBalance).toBe(false);
-      expect(balancesResult.balances.privateByDefault).toBe(true);
-      expect(JSON.stringify(balancesResult)).not.toContain("position-open");
-
-      const activityResponse = await restarted.handle(
-        new Request(`http://pnlx.local/portfolio/activity?ownerCommitment=${ownerCommitment}`),
-      );
-      expect(activityResponse.status).toBe(200);
-      const activityResult = (await activityResponse.json()) as Record<string, unknown>;
-      const activity = activityResult.activity as Record<string, unknown>[];
-      expect(activity.map((item) => item.kind)).toEqual(["account-event"]);
-    } finally {
-      if (previousStore === undefined) {
-        delete process.env.PROTOCOL_STORE_PATH;
-      } else {
-        process.env.PROTOCOL_STORE_PATH = previousStore;
-      }
-    }
+    const activityResponse = await app.handle(
+      new Request(`http://pnlx.local/portfolio/activity?ownerCommitment=${ownerCommitment}`),
+    );
+    expect(activityResponse.status).toBe(200);
+    const activityResult = (await activityResponse.json()) as Record<string, unknown>;
+    const activity = activityResult.activity as Record<string, unknown>[];
+    expect(activity.map((item) => item.kind)).toEqual(["account-event"]);
   });
 
   test("binds encrypted account events and portfolio reads to signed owner commitments", async () => {
     const previousRequired = process.env.AUTH_REQUIRED;
-    const previousStore = process.env.PROTOCOL_STORE_PATH;
     process.env.AUTH_REQUIRED = "true";
-    process.env.PROTOCOL_STORE_PATH = join(
-      mkdtempSync(join(tmpdir(), "pnlx-owned-account-events-")),
-      "protocol-store.json",
-    );
     try {
       const app = createApp();
       const { address, token } = await createSignedSession(app);
@@ -1667,18 +1649,12 @@ describe("server api", () => {
       expect((balances.balances.accountEvents as unknown[])).toHaveLength(1);
     } finally {
       restoreEnv("AUTH_REQUIRED", previousRequired);
-      restoreEnv("PROTOCOL_STORE_PATH", previousStore);
     }
   });
 
-  test("binds account encryption keys to signed owner commitments and persists them", async () => {
+  test("binds account encryption keys to signed owner commitments", async () => {
     const previousRequired = process.env.AUTH_REQUIRED;
-    const previousAuthStore = process.env.AUTH_STORE_PATH;
-    const previousStore = process.env.PROTOCOL_STORE_PATH;
-    const runtimeDir = mkdtempSync(join(tmpdir(), "pnlx-account-keys-"));
     process.env.AUTH_REQUIRED = "true";
-    process.env.AUTH_STORE_PATH = join(runtimeDir, "auth-store.json");
-    process.env.PROTOCOL_STORE_PATH = join(runtimeDir, "protocol-store.json");
     try {
       const app = createApp();
       const { address, token } = await createSignedSession(app);
@@ -1706,6 +1682,22 @@ describe("server api", () => {
       const created = (await createResponse.json()) as Record<string, Record<string, string>>;
       expect(created.accountKey.publicKey).toBe(publicKey);
 
+      const rotateResponse = await app.handle(
+        new Request("http://pnlx.local/account-keys", {
+          method: "POST",
+          body: body({
+            algorithm: "ecdh-p256-aes-gcm",
+            ownerCommitment: ownCommitment,
+            publicKey: rawP256PublicKey(),
+          }),
+          headers: authHeaders,
+        }),
+      );
+      expect(rotateResponse.status).toBe(500);
+      expect(await rotateResponse.json()).toEqual({
+        error: "account encryption key is already registered for this owner",
+      });
+
       const foreignResponse = await app.handle(
         new Request("http://pnlx.local/account-keys", {
           method: "POST",
@@ -1722,17 +1714,40 @@ describe("server api", () => {
         error: "ownerCommitment does not match authenticated account",
       });
 
-      const restarted = createApp();
-      const readResponse = await restarted.handle(
+      const recoveryKey = rawP256PublicKey();
+      const recoveryResponse = await app.handle(
+        new Request("http://pnlx.local/account-keys/recover", {
+          method: "POST",
+          body: body({
+            algorithm: "ecdh-p256-aes-gcm",
+            ownerCommitment: ownCommitment,
+            publicKey: recoveryKey,
+          }),
+          headers: authHeaders,
+        }),
+      );
+      expect(recoveryResponse.status).toBe(201);
+      const recovered = (await recoveryResponse.json()) as {
+        accountKeyRecovery: {
+          accountKey: { publicKey: string };
+          repairedEventCount: number;
+          skipped: unknown[];
+        };
+      };
+      expect(recovered.accountKeyRecovery.accountKey.publicKey).toBe(recoveryKey);
+      expect(recovered.accountKeyRecovery.repairedEventCount).toBe(0);
+      expect(recovered.accountKeyRecovery.skipped).toHaveLength(0);
+
+      const readResponse = await app.handle(
         new Request(`http://pnlx.local/account-keys?ownerCommitment=${ownCommitment}`, {
           headers: authHeaders,
         }),
       );
       expect(readResponse.status).toBe(200);
       const read = (await readResponse.json()) as Record<string, Record<string, string>>;
-      expect(read.accountKey.publicKey).toBe(publicKey);
+      expect(read.accountKey.publicKey).toBe(recoveryKey);
 
-      const foreignRead = await restarted.handle(
+      const foreignRead = await app.handle(
         new Request(`http://pnlx.local/account-keys?ownerCommitment=${otherCommitment}`, {
           headers: authHeaders,
         }),
@@ -1743,8 +1758,6 @@ describe("server api", () => {
       });
     } finally {
       restoreEnv("AUTH_REQUIRED", previousRequired);
-      restoreEnv("AUTH_STORE_PATH", previousAuthStore);
-      restoreEnv("PROTOCOL_STORE_PATH", previousStore);
     }
   });
 
@@ -3317,3 +3330,61 @@ describe("server api", () => {
     expect(response.status).toBe(500);
   });
 });
+
+function createFileExecutor(storePath: string): ExecutorService {
+  return new ExecutorService({}, new FileProtocolStore(storePath));
+}
+
+function prooflessProofs(): ConstructorParameters<typeof MatcherService>[1] {
+  return {
+    artifactFor() {
+      return undefined;
+    },
+    createSettlement(input: SettlementProofInput): BatchSettlement {
+      const draft = {
+        aggregateVolume: input.match.aggregateVolume,
+        batchId: input.batchId,
+        fillCount: input.match.fills.length,
+        marginChangeCommitments: input.match.marginChangeCommitments,
+        marketId: input.market.marketId,
+        matchTranscriptDigest: input.match.matchTranscriptDigest,
+        newCommitments: input.match.fills.map((fill) => fill.positionCommitment),
+        newRoot: input.newRoot,
+        oldRoot: input.oldRoot,
+        openInterestDelta: input.match.openInterestDelta,
+        orderUpdates: input.match.orderUpdates,
+        residualSize: input.match.residualSize,
+        settlementDigest: hashFields("test-settlement", [input.batchId, input.newRoot]),
+        spentNullifiers: input.match.spentNullifiers,
+      };
+      const publicInputHash = batchSettlementPublicInputHash({
+        ...draft,
+        proof: proofMeta("batch-match"),
+      });
+      const sealDigest = hashFields("risc0-seal", [input.batchId, input.newRoot]);
+      return {
+        ...draft,
+        proof: {
+          ...proofMeta("batch-match"),
+          imageId: hashFields("risc0-image", [input.batchId]),
+          journalDigest: publicInputHash,
+          proofDigest: sealDigest,
+          proofSystem: "risc0-groth16",
+          publicInputHash,
+          sealDigest,
+        },
+      };
+    },
+  } as never;
+}
+
+function proofMeta(label: string): ProofMeta {
+  return {
+    circuitHash: hashFields("circuit-hash", [label]),
+    circuitId: label,
+    circuitKey: hashFields("circuit-key", [label]),
+    proofDigest: hashFields("proof-digest", [label]),
+    publicInputHash: hashFields("public-input", [label]),
+    verifierHash: hashFields("verifier", [label]),
+  };
+}
