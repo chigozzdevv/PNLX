@@ -2,12 +2,9 @@ name: pnlx
 
 x-pnlx-env: &pnlx-env
   NODE_ENV: development
-  PROTOCOL_STORAGE_DRIVER: mongodb
   MONGODB_URI: mongodb://mongo:27017/pnlx
   MONGODB_DATABASE: pnlx
   MONGODB_PROTOCOL_COLLECTION: protocol_state
-  JOB_QUEUE_DRIVER: bullmq
-  REDIS_URL: redis://redis:6379
   MATCHER_PROVIDER: risc0
   MATCHER_SERVICE_URL: http://matcher:4102
   MATCHER_SERVICE_TOKEN: pnlx-matcher-dev-token
@@ -42,20 +39,6 @@ services:
       timeout: 5s
       retries: 12
 
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-
   api:
     build: .
     env_file:
@@ -63,8 +46,6 @@ services:
     restart: unless-stopped
     depends_on:
       mongo:
-        condition: service_healthy
-      redis:
         condition: service_healthy
       matcher:
         condition: service_started
@@ -82,8 +63,6 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     environment:
       <<: *pnlx-env
       MATCHER_SERVICE_URL: ""
@@ -92,19 +71,33 @@ services:
     ports:
       - "4102:4102"
 
+  prover:
+    build: .
+    env_file:
+      - .env
+    restart: unless-stopped
+    environment:
+      PNLX_CLIENT_PROVER_HOST: "0.0.0.0"
+      PNLX_CLIENT_PROVER_PORT: "4101"
+    command: ["bun", "run", "prover:client"]
+    ports:
+      - "4101:4101"
+
   client:
     build: .
     restart: unless-stopped
     depends_on:
       api:
         condition: service_started
+      prover:
+        condition: service_started
     environment:
-      NEXT_PUBLIC_PNLX_API_URL: http://localhost:4000
-      NEXT_PUBLIC_PNLX_PROVER_URL: http://localhost:4101
+      PNLX_API_URL: http://api:4000
+      PNLX_PROVER_URL: http://prover:4101
+      NEXT_PUBLIC_PNLX_PROVER_URL: /api/prover
     command: ["bun", "run", "--filter", "@pnlx/client", "dev", "--hostname", "0.0.0.0"]
     ports:
       - "3000:3000"
 
 volumes:
   mongo-data:
-  redis-data:

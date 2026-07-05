@@ -219,6 +219,13 @@ export interface FundingSettlementRecord extends FundingUpdateRecord {
 }
 
 export type BatchExecutionRunStatus = "failed" | "settled" | "skipped";
+export type BatchExecutionPhase =
+  | "oracle"
+  | "maker-liquidity"
+  | "matcher"
+  | "batch-settlement"
+  | "settlement-commit"
+  | "maker-finalize";
 
 export interface BatchExecutionRunRecord {
   aggregateVolume?: bigint;
@@ -226,6 +233,7 @@ export interface BatchExecutionRunRecord {
   completedAt: number;
   fillCount?: number;
   marketId: string;
+  phase?: BatchExecutionPhase;
   reason?: string;
   runId: Hex;
   settlementDigest?: Hex;

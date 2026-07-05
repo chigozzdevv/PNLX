@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { delimiter } from "node:path";
 import { join } from "node:path";
 import type { Hex } from "@pnlx/protocol-types";
 import type { CircuitId } from "./circuits";
@@ -36,7 +37,7 @@ function hashFile(path: string): Hex {
 function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): void {
   const result = spawnSync(command, args, { cwd, encoding: "utf8", env });
   if (result.status !== 0) {
-    const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
+    const output = [result.error?.message, result.stdout, result.stderr].filter(Boolean).join("\n");
     throw new Error(`${command} ${args.join(" ")} failed\n${output}`);
   }
 }
@@ -84,11 +85,13 @@ export function buildProofArtifact(
   const proverPath = join(proverDir, `${name}.toml`);
   const cacheDir = join(root, ".pnlx", "proof-cache");
   const proofHome = join(root, ".pnlx", "proof-home");
+  const toolHome = process.env.HOME || "";
   const proofEnv = {
     ...process.env,
     HOME: proofHome,
     NARGO_HOME: join(cacheDir, "nargo-home"),
     NOIR_CACHE_DIR: join(cacheDir, "noir"),
+    PATH: proofToolPath(toolHome, process.env.PATH),
     XDG_CACHE_HOME: cacheDir,
   };
 
@@ -161,4 +164,12 @@ export function buildProofArtifact(
     publicInputsPath,
     vkPath,
   };
+}
+
+function proofToolPath(home: string, existingPath = ""): string {
+  return [
+    home ? join(home, ".nargo", "bin") : "",
+    home ? join(home, ".bb", "bin") : "",
+    existingPath,
+  ].filter(Boolean).join(delimiter);
 }

@@ -97,10 +97,8 @@ Wallet auth is Freighter-compatible signed-message auth:
 
 The execution store mirrors the contract invariant: withdrawals, settlements,
 conditional closes, liquidations, and disclosures are rejected unless their
-proof digest has first been recorded in the local proof ledger. For the clean
-runtime path, set `PROTOCOL_STORAGE_DRIVER=mongodb` and back protocol state with
-MongoDB. Tests stay in-memory unless a test explicitly sets a store path; the
-file store remains only as an explicit local fallback.
+proof digest has first been recorded in the local proof ledger. Runtime protocol
+state is backed by MongoDB.
 
 Docker runtime:
 
@@ -108,9 +106,8 @@ Docker runtime:
 - `bun run docker:up` starts MongoDB, Redis, API, matcher, and client.
 - MongoDB stores protocol state: markets, margin commitments, intents, private
   matcher payloads, proofs, settlements, account events, and lifecycle records.
-- Redis/BullMQ runs background jobs when `JOB_QUEUE_DRIVER=bullmq`, including
-  batch execution and liquidation automation. The job handlers still call the
-  same `runOnce` logic as the HTTP/manual paths.
+- The API starts the automated executor loop directly outside tests. It does
+  not require Redis or a queue-driver flag for demo/runtime fills.
 - Private margin note witnesses stay client-side; the server stores only
   commitments, nullifiers, encrypted events, and proof-bound metadata.
 
@@ -142,7 +139,7 @@ Matching flow:
   order commitments, spent nullifiers, new position commitments, owner
   commitments, residual order records, encrypted owner account events, and the
   RISC0 journal digest before indexing.
-- `BATCH_EXECUTOR_ENABLED=true` starts the automated batch executor. It scans
+- Outside tests, the API starts the automated batch executor directly. It scans
   markets with open private orders, asks the matcher service to create a
   settlement transcript, relays settlement on-chain when configured, commits
   only after the proof/finality rule is satisfied, and writes a durable
@@ -156,7 +153,9 @@ Matching flow:
   private client-side path to reconstruct position notes for close/TP/SL flows
   without exposing `positionNullifier` in public portfolio snapshots.
 - Maker liquidity comes from funded wallets that deposit USDC into the shielded
-  pool and submit normal private maker intents. User intents can still be
+  pool and submit normal private maker intents. The protocol state lives in the
+  MongoDB protocol-state store, while maker private note witnesses live in the
+  MongoDB-backed maker-note store (`maker_notes`). User intents can still be
   partially filled, and any unfilled size remains as a private residual order.
 
 Private dashboard state is backed by encrypted account events:
@@ -347,17 +346,13 @@ contract hashes, verifier registry entries, and initialization plan.
 
 Oracle environment:
 
-- `PROTOCOL_STORAGE_DRIVER`: `mongodb`, `file`, or `memory`. Docker uses
-  `mongodb`; tests use memory by default.
-- `MONGODB_URI`: MongoDB connection string for protocol state.
+- `MONGODB_URI`: required MongoDB connection string for runtime protocol state
+  and maker private note witnesses.
 - `MONGODB_DATABASE`: Mongo database name. Defaults to `pnlx`.
 - `MONGODB_PROTOCOL_COLLECTION`: collection for the protocol-state document.
   Defaults to `protocol_state`.
-- `REDIS_URL`: Redis connection string for BullMQ jobs.
-- `JOB_QUEUE_DRIVER`: `bullmq` or `timer`. Docker uses `bullmq`; without Redis
-  the app uses timer-based local workers.
-- `PNLX_RUNTIME_DIR`: directory for explicit file fallback state. Defaults to
-  `.pnlx` outside tests when `PROTOCOL_STORAGE_DRIVER=file`.
+- Maker private note witnesses are stored in the same MongoDB database, in the
+  fixed `maker_notes` collection, namespaced by `STELLAR_NETWORK`.
 - `FUNDING_ENGINE_ENABLED`: starts the periodic funding worker outside tests by
   default. Set `false` to keep funding manual-only.
 - `FUNDING_INTERVAL_MS`: funding accrual interval. Defaults to one hour.
@@ -441,7 +436,8 @@ Asset custody smoke:
 
 ```sh
 bun run smoke:custody:prepare -- --token=<COLLATERAL_TOKEN_CONTRACT> --source=<stellar-key-alias>
-bun run smoke:custody -- --token=<COLLATERAL_TOKEN_CONTRACT> --source=<stellar-key-alias> --amount=1000000
+bun run smoke:custody -- --token=<COLLATERAL_TOKEN_CONTRACT> --source=<stellar-key-alias> --amount=10000000
+bun run smoke:custody -- --token=<COLLATERAL_TOKEN_CONTRACT> --source=pnlx-maker --amount=200000000 --note-amount=10000000
 ```
 
 The prepare command builds the wallet-signable `deposit_asset` action. The live
@@ -449,7 +445,11 @@ command requires `STELLAR_ONCHAIN_RELAY=true`, `STELLAR_RELAYER_MODE=stellar-cli
 a funded source account, a deployed shielded-pool deployment file, and a
 collateral token balance for the source. For test collateral you can pass
 `--deploy-asset --asset=native`; production USDC should pass the real Stellar
-asset contract through `--token` or `COLLATERAL_TOKEN_CONTRACT`.
+asset contract through `--token` or `COLLATERAL_TOKEN_CONTRACT`. For maker
+liquidity, use `--note-amount` to seed exactly sized private maker notes up
+front; for example, the Stellar testnet USDC asset uses 7 decimals, so
+`--amount=200000000 --note-amount=10000000` creates twenty real 1 USDC shielded
+maker notes in the Mongo-backed maker-note store.
 
 For a real localnet deployment:
 
