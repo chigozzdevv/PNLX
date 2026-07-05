@@ -1,8 +1,9 @@
 import type { ProtocolStore } from "@/shared/state/store";
-import type { Hex } from "@pnlx/protocol-types";
+import type { BatchExecutionRunRecord, Hex, OrderLifecycleRecord } from "@pnlx/protocol-types";
 import type {
   MarketPublicSnapshot,
   OwnerActivitySnapshot,
+  OwnerOrderMatchingSnapshot,
   OwnerOrderSnapshot,
   OwnerPositionSnapshot,
   PublicSnapshot,
@@ -31,8 +32,8 @@ export class IndexerService {
     };
   }
 
-  ordersFor(ownerCommitment: Hex): OwnerOrderSnapshot[] {
-    return [...this.store.orderLifecycle.values()]
+  ordersFor(ownerCommitment: Hex, options: { activeOnly?: boolean } = {}): OwnerOrderSnapshot[] {
+    const orders = [...this.store.orderLifecycle.values()]
       .filter((order) => order.ownerCommitment === ownerCommitment)
       .map((order) => {
         const residual = this.store.residualOrders.get(order.intentCommitment);
@@ -41,6 +42,7 @@ export class IndexerService {
           createdAt: order.createdAt,
           intentCommitment: order.intentCommitment,
           isResidual: Boolean(residual),
+          matching: this.matchingForOrder(order),
           matchingPayloadCommitment: this.store.intents.get(order.intentCommitment)?.matchingPayloadCommitment ??
             residual?.matchingPayloadCommitment ??
             "0x0",
@@ -50,8 +52,70 @@ export class IndexerService {
           status: order.status,
           updatedAt: order.updatedAt,
         };
-      })
+      });
+    return (options.activeOnly ? orders.filter((order) => isActiveOrderStatus(order.status)) : orders)
       .sort((a, b) => a.batchId.localeCompare(b.batchId) || a.intentCommitment.localeCompare(b.intentCommitment));
+  }
+
+  private matchingForOrder(order: OrderLifecycleRecord): OwnerOrderMatchingSnapshot {
+    if (!isActiveOrderStatus(order.status)) {
+      return {
+        message: "Order is no longer active",
+        state: "settled",
+      };
+    }
+
+    const latestRun = this.latestMatchingRunForOrder(order);
+    if (!latestRun) {
+      return {
+        message: "Queued for matching",
+        state: "queued",
+      };
+    }
+
+    const base = {
+      batchId: latestRun.batchId,
+      completedAt: latestRun.completedAt,
+      phase: latestRun.phase,
+      reason: latestRun.reason,
+      runId: latestRun.runId,
+      status: latestRun.status,
+    };
+
+    if (latestRun.status === "failed") {
+      return {
+        ...base,
+        message: blockedMessage(latestRun),
+        state: "blocked",
+      };
+    }
+
+    if (latestRun.status === "skipped") {
+      return {
+        ...base,
+        message: skippedMessage(latestRun.reason),
+        state: latestRun.reason?.includes("batch has no crossed liquidity") ? "waiting-liquidity" : "queued",
+      };
+    }
+
+    return {
+      ...base,
+      message: "Batch settled; refreshing position state",
+      state: "settled",
+    };
+  }
+
+  private latestMatchingRunForOrder(order: OrderLifecycleRecord): BatchExecutionRunRecord | undefined {
+    return [...this.store.batchExecutionRuns.values()]
+      .filter((run) =>
+        run.marketId === order.marketId &&
+        run.startedAt >= order.createdAt - 5_000
+      )
+      .sort((left, right) =>
+        right.completedAt - left.completedAt ||
+        right.startedAt - left.startedAt ||
+        right.runId.localeCompare(left.runId)
+      )[0];
   }
 
   positionsFor(ownerCommitment: Hex): OwnerPositionSnapshot[] {
@@ -145,10 +209,44 @@ export class IndexerService {
   }
 }
 
+function isActiveOrderStatus(status: string): boolean {
+  return status === "open" || status === "partially-filled";
+}
+
 function countByMarket<T extends { marketId: string }>(values: Iterable<T>, marketId: string): number {
   let count = 0;
   for (const value of values) {
     if (value.marketId === marketId) count += 1;
   }
   return count;
+}
+
+function blockedMessage(run: BatchExecutionRunRecord): string {
+  const reason = run.reason ?? "matching failed";
+  if (run.phase === "oracle" || reason.includes("oracle-price")) {
+    return "Blocked: oracle relay failed";
+  }
+  if (run.phase === "maker-liquidity") {
+    return "Blocked: maker liquidity failed";
+  }
+  if (run.phase === "matcher") {
+    return "Blocked: matcher failed";
+  }
+  if (run.phase === "batch-settlement") {
+    return "Blocked: batch settlement relay failed";
+  }
+  return `Blocked: ${cleanReason(reason)}`;
+}
+
+function skippedMessage(reason: string | undefined): string {
+  if (reason?.includes("batch has no crossed liquidity")) return "Waiting for opposite-side liquidity";
+  if (reason?.includes("batch has no active intents")) return "Waiting for matching";
+  return reason ? cleanReason(reason) : "Queued for matching";
+}
+
+function cleanReason(reason: string): string {
+  return reason
+    .replace(/^(oracle|maker-liquidity|matcher|batch-settlement|settlement-commit|maker-finalize):\s*/, "")
+    .replace(/^stellar relay failed \(([^)]+)\):\s*/, "$1 failed: ")
+    .trim();
 }

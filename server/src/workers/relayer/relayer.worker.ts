@@ -3,10 +3,9 @@ import type { CommandRunner, StellarRelayerConfig } from "@/workers/relayer/rela
 
 interface CreateRelayerOptions {
   config?: StellarRelayerConfig;
-  historyPath?: string;
   runCommand?: CommandRunner;
 }
 
 export function createRelayer(options: CreateRelayerOptions = {}): RelayerService {
-  return new RelayerService(options.config, options.runCommand, options.historyPath);
+  return new RelayerService(options.config, options.runCommand);
 }

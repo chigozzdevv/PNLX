@@ -1,4 +1,4 @@
-import type { Hex, OrderStatus, PositionStatus } from "@pnlx/protocol-types";
+import type { BatchExecutionPhase, Hex, OrderStatus, PositionStatus } from "@pnlx/protocol-types";
 
 export interface MarketPublicSnapshot {
   aggregateVolume: string;
@@ -22,12 +22,26 @@ export interface OwnerOrderSnapshot {
   createdAt: number;
   intentCommitment: Hex;
   isResidual: boolean;
+  matching: OwnerOrderMatchingSnapshot;
   matchingPayloadCommitment: Hex;
   marketId: string;
   residualCommitment?: Hex;
   sourceIntentCommitment?: Hex;
   status: OrderStatus;
   updatedAt: number;
+}
+
+export type OwnerOrderMatchingState = "blocked" | "queued" | "settled" | "waiting-liquidity";
+
+export interface OwnerOrderMatchingSnapshot {
+  batchId?: string;
+  completedAt?: number;
+  message: string;
+  phase?: BatchExecutionPhase;
+  reason?: string;
+  runId?: Hex;
+  state: OwnerOrderMatchingState;
+  status?: "failed" | "settled" | "skipped";
 }
 
 export interface OwnerPositionSnapshot {

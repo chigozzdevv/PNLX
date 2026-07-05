@@ -1,6 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
 import { hashFields } from "@pnlx/crypto";
 import type {
   CommandResult,
@@ -24,21 +22,19 @@ export class RelayerService {
       source: "pnlx-testnet",
     },
     private readonly runCommand: CommandRunner = defaultCommandRunner,
-    private readonly historyPath?: string,
-  ) {
-    this.load();
-  }
+  ) {}
 
   relay(request: RelayRequest): RelayedTx {
     const payloadDigest = hashFields("relay-payload", [request.kind, request.payload]);
     const command = this.config.mode === "stellar-cli" ? stellarInvokeCommand(this.config, request.payload) : undefined;
+    const invokePayload = command ? parseInvokePayload(request.payload) : undefined;
     const output = command ? runCommandWithRetry(this.runCommand, command) : undefined;
     const commandOutputDigest = output
       ? hashFields("relay-command-output", [payloadDigest, output.status ?? "null", output.stdout, output.stderr])
       : undefined;
     const sendMode = command ? commandSendMode(command) : undefined;
     if (output && output.status !== 0) {
-      throw new Error(`stellar relay failed: ${formatStellarFailure(output)}`);
+      throw new Error(`stellar relay failed (${relayTarget(request.kind, invokePayload)}): ${formatStellarFailure(output)}`);
     }
     const txHash = output ? parseTxHash(commandOutput(output)) : undefined;
     if (command && output?.status === 0 && sendsTransaction(command) && !txHash) {
@@ -51,8 +47,8 @@ export class RelayerService {
       command,
       commandOutputDigest,
       commandStatus: output?.status,
-      contractId: command ? parseInvokePayload(request.payload).contractId : undefined,
-      functionName: command ? parseInvokePayload(request.payload).functionName : undefined,
+      contractId: invokePayload?.contractId,
+      functionName: invokePayload?.functionName,
       relayId: hashFields("relay-id", [request.kind, payloadDigest, this.sent.length]),
       kind: request.kind,
       mode: this.config.mode,
@@ -63,7 +59,6 @@ export class RelayerService {
       txHash,
     };
     this.sent.push(tx);
-    this.save();
     return tx;
   }
 
@@ -108,7 +103,6 @@ export class RelayerService {
       txHash,
     };
     this.sent.push(tx);
-    this.save();
     return tx;
   }
 
@@ -194,28 +188,11 @@ export class RelayerService {
   find(relayId: `0x${string}`): RelayedTx | undefined {
     return this.sent.find((tx) => tx.relayId === relayId);
   }
+}
 
-  private load(): void {
-    if (!this.historyPath || !existsSync(this.historyPath)) return;
-
-    const snapshot = JSON.parse(readFileSync(this.historyPath, "utf8")) as Partial<{
-      sent: Array<Partial<RelayedTx> & Pick<RelayedTx, "kind" | "payloadDigest" | "relayId" | "submittedAt">>;
-    }>;
-    this.sent.splice(0, this.sent.length, ...(snapshot.sent ?? []).map((tx) => ({
-      ...tx,
-      mode: tx.mode ?? (tx.command ? "stellar-cli" : "local"),
-      submitted: tx.submitted ?? Boolean(tx.txHash),
-    })));
-  }
-
-  private save(): void {
-    if (!this.historyPath) return;
-
-    mkdirSync(dirname(this.historyPath), { recursive: true });
-    const tempPath = `${this.historyPath}.tmp`;
-    writeFileSync(tempPath, JSON.stringify({ sent: this.sent }, null, 2));
-    renameSync(tempPath, this.historyPath);
-  }
+function relayTarget(kind: RelayRequest["kind"], payload: StellarInvokePayload | undefined): string {
+  if (!payload) return kind;
+  return `${kind} ${payload.functionName} on ${payload.contractId}`;
 }
 
 function stellarInvokeCommand(config: StellarRelayerConfig, rawPayload: unknown): string[] {

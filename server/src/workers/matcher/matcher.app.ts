@@ -1,6 +1,7 @@
 import { json, readJson } from "@/shared/http/json";
 import { Router } from "@/shared/http/router";
 import { createExecutor, createExecutorAsync } from "@/workers/executor/executor.worker";
+import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { MongoProtocolStoreOptions } from "@/shared/state/mongo-store";
 import { createMatcher } from "@/workers/matcher/matcher.worker";
 import type {
@@ -10,10 +11,10 @@ import type {
 } from "@/workers/matcher/matcher.model";
 
 export interface MatcherAppOptions {
+  executor?: ExecutorService;
   provider?: MatcherProvider;
   privateMatchingRequired?: boolean;
   signerConfig?: Parameters<typeof createMatcher>[1];
-  storePath?: string;
   mongo?: MongoProtocolStoreOptions;
   token?: string;
 }
@@ -22,7 +23,7 @@ export function createMatcherApp(options: MatcherAppOptions = {}): Router {
   const provider = options.provider ?? "risc0";
 
   const router = new Router();
-  const persistentMatcher = options.storePath ? undefined : createRequestMatcher(options, provider);
+  const persistentMatcher = createRequestMatcher(options, provider);
 
   router.add("POST", "/match/settlement", async (request) => {
     assertMatcherAuth(request, options.token);
@@ -38,7 +39,7 @@ export async function createMatcherAppAsync(options: MatcherAppOptions = {}): Pr
   const provider = options.provider ?? "risc0";
 
   const router = new Router();
-  const persistentMatcher = options.storePath || options.mongo ? undefined : await createRequestMatcherRuntimeAsync(options, provider);
+  const persistentMatcher = options.mongo ? undefined : await createRequestMatcherRuntimeAsync(options, provider);
 
   router.add("POST", "/match/settlement", async (request) => {
     assertMatcherAuth(request, options.token);
@@ -58,9 +59,8 @@ function createRequestMatcher(
   options: MatcherAppOptions,
   _provider: MatcherProvider,
 ) {
-  const executor = createExecutor({
+  const executor = options.executor ?? createExecutor({
     privateMatchingRequired: true,
-    storePath: options.storePath,
   });
   return createMatcher(executor, options.signerConfig);
 }
@@ -69,10 +69,9 @@ async function createRequestMatcherRuntimeAsync(
   options: MatcherAppOptions,
   _provider: MatcherProvider,
 ) : Promise<{ close?: () => Promise<void>; matcher: MatcherGateway }> {
-  const executor = await createExecutorAsync({
+  const executor = options.executor ?? await createExecutorAsync({
     mongo: options.mongo,
     privateMatchingRequired: true,
-    storePath: options.storePath,
   });
   const closeableStore = hasClose(executor.store) ? executor.store : undefined;
   return {

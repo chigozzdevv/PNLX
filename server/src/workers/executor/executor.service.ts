@@ -21,6 +21,7 @@ import type {
   TradeIntent,
 } from "@pnlx/protocol-types";
 import type { ProofArtifact } from "@pnlx/proof-system";
+import { hasInitialMargin, hasMaxLeverage, maintenanceMargin } from "@pnlx/market-math";
 import { ProtocolStore } from "@/shared/state/store";
 import { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
 import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
@@ -84,12 +85,16 @@ export class ExecutorService implements PnlxExecutor {
     ) {
       throw new Error("intent proof public binding mismatch");
     }
+    if (input.validity.marginRoot !== this.store.marginMembershipRoot()) {
+      throw new Error("intent margin root is not current");
+    }
     const privateMatchIntent = privateMatchIntentFromTradeIntent({
       intent: input.intent,
       intentCommitment,
       noteChangeCommitment: input.validity.noteChangeCommitment,
       ownerCommitment: ownerCommitment(input.intent.owner),
     });
+    this.assertIntentRisk(privateMatchIntent);
     const record = {
       batchDigest: binding.batchDigest,
       batchId: input.intent.batchId,
@@ -106,6 +111,23 @@ export class ExecutorService implements PnlxExecutor {
     };
 
     return { privateMatchIntent, record };
+  }
+
+  private assertIntentRisk(intent: PrivateMatchIntent): void {
+    const market = this.store.markets.get(intent.marketId);
+    if (!market) return;
+    const size = intent.signedSize < 0n ? -intent.signedSize : intent.signedSize;
+    if (size <= 0n) throw new Error("intent size cannot be zero");
+    if (intent.limitPrice <= 0n) throw new Error("intent limit price must be positive");
+    if (!hasInitialMargin(size, intent.limitPrice, intent.margin, market.initialMarginRate)) {
+      throw new Error("intent exceeds available margin at selected leverage");
+    }
+    if (!hasMaxLeverage(size, intent.limitPrice, intent.margin, market.maxLeverage)) {
+      throw new Error("intent exceeds market max leverage");
+    }
+    if (intent.margin <= maintenanceMargin(size, intent.limitPrice, market.maintenanceMarginRate)) {
+      throw new Error("intent margin is below maintenance buffer");
+    }
   }
 
   commitPreparedIntent(input: PreparedIntentSubmission): IntentRecord {
@@ -468,7 +490,7 @@ function privateMatchIntentsFor(
 ): PrivateMatchIntent[] {
   return [
     ...residuals.map((record) => privateMatchIntentFor(store, record, batchId)),
-    ...records.map((record) => privateMatchIntentFor(store, record, record.batchId)),
+    ...records.map((record) => privateMatchIntentFor(store, record, batchId)),
   ];
 }
 

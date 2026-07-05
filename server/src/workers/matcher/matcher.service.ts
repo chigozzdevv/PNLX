@@ -51,7 +51,8 @@ export class MatcherService {
     const market = this.store.markets.get(input.marketId);
     if (!market) throw new Error("unknown market");
 
-    const records = input.records ?? activeIntents(this.store, input.marketId, input.batchId);
+    const records = input.records ??
+      activeIntents(this.store, input.marketId, input.batchId, Boolean(input.includeOpenMarketOrders));
     const residuals = input.residuals ?? activeResiduals(this.store, input.marketId, input.batchId);
     if (records.length === 0 && residuals.length === 0) {
       throw new Error("batch has no active intents");
@@ -178,11 +179,16 @@ function createAccountEvents(
   ];
 }
 
-function activeIntents(store: ProtocolStore, marketId: string, batchId: string): IntentRecord[] {
+function activeIntents(
+  store: ProtocolStore,
+  marketId: string,
+  batchId: string,
+  includeOpenMarketOrders: boolean,
+): IntentRecord[] {
   return [...store.intents.values()]
     .filter(
       (intent) =>
-        intent.batchId === batchId &&
+        (includeOpenMarketOrders || intent.batchId === batchId) &&
         intent.marketId === marketId &&
         store.orderLifecycle.get(intent.intentCommitment)?.status === "open",
     )
@@ -212,7 +218,7 @@ function privateMatchIntentsFor(
 ): PrivateMatchIntent[] {
   return [
     ...residuals.map((record) => privateMatchIntentFor(store, record, batchId)),
-    ...records.map((record) => privateMatchIntentFor(store, record, record.batchId)),
+    ...records.map((record) => privateMatchIntentFor(store, record, batchId)),
   ];
 }
 

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { hashFields } from "@pnlx/crypto";
 import type { ProofArtifact } from "@pnlx/proof-system";
 import type { BatchSettlement, Hex, ProofMeta } from "@pnlx/protocol-types";
@@ -25,6 +25,7 @@ interface Risc0ProverOutput {
 }
 
 interface ProverRun {
+  error?: string;
   metadataPath: string;
   stderr: string;
   stdout: string;
@@ -168,7 +169,7 @@ function runRisc0Prover(
 
   const result = runBoundlessProver(root, inputPath, proofDir);
   if (result.status !== 0) {
-    const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
+    const output = [result.error, result.stdout, result.stderr].filter(Boolean).join("\n");
     throw new Error(`Boundless RISC0 Groth16 batch prover failed\n${output}`);
   }
 
@@ -205,16 +206,27 @@ function runBoundlessProver(root: string, inputPath: string, proofDir: string): 
       env: {
         ...process.env,
         BOUNDLESS_IGNORE_PREFLIGHT: process.env.BOUNDLESS_IGNORE_PREFLIGHT ?? "1",
+        PATH: risc0ToolPath(process.env.HOME || "", process.env.PATH),
         RISC0_DEV_MODE: "0",
       },
     },
   );
+  const stdout = result.stdout ?? "";
+  const stderr = result.stderr ?? "";
   return {
-    metadataPath: result.stdout.trim().split(/\r?\n/).at(-1) ?? join(proofDir, "proof.json"),
-    stderr: result.stderr,
-    stdout: result.stdout,
+    error: result.error?.message,
+    metadataPath: stdout.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? join(proofDir, "proof.json"),
+    stderr,
+    stdout,
     status: result.status,
   };
+}
+
+function risc0ToolPath(home: string, existingPath = ""): string {
+  return [
+    home ? join(home, ".cargo", "bin") : "",
+    existingPath,
+  ].filter(Boolean).join(delimiter);
 }
 
 function toProverInput(input: SettlementProofInput, draft: Omit<BatchSettlement, "proof">) {

@@ -1,8 +1,9 @@
 import { hashFields } from "@pnlx/crypto";
-import type { BatchExecutionRunRecord, Hex } from "@pnlx/protocol-types";
+import type { BatchExecutionPhase, BatchExecutionRunRecord, Hex } from "@pnlx/protocol-types";
 import type { OnchainRelay, OnchainRelayResult } from "@/workers/onchain/onchain.model";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { MatcherGateway } from "@/workers/matcher/matcher.model";
+import type { MakerLiquidityService } from "@/workers/maker-liquidity/maker-liquidity.service";
 import type {
   BatchExecutorConfig,
   BatchExecutorMarketResult,
@@ -12,8 +13,21 @@ import type {
 
 const DEFAULT_BATCH_INTERVAL_MS = 5_000;
 const DEFAULT_BATCH_PREFIX = "auto";
+const FAILED_BATCH_RETRY_COOLDOWN_MS = 60_000;
+
+class BatchPhaseError extends Error {
+  constructor(
+    readonly phase: BatchExecutionPhase,
+    cause: unknown,
+  ) {
+    super(`${phase}: ${errorMessage(cause)}`);
+    this.name = "BatchPhaseError";
+  }
+}
 
 export class BatchExecutorService {
+  private failedBatchRetryAfter = new Map<string, number>();
+  private running = false;
   private timer: ReturnType<typeof setInterval> | undefined;
 
   constructor(
@@ -23,11 +37,13 @@ export class BatchExecutorService {
       intervalMs: DEFAULT_BATCH_INTERVAL_MS,
     },
     private readonly onchain?: OnchainRelay,
+    private readonly makerLiquidity?: MakerLiquidityService,
   ) {}
 
   async runOnce(input: RunBatchExecutorInput = {}): Promise<BatchExecutorRunResult> {
     const startedAt = input.now ?? Date.now();
-    const markets = this.marketIds(input.marketId);
+    const markets = this.marketIds(input.marketId)
+      .filter((marketId) => !this.isCoolingDown(marketId, startedAt, input));
     const results = await Promise.all(
       markets.map((marketId) => this.runMarket(marketId, startedAt, input)),
     );
@@ -41,7 +57,11 @@ export class BatchExecutorService {
   start(input: Omit<RunBatchExecutorInput, "now"> = {}): void {
     if (this.timer) return;
     this.timer = setInterval(() => {
-      void this.runOnce(input);
+      if (this.running) return;
+      this.running = true;
+      void this.runOnce(input).finally(() => {
+        this.running = false;
+      });
     }, this.config.intervalMs);
     (this.timer as { unref?: () => void }).unref?.();
   }
@@ -57,20 +77,33 @@ export class BatchExecutorService {
     startedAt: number,
     input: RunBatchExecutorInput,
   ): Promise<BatchExecutorMarketResult> {
-    const batchId = `${input.batchIdPrefix ?? this.config.batchIdPrefix ?? DEFAULT_BATCH_PREFIX}-${marketId}-${startedAt}`;
+    const batchId = this.batchIdForMarket(marketId, startedAt, input);
     try {
-      const transcript = await this.matcher.createSettlementTranscript({
-        batchId,
-        marketId,
-      });
-      const relay = this.trySettleOnchain(transcript.settlement);
-      const proofVerified = hasSubmittedProofVerification(relay);
+      await runPhase("oracle", () => this.config.refreshMarketOracle?.(marketId));
+      await runPhase("maker-liquidity", () => this.makerLiquidity?.ensureForMarket({ batchId, marketId }));
+      await runPhase("maker-liquidity", () => flushStore(this.executor.store));
+      const transcript = await runPhase("matcher", () =>
+        this.matcher.createSettlementTranscript({
+          batchId,
+          includeOpenMarketOrders: true,
+          marketId,
+        })
+      );
+      const alreadySettledOnchain = this.isSettledOnchain(transcript.settlement);
+      const relay = alreadySettledOnchain
+        ? undefined
+        : await runPhase("batch-settlement", () => this.trySettleOnchain(transcript.settlement));
+      const proofVerified = alreadySettledOnchain || hasSubmittedProofVerification(relay);
       if (this.config.settlementsOnchainRequired && !proofVerified) {
         throw new Error("settlements require on-chain relay");
       }
-      const settlement = this.executor.commitExternalBatchSettlement(transcript, {
-        proofVerified: proofVerified || !this.config.settlementsOnchainRequired,
-      });
+      const settlement = await runPhase("settlement-commit", () =>
+        this.executor.commitExternalBatchSettlement(transcript, {
+          proofVerified: proofVerified || !this.config.settlementsOnchainRequired,
+        })
+      );
+      await runPhase("maker-finalize", () => this.makerLiquidity?.finalizeSettlement(settlement));
+      await runPhase("maker-finalize", () => flushStore(this.executor.store));
       return this.record({
         aggregateVolume: settlement.aggregateVolume,
         batchId,
@@ -83,11 +116,16 @@ export class BatchExecutorService {
         status: "settled",
       });
     } catch (error) {
+      const phase = error instanceof BatchPhaseError ? error.phase : undefined;
       const reason = error instanceof Error ? error.message : "batch execution failed";
+      if (!shouldSkip(reason)) {
+        this.failedBatchRetryAfter.set(batchId, Date.now() + FAILED_BATCH_RETRY_COOLDOWN_MS);
+      }
       return this.record({
         batchId,
         completedAt: Date.now(),
         marketId,
+        phase,
         reason,
         runId: runId(batchId, marketId, startedAt),
         startedAt,
@@ -113,6 +151,14 @@ export class BatchExecutorService {
     }
   }
 
+  private isSettledOnchain(settlement: Parameters<NonNullable<OnchainRelay>["settleBatch"]>[0]): boolean {
+    try {
+      return Boolean(this.onchain?.isBatchSettled?.(settlement.batchId, settlement.marketId));
+    } catch {
+      return false;
+    }
+  }
+
   private marketIds(marketId?: string): string[] {
     if (marketId) {
       if (!this.executor.store.markets.has(marketId)) throw new Error("unknown market");
@@ -125,6 +171,60 @@ export class BatchExecutorService {
       }
     }
     return [...active].sort();
+  }
+
+  private batchIdForMarket(
+    marketId: string,
+    startedAt: number,
+    input: RunBatchExecutorInput,
+  ): string {
+    const prefix = input.batchIdPrefix ?? this.config.batchIdPrefix ?? DEFAULT_BATCH_PREFIX;
+    if (input.now !== undefined) return `${prefix}-${marketId}-${startedAt}`;
+
+    const clientOrderIds = [...this.executor.store.orderLifecycle.values()]
+      .filter((order) =>
+        order.marketId === marketId &&
+        (order.status === "open" || order.status === "partially-filled") &&
+        !order.batchId.startsWith("maker-auto-")
+      )
+      .map((order) => order.intentCommitment)
+      .sort();
+    if (clientOrderIds.length === 0) return `${prefix}-${marketId}-${startedAt}`;
+
+    const fingerprint = hashFields("batch-active-orders", [marketId, ...clientOrderIds]).slice(2, 18);
+    return `${prefix}-${marketId}-${fingerprint}`;
+  }
+
+  private isCoolingDown(
+    marketId: string,
+    startedAt: number,
+    input: RunBatchExecutorInput,
+  ): boolean {
+    const batchId = this.batchIdForMarket(marketId, startedAt, input);
+    const retryAfter = this.failedBatchRetryAfter.get(batchId);
+    if (!retryAfter) return false;
+    if (retryAfter <= Date.now()) {
+      this.failedBatchRetryAfter.delete(batchId);
+      return false;
+    }
+    return true;
+  }
+}
+
+async function runPhase<T>(
+  phase: BatchExecutionPhase,
+  task: () => Promise<T> | T,
+): Promise<T> {
+  try {
+    return await task();
+  } catch (error) {
+    throw new BatchPhaseError(phase, error);
+  }
+}
+
+async function flushStore(store: unknown): Promise<void> {
+  if (store && typeof store === "object" && "flush" in store && typeof store.flush === "function") {
+    await (store as { flush(): Promise<void> }).flush();
   }
 }
 
@@ -148,4 +248,8 @@ function shouldSkip(reason: string): boolean {
     "private match payload not found",
     "account encryption key not found",
   ].some((message) => reason.includes(message));
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

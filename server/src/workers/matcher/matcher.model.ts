@@ -66,6 +66,7 @@ export type MatcherAccountEventPayload =
 
 export interface CreateExternalSettlementInput {
   batchId: string;
+  includeOpenMarketOrders?: boolean;
   marketId: string;
   records?: IntentRecord[];
   residuals?: ResidualOrderRecord[];

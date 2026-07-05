@@ -3,6 +3,7 @@ import type { BatchExecutionRunRecord } from "@pnlx/protocol-types";
 export interface BatchExecutorConfig {
   batchIdPrefix?: string;
   intervalMs: number;
+  refreshMarketOracle?: (marketId: string) => Promise<void> | void;
   settlementsOnchainRequired?: boolean;
 }
 

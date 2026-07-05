@@ -101,6 +101,9 @@ export interface OnchainRelay {
   tokenDigest(token: string, source?: string): Hex;
   verifyProof(proof: ProofMeta): OnchainRelayResult;
   publishOraclePrice(input: OraclePriceRelayInput): OnchainRelayResult;
+  isBatchSettled?(batchId: string, marketId: string): boolean;
+  isIntentRegistered?(intentCommitment: Hex): boolean;
+  isMarketActive?(marketId: string): boolean;
   submitIntent(record: IntentRecord): OnchainRelayResult;
   cancelIntent(intentCommitment: Hex): OnchainRelayResult;
   upsertMarket(record: MarketConfig, config: OnchainMarketConfig): OnchainRelayResult;

@@ -179,6 +179,46 @@ export class OnchainRelayService implements OnchainRelay {
     };
   }
 
+  isIntentRegistered(intentCommitment: Hex): boolean {
+    if (!this.config.enabled) return false;
+    const deployment = this.deployment();
+    const result = this.relayer.read({
+      kind: "intent",
+      payload: {
+        args: [
+          "--intent_commitment",
+          bytes32(intentCommitment),
+        ],
+        contractId: contractId(deployment, "intent-registry"),
+        functionName: "has_intent",
+        send: "no",
+      },
+    });
+    return result.output.trim().toLowerCase().includes("true");
+  }
+
+  isMarketActive(marketId: string): boolean {
+    if (!this.config.enabled) return false;
+    const deployment = this.deployment();
+    try {
+      const result = this.relayer.read({
+        kind: "market",
+        payload: {
+          args: [
+            "--market_id",
+            marketKey(marketId),
+          ],
+          contractId: contractId(deployment, "market"),
+          functionName: "is_active",
+          send: "no",
+        },
+      });
+      return result.output.trim().toLowerCase().includes("true");
+    } catch {
+      return false;
+    }
+  }
+
   upsertMarket(record: MarketConfig, config: OnchainMarketConfig): OnchainRelayResult {
     if (!this.config.enabled) return empty();
     const deployment = this.deployment();
@@ -323,6 +363,26 @@ export class OnchainRelayService implements OnchainRelay {
         ]),
       ],
     };
+  }
+
+  isBatchSettled(batchId: string, marketId: string): boolean {
+    if (!this.config.enabled) return false;
+    const deployment = this.deployment();
+    const result = this.relayer.read({
+      kind: "batch-settlement",
+      payload: {
+        args: [
+          "--batch_id",
+          bytes32(batchKey(batchId)),
+          "--market_id",
+          marketKey(marketId),
+        ],
+        contractId: contractId(deployment, "batch-settlement"),
+        functionName: "is_settled",
+        send: "no",
+      },
+    });
+    return result.output.trim().toLowerCase().includes("true");
   }
 
   settleFunding(record: FundingSettlementRecord): OnchainRelayResult {
