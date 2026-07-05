@@ -1,5 +1,5 @@
 import { registerPendingConditionalOrdersForPosition } from "@/lib/conditional-orders";
-import { pnlxPost } from "@/lib/pnlx-api";
+import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
 import type { ServerAccountEvent } from "@/types/trading";
 import type { WalletSession } from "@/lib/wallet-auth";
 
@@ -13,6 +13,25 @@ interface StoredAccountKey {
   privateKey: CryptoKey;
   publicKey: CryptoKey;
   publicKeyRaw: string;
+}
+
+interface AccountKeyResponse {
+  accountKey: {
+    algorithm: "ecdh-p256-aes-gcm";
+    ownerCommitment: string;
+    publicKey: string;
+  } | null;
+}
+
+interface AccountKeyStatus {
+  recovered: boolean;
+}
+
+interface AccountKeyRecoveryResponse {
+  accountKeyRecovery: {
+    repairedEventCount: number;
+    skipped: unknown[];
+  };
 }
 
 interface AccountEventEnvelope {
@@ -44,10 +63,51 @@ export type PrivateAccountEventPayload =
       [key: string]: unknown;
     };
 
-export async function ensureAccountEncryptionKey(session: WalletSession): Promise<void> {
-  const key = await getOrCreateAccountKey(session.ownerCommitment);
+export async function ensureAccountEncryptionKey(session: WalletSession): Promise<AccountKeyStatus> {
+  const registered = await readRegisteredAccountKey(session);
+  const existing = await getStoredAccountKey(session.ownerCommitment);
+  if (registered) {
+    const key = existing ?? await createAccountKey(session.ownerCommitment);
+    if (key.publicKeyRaw !== registered.publicKey) {
+      await recoverRegisteredAccountKey(session, key);
+      return { recovered: true };
+    }
+    return { recovered: false };
+  }
+
+  const key = existing ?? await createAccountKey(session.ownerCommitment);
   await pnlxPost(
     "/account-keys",
+    {
+      algorithm: "ecdh-p256-aes-gcm",
+      ownerCommitment: session.ownerCommitment,
+      publicKey: key.publicKeyRaw,
+    },
+    session.token,
+  );
+  return { recovered: false };
+}
+
+export async function recoverAccountEncryptionKey(session: WalletSession): Promise<AccountKeyStatus> {
+  const key = await createAccountKey(session.ownerCommitment);
+  await recoverRegisteredAccountKey(session, key);
+  return { recovered: true };
+}
+
+async function readRegisteredAccountKey(session: WalletSession): Promise<AccountKeyResponse["accountKey"]> {
+  const response = await pnlxGet<AccountKeyResponse>(
+    `/account-keys?ownerCommitment=${encodeURIComponent(session.ownerCommitment)}`,
+    session.token,
+  );
+  return response.accountKey;
+}
+
+async function recoverRegisteredAccountKey(
+  session: WalletSession,
+  key: StoredAccountKey,
+): Promise<AccountKeyRecoveryResponse> {
+  return pnlxPost<AccountKeyRecoveryResponse>(
+    "/account-keys/recover",
     {
       algorithm: "ecdh-p256-aes-gcm",
       ownerCommitment: session.ownerCommitment,
@@ -97,10 +157,16 @@ export async function decryptAccountEvent<T>(ownerCommitment: string, ciphertext
     false,
     [],
   );
-  const aesKey = await globalThis.crypto.subtle.deriveKey(
+  const sharedSecret = await globalThis.crypto.subtle.deriveBits(
     { name: "ECDH", public: ephemeralPublicKey },
     key.privateKey,
-    { name: "AES-GCM", length: 256 },
+    256,
+  );
+  const aesKeyMaterial = await globalThis.crypto.subtle.digest("SHA-256", sharedSecret);
+  const aesKey = await globalThis.crypto.subtle.importKey(
+    "raw",
+    aesKeyMaterial,
+    { name: "AES-GCM" },
     false,
     ["decrypt"],
   );
@@ -117,14 +183,11 @@ export async function decryptAccountEvent<T>(ownerCommitment: string, ciphertext
   return JSON.parse(bytesToText(new Uint8Array(plaintext))) as T;
 }
 
-async function getOrCreateAccountKey(ownerCommitment: string): Promise<StoredAccountKey> {
-  const existing = await getStoredAccountKey(ownerCommitment);
-  if (existing) return existing;
-
+async function createAccountKey(ownerCommitment: string): Promise<StoredAccountKey> {
   const pair = await globalThis.crypto.subtle.generateKey(
     { name: "ECDH", namedCurve: "P-256" },
     false,
-    ["deriveKey"],
+    ["deriveBits"],
   );
   const publicKeyRaw = bytesToBase64Url(
     new Uint8Array(await globalThis.crypto.subtle.exportKey("raw", pair.publicKey)),

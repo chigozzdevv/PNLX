@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bunx next dev --webpack",
-    "build": "bunx next build",
+    "build": "bunx next build --webpack",
     "start": "bunx next start",
     "check": "bunx eslint . && bunx tsc --noEmit"
   },

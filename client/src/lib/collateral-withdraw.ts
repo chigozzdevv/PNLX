@@ -7,7 +7,9 @@ import {
 import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
 import {
   markPrivateMarginNoteSpent,
+  privateMarginNoteRuntimeScopeFromHealth,
   selectWithdrawablePrivateMarginNote,
+  setPrivateMarginNoteRuntimeScope,
 } from "@/lib/private-margin-notes";
 import type { Hex, ServerProofMeta } from "@/types/trading";
 import type { WalletSession } from "@/lib/wallet-auth";
@@ -18,6 +20,18 @@ interface HealthResponse {
       tokenContract: string;
       tokenDigest?: Hex;
     };
+  };
+  persistence?: {
+    mongodb?: {
+      collection?: string;
+      database?: string;
+    };
+  };
+  runtime?: {
+    clientStorageScope?: string;
+  };
+  stellar?: {
+    network?: string;
   };
 }
 
@@ -63,6 +77,7 @@ export async function withdrawAvailableCollateral(
     throw new Error("Client proof provider is not configured");
   }
   const health = await pnlxGet<HealthResponse>("/health", session.token);
+  setPrivateMarginNoteRuntimeScope(privateMarginNoteRuntimeScopeFromHealth(health));
   const token = health.custody.collateralAsset.tokenContract;
   const tokenDigest = health.custody.collateralAsset.tokenDigest;
   if (!token) throw new Error("Collateral token contract is not configured");
@@ -114,11 +129,19 @@ export async function withdrawAvailableCollateral(
 }
 
 async function marginMembership(commitment: Hex, token?: string): Promise<MarginMembershipResponse["note"]> {
-  const response = await pnlxGet<MarginMembershipResponse>(
-    `/notes/membership?commitment=${encodeURIComponent(commitment)}`,
-    token,
-  );
-  return response.note;
+  try {
+    const response = await pnlxGet<MarginMembershipResponse>(
+      `/notes/membership?commitment=${encodeURIComponent(commitment)}`,
+      token,
+    );
+    return response.note;
+  } catch (error) {
+    if (error instanceof Error && error.message.toLowerCase().includes("margin note not found")) {
+      markPrivateMarginNoteSpent(commitment);
+      throw new Error("That local margin note is stale for this runtime. It has been removed; deposit private USDC again.");
+    }
+    throw error;
+  }
 }
 
 async function addressDigest(address: string, token?: string): Promise<Hex> {

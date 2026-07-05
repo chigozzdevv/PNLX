@@ -7,7 +7,7 @@ const clientRoot = dirname(fileURLToPath(import.meta.url));
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
   env: {
-    NEXT_PUBLIC_PNLX_PROVER_URL: process.env.NEXT_PUBLIC_PNLX_PROVER_URL ?? "http://127.0.0.1:4101",
+    NEXT_PUBLIC_PNLX_PROVER_URL: process.env.NEXT_PUBLIC_PNLX_PROVER_URL ?? "/api/prover",
   },
   images: {
     remotePatterns: [

@@ -12,7 +12,11 @@ import {
   fieldHashPair,
   randomLabel,
 } from "@/lib/private-note";
-import { savePrivateMarginNote } from "@/lib/private-margin-notes";
+import {
+  privateMarginNoteRuntimeScopeFromHealth,
+  savePrivateMarginNote,
+  setPrivateMarginNoteRuntimeScope,
+} from "@/lib/private-margin-notes";
 import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
 import type { Hex, MarketDisplay, PositionRow, Side } from "@/types/trading";
 import type { WalletSession } from "@/lib/wallet-auth";
@@ -38,7 +42,20 @@ interface HealthResponse {
   custody?: {
     collateralAsset?: {
       tokenDigest?: Hex;
+      tokenContract?: string;
     };
+  };
+  persistence?: {
+    mongodb?: {
+      collection?: string;
+      database?: string;
+    };
+  };
+  runtime?: {
+    clientStorageScope?: string;
+  };
+  stellar?: {
+    network?: string;
   };
 }
 
@@ -204,6 +221,7 @@ export async function closePosition(input: ClosePositionInput): Promise<Position
 
 async function collateralAssetDigest(token?: string): Promise<Hex> {
   const health = await pnlxGet<HealthResponse>("/health", token);
+  setPrivateMarginNoteRuntimeScope(privateMarginNoteRuntimeScopeFromHealth(health));
   return health.custody?.collateralAsset?.tokenDigest ?? digestToFieldHex("asset:usdc");
 }
 

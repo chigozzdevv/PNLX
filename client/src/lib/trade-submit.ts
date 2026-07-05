@@ -12,9 +12,12 @@ import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
 import { createCircuitMarginNote, randomLabel } from "@/lib/private-note";
 import {
   lockPrivateMarginNote,
+  markPrivateMarginNoteSpent,
+  privateMarginNoteRuntimeScopeFromHealth,
   savePendingPrivateMarginChange,
   savePrivateMarginNote,
   selectPrivateMarginNote,
+  setPrivateMarginNoteRuntimeScope,
 } from "@/lib/private-margin-notes";
 import { usdcToProtocolAmount } from "@/lib/asset-units";
 import type { Hex, MarketDisplay, ServerIntentRecord, Side } from "@/types/trading";
@@ -63,6 +66,18 @@ interface HealthResponse {
       tokenDigest?: Hex;
     };
   };
+  persistence?: {
+    mongodb?: {
+      collection?: string;
+      database?: string;
+    };
+  };
+  runtime?: {
+    clientStorageScope?: string;
+  };
+  stellar?: {
+    network?: string;
+  };
 }
 
 export interface SubmitTradeIntentInput {
@@ -89,6 +104,7 @@ export interface DepositPrivateMarginInput {
   amount: number;
   collateralAsset: "USDC";
   onProgress?: (stage: TradeSubmitStage) => void;
+  preferredNoteAmount?: number;
   proofProvider?: ClientProofProvider;
   session: WalletSession;
 }
@@ -96,6 +112,8 @@ export interface DepositPrivateMarginInput {
 export interface DepositPrivateMarginResult {
   amount: bigint;
   commitment: Hex;
+  commitments: Hex[];
+  noteCount: number;
 }
 
 export async function submitTradeIntent(input: SubmitTradeIntentInput): Promise<SubmitTradeIntentResult> {
@@ -114,6 +132,7 @@ export async function submitTradeIntent(input: SubmitTradeIntentInput): Promise<
   const conditionalStrategy = normalizeConditionalStrategy(input, entryPrice);
 
   const health = await pnlxGet<HealthResponse>("/health", input.session.token);
+  setPrivateMarginNoteRuntimeScope(privateMarginNoteRuntimeScopeFromHealth(health));
   if (health.custody.required) {
     return submitCustodySharedTradeIntent({
       ...input,
@@ -335,11 +354,13 @@ async function submitCustodySharedTradeIntent(
 
 export async function depositPrivateMargin(input: DepositPrivateMarginInput): Promise<DepositPrivateMarginResult> {
   const amount = usdcToProtocolAmount(input.amount, "Collateral");
+  const noteAmounts = splitDepositAmounts(amount, input.preferredNoteAmount);
   const proofProvider = input.proofProvider ?? defaultClientProofProvider();
   if (!proofProvider) throw new Error("Client proof provider is not configured");
 
   markProgress(input, "shielding");
   const health = await pnlxGet<HealthResponse>("/health", input.session.token);
+  setPrivateMarginNoteRuntimeScope(privateMarginNoteRuntimeScopeFromHealth(health));
   if (!health.custody.required) {
     throw new Error("Asset custody is not enabled");
   }
@@ -350,42 +371,55 @@ export async function depositPrivateMargin(input: DepositPrivateMarginInput): Pr
     throw new Error("Collateral token digest is not configured");
   }
 
-  const prepared = await prepareWalletAssetDeposit({
-    amount,
-    assetDigest: health.custody.collateralAsset.tokenDigest,
-    assetId: input.collateralAsset.toLowerCase(),
-    proofProvider,
-    session: input.session,
-    token: health.custody.collateralAsset.tokenContract,
-  });
-  markProgress(input, "signing");
-  const relay = await signAndRelayPreparedDeposit({
-    prepared: prepared.prepared,
-    session: input.session,
-  });
-  await finalizeWalletAssetDeposit({
-    prepared: prepared.prepared,
-    relay,
-    session: input.session,
-  });
-  savePrivateMarginNote({
-    amount: prepared.note.amount.toString(),
-    assetDigest: prepared.note.assetDigest,
-    blinding: prepared.note.blinding,
-    commitment: prepared.note.commitment,
-    noteNullifier: prepared.note.noteNullifier,
-    ownerCommitment: input.session.ownerCommitment,
-    ownerDigest: prepared.note.ownerDigest,
-    rhoDigest: prepared.note.rhoDigest,
-    spendSecretDigest: prepared.note.spendSecretDigest,
-    walletAddress: input.session.address,
-  });
+  const commitments: Hex[] = [];
+  for (const noteAmount of noteAmounts) {
+    const prepared = await prepareWalletAssetDeposit({
+      amount: noteAmount,
+      assetDigest: health.custody.collateralAsset.tokenDigest,
+      assetId: input.collateralAsset.toLowerCase(),
+      proofProvider,
+      session: input.session,
+      token: health.custody.collateralAsset.tokenContract,
+    });
+    markProgress(input, "signing");
+    const relay = await signAndRelayPreparedDeposit({
+      prepared: prepared.prepared,
+      session: input.session,
+    });
+    await finalizeWalletAssetDeposit({
+      prepared: prepared.prepared,
+      relay,
+      session: input.session,
+    });
+    savePrivateMarginNote({
+      amount: prepared.note.amount.toString(),
+      assetDigest: prepared.note.assetDigest,
+      blinding: prepared.note.blinding,
+      commitment: prepared.note.commitment,
+      noteNullifier: prepared.note.noteNullifier,
+      ownerCommitment: input.session.ownerCommitment,
+      ownerDigest: prepared.note.ownerDigest,
+      rhoDigest: prepared.note.rhoDigest,
+      spendSecretDigest: prepared.note.spendSecretDigest,
+      walletAddress: input.session.address,
+    });
+    commitments.push(prepared.note.commitment);
+  }
   markProgress(input, "done");
 
   return {
     amount,
-    commitment: prepared.note.commitment,
+    commitment: commitments[0],
+    commitments,
+    noteCount: commitments.length,
   };
+}
+
+function splitDepositAmounts(amount: bigint, preferredNoteAmount?: number): bigint[] {
+  if (!preferredNoteAmount || preferredNoteAmount <= 0) return [amount];
+  const preferred = usdcToProtocolAmount(preferredNoteAmount, "Preferred note amount");
+  if (preferred <= 0n || preferred >= amount) return [amount];
+  return [preferred, amount - preferred];
 }
 
 function intentRecordFromResponse(response: ProveAndSubmitIntentResponse | IntentSubmitResponse): ServerIntentRecord {
@@ -472,11 +506,19 @@ function normalizeIntentValidity(input: {
 }
 
 async function freshMarginMembership(commitment: Hex, token?: string): Promise<MarginMembershipResponse["note"]> {
-  const response = await pnlxGet<MarginMembershipResponse>(
-    `/notes/membership?commitment=${encodeURIComponent(commitment)}`,
-    token,
-  );
-  return response.note;
+  try {
+    const response = await pnlxGet<MarginMembershipResponse>(
+      `/notes/membership?commitment=${encodeURIComponent(commitment)}`,
+      token,
+    );
+    return response.note;
+  } catch (error) {
+    if (error instanceof Error && error.message.toLowerCase().includes("margin note not found")) {
+      markPrivateMarginNoteSpent(commitment);
+      throw new Error("That local margin note is stale for this runtime. It has been removed; deposit private USDC again.");
+    }
+    throw error;
+  }
 }
 
 function protocolSizeFromTicket(margin: bigint, leverage: number, price: number): bigint {

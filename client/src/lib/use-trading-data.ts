@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   decryptAccountEvent,
+  ensureAccountEncryptionKey,
+  recoverAccountEncryptionKey,
   syncPrivateConditionalOrders,
   type PrivateAccountEventPayload,
 } from "@/lib/account-encryption";
@@ -12,7 +14,9 @@ import {
   privatePendingBalance,
   privateReservedBalance,
   privateSpendableBalance,
+  privateMarginNoteRuntimeScopeFromHealth,
   reconcilePrivateMarginNotes,
+  setPrivateMarginNoteRuntimeScope,
 } from "@/lib/private-margin-notes";
 import { priceFromOracleString, rateFromMicroBps } from "@/lib/format";
 import type {
@@ -35,6 +39,27 @@ interface PortfolioResponse {
   portfolio: ServerPortfolioSnapshot;
 }
 
+interface HealthResponse {
+  custody?: {
+    collateralAsset?: {
+      tokenContract?: string;
+      tokenDigest?: Hex;
+    };
+  };
+  persistence?: {
+    mongodb?: {
+      collection?: string;
+      database?: string;
+    };
+  };
+  runtime?: {
+    clientStorageScope?: string;
+  };
+  stellar?: {
+    network?: string;
+  };
+}
+
 interface TradingDataState {
   data: TradingLiveData;
   error?: string;
@@ -43,6 +68,7 @@ interface TradingDataState {
 
 const ZERO_ROOT = `0x${"0".repeat(64)}` as Hex;
 const PRICE_SCALE = 100_000_000;
+const PRIVATE_OPENING_RECOVERY_PREFIX = "pnlx.account-key-opening-recovery.v2";
 const SUPPORTED_MARKET_ORDER = ["btc-usd-perp", "eth-usd-perp", "xlm-usd-perp", "sol-usd-perp", "xrp-usd-perp"];
 const SUPPORTED_MARKET_IDS = new Set(SUPPORTED_MARKET_ORDER);
 
@@ -93,27 +119,30 @@ export function useTradingData(session: WalletSession | null, refreshKey = 0): T
 }
 
 async function loadTradingData(session: WalletSession | null): Promise<TradingLiveData> {
-  const [marketsResponse, portfolio] = await Promise.all([
+  const [marketsResponse, health, portfolio] = await Promise.all([
     pnlxGet<MarketsResponse>("/markets", session?.token),
-    session
-      ? pnlxGet<PortfolioResponse>(
-          `/portfolio?ownerCommitment=${encodeURIComponent(session.ownerCommitment)}`,
-          session.token,
-        ).then((response) => response.portfolio)
-      : Promise.resolve(undefined),
+    pnlxGet<HealthResponse>("/health", session?.token),
+    session ? fetchPortfolio(session) : Promise.resolve(undefined),
   ]);
-  const publicMarkets = new Map(
-    (portfolio?.publicState.markets ?? []).map((market) => [market.marketId, market]),
-  );
-  if (session && portfolio) {
-    void syncPrivateConditionalOrders(session, portfolio.accountEvents);
-    reconcilePrivateMarginNotes({ orders: portfolio.orders });
+  setPrivateMarginNoteRuntimeScope(privateMarginNoteRuntimeScopeFromHealth(health));
+  let activePortfolio = portfolio;
+  if (session && activePortfolio) {
+    const keyStatus = await ensureAccountEncryptionKey(session);
+    if (keyStatus.recovered) {
+      activePortfolio = await fetchPortfolio(session);
+    }
+    void syncPrivateConditionalOrders(session, activePortfolio.accountEvents);
+    reconcilePrivateMarginNotes({ orders: activePortfolio.orders });
   }
-  const privateOpenings = new Map(
-    (session && portfolio ? await decryptPrivateOpenings(session, portfolio.accountEvents) : [])
-      .map((payload) => [payload.opening.positionCommitment, payload.opening]),
+  const publicMarkets = new Map(
+    (activePortfolio?.publicState.markets ?? []).map((market) => [market.marketId, market]),
   );
-  const positionLockedMargin = portfolio?.positions.reduce((total, position) => {
+  const privateOpenings = new Map(
+    (await decryptRecoverablePrivateOpenings(session, activePortfolio)).map(
+      (payload) => [payload.opening.positionCommitment, payload.opening],
+    ),
+  );
+  const positionLockedMargin = activePortfolio?.positions.reduce((total, position) => {
     if (position.status !== "open") return total;
     const opening = privateOpenings.get(position.positionCommitment);
     return total + usdcAmount(opening?.margin);
@@ -128,12 +157,12 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
   const marketPrices = new Map(markets.map((market) => [market.marketId, market.price]));
 
   return {
-    account: accountFromServer(session, portfolio, lockedMargin, spendablePrivateMargin, pendingPrivateMargin),
-    accountEventCount: portfolio?.accountEvents.length ?? 0,
-    activity: portfolio?.activities ?? [],
+    account: accountFromServer(session, activePortfolio, lockedMargin, spendablePrivateMargin, pendingPrivateMargin),
+    accountEventCount: activePortfolio?.accountEvents.length ?? 0,
+    activity: activePortfolio?.activities ?? [],
     markets,
-    orders: portfolio?.orders ?? [],
-    positions: portfolio?.positions.map((position) => {
+    orders: activePortfolio?.orders ?? [],
+    positions: activePortfolio?.positions.map((position) => {
       const opening = privateOpenings.get(position.positionCommitment);
       const entryPrice = priceAmount(opening?.entryPrice);
       const size = baseAmount(opening?.size);
@@ -182,6 +211,77 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
       volume24h: market.volume24h,
     })),
   };
+}
+
+async function fetchPortfolio(session: WalletSession): Promise<ServerPortfolioSnapshot> {
+  return pnlxGet<PortfolioResponse>(
+    `/portfolio?ownerCommitment=${encodeURIComponent(session.ownerCommitment)}`,
+    session.token,
+  ).then((response) => response.portfolio);
+}
+
+async function decryptRecoverablePrivateOpenings(
+  session: WalletSession | null,
+  portfolio: ServerPortfolioSnapshot | undefined,
+): Promise<Array<Extract<PrivateAccountEventPayload, { kind: "position-opening" }>>> {
+  if (!session || !portfolio) return [];
+
+  let activePortfolio = portfolio;
+  let openings = await decryptPrivateOpenings(session, activePortfolio.accountEvents);
+  if (!shouldRecoverPrivateOpenings(session, activePortfolio, openings)) {
+    return openings;
+  }
+
+  await recoverAccountEncryptionKey(session);
+  markPrivateOpeningRecoveryAttempt(session, activePortfolio);
+  activePortfolio = await fetchPortfolio(session);
+  openings = await decryptPrivateOpenings(session, activePortfolio.accountEvents);
+
+  if (openings.length > 0) {
+    void syncPrivateConditionalOrders(session, activePortfolio.accountEvents);
+  }
+  return openings;
+}
+
+function shouldRecoverPrivateOpenings(
+  session: WalletSession,
+  portfolio: ServerPortfolioSnapshot,
+  openings: Array<Extract<PrivateAccountEventPayload, { kind: "position-opening" }>>,
+): boolean {
+  const openPositionCommitments = portfolio.positions
+    .filter((position) => position.status === "open")
+    .map((position) => position.positionCommitment);
+  if (openPositionCommitments.length === 0 || portfolio.accountEvents.length === 0) return false;
+
+  const decrypted = new Set(openings.map((payload) => payload.opening.positionCommitment));
+  const missingOpening = openPositionCommitments.some((commitment) => !decrypted.has(commitment));
+  return missingOpening && !hasPrivateOpeningRecoveryAttempt(session, portfolio);
+}
+
+function privateOpeningRecoveryKey(
+  session: WalletSession,
+  portfolio: ServerPortfolioSnapshot,
+): string {
+  const commitments = portfolio.positions
+    .filter((position) => position.status === "open")
+    .map((position) => position.positionCommitment)
+    .sort()
+    .join("|");
+  return `${PRIVATE_OPENING_RECOVERY_PREFIX}:${session.ownerCommitment}:${commitments}`;
+}
+
+function hasPrivateOpeningRecoveryAttempt(
+  session: WalletSession,
+  portfolio: ServerPortfolioSnapshot,
+): boolean {
+  return window.sessionStorage.getItem(privateOpeningRecoveryKey(session, portfolio)) === "1";
+}
+
+function markPrivateOpeningRecoveryAttempt(
+  session: WalletSession,
+  portfolio: ServerPortfolioSnapshot,
+): void {
+  window.sessionStorage.setItem(privateOpeningRecoveryKey(session, portfolio), "1");
 }
 
 function canonicalMarkets(markets: ServerMarketConfig[]): ServerMarketConfig[] {

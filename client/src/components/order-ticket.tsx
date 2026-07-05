@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { CircleDollarSign, Plus } from "lucide-react";
+import { ArrowLeft, CircleDollarSign, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { formatNumber, formatUsd, shortAddress } from "@/lib/format";
 import type { SubmitTradeIntentResult, TradeSubmitStage } from "@/lib/trade-submit";
@@ -33,9 +33,11 @@ export interface OrderTicketDepositInput {
   amount: number;
   collateralAsset: "USDC";
   onProgress?: (stage: TradeSubmitStage) => void;
+  preferredNoteAmount?: number;
 }
 
 type ConditionMode = "percent" | "price";
+type TicketMode = "trade" | "deposit";
 const MARGIN_STORAGE_PREFIX = "pnlx.order-ticket.margin.v1";
 
 export function OrderTicket({
@@ -55,7 +57,7 @@ export function OrderTicket({
   const [submitSuccess, setSubmitSuccess] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
   const [depositing, setDepositing] = useState(false);
-  const [fundingOpen, setFundingOpen] = useState(false);
+  const [ticketMode, setTicketMode] = useState<TicketMode>("trade");
   const [margin, setMargin] = useState(() => readStoredMargin(market.marketId, order.collateral));
   const [fundAmount, setFundAmount] = useState(() => readStoredMargin(market.marketId, order.collateral));
   const [limitPrice, setLimitPrice] = useState(market.price);
@@ -72,14 +74,14 @@ export function OrderTicket({
   const executionLimitPrice = orderType === "market"
     ? marketLimitPrice(side, market.price, slippagePercent)
     : limitPrice;
+  const sizingPrice = orderType === "market" ? executionLimitPrice : activePrice;
   const exposure = margin * leverage;
-  const size = activePrice > 0 ? exposure / activePrice : 0;
-  const takeProfitPnl = estimatePnl(side, size, activePrice, takeProfitPrice);
-  const stopLossPnl = estimatePnl(side, size, activePrice, stopLossPrice);
+  const size = sizingPrice > 0 ? exposure / sizingPrice : 0;
+  const takeProfitPnl = estimatePnl(side, size, sizingPrice, takeProfitPrice);
+  const stopLossPnl = estimatePnl(side, size, sizingPrice, stopLossPrice);
   const takeProfitPercent = percentFromPnl("tp", takeProfitPnl, margin);
   const stopLossPercent = percentFromPnl("sl", stopLossPnl, margin);
   const availableCollateralValue = availableCollateral ?? 0;
-  const hasFundedCollateral = availableCollateralValue > 0;
   const hasEnoughCollateral = availableCollateralValue >= margin;
   const canSubmit = connected && Boolean(onSubmit) && !submitting && !depositing && margin > 0 && hasEnoughCollateral;
   const canDeposit = connected && Boolean(onDeposit) && !submitting && !depositing && fundAmount > 0;
@@ -87,12 +89,18 @@ export function OrderTicket({
   const primaryBusy = submitting || depositing;
   const liquidationPrice = useMemo(() => {
     const riskMove = leverage > 0 ? 1 / leverage - market.maintenanceMarginRate : 0;
-    return side === "long" ? activePrice * (1 - riskMove) : activePrice * (1 + riskMove);
-  }, [activePrice, leverage, market.maintenanceMarginRate, side]);
+    return side === "long" ? sizingPrice * (1 - riskMove) : sizingPrice * (1 + riskMove);
+  }, [leverage, market.maintenanceMarginRate, side, sizingPrice]);
 
   useEffect(() => {
     writeStoredMargin(market.marketId, margin);
   }, [margin, market.marketId]);
+
+  useEffect(() => {
+    if (!submitSuccess || submitting || depositing) return;
+    const timer = window.setTimeout(() => setSubmitSuccess(undefined), 3_500);
+    return () => window.clearTimeout(timer);
+  }, [depositing, submitSuccess, submitting]);
 
   function selectSide(nextSide: Side) {
     setSide(nextSide);
@@ -130,7 +138,6 @@ export function OrderTicket({
   function updateFundAmount(value: number) {
     const next = Math.max(value || 0, 0);
     setFundAmount(next);
-    if (!hasFundedCollateral) setMargin(next);
   }
 
   async function submitOrder() {
@@ -156,12 +163,12 @@ export function OrderTicket({
         onProgress: setSubmitStage,
         orderType,
         side,
-        sizingPrice: activePrice,
+        sizingPrice,
         stopLossPrice: tpSlEnabled ? stopLossPrice : null,
         takeProfitPrice: tpSlEnabled ? takeProfitPrice : null,
       });
-      setSubmitStage("done");
-      setSubmitSuccess(`Intent ${shortAddress(result.intent.intentCommitment)} submitted`);
+      setSubmitStage(undefined);
+      setSubmitSuccess(`Submitted ${shortAddress(result.intent.intentCommitment)}`);
     } catch (error) {
       setSubmitStage(undefined);
       setSubmitError(error instanceof Error ? error.message : "Trade submission failed");
@@ -196,8 +203,11 @@ export function OrderTicket({
       await onDeposit({
         amount,
         collateralAsset: order.collateralAsset,
+        onProgress: setSubmitStage,
+        preferredNoteAmount: amount > margin ? margin : undefined,
       });
-      setFundingOpen(false);
+      setSubmitStage(undefined);
+      setTicketMode("trade");
       setSubmitSuccess(`${formatUsd(amount, { maximumFractionDigits: 2 })} deposited`);
     } catch (error) {
       setSubmitStage(undefined);
@@ -207,38 +217,69 @@ export function OrderTicket({
     }
   }
 
-  const fundingDropdown = fundingOpen ? (
-    <div className="funding-dropdown">
-      <div className="field-control">
-        <input
-          aria-label="Funding amount"
-          inputMode="decimal"
-          value={fundAmount}
-          onChange={(event) => updateFundAmount(Number(event.target.value) || 0)}
-        />
-        <div className="asset-pill">
-          <CircleDollarSign size={18} />
-          {order.collateralAsset}
-        </div>
-      </div>
-      <button
-        className="secondary-ticket-button funding-submit-button"
-        disabled={!canDeposit}
-        type="button"
-        onClick={() => depositMargin()}
-      >
-        {depositing ? "Depositing" : "Deposit"}
-      </button>
-    </div>
-  ) : null;
-
   return (
     <section className="panel order-ticket">
       <div className="ticket-heading">
-        <p>Trade</p>
+        <p>{ticketMode === "deposit" ? "Deposit" : "Trade"}</p>
         <span>{market.pair}</span>
       </div>
 
+      {ticketMode === "deposit" ? (
+        <>
+          <button
+            className="secondary-ticket-button ticket-mode-back"
+            disabled={depositing}
+            type="button"
+            onClick={() => setTicketMode("trade")}
+          >
+            <ArrowLeft size={16} />
+            Trade
+          </button>
+
+          <div className="ticket-field">
+            <div className="field-label">
+              <span>Amount</span>
+              <strong className="field-balance">
+                Available {formatUsd(availableCollateralValue, { maximumFractionDigits: 2 })}
+              </strong>
+            </div>
+            <div className="field-control">
+              <input
+                aria-label="Deposit amount"
+                inputMode="decimal"
+                value={fundAmount}
+                onChange={(event) => updateFundAmount(Number(event.target.value) || 0)}
+              />
+              <div className="asset-pill">
+                <CircleDollarSign size={18} />
+                {order.collateralAsset}
+              </div>
+            </div>
+          </div>
+
+          <motion.button
+            className="primary-trade-button"
+            data-side="long"
+            disabled={!canDeposit}
+            type="button"
+            onClick={() => depositMargin()}
+            whileHover={{ y: -1 }}
+            whileTap={{ scale: 0.99 }}
+          >
+            {!connected ? "Connect Wallet" : depositing ? "Depositing" : "Deposit"}
+          </motion.button>
+
+          <TradeProgress depositing={depositing} stage={submitStage} />
+
+          {submitError ? (
+            <p className="ticket-message ticket-message-error" role="alert" title={submitError}>
+              {submitError}
+            </p>
+          ) : null}
+          {submitSuccess ? <p className="ticket-message ticket-message-success">{submitSuccess}</p> : null}
+        </>
+      ) : (
+        <>
       <div className="side-selector">
         <button
           className={`side-button side-button-long ${side === "long" ? "side-button-active" : ""}`}
@@ -322,13 +363,12 @@ export function OrderTicket({
               Available {formatUsd(availableCollateralValue, { maximumFractionDigits: 2 })}
             </strong>
             <button
-              aria-expanded={fundingOpen}
               aria-label="Top up available collateral"
               className="field-topup-button"
               disabled={!connected || !onDeposit || depositing || submitting}
               title="Top up collateral"
               type="button"
-              onClick={() => setFundingOpen((open) => !open)}
+              onClick={() => setTicketMode("deposit")}
             >
               <Plus size={14} />
             </button>
@@ -346,7 +386,6 @@ export function OrderTicket({
             {order.collateralAsset}
           </div>
         </div>
-        {fundingDropdown}
       </div>
 
       <div className="ticket-field">
@@ -472,7 +511,7 @@ export function OrderTicket({
                 : "Submit Short"}
       </motion.button>
 
-      <TradeProgress stage={submitStage} />
+      <TradeProgress depositing={depositing} stage={submitStage} />
 
       {submitError ? (
         <p className="ticket-message ticket-message-error" role="alert" title={submitError}>
@@ -494,39 +533,55 @@ export function OrderTicket({
           />
         ) : null}
       </div>
+        </>
+      )}
     </section>
   );
 }
 
-const TRADE_PROGRESS: Array<{ id: TradeSubmitStage; label: string }> = [
-  { id: "hashing", label: "Hash" },
-  { id: "shielding", label: "Shield" },
-  { id: "signing", label: "Sign" },
-  { id: "proving", label: "Proof" },
-  { id: "matching", label: "Match" },
-];
-
-function TradeProgress({ stage }: { stage?: TradeSubmitStage }) {
+function TradeProgress({ depositing, stage }: { depositing: boolean; stage?: TradeSubmitStage }) {
   if (!stage) return null;
-  const activeIndex = stage === "done"
-    ? TRADE_PROGRESS.length
-    : TRADE_PROGRESS.findIndex((step) => step.id === stage);
+  const label = progressLabel(stage, depositing);
 
   return (
-    <div className="trade-progress" aria-label="Private trade progress">
-      {TRADE_PROGRESS.map((step, index) => (
-        <div
-          className={`trade-progress-step ${
-            index <= activeIndex ? "trade-progress-step-active" : ""
-          } ${index === activeIndex ? "trade-progress-step-current" : ""}`}
-          key={step.id}
-        >
-          <span />
-          <strong>{step.label}</strong>
-        </div>
-      ))}
-    </div>
+    <p className="ticket-message ticket-message-status" aria-live="polite">
+      {label}
+    </p>
   );
+}
+
+function progressLabel(stage: TradeSubmitStage, depositing: boolean): string {
+  if (stage === "done") return depositing ? "Deposit confirmed" : "Order queued for matching";
+  if (depositing) {
+    switch (stage) {
+      case "shielding":
+        return "Creating shielded note";
+      case "signing":
+        return "Waiting for wallet signature";
+      case "proving":
+        return "Preparing deposit proof";
+      case "matching":
+        return "Finalizing deposit";
+      case "hashing":
+      default:
+        return "Preparing deposit";
+    }
+  }
+
+  switch (stage) {
+    case "hashing":
+      return "Preparing private order";
+    case "shielding":
+      return "Selecting private margin";
+    case "signing":
+      return "Waiting for wallet signature";
+    case "proving":
+      return "Generating validity proof";
+    case "matching":
+      return "Submitting private intent";
+    default:
+      return "Submitting private order";
+  }
 }
 
 function ConditionInput({

@@ -62,6 +62,16 @@ export interface ServerOwnerOrderSnapshot {
   createdAt: number;
   intentCommitment: Hex;
   isResidual: boolean;
+  matching: {
+    batchId?: string;
+    completedAt?: number;
+    message: string;
+    phase?: "oracle" | "maker-liquidity" | "matcher" | "batch-settlement" | "settlement-commit" | "maker-finalize";
+    reason?: string;
+    runId?: Hex;
+    state: "blocked" | "queued" | "settled" | "waiting-liquidity";
+    status?: "failed" | "settled" | "skipped";
+  };
   matchingPayloadCommitment: Hex;
   marketId: string;
   residualCommitment?: Hex;

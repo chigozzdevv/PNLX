@@ -179,7 +179,7 @@ class HttpClientProofProvider implements ClientProofProvider {
   }
 
   private async post<T>(path: string, data: Record<string, unknown>): Promise<ProofBundle<T>> {
-    const response = await fetch(new URL(path, normalizedBase(this.baseUrl)), {
+    const response = await fetch(providerUrl(this.baseUrl, path), {
       body: JSON.stringify(data),
       cache: "no-store",
       headers: { "content-type": "application/json" },
@@ -199,6 +199,16 @@ class HttpClientProofProvider implements ClientProofProvider {
     }
     return body as ProofBundle<T>;
   }
+}
+
+function providerUrl(baseUrl: string, path: string): URL {
+  const cleanPath = path.replace(/^\/+/, "");
+  const base = normalizedBase(baseUrl);
+  if (/^[a-z][a-z\d+.-]*:/i.test(base)) return new URL(cleanPath, base);
+  if (typeof window === "undefined") {
+    throw new Error("Relative proof provider URL requires a browser origin");
+  }
+  return new URL(cleanPath, new URL(base, window.location.origin));
 }
 
 function normalizedBase(value: string): string {

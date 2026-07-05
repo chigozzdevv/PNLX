@@ -1,9 +1,33 @@
 import type { Hex } from "@/types/trading";
 
 const STORAGE_KEY = "pnlx.private.margin-notes.v1";
+const RUNTIME_SCOPE_KEY = "pnlx.private.margin-notes.runtime-scope.v1";
 
 export type PrivateMarginNoteStatus = "available" | "locked" | "pending" | "spent";
 type ReconciledOrderStatus = "open" | "filled" | "partially-filled" | "cancelled";
+
+let activeRuntimeScope: string | undefined;
+
+export interface PrivateMarginNoteRuntimeHealth {
+  custody?: {
+    collateralAsset?: {
+      tokenContract?: string;
+      tokenDigest?: Hex;
+    };
+  };
+  persistence?: {
+    mongodb?: {
+      collection?: string;
+      database?: string;
+    };
+  };
+  runtime?: {
+    clientStorageScope?: string;
+  };
+  stellar?: {
+    network?: string;
+  };
+}
 
 export interface StoredPrivateMarginNote {
   amount: string;
@@ -20,6 +44,7 @@ export interface StoredPrivateMarginNote {
   updatedAt: number;
   walletAddress: string;
   lockedByIntentCommitment?: Hex;
+  runtimeScope?: string;
 }
 
 export function privateSpendableBalance(ownerCommitment?: Hex): bigint {
@@ -58,6 +83,50 @@ export function privatePendingBalance(ownerCommitment?: Hex): bigint {
 }
 
 export function privateMarginNotes(ownerCommitment?: Hex): StoredPrivateMarginNote[] {
+  const scope = currentPrivateMarginNoteRuntimeScope();
+  if (!scope) return [];
+  return readPrivateMarginNotes()
+    .filter((note) => note.runtimeScope === scope)
+    .filter((note) => !ownerCommitment || note.ownerCommitment === ownerCommitment);
+}
+
+export function setPrivateMarginNoteRuntimeScope(scope?: string): void {
+  if (typeof window === "undefined") {
+    activeRuntimeScope = normalizeRuntimeScope(scope);
+    return;
+  }
+  const normalized = normalizeRuntimeScope(scope);
+  activeRuntimeScope = normalized;
+  if (normalized) {
+    window.sessionStorage.setItem(RUNTIME_SCOPE_KEY, normalized);
+  } else {
+    window.sessionStorage.removeItem(RUNTIME_SCOPE_KEY);
+  }
+}
+
+export function currentPrivateMarginNoteRuntimeScope(): string | undefined {
+  if (activeRuntimeScope) return activeRuntimeScope;
+  if (typeof window === "undefined") return undefined;
+  activeRuntimeScope = normalizeRuntimeScope(window.sessionStorage.getItem(RUNTIME_SCOPE_KEY) ?? undefined);
+  return activeRuntimeScope;
+}
+
+export function privateMarginNoteRuntimeScopeFromHealth(
+  health: PrivateMarginNoteRuntimeHealth,
+): string | undefined {
+  const serverScope = normalizeRuntimeScope(health.runtime?.clientStorageScope);
+  if (serverScope) return serverScope;
+
+  return normalizeRuntimeScope([
+    "pnlx",
+    health.stellar?.network,
+    health.persistence?.mongodb?.database,
+    health.persistence?.mongodb?.collection,
+    health.custody?.collateralAsset?.tokenContract,
+  ].filter(Boolean).join(":"));
+}
+
+function readPrivateMarginNotes(): StoredPrivateMarginNote[] {
   if (typeof window === "undefined") return [];
   const raw = window.localStorage.getItem(STORAGE_KEY);
   if (!raw) return [];
@@ -66,8 +135,7 @@ export function privateMarginNotes(ownerCommitment?: Hex): StoredPrivateMarginNo
     const parsed = JSON.parse(raw) as unknown[];
     return parsed
       .map(normalizeNote)
-      .filter((note): note is StoredPrivateMarginNote => Boolean(note))
-      .filter((note) => !ownerCommitment || note.ownerCommitment === ownerCommitment);
+      .filter((note): note is StoredPrivateMarginNote => Boolean(note));
   } catch {
     window.localStorage.removeItem(STORAGE_KEY);
     return [];
@@ -82,12 +150,13 @@ export function savePrivateMarginNote(
   const note: StoredPrivateMarginNote = {
     ...input,
     createdAt: input.createdAt ?? now,
+    runtimeScope: input.runtimeScope ?? currentPrivateMarginNoteRuntimeScope(),
     status: input.status ?? "available",
     updatedAt: input.updatedAt ?? now,
   };
   writeNotes([
     note,
-    ...privateMarginNotes().filter((existing) => existing.commitment !== note.commitment),
+    ...readPrivateMarginNotes().filter((existing) => existing.commitment !== note.commitment),
   ]);
   return note;
 }
@@ -123,7 +192,7 @@ export function selectWithdrawablePrivateMarginNote(input: {
 
 export function lockPrivateMarginNote(commitment: Hex, intentCommitment: Hex): void {
   writeNotes(
-    privateMarginNotes().map((note) =>
+    readPrivateMarginNotes().map((note) =>
       note.commitment === commitment
         ? {
             ...note,
@@ -138,7 +207,7 @@ export function lockPrivateMarginNote(commitment: Hex, intentCommitment: Hex): v
 
 export function markPrivateMarginNoteSpent(commitment: Hex): void {
   writeNotes(
-    privateMarginNotes().map((note) =>
+    readPrivateMarginNotes().map((note) =>
       note.commitment === commitment
         ? {
             ...note,
@@ -167,7 +236,7 @@ export function reconcilePrivateMarginNotes(input: {
 }): void {
   const orderStatus = new Map(input.orders.map((order) => [order.intentCommitment, order.status]));
   let changed = false;
-  const next = privateMarginNotes().map((note) => {
+  const next = readPrivateMarginNotes().map((note) => {
     if (!note.lockedByIntentCommitment) return note;
     const status = orderStatus.get(note.lockedByIntentCommitment);
     if (!status) return note;
@@ -251,6 +320,7 @@ function normalizeNote(value: unknown): StoredPrivateMarginNote | undefined {
     ownerCommitment: note.ownerCommitment,
     ownerDigest: note.ownerDigest,
     rhoDigest: note.rhoDigest,
+    runtimeScope: normalizeRuntimeScope(note.runtimeScope),
     spendSecretDigest: note.spendSecretDigest,
     status: normalizeStatus(note.status),
     updatedAt: Number(note.updatedAt ?? Date.now()),
@@ -260,4 +330,10 @@ function normalizeNote(value: unknown): StoredPrivateMarginNote | undefined {
 
 function normalizeStatus(value: unknown): PrivateMarginNoteStatus {
   return value === "locked" || value === "pending" || value === "spent" ? value : "available";
+}
+
+function normalizeRuntimeScope(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized ? normalized : undefined;
 }

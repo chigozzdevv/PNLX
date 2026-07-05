@@ -1,4 +1,4 @@
-export const USDC_SCALE = 1_000_000;
+export const USDC_SCALE = 10_000_000;
 
 export function usdcToProtocolAmount(value: number, label = "USDC amount"): bigint {
   if (!Number.isFinite(value)) {

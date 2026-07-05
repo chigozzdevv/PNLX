@@ -18,10 +18,18 @@ import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useTradingData } from "@/lib/use-trading-data";
 import { useWalletSession } from "@/lib/use-wallet-session";
 import type { OrderTicketSubmitInput } from "@/components/order-ticket";
-import type { MarketDisplay, OrderDraft, PositionRow, ServerOwnerOrderSnapshot, TickerItem } from "@/types/trading";
+import type {
+  MarketDisplay,
+  OrderDraft,
+  PositionRow,
+  ServerOwnerActivitySnapshot,
+  ServerOwnerOrderSnapshot,
+  TickerItem,
+} from "@/types/trading";
 
 const SELECTED_MARKET_STORAGE_KEY = "pnlx:selected-market-id:v2";
 const DEFAULT_MARKET_ID = "xlm-usd-perp";
+const OPTIMISTIC_ORDER_TTL_MS = 30_000;
 
 export function TradingPage() {
   const wallet = useWalletSession();
@@ -36,6 +44,7 @@ export function TradingPage() {
     () => new Map(),
   );
   const [pendingOrders, setPendingOrders] = useState<ServerOwnerOrderSnapshot[]>([]);
+  const [optimisticOrderClock, setOptimisticOrderClock] = useState(0);
   const trading = useTradingData(wallet.session, refreshKey);
   const ticker = useMarketTicker(trading.data.ticker);
   const [selectedMarketId, setSelectedMarketId] = useState(readStoredMarketId);
@@ -69,10 +78,8 @@ export function TradingPage() {
   const orderDraft = displaySelectedMarket ? orderDraftFromMarket(displaySelectedMarket) : undefined;
   const orders = useMemo(() => {
     const liveIds = new Set(trading.data.orders.map((order) => order.intentCommitment));
-    return [
-      ...pendingOrders.filter((order) => !liveIds.has(order.intentCommitment)),
-      ...trading.data.orders,
-    ].map((order) =>
+    const resolvedIds = resolvedOrderIds(trading.data.activity, trading.data.positions);
+    const liveOrders = trading.data.orders.map((order) =>
       optimisticCancelledOrders.has(order.intentCommitment)
         ? {
             ...order,
@@ -81,8 +88,23 @@ export function TradingPage() {
           }
         : order,
     );
-  }, [optimisticCancelledOrders, pendingOrders, trading.data.orders]);
-  const hasPendingOrders = orders.some((order) => order.status === "open" || order.status === "partially-filled");
+    return [
+      ...pendingOrders.filter((order) =>
+        !liveIds.has(order.intentCommitment) &&
+        !resolvedIds.has(order.intentCommitment) &&
+        (optimisticOrderClock === 0 || optimisticOrderClock - order.createdAt < OPTIMISTIC_ORDER_TTL_MS)
+      ),
+      ...liveOrders.filter((order) => isActiveOrderStatus(order.status)),
+    ];
+  }, [
+    optimisticCancelledOrders,
+    optimisticOrderClock,
+    pendingOrders,
+    trading.data.activity,
+    trading.data.orders,
+    trading.data.positions,
+  ]);
+  const hasPendingOrders = orders.some((order) => isActiveOrderStatus(order.status));
   const handleSelectMarket = useCallback((marketId: string) => {
     setSelectedMarketId(marketId);
     writeStoredMarketId(marketId);
@@ -173,6 +195,14 @@ export function TradingPage() {
     return () => window.clearInterval(timer);
   }, [hasPendingOrders, wallet.session]);
 
+  useEffect(() => {
+    if (pendingOrders.length === 0) return;
+    const timer = window.setInterval(() => {
+      setOptimisticOrderClock(Date.now());
+    }, 4_000);
+    return () => window.clearInterval(timer);
+  }, [pendingOrders.length]);
+
   return (
     <AppShell
       account={trading.data.account}
@@ -248,12 +278,17 @@ export function TradingPage() {
                   session: wallet.session,
                 });
                 const submittedAt = Date.now();
+                setOptimisticOrderClock(submittedAt);
                 setPendingOrders((current) => [
                   {
                     batchId: result.intent.batchId,
                     createdAt: submittedAt,
                     intentCommitment: result.intent.intentCommitment,
                     isResidual: false,
+                    matching: {
+                      message: "Queued for matching",
+                      state: "queued",
+                    },
                     marketId: result.intent.marketId,
                     matchingPayloadCommitment: result.intent.matchingPayloadCommitment,
                     status: "open",
@@ -274,6 +309,26 @@ export function TradingPage() {
       <BottomTicker ticker={ticker.ticker} live={ticker.live} updatedAt={ticker.updatedAt} />
     </AppShell>
   );
+}
+
+function resolvedOrderIds(
+  activity: ServerOwnerActivitySnapshot[],
+  positions: PositionRow[],
+): Set<string> {
+  const ids = new Set<string>();
+  for (const item of activity) {
+    if (item.kind === "order" && !isActiveOrderStatus(item.status)) ids.add(item.id);
+  }
+  for (const position of positions) {
+    if (position.privateState?.sourceIntentCommitment) {
+      ids.add(position.privateState.sourceIntentCommitment);
+    }
+  }
+  return ids;
+}
+
+function isActiveOrderStatus(status?: string): boolean {
+  return status === "open" || status === "partially-filled";
 }
 
 function readStoredMarketId(): string {

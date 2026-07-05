@@ -130,38 +130,57 @@ function PositionsView({
         <span />
       </div>
 
-      {positions.map((position) => (
-        <div className="positions-row" key={position.id}>
-          <span>{position.time}</span>
-          <strong>
-            {position.market}
-            {position.side ? ` / ${position.side}` : ""}
-          </strong>
-          <span>{privateNumber(position.size, (value) => formatNumber(value, 6), position.privateDetails)}</span>
-          <span>{privateNumber(position.collateral, formatUsd, position.privateDetails)}</span>
-          <span>{privateNumber(position.entryPrice, (value) => formatNumber(value, 1), position.privateDetails)}</span>
-          <span>{privateNumber(position.marketPrice, (value) => formatNumber(value, 1), position.privateDetails)}</span>
-          <span>{privateNumber(position.netValue, formatUsd, position.privateDetails)}</span>
-          <span>{statusLabel(position.status)}</span>
-          <span>{position.commitment ? shortAddress(position.commitment) : "--"}</span>
-          <span>
-            {position.status === "open" ? (
-              <button
-                className="row-action-button"
-                disabled={!onClosePosition || !position.privateState || closingPositionId === position.id}
-                type="button"
-                onClick={() => onClosePosition?.(position)}
-              >
-                {closingPositionId === position.id ? "Closing" : "Close"}
-              </button>
-            ) : (
-              "--"
-            )}
-          </span>
-        </div>
-      ))}
+      {positions.map((position) => {
+        const closeUnavailableReason = position.status === "open"
+          ? closeDisabledReason(position, onClosePosition)
+          : undefined;
+        return (
+          <div className="positions-row" key={position.id}>
+            <span>{position.time}</span>
+            <strong>
+              {position.market}
+              {position.side ? ` / ${position.side}` : ""}
+            </strong>
+            <span>{privateNumber(position.size, (value) => formatNumber(value, 6), position.privateDetails)}</span>
+            <span>{privateNumber(position.collateral, formatUsd, position.privateDetails)}</span>
+            <span>{privateNumber(position.entryPrice, (value) => formatNumber(value, 1), position.privateDetails)}</span>
+            <span>{privateNumber(position.marketPrice, (value) => formatNumber(value, 1), position.privateDetails)}</span>
+            <span>{privateNumber(position.netValue, formatUsd, position.privateDetails)}</span>
+            <span>{statusLabel(position.status)}</span>
+            <span>{position.commitment ? shortAddress(position.commitment) : "--"}</span>
+            <span>
+              {position.status === "open" ? (
+                <button
+                  className="row-action-button"
+                  disabled={Boolean(closeUnavailableReason) || closingPositionId === position.id}
+                  title={closeUnavailableReason}
+                  type="button"
+                  onClick={() => onClosePosition?.(position)}
+                >
+                  {closingPositionId === position.id
+                    ? "Closing"
+                    : closeUnavailableReason
+                      ? "Key missing"
+                      : "Close"}
+                </button>
+              ) : (
+                "--"
+              )}
+            </span>
+          </div>
+        );
+      })}
     </>
   );
+}
+
+function closeDisabledReason(
+  position: PositionRow,
+  onClosePosition?: (position: PositionRow) => Promise<void> | void,
+): string | undefined {
+  if (!onClosePosition) return "Close action is unavailable";
+  if (!position.privateState) return "Private position key is unavailable in this browser";
+  return undefined;
 }
 
 function OrdersView({
@@ -198,7 +217,9 @@ function OrdersView({
           <span>{order.residualCommitment ? shortAddress(order.residualCommitment) : "--"}</span>
           <span>{order.batchId}</span>
           <span>{formatTime(order.updatedAt)}</span>
-          <span>{shortAddress(order.matchingPayloadCommitment)}</span>
+          <span title={order.matching?.reason ?? order.matchingPayloadCommitment}>
+            {order.matching ? matcherLabel(order.matching) : shortAddress(order.matchingPayloadCommitment)}
+          </span>
           <span>
             {order.status === "open" || order.status === "partially-filled" ? (
               <button
@@ -268,6 +289,13 @@ function statusLabel(status?: string): string {
     .split("-")
     .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
     .join(" ");
+}
+
+function matcherLabel(matching: ServerOwnerOrderSnapshot["matching"]): string {
+  if (matching.state === "blocked") return matching.message;
+  if (matching.state === "waiting-liquidity") return "Waiting for liquidity";
+  if (matching.state === "settled") return "Settling";
+  return "Queued";
 }
 
 function activityKind(kind: ServerOwnerActivitySnapshot["kind"]): string {
