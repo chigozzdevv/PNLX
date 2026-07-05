@@ -7,4 +7,5 @@ export function registerAccountKeysRoute(router: Router, executor: ExecutorServi
   const controller = new AccountKeysController(new AccountKeysService(executor));
   router.add("GET", "/account-keys", (request) => controller.get(request), { auth: true });
   router.add("POST", "/account-keys", (request) => controller.upsert(request));
+  router.add("POST", "/account-keys/recover", (request) => controller.recover(request), { auth: true });
 }

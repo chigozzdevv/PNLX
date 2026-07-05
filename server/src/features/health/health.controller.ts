@@ -23,6 +23,9 @@ export class HealthController {
     return json({
       ok: true,
       service: "pnlx-server",
+      runtime: {
+        clientStorageScope: clientStorageScope(this.env),
+      },
       auth: {
         required: this.env.authRequired,
       },
@@ -104,19 +107,13 @@ export class HealthController {
         source: this.env.oraclePriceSource,
       },
       persistence: {
-        authStore: Boolean(this.env.authStorePath),
-        jobQueueDriver: this.env.jobQueueDriver,
         mongodb: {
           collection: this.env.mongodbCollection,
           database: this.env.mongodbDatabase,
           configured: Boolean(this.env.mongodbUri),
         },
-        protocolStorageDriver: this.env.protocolStorageDriver,
-        protocolStore: this.env.protocolStorageDriver === "mongodb"
-          ? Boolean(this.env.mongodbUri)
-          : Boolean(this.env.protocolStorePath),
-        relayStore: Boolean(this.env.relayStorePath),
-        redisConfigured: Boolean(this.env.redisUrl),
+        protocolStore: Boolean(this.env.mongodbUri),
+        workers: "direct",
       },
       stellar: {
         network: this.env.stellarNetwork,
@@ -215,6 +212,17 @@ function redactUrl(value: string): string {
   } catch {
     return "<invalid>";
   }
+}
+
+function clientStorageScope(env: ServerEnv): string {
+  return [
+    "pnlx",
+    env.stellarNetwork,
+    env.mongodbDatabase,
+    env.mongodbCollection,
+    env.stellarDeploymentFile,
+    env.collateralTokenContract,
+  ].filter(Boolean).join(":");
 }
 
 function custodyReadinessIssues(env: ServerEnv): string[] {

@@ -4,8 +4,6 @@ import {
   randomBytes,
   verify as verifySignature,
 } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
 import { ownerCommitment } from "@pnlx/crypto";
 import type {
   AuthChallengeInput,
@@ -29,21 +27,13 @@ interface PendingChallenge {
   message: string;
 }
 
-interface AuthStateSnapshot {
-  challenges: [string, PendingChallenge][];
-  sessions: [string, AuthSession][];
-}
-
 export class AuthService {
   private readonly challenges = new Map<string, PendingChallenge>();
   private readonly sessions = new Map<string, AuthSession>();
 
   constructor(
     private readonly networkPassphrase: string,
-    private readonly statePath?: string,
-  ) {
-    this.load();
-  }
+  ) {}
 
   challenge(input: AuthChallengeInput): AuthChallengeResult {
     const address = input.address.trim().toUpperCase();
@@ -64,7 +54,6 @@ export class AuthService {
     ].join("\n");
 
     this.challenges.set(nonce, { address, expiresAt, message });
-    this.save();
     return {
       address,
       domain,
@@ -84,7 +73,6 @@ export class AuthService {
     if (!challenge) throw new Error("auth challenge not found");
     if (challenge.expiresAt < Date.now()) {
       this.challenges.delete(input.nonce);
-      this.save();
       throw new Error("auth challenge expired");
     }
     if (challenge.address !== address) throw new Error("auth address mismatch");
@@ -98,7 +86,6 @@ export class AuthService {
     const token = randomBytes(32).toString("base64url");
     const expiresAt = Date.now() + SESSION_TTL_MS;
     this.sessions.set(sessionKey(token), { address, expiresAt });
-    this.save();
 
     return {
       address,
@@ -123,39 +110,9 @@ export class AuthService {
     }
     if (session.expiresAt < Date.now()) {
       this.sessions.delete(sessionKey(token));
-      this.save();
       return Response.json({ error: "expired auth token" }, { status: 401 });
     }
     return { address: session.address, expiresAt: session.expiresAt };
-  }
-
-  private load(): void {
-    if (!this.statePath || !existsSync(this.statePath)) return;
-
-    const now = Date.now();
-    const snapshot = JSON.parse(readFileSync(this.statePath, "utf8")) as Partial<AuthStateSnapshot>;
-    this.challenges.clear();
-    this.sessions.clear();
-
-    for (const [nonce, challenge] of snapshot.challenges ?? []) {
-      if (challenge.expiresAt >= now) this.challenges.set(nonce, challenge);
-    }
-    for (const [tokenHash, session] of snapshot.sessions ?? []) {
-      if (session.expiresAt >= now) this.sessions.set(tokenHash, session);
-    }
-  }
-
-  private save(): void {
-    if (!this.statePath) return;
-
-    const snapshot: AuthStateSnapshot = {
-      challenges: [...this.challenges.entries()],
-      sessions: [...this.sessions.entries()],
-    };
-    mkdirSync(dirname(this.statePath), { recursive: true });
-    const tempPath = `${this.statePath}.tmp`;
-    writeFileSync(tempPath, JSON.stringify(snapshot, null, 2));
-    renameSync(tempPath, this.statePath);
   }
 }
 

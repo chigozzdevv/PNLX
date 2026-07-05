@@ -19,4 +19,17 @@ export class AccountKeysController {
       accountKey: this.accountKeys.get(parseAccountKeyQuery(request), authenticatedAddress(request)),
     });
   }
+
+  async recover(request: Request): Promise<Response> {
+    const body = await readJson<Record<string, unknown>>(request);
+    return json(
+      {
+        accountKeyRecovery: this.accountKeys.recover(
+          parseAccountKey(body),
+          authenticatedAddress(request),
+        ),
+      },
+      201,
+    );
+  }
 }

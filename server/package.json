@@ -11,7 +11,6 @@
     "@pnlx/proof-system": "workspace:*",
     "@pnlx/protocol-types": "workspace:*",
     "@pnlx/sdk": "workspace:*",
-    "bullmq": "^5.65.1",
     "mongodb": "^6.21.0"
   }
 }

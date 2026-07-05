@@ -6,9 +6,6 @@ export function oracleReadinessIssues(
 ): string[] {
   const onchainRequired = options.requireOnchain || env.stellarOnchainRelay || env.oracleOnchainRequired;
   const issues: string[] = [];
-  if (env.oracleOnchainRequired && env.oraclePriceSource !== "onchain-market") {
-    issues.push("ORACLE_PRICE_SOURCE=onchain-market is required for production oracle authority");
-  }
   if (
     (env.oracleOnchainRequired || env.oraclePriceSource === "onchain-market") &&
     !env.stellarOnchainRelay

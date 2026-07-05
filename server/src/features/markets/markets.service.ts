@@ -139,10 +139,13 @@ export class MarketsService {
           oracleRelayConfig(market.marketId, this.env, price.price, price.publishTime),
         )
       : undefined;
+    const marketRelay = this.onchainEnabled() && !this.onchain?.isMarketActive?.(market.marketId)
+      ? this.onchain?.upsertMarket(market, marketRelayConfig(market.marketId, this.env))
+      : undefined;
     this.executor.store.updateMarket(market);
     return {
       market,
-      onchain: oracleRelay ? { oracle: oracleRelay } : undefined,
+      onchain: oracleRelay || marketRelay ? { market: marketRelay, oracle: oracleRelay } : undefined,
       oracle: price,
     };
   }
@@ -182,19 +185,24 @@ export class MarketsService {
   }
 
   private async ensureSupportedMarkets(): Promise<void> {
+    const supportedAssets = Object.values(SUPPORTED_PERP_ASSETS);
+    const hasAllSupportedMarkets = supportedAssets.every((asset) =>
+      this.executor.store.markets.has(asset.marketId)
+    );
+    if (hasAllSupportedMarkets) return;
+
     let tickerFallback: Map<string, MarketTickerItem> | undefined;
-    for (const asset of Object.values(SUPPORTED_PERP_ASSETS)) {
+    for (const asset of supportedAssets) {
       const existing = this.executor.store.markets.get(asset.marketId);
+      if (existing) continue;
       try {
         const oraclePrice = await this.bootstrapMarketPrice(asset.marketId, async () => {
           tickerFallback ??= new Map((await hyperliquidTicker()).map((item) => [item.marketId, item]));
           return tickerFallback.get(asset.marketId);
         });
-        this.upsertSupportedMarket(asset, oraclePrice, existing?.fundingIndex ?? 0n);
+        this.upsertSupportedMarket(asset, oraclePrice, 0n);
       } catch {
-        if (existing) {
-          this.upsertSupportedMarket(asset, existing.oraclePrice, existing.fundingIndex);
-        }
+        continue;
       }
     }
   }

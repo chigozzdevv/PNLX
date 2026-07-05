@@ -12,8 +12,9 @@ export function registerMarketsRoute(
   oracle: OracleService,
   env: ServerEnv,
   onchain?: OnchainRelayService,
+  markets = new MarketsService(executor, oracle, env, onchain),
 ): void {
-  const controller = new MarketsController(new MarketsService(executor, oracle, env, onchain));
+  const controller = new MarketsController(markets);
   router.add("GET", "/markets", () => controller.list());
   router.add("GET", "/markets/ticker", () => controller.ticker());
   router.add("GET", "/markets/candles", (request) => controller.candles(request));

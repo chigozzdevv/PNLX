@@ -12,7 +12,7 @@ export class PortfolioService {
     return {
       accountEvents: this.executor.store.accountEventsFor(input.ownerCommitment),
       activities: indexer.activitiesFor(input.ownerCommitment),
-      orders: indexer.ordersFor(input.ownerCommitment),
+      orders: indexer.ordersFor(input.ownerCommitment, { activeOnly: true }),
       ownerCommitment: input.ownerCommitment,
       positions: indexer.positionsFor(input.ownerCommitment),
       publicState: indexer.snapshot(),
@@ -21,7 +21,7 @@ export class PortfolioService {
 
   orders(input: PortfolioInput, authenticated?: string) {
     assertAuthenticatedOwnerCommitment(authenticated, input.ownerCommitment, "ownerCommitment");
-    return createIndexer(this.executor.store).ordersFor(input.ownerCommitment);
+    return createIndexer(this.executor.store).ordersFor(input.ownerCommitment, { activeOnly: true });
   }
 
   positions(input: PortfolioInput, authenticated?: string) {

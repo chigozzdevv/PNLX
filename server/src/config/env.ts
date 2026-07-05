@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { DEFAULT_SMOKE_MARKET_SYMBOLS, SUPPORTED_PERP_ASSETS } from "@/config/assets";
 
 export interface ServerEnv {
-  authStorePath: string;
   authRequired: boolean;
   batchExecutorEnabled: boolean;
   batchExecutorIntervalMs: number;
@@ -53,16 +52,11 @@ export interface ServerEnv {
   oracleTwapRecords: number;
   protocolAdminAddresses: string[];
   protocolAdminRequired: boolean;
-  protocolStorageDriver: "memory" | "file" | "mongodb";
-  protocolStorePath: string;
   privateMatchingRequired: boolean;
   pythBtcUsdFeedId: string;
   pythFeedIds: Record<string, string>;
   pythHermesUrl: string;
   smokeMarketSymbols: string[];
-  relayStorePath: string;
-  redisUrl: string;
-  jobQueueDriver: "timer" | "bullmq";
   serverWitnessRoutesEnabled: boolean;
   settlementsOnchainRequired: boolean;
   stellarDeployerAddress: string;
@@ -79,8 +73,11 @@ export function loadEnv(): ServerEnv {
   if (process.env.NODE_ENV !== "test") loadEnvFile();
 
   const nodeEnv = process.env.NODE_ENV ?? "development";
-  const runtimeDir = value("PNLX_RUNTIME_DIR", ".pnlx");
   const persistentByDefault = nodeEnv !== "test";
+  const mongodbUri = value("MONGODB_URI", "");
+  if (persistentByDefault && !mongodbUri) {
+    throw new Error("MONGODB_URI is required for PNLX runtime");
+  }
   const stellarRelayerMode = value("STELLAR_RELAYER_MODE", "local");
   const oracleOnchainRequired = booleanValue("ORACLE_ONCHAIN_REQUIRED", nodeEnv === "production");
   const pythFeedIds = Object.fromEntries(
@@ -91,9 +88,8 @@ export function loadEnv(): ServerEnv {
   );
 
   return {
-    authStorePath: value("AUTH_STORE_PATH", persistentByDefault ? join(runtimeDir, "auth-state.json") : ""),
     authRequired: booleanValue("AUTH_REQUIRED", persistentByDefault),
-    batchExecutorEnabled: booleanValue("BATCH_EXECUTOR_ENABLED", false),
+    batchExecutorEnabled: persistentByDefault,
     batchExecutorIntervalMs: Number(value("BATCH_EXECUTOR_INTERVAL_MS", "5000")),
     batchExecutorPrefix: value("BATCH_EXECUTOR_PREFIX", "auto"),
     assetCustodyRequired: booleanValue("ASSET_CUSTODY_REQUIRED", persistentByDefault),
@@ -120,7 +116,7 @@ export function loadEnv(): ServerEnv {
     matcherPort: Number(value("MATCHER_PORT", "4102")),
     mongodbCollection: value("MONGODB_PROTOCOL_COLLECTION", "protocol_state"),
     mongodbDatabase: value("MONGODB_DATABASE", "pnlx"),
-    mongodbUri: value("MONGODB_URI", ""),
+    mongodbUri,
     marketId: value("PNLX_MARKET_ID", "xlm-usd-perp"),
     port: Number(process.env.PORT ?? 4000),
     nodeEnv,
@@ -131,9 +127,7 @@ export function loadEnv(): ServerEnv {
     oracleContractId: value("ORACLE_CONTRACT_ID", ""),
     oracleKind: value("ORACLE_KIND", "sep40"),
     oracleOnchainRequired,
-    oraclePriceSource: oraclePriceSource(
-      value("ORACLE_PRICE_SOURCE", oracleOnchainRequired ? "onchain-market" : "hermes"),
-    ),
+    oraclePriceSource: oraclePriceSource(value("ORACLE_PRICE_SOURCE", "hermes")),
     oracleMaxConfidenceBps: BigInt(value("ORACLE_MAX_CONFIDENCE_BPS", "100")),
     oracleCommitteeMaxAgeSeconds: Number(value("ORACLE_COMMITTEE_MAX_AGE_SECONDS", value("ORACLE_PRICE_MAX_AGE_SECONDS", "120"))),
     oracleCommitteeMaxDeviationBps: Number(value("ORACLE_COMMITTEE_MAX_DEVIATION_BPS", "100")),
@@ -146,22 +140,11 @@ export function loadEnv(): ServerEnv {
     oracleTwapRecords: Number(value("ORACLE_TWAP_RECORDS", "1")),
     protocolAdminAddresses: listValue("PROTOCOL_ADMIN_ADDRESSES", []),
     protocolAdminRequired: booleanValue("PROTOCOL_ADMIN_REQUIRED", nodeEnv === "production"),
-    protocolStorageDriver: protocolStorageDriver(value(
-      "PROTOCOL_STORAGE_DRIVER",
-      value("MONGODB_URI", "") ? "mongodb" : persistentByDefault ? "file" : "memory",
-    )),
-    protocolStorePath: value(
-      "PROTOCOL_STORE_PATH",
-      persistentByDefault ? join(runtimeDir, "protocol-store.json") : "",
-    ),
     privateMatchingRequired: booleanValue("PRIVATE_MATCHING_REQUIRED", nodeEnv === "production"),
     pythBtcUsdFeedId: pythFeedIds.BTC,
     pythFeedIds,
     pythHermesUrl: value("PYTH_HERMES_URL", "https://hermes.pyth.network"),
     smokeMarketSymbols: listValue("PNLX_SMOKE_MARKETS", DEFAULT_SMOKE_MARKET_SYMBOLS),
-    relayStorePath: value("RELAY_STORE_PATH", persistentByDefault ? join(runtimeDir, "relay-state.json") : ""),
-    redisUrl: value("REDIS_URL", ""),
-    jobQueueDriver: jobQueueDriver(value("JOB_QUEUE_DRIVER", value("REDIS_URL", "") ? "bullmq" : "timer")),
     serverWitnessRoutesEnabled: booleanValue("SERVER_WITNESS_ROUTES_ENABLED", nodeEnv === "test"),
     settlementsOnchainRequired: booleanValue("SETTLEMENTS_ONCHAIN_REQUIRED", nodeEnv === "production"),
     stellarDeployerAddress: value("STELLAR_DEPLOYER_ADDRESS", ""),
@@ -237,16 +220,6 @@ function optionalBigInt(key: string): bigint | undefined {
 function matcherProvider(value: string): ServerEnv["matcherProvider"] {
   if (value === "risc0") return value;
   throw new Error("MATCHER_PROVIDER must be risc0");
-}
-
-function protocolStorageDriver(value: string): ServerEnv["protocolStorageDriver"] {
-  if (value === "memory" || value === "file" || value === "mongodb") return value;
-  throw new Error("PROTOCOL_STORAGE_DRIVER must be memory, file, or mongodb");
-}
-
-function jobQueueDriver(value: string): ServerEnv["jobQueueDriver"] {
-  if (value === "timer" || value === "bullmq") return value;
-  throw new Error("JOB_QUEUE_DRIVER must be timer or bullmq");
 }
 
 function oraclePriceSource(value: string): "hermes" | "onchain-market" {

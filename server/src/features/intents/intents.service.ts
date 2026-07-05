@@ -66,9 +66,26 @@ export class IntentsService {
     const { intent, validity } = input;
     this.executor.store.recordProof(validity.proof);
     const prepared = this.executor.prepareIntent({ intent, validity });
-    const relay = this.onchain?.submitIntent(prepared.record);
-    this.assertSubmittedIntentRelay(relay, "submit");
+    const { alreadyRegistered, relay } = this.submitIntentOnchain(prepared.record);
+    if (!alreadyRegistered) this.assertSubmittedIntentRelay(relay, "submit");
     return this.executor.commitPreparedIntent(prepared);
+  }
+
+  private submitIntentOnchain(record: IntentRecord): {
+    alreadyRegistered: boolean;
+    relay?: OnchainRelayResult;
+  } {
+    try {
+      return {
+        alreadyRegistered: false,
+        relay: this.onchain?.submitIntent(record),
+      };
+    } catch (error) {
+      if (this.onchain?.isIntentRegistered?.(record.intentCommitment)) {
+        return { alreadyRegistered: true };
+      }
+      throw error;
+    }
   }
 
   assertSubmittedIntentRelay(

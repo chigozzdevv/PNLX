@@ -10,6 +10,7 @@ import { registerIntentsRoute } from "@/features/intents/intents.route";
 import { registerLiquidationAutomationRoute } from "@/features/liquidation-automation/liquidation-automation.route";
 import { registerLiquidationsRoute } from "@/features/liquidations/liquidations.route";
 import { registerMarketsRoute } from "@/features/markets/markets.route";
+import { MarketsService } from "@/features/markets/markets.service";
 import { registerNotesRoute } from "@/features/notes/notes.route";
 import { registerOrdersRoute } from "@/features/orders/orders.route";
 import { registerPositionClosesRoute } from "@/features/position-closes/position-closes.route";
@@ -27,6 +28,7 @@ import { createBatchExecutor } from "@/workers/batch-executor/batch-executor.wor
 import type { BatchExecutorService } from "@/workers/batch-executor/batch-executor.service";
 import { createMatcher } from "@/workers/matcher/matcher.worker";
 import { RemoteMatcherClient } from "@/workers/matcher/remote/matcher.service";
+import { MakerLiquidityService } from "@/workers/maker-liquidity/maker-liquidity.service";
 import { createFundingEngine } from "@/workers/funding-engine/funding-engine.worker";
 import type { FundingEngineService } from "@/workers/funding-engine/funding-engine.service";
 import { OracleService } from "@/workers/oracle/oracle.service";
@@ -34,11 +36,9 @@ import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createOnchainRelay } from "@/workers/onchain/onchain.worker";
 import { createProver } from "@/workers/prover/prover.worker";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
-import { startBackgroundJobQueues, type BackgroundJobQueues } from "@/workers/jobs/background-queues";
 
 export interface AppRuntime {
   batchExecutor: BatchExecutorService;
-  backgroundJobs?: BackgroundJobQueues;
   executor: ExecutorService;
   fundingEngine: FundingEngineService;
   liquidationAutomation: LiquidationAutomationService;
@@ -66,7 +66,7 @@ export async function createAppRuntimeAsync(): Promise<AppRuntime> {
 }
 
 function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorService): AppRuntime {
-  const auth = new AuthService(env.stellarNetworkPassphrase, env.authStorePath || undefined);
+  const auth = new AuthService(env.stellarNetworkPassphrase);
   const router = new Router({
     authenticate: (request) => auth.authenticateRequest(request),
     protectMutations: env.authRequired,
@@ -94,7 +94,6 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
       rpcUrl: env.stellarRpcUrl,
       source: env.stellarSource,
     },
-    historyPath: env.relayStorePath || undefined,
   });
   const onchain = env.stellarOnchainRelay
     ? createOnchainRelay(relayer, {
@@ -123,15 +122,23 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
         url: env.matcherServiceUrl,
       })
     : createMatcher(executor);
+  const makerLiquidity = new MakerLiquidityService(executor, prover, onchain, env);
+  const markets = new MarketsService(executor, oracle, env, onchain);
   const batchExecutor = createBatchExecutor(
     executor,
     matcher,
     {
       batchIdPrefix: env.batchExecutorPrefix,
       intervalMs: env.batchExecutorIntervalMs,
+      refreshMarketOracle: (marketId) =>
+        markets.refreshFromOracle(
+          { marketId },
+          env.protocolAdminAddresses[0] ?? deployment?.sourceAddress,
+        ).then(() => undefined),
       settlementsOnchainRequired: env.settlementsOnchainRequired,
     },
     onchain,
+    makerLiquidity,
   );
   const liquidations = new LiquidationsService(executor, prover, onchain, env);
   const liquidationAutomation = new LiquidationAutomationService(executor, liquidations, {
@@ -144,7 +151,7 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
   registerAccountEventsRoute(router, executor);
   registerPortfolioRoute(router, executor);
   registerNotesRoute(router, executor, prover, env, onchain, relayer);
-  registerMarketsRoute(router, executor, oracle, env, onchain);
+  registerMarketsRoute(router, executor, oracle, env, onchain, markets);
   registerFundingRoute(router, executor, env, fundingEngine);
   registerIntentsRoute(router, executor, prover, env, onchain, {
     witnessRoutesEnabled: env.serverWitnessRoutesEnabled,
@@ -174,50 +181,39 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
   if (env.fundingEngineEnabled) {
     fundingEngine.start();
   }
-  let backgroundJobs: BackgroundJobQueues | undefined;
-  if (env.jobQueueDriver === "bullmq") {
-    backgroundJobs = startBackgroundJobQueues({
-      batchExecutor,
-      batchExecutorEnabled: env.batchExecutorEnabled,
-      batchExecutorIntervalMs: env.batchExecutorIntervalMs,
-      batchExecutorPrefix: env.batchExecutorPrefix,
-      liquidationAutomation,
-      liquidationAutomationEnabled: env.liquidationAutomationEnabled,
-      liquidationAutomationIntervalMs: env.liquidationAutomationIntervalMs,
-      redisUrl: env.redisUrl,
-    });
-  } else if (env.batchExecutorEnabled) {
+  if (env.batchExecutorEnabled) {
     batchExecutor.start();
   }
-  if (env.jobQueueDriver !== "bullmq" && env.liquidationAutomationEnabled) {
+  if (env.liquidationAutomationEnabled) {
     liquidationAutomation.start();
   }
 
-  return { backgroundJobs, batchExecutor, executor, fundingEngine, liquidationAutomation, router };
+  return { batchExecutor, executor, fundingEngine, liquidationAutomation, router };
 }
 
 function createExecutorForEnv(env: ReturnType<typeof loadEnv>): ExecutorService {
-  if (env.protocolStorageDriver === "mongodb") {
-    throw new Error("MongoDB protocol storage requires async app startup");
+  if (env.nodeEnv !== "test") {
+    throw new Error("PNLX runtime uses MongoDB and must start with createAppAsync()");
   }
   return createExecutor({
     privateMatchingRequired: env.privateMatchingRequired,
-    storePath: env.protocolStorageDriver === "file" ? env.protocolStorePath || undefined : undefined,
   });
 }
 
 async function createExecutorForEnvAsync(env: ReturnType<typeof loadEnv>): Promise<ExecutorService> {
-  if (env.protocolStorageDriver === "mongodb") {
-    if (!env.mongodbUri) throw new Error("MONGODB_URI is required when PROTOCOL_STORAGE_DRIVER=mongodb");
-    return createExecutorAsync({
-      mongo: {
-        collection: env.mongodbCollection,
-        database: env.mongodbDatabase,
-        documentId: env.stellarNetwork,
-        uri: env.mongodbUri,
-      },
+  if (env.nodeEnv === "test" && !env.mongodbUri) {
+    return createExecutor({
       privateMatchingRequired: env.privateMatchingRequired,
     });
   }
-  return createExecutorForEnv(env);
+  if (!env.mongodbUri) throw new Error("MONGODB_URI is required for PNLX runtime");
+  return createExecutorAsync({
+    mongo: {
+      collection: env.mongodbCollection,
+      database: env.mongodbDatabase,
+      documentId: env.stellarNetwork,
+      uri: env.mongodbUri,
+    },
+    privateMatchingRequired: env.privateMatchingRequired,
+  });
 }
