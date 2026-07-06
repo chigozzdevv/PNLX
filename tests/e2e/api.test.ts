@@ -36,10 +36,16 @@ process.env.ASSET_CUSTODY_REQUIRED = "false";
 process.env.AUTH_REQUIRED = "false";
 process.env.COLLATERAL_TOKEN_CONTRACT = "";
 process.env.COLLATERAL_TOKEN_DIGEST = "";
+process.env.CONDITIONAL_ORDERS_ONCHAIN_REQUIRED = "false";
 process.env.FUNDING_ENGINE_ENABLED = "false";
+process.env.INTENT_REGISTRY_ONCHAIN_REQUIRED = "false";
 process.env.MATCHER_PROVIDER = "risc0";
+process.env.ORACLE_ONCHAIN_REQUIRED = "false";
+process.env.ORACLE_PRICE_SOURCE = "hermes";
 process.env.PRIVATE_MATCHING_REQUIRED = "false";
+process.env.PROTOCOL_ADMIN_REQUIRED = "false";
 process.env.SERVER_WITNESS_ROUTES_ENABLED = "true";
+process.env.SETTLEMENTS_ONCHAIN_REQUIRED = "false";
 process.env.STELLAR_ONCHAIN_RELAY = "false";
 process.env.STELLAR_RELAYER_MODE = "local";
 
@@ -923,9 +929,9 @@ describe("server api", () => {
         "/proofs/intent",
         "/proofs/liquidation",
         "/proofs/disclosure",
-        "/intents",
         "/intents/prove-and-submit",
         "/notes/deposit",
+        "/notes/deposit-asset/prepare",
         "/notes/deposit-asset",
         "/notes/withdraw",
         "/notes/withdraw-asset",
@@ -2136,10 +2142,12 @@ describe("server api", () => {
     expect(portfolioResponse.status).toBe(200);
     const portfolioResult = (await portfolioResponse.json()) as Record<string, Record<string, unknown>>;
     const orders = portfolioResult.portfolio.orders as Record<string, string>[];
-    expect(orders.find((order) => order.intentCommitment === originalRecord.intentCommitment)?.status).toBe(
+    expect(orders).toHaveLength(0);
+    const activities = portfolioResult.portfolio.activities as Record<string, string>[];
+    expect(activities.find((activity) => activity.id === originalRecord.intentCommitment)?.status).toBe(
       "cancelled",
     );
-    expect(orders.find((order) => order.intentCommitment === replacementCommitment)?.status).toBe(
+    expect(activities.find((activity) => activity.id === replacementCommitment)?.status).toBe(
       "filled",
     );
 
@@ -2148,9 +2156,7 @@ describe("server api", () => {
     );
     expect(ordersResponse.status).toBe(200);
     const ordersResult = (await ordersResponse.json()) as Record<string, Record<string, string>[]>;
-    expect(ordersResult.orders.find((order) => order.intentCommitment === replacementCommitment)?.status).toBe(
-      "filled",
-    );
+    expect(ordersResult.orders).toHaveLength(0);
 
     const positionsResponse = await app.handle(
       new Request(`http://pnlx.local/portfolio/positions?ownerCommitment=${ownerCommitment(owner)}`),
@@ -2527,6 +2533,71 @@ describe("server api", () => {
     expect(accountEvents[0].ciphertext.startsWith("pnlx-account-event-v1:")).toBe(true);
     expect(JSON.stringify(accountEvents)).not.toContain(`${suffix}-long-owner`);
     expect(JSON.stringify(accountEvents)).not.toContain(closeSettlement.newMargin.toString());
+  });
+
+  test("returns current market snapshot for position close context", async () => {
+    const runtime = createAppRuntime();
+    const app = runtime.router;
+    const suffix = "close-context";
+    const market = {
+      marketId: "btc-usd-perp-close-context",
+      oraclePrice: 50_000n * PRICE_SCALE,
+      maxLeverage: 5n,
+      initialMarginRate: 200_000n,
+      maintenanceMarginRate: 100_000n,
+      fundingIndex: 0n,
+    };
+    const owner = ownerCommitment(`${suffix}-owner`);
+    const positionCommitment = hashFields("position-close-context-position", [suffix]);
+    runtime.executor.addMarket(market);
+    runtime.executor.store.positionCommitments.add(positionCommitment);
+    runtime.executor.store.addPositionOpening({
+      batchId: `${suffix}-batch`,
+      marketId: market.marketId,
+      openedAt: 1,
+      ownerCommitment: owner,
+      positionCommitment,
+      positionNullifier: hashFields("position-close-context-nullifier", [suffix]),
+      settlementDigest: hashFields("position-close-context-settlement", [suffix]),
+      sourceIntentCommitment: hashFields("position-close-context-intent", [suffix]),
+      status: "open",
+      updatedAt: 1,
+    });
+    const currentMarkPrice = 57_000n * PRICE_SCALE;
+    const currentFundingIndex = 7n;
+    const updateResponse = await app.handle(
+      new Request("http://pnlx.local/markets/update", {
+        method: "POST",
+        body: body({
+          ...market,
+          fundingIndex: currentFundingIndex,
+          oraclePrice: currentMarkPrice,
+        }),
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    expect(updateResponse.status).toBeLessThan(300);
+
+    const newPositionCommitment = hashFields("position-close-context-new-position", [suffix]);
+    const contextResponse = await app.handle(
+      new Request(
+        `http://pnlx.local/position-closes/context` +
+          `?ownerCommitment=${encodeURIComponent(owner)}` +
+          `&positionCommitment=${encodeURIComponent(positionCommitment)}` +
+          `&newPositionCommitment=${encodeURIComponent(newPositionCommitment)}`,
+      ),
+    );
+
+    expect(contextResponse.status).toBe(200);
+    const result = (await contextResponse.json()) as Record<string, Record<string, unknown>>;
+    const context = result.context as Record<string, Record<string, string>>;
+    expect(context.market).toEqual({
+      fundingIndex: currentFundingIndex.toString(),
+      marketId: market.marketId,
+      markPrice: currentMarkPrice.toString(),
+    });
+    expect(context.positionRoot).toBe(runtime.executor.store.positionMembershipRoot());
+    expect(context.newPositionRoot).not.toBe(context.positionRoot);
   });
 
   test("executes queued proven liquidations and emits encrypted account events", async () => {

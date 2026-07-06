@@ -97,6 +97,67 @@ describe("local client prover", () => {
     expect(badResponse.status).toBe(500);
   });
 
+  test("generates partial-note intent change commitments from the spent note owner digest", async () => {
+    const handle = createLocalClientProverHandler(process.cwd());
+    const note = createCircuitMarginNote({
+      amount: 12_000n,
+      assetId: "usdc",
+      blinding: "partial-intent-note-blind",
+      owner: "GSTOREDOWNERDIGEST",
+      rho: "partial-intent-note-rho",
+      spendSecret: "partial-intent-note-spend",
+    });
+    const changeNote = createCircuitMarginNote({
+      amount: 5_000n,
+      assetDigest: note.assetDigest,
+      assetId: "usdc",
+      blinding: "partial-intent-change-blind",
+      owner: "GCURRENTWALLETADDRESS",
+      ownerDigest: note.ownerDigest,
+      rho: "partial-intent-change-rho",
+      spendSecret: "partial-intent-change-spend",
+    });
+    const membership = fieldMerkleProof([note.commitment as Hex], note.commitment as Hex);
+
+    const response = await handle(
+      new Request("http://127.0.0.1:4101/intent-validity", {
+        method: "POST",
+        body: body({
+          assetDigest: note.assetDigest,
+          batchId: "partial-intent-batch",
+          blinding: note.blinding,
+          changeBlinding: changeNote.blinding,
+          changeRhoDigest: changeNote.rhoDigest,
+          currentBatch: 1n,
+          expiryBatch: 2n,
+          limitPrice: 50_000n * PRICE_SCALE,
+          margin: 7_000n,
+          marginRoot: membership.root,
+          marketId: "btc-usd-perp",
+          nonce: "partial-intent-nonce",
+          noteAmount: note.amount,
+          noteChangeCommitment: changeNote.commitment,
+          noteCommitment: note.commitment,
+          noteNullifier: note.noteNullifier,
+          owner: "GCURRENTWALLETADDRESS",
+          ownerDigest: note.ownerDigest,
+          pathIndices: membership.indices,
+          pathSiblings: membership.siblings,
+          rhoDigest: note.rhoDigest,
+          salt: "partial-intent-salt",
+          side: "long",
+          size: 1n,
+          spendSecretDigest: note.spendSecretDigest,
+        }),
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const intent = await response.json() as Record<string, Record<string, unknown>>;
+    expect((intent.record as Record<string, unknown>).noteChangeCommitment).toBe(changeNote.commitment);
+  });
+
   test("generates position close proof bundles for client-side closes", async () => {
     const handle = createLocalClientProverHandler(process.cwd());
     const owner = hashFields("owner", ["local-close-owner"]);
