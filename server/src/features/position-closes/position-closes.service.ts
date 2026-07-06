@@ -106,7 +106,7 @@ export class PositionClosesService {
         error: err instanceof Error ? err.message : String(err),
         stack: err instanceof Error ? err.stack : undefined,
         timestamp: new Date().toISOString()
-      }, null, 2));
+      }, (_key, value) => (typeof value === "bigint" ? value.toString() : value), 2));
       throw err;
     }
   }
