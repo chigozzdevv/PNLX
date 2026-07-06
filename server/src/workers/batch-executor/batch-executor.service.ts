@@ -14,6 +14,7 @@ import type {
 const DEFAULT_BATCH_INTERVAL_MS = 5_000;
 const DEFAULT_BATCH_PREFIX = "auto";
 const FAILED_BATCH_RETRY_COOLDOWN_MS = 60_000;
+const DEFAULT_ORACLE_REFRESH_INTERVAL_MS = 60_000;
 
 class BatchPhaseError extends Error {
   constructor(
@@ -27,6 +28,7 @@ class BatchPhaseError extends Error {
 
 export class BatchExecutorService {
   private failedBatchRetryAfter = new Map<string, number>();
+  private oracleRefreshAfter = new Map<string, number>();
   private running = false;
   private timer: ReturnType<typeof setInterval> | undefined;
 
@@ -79,7 +81,7 @@ export class BatchExecutorService {
   ): Promise<BatchExecutorMarketResult> {
     const batchId = this.batchIdForMarket(marketId, startedAt, input);
     try {
-      await runPhase("oracle", () => this.config.refreshMarketOracle?.(marketId));
+      await runPhase("oracle", () => this.refreshMarketOracleIfNeeded(marketId, startedAt));
       await runPhase("maker-liquidity", () => this.makerLiquidity?.ensureForMarket({ batchId, marketId }));
       await runPhase("maker-liquidity", () => flushStore(this.executor.store));
       const transcript = await runPhase("matcher", () =>
@@ -157,6 +159,18 @@ export class BatchExecutorService {
     } catch {
       return false;
     }
+  }
+
+  private async refreshMarketOracleIfNeeded(marketId: string, now: number): Promise<void> {
+    if (!this.config.refreshMarketOracle) return;
+    const retryAfter = this.oracleRefreshAfter.get(marketId);
+    if (retryAfter && retryAfter > now) return;
+
+    await this.config.refreshMarketOracle(marketId);
+    this.oracleRefreshAfter.set(
+      marketId,
+      now + (this.config.oracleRefreshIntervalMs ?? DEFAULT_ORACLE_REFRESH_INTERVAL_MS),
+    );
   }
 
   private marketIds(marketId?: string): string[] {

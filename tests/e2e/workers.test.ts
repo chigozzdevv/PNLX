@@ -601,6 +601,7 @@ describe("support workers", () => {
 
     const transcript = await createProoflessMatcher(executor).createSettlementTranscript({
       batchId: "current-open-batch",
+      includeOpenMarketOrders: true,
       marketId: market.marketId,
     });
 
@@ -877,6 +878,46 @@ describe("support workers", () => {
     expect(executor.store.settlements.size).toBe(0);
     expect(executor.store.batchExecutionRuns.size).toBe(1);
     expect(executor.store.orderLifecycle.get(long.intentCommitment)?.status).toBe("open");
+  });
+
+  test("batch executor throttles oracle refresh across fast active-order loops", async () => {
+    const executor = createExecutor();
+    const market = {
+      marketId: "btc-usd-perp",
+      oraclePrice: 50_000n * PRICE_SCALE,
+      maxLeverage: 10n,
+      initialMarginRate: 100_000n,
+      maintenanceMarginRate: 50_000n,
+      fundingIndex: 0n,
+    };
+    executor.addMarket(market);
+    submitBackedIntent(executor, matchedTradeIntent("oracle-refresh-throttle-long", "long", {
+      batchId: "ui-oracle-refresh-throttle",
+      limitPrice: 50_500n * PRICE_SCALE,
+      marketId: market.marketId,
+    }));
+    const refreshes: string[] = [];
+    const batchExecutor = createBatchExecutor(
+      executor,
+      createProoflessMatcher(executor),
+      {
+        batchIdPrefix: "runner",
+        intervalMs: 1000,
+        oracleRefreshIntervalMs: 60_000,
+        refreshMarketOracle(marketId) {
+          refreshes.push(marketId);
+        },
+      },
+    );
+
+    await batchExecutor.runOnce({ now: 1000 });
+    await batchExecutor.runOnce({ now: 2000 });
+    await batchExecutor.runOnce({ now: 61_000 });
+
+    expect(refreshes).toEqual([
+      market.marketId,
+      market.marketId,
+    ]);
   });
 
   test("runs bounded funding engine cycles from market oracle price", () => {
@@ -3142,13 +3183,13 @@ function backedIntent(seed: string, executor: ReturnType<typeof createExecutor>)
   return {
     batchId: "intent-finality-batch",
     limitPrice: 50_000n * PRICE_SCALE,
-    margin: 1_000n,
-	    marketId,
-	    noteNullifier: hashFields("note-nullifier", [seed]),
-	    nonce: `${seed}-nonce`,
-	    owner: `G${seed.toUpperCase().replace(/[^A-Z0-9]/g, "").padEnd(55, "A").slice(0, 55)}`,
-	    salt: `${seed}-salt`,
-	    side: "long",
+    margin: 10_000n,
+    marketId,
+    noteNullifier: hashFields("note-nullifier", [seed]),
+    nonce: `${seed}-nonce`,
+    owner: `G${seed.toUpperCase().replace(/[^A-Z0-9]/g, "").padEnd(55, "A").slice(0, 55)}`,
+    salt: `${seed}-salt`,
+    side: "long",
     size: 1n,
   };
 }
