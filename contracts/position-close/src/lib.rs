@@ -7,12 +7,15 @@ use position_state_interface::PositionStateClient;
 use proof_ledger_interface::ProofLedgerClient;
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
-    contract, contractimpl, contracttype,
-    crypto::bn254::Bn254Fr,
-    Address, Bytes, BytesN, Env, IntoVal, Symbol, Val, Vec, U256,
+    contract, contractimpl, contracttype, Address, Bytes, BytesN, Env, IntoVal, Symbol, Val, Vec,
+    U256,
 };
 
 const PRICE_SCALE: u128 = 100_000_000;
+const BN254_SCALAR_MODULUS_BE: [u8; 32] = [
+    0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
+    0x28, 0x33, 0xe8, 0x48, 0x79, 0xb9, 0x70, 0x91, 0x43, 0xe1, 0xf5, 0x93, 0xf0, 0x00, 0x00, 0x01,
+];
 
 #[derive(Clone)]
 #[contracttype]
@@ -422,13 +425,13 @@ fn position_close_public_input_hash(
     let mut public_inputs = Bytes::new(env);
     append_u128_field(env, &mut public_inputs, mark_price);
     append_u128_field(env, &mut public_inputs, price_scale);
-    append_field(&mut public_inputs, position_root);
-    append_field(&mut public_inputs, position_commitment);
-    append_field(&mut public_inputs, position_nullifier);
-    append_field(&mut public_inputs, close_commitment);
-    append_field(&mut public_inputs, new_position_commitment);
-    append_field(&mut public_inputs, new_position_root);
-    append_field(&mut public_inputs, margin_output_commitment);
+    append_field(env, &mut public_inputs, position_root);
+    append_field(env, &mut public_inputs, position_commitment);
+    append_field(env, &mut public_inputs, position_nullifier);
+    append_field(env, &mut public_inputs, close_commitment);
+    append_field(env, &mut public_inputs, new_position_commitment);
+    append_field(env, &mut public_inputs, new_position_root);
+    append_field(env, &mut public_inputs, margin_output_commitment);
     env.crypto().sha256(&public_inputs).to_bytes()
 }
 
@@ -437,8 +440,15 @@ fn append_u128_field(env: &Env, out: &mut Bytes, value: u128) {
     out.append(&encoded);
 }
 
-fn append_field(out: &mut Bytes, value: &BytesN<32>) {
-    out.extend_from_slice(&Bn254Fr::from_bytes(value.clone()).to_bytes().to_array());
+fn append_field(env: &Env, out: &mut Bytes, value: &BytesN<32>) {
+    out.append(&field_bytes(env, value));
+}
+
+fn field_bytes(env: &Env, value: &BytesN<32>) -> Bytes {
+    let modulus = U256::from_be_bytes(env, &Bytes::from_array(env, &BN254_SCALAR_MODULUS_BE));
+    U256::from_be_bytes(env, &Bytes::from_array(env, &value.to_array()))
+        .rem_euclid(&modulus)
+        .to_be_bytes()
 }
 
 fn validate_hash(env: &Env, value: &BytesN<32>) {
@@ -537,6 +547,44 @@ mod tests {
         let new_position = BytesN::from_array(&env, &[4; 32]);
         let margin_output = BytesN::from_array(&env, &[5; 32]);
         let proof = proof(&env);
+        let setup = setup_protocol(&env, &id, Some(&proof), None);
+
+        client.init(
+            &setup.governance,
+            &setup.proof_ledger,
+            &setup.conditional_order,
+            &setup.market,
+            &setup.position_state,
+            &circuit(&env),
+        );
+        client.settle_manual(
+            &market,
+            &position_root(&env),
+            &position_commitment(&env),
+            &nullifier,
+            &close,
+            &mark_price(&env),
+            &new_position,
+            &new_position_root(&env),
+            &margin_output,
+            &proof,
+        );
+
+        assert!(client.is_settled(&close));
+        assert!(client.is_position_spent(&nullifier));
+    }
+
+    #[test]
+    fn records_manual_position_close_with_high_byte_commitments() {
+        let env = Env::default();
+        let id = env.register(PositionClose, ());
+        let client = PositionCloseClient::new(&env, &id);
+        let market = BytesN::from_array(&env, &[1; 32]);
+        let nullifier = high_bytes(&env, 0);
+        let close = high_bytes(&env, 1);
+        let new_position = high_bytes(&env, 2);
+        let margin_output = high_bytes(&env, 3);
+        let proof = proof_for(&env, &nullifier, &close, &new_position, &margin_output);
         let setup = setup_protocol(&env, &id, Some(&proof), None);
 
         client.init(
@@ -894,6 +942,12 @@ mod tests {
 
     fn verifier(env: &Env) -> BytesN<32> {
         BytesN::from_array(env, &[7; 32])
+    }
+
+    fn high_bytes(env: &Env, last: u8) -> BytesN<32> {
+        let mut value = [0xff; 32];
+        value[31] = last;
+        BytesN::from_array(env, &value)
     }
 
     fn conditional_proof(env: &Env) -> ConditionalProofMeta {

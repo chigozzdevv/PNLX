@@ -3,9 +3,14 @@
 use governance_interface::GovernanceClient;
 use proof_ledger_interface::ProofLedgerClient;
 use soroban_sdk::{
-    contract, contractimpl, contracttype, crypto::bn254::Bn254Fr, token::Client as TokenClient,
-    xdr::ToXdr, Address, Bytes, BytesN, Env, U256,
+    contract, contractimpl, contracttype, token::Client as TokenClient, xdr::ToXdr, Address, Bytes,
+    BytesN, Env, U256,
 };
+
+const BN254_SCALAR_MODULUS_BE: [u8; 32] = [
+    0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
+    0x28, 0x33, 0xe8, 0x48, 0x79, 0xb9, 0x70, 0x91, 0x43, 0xe1, 0xf5, 0x93, 0xf0, 0x00, 0x00, 0x01,
+];
 
 #[derive(Clone)]
 #[contracttype]
@@ -303,8 +308,8 @@ fn deposit_public_input_hash(
 ) -> BytesN<32> {
     let mut public_inputs = Bytes::new(env);
     append_u128_field(env, &mut public_inputs, amount as u128);
-    append_field(&mut public_inputs, token_digest);
-    append_field(&mut public_inputs, commitment);
+    append_field(env, &mut public_inputs, token_digest);
+    append_field(env, &mut public_inputs, commitment);
     env.crypto().sha256(&public_inputs).to_bytes()
 }
 
@@ -319,11 +324,11 @@ fn withdraw_public_input_hash(
 ) -> BytesN<32> {
     let mut public_inputs = Bytes::new(env);
     append_u128_field(env, &mut public_inputs, amount as u128);
-    append_field(&mut public_inputs, root);
-    append_field(&mut public_inputs, nullifier);
-    append_field(&mut public_inputs, token_digest);
-    append_field(&mut public_inputs, recipient_digest);
-    append_field(&mut public_inputs, change_commitment);
+    append_field(env, &mut public_inputs, root);
+    append_field(env, &mut public_inputs, nullifier);
+    append_field(env, &mut public_inputs, token_digest);
+    append_field(env, &mut public_inputs, recipient_digest);
+    append_field(env, &mut public_inputs, change_commitment);
     env.crypto().sha256(&public_inputs).to_bytes()
 }
 
@@ -332,12 +337,20 @@ fn append_u128_field(env: &Env, out: &mut Bytes, value: u128) {
     out.append(&encoded);
 }
 
-fn append_field(out: &mut Bytes, value: &BytesN<32>) {
-    out.extend_from_slice(&Bn254Fr::from_bytes(value.clone()).to_bytes().to_array());
+fn append_field(env: &Env, out: &mut Bytes, value: &BytesN<32>) {
+    out.append(&field_bytes(env, value));
 }
 
 fn address_digest(env: &Env, address: &Address) -> BytesN<32> {
-    Bn254Fr::from_bytes(env.crypto().sha256(&address.clone().to_xdr(env)).to_bytes()).to_bytes()
+    let digest = env.crypto().sha256(&address.clone().to_xdr(env)).to_bytes();
+    BytesN::<32>::try_from(field_bytes(env, &digest)).unwrap()
+}
+
+fn field_bytes(env: &Env, value: &BytesN<32>) -> Bytes {
+    let modulus = U256::from_be_bytes(env, &Bytes::from_array(env, &BN254_SCALAR_MODULUS_BE));
+    U256::from_be_bytes(env, &Bytes::from_array(env, &value.to_array()))
+        .rem_euclid(&modulus)
+        .to_be_bytes()
 }
 
 fn validate_hash(env: &Env, value: &BytesN<32>) {

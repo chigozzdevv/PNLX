@@ -22,3 +22,6 @@ note_nullifier = 1351
 nonce_digest = 23
 salt_digest = 24
 zero_commitment = 0
+change_blinding = 8
+change_rho_digest = 7
+note_change_commitment = 0

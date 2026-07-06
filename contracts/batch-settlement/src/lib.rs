@@ -7,12 +7,15 @@ use position_state_interface::PositionStateClient;
 use proof_ledger_interface::ProofLedgerClient;
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
-    contract, contractimpl, contracttype,
-    crypto::bn254::Bn254Fr,
-    Address, Bytes, BytesN, Env, IntoVal, Symbol, Val, Vec, U256,
+    contract, contractimpl, contracttype, Address, Bytes, BytesN, Env, IntoVal, Symbol, Val, Vec,
+    U256,
 };
 
 const MAX_PUBLIC_ITEMS: u32 = 8;
+const BN254_SCALAR_MODULUS_BE: [u8; 32] = [
+    0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
+    0x28, 0x33, 0xe8, 0x48, 0x79, 0xb9, 0x70, 0x91, 0x43, 0xe1, 0xf5, 0x93, 0xf0, 0x00, 0x00, 0x01,
+];
 
 #[derive(Clone)]
 #[contracttype]
@@ -358,11 +361,11 @@ fn batch_public_input_hash(
     volume: u128,
 ) -> BytesN<32> {
     let mut public_inputs = Bytes::new(env);
-    append_field(&mut public_inputs, batch_id);
-    append_field(&mut public_inputs, market_id);
-    append_field(&mut public_inputs, old_root);
-    append_field(&mut public_inputs, new_root);
-    append_field(&mut public_inputs, settlement_digest);
+    append_field(env, &mut public_inputs, batch_id);
+    append_field(env, &mut public_inputs, market_id);
+    append_field(env, &mut public_inputs, old_root);
+    append_field(env, &mut public_inputs, new_root);
+    append_field(env, &mut public_inputs, settlement_digest);
     append_public_vec(env, &mut public_inputs, filled_intents);
     append_public_vec(env, &mut public_inputs, new_commitments);
     append_public_vec(env, &mut public_inputs, margin_change_commitments);
@@ -378,9 +381,9 @@ fn append_public_vec(env: &Env, out: &mut Bytes, values: &Vec<BytesN<32>>) {
     let mut index = 0u32;
     while index < MAX_PUBLIC_ITEMS {
         if index < values.len() {
-            append_field(out, &values.get(index).unwrap());
+            append_field(env, out, &values.get(index).unwrap());
         } else {
-            append_field(out, &zero);
+            append_field(env, out, &zero);
         }
         index += 1;
     }
@@ -391,8 +394,15 @@ fn append_u128_field(env: &Env, out: &mut Bytes, value: u128) {
     out.append(&encoded);
 }
 
-fn append_field(out: &mut Bytes, value: &BytesN<32>) {
-    out.extend_from_slice(&Bn254Fr::from_bytes(value.clone()).to_bytes().to_array());
+fn append_field(env: &Env, out: &mut Bytes, value: &BytesN<32>) {
+    out.append(&field_bytes(env, value));
+}
+
+fn field_bytes(env: &Env, value: &BytesN<32>) -> Bytes {
+    let modulus = U256::from_be_bytes(env, &Bytes::from_array(env, &BN254_SCALAR_MODULUS_BE));
+    U256::from_be_bytes(env, &Bytes::from_array(env, &value.to_array()))
+        .rem_euclid(&modulus)
+        .to_be_bytes()
 }
 
 fn validate_hash(env: &Env, value: &BytesN<32>) {
@@ -461,6 +471,63 @@ mod tests {
             assert!(!registry.is_active_intent(&intent));
             assert!(registry.is_cancelled(&intent));
         }
+    }
+
+    #[test]
+    fn settles_batch_with_high_byte_public_inputs() {
+        let env = Env::default();
+        let id = env.register(BatchSettlement, ());
+        let client = BatchSettlementClient::new(&env, &id);
+        let batch = high_bytes(&env, 0);
+        let market = high_bytes(&env, 1);
+        let old_root = high_bytes(&env, 2);
+        let new_root = high_bytes(&env, 3);
+        let settlement_digest = high_bytes(&env, 4);
+        let filled = filled_intents(&env);
+        let commitments = high_vec(&env, 5, 2);
+        let margin_changes = margin_change_commitments(&env);
+        let spent = high_vec(&env, 7, 2);
+        let proof = proof_with_inputs(
+            &env,
+            &batch,
+            &market,
+            &old_root,
+            &new_root,
+            &settlement_digest,
+            &filled,
+            &commitments,
+            &margin_changes,
+            &spent,
+            0,
+            2,
+        );
+        let intent_registry = setup_intent_registry(&env, false);
+        client.init(
+            &setup_governance(&env),
+            &setup_proof_ledger(&env, Some(&proof)),
+            &setup_market(&env, &market, 50_000_00000000, 950, true),
+            &setup_position_state(&env, &id, &old_root),
+            &intent_registry,
+            &circuit(&env),
+        );
+
+        client.settle(
+            &batch,
+            &market,
+            &old_root,
+            &new_root,
+            &settlement_digest,
+            &proof,
+            &filled,
+            &commitments,
+            &margin_changes,
+            &spent,
+            &2,
+            &0,
+        );
+
+        assert!(client.is_settled(&batch, &market));
+        assert!(client.has_root(&new_root));
     }
 
     #[test]
@@ -891,23 +958,54 @@ mod tests {
         let market = BytesN::from_array(env, &[2; 32]);
         let old_root = BytesN::from_array(env, &[3; 32]);
         let new_root = BytesN::from_array(env, &[4; 32]);
+        proof_with_inputs(
+            env,
+            &batch,
+            &market,
+            &old_root,
+            &new_root,
+            &settlement_digest(env),
+            filled_intents,
+            &new_commitments(env),
+            &margin_change_commitments(env),
+            &spent_nullifiers(env),
+            0,
+            2,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn proof_with_inputs(
+        env: &Env,
+        batch: &BytesN<32>,
+        market: &BytesN<32>,
+        old_root: &BytesN<32>,
+        new_root: &BytesN<32>,
+        settlement_digest: &BytesN<32>,
+        filled_intents: &Vec<BytesN<32>>,
+        new_commitments: &Vec<BytesN<32>>,
+        margin_change_commitments: &Vec<BytesN<32>>,
+        spent_nullifiers: &Vec<BytesN<32>>,
+        residual: u128,
+        volume: u128,
+    ) -> ProofMeta {
         ProofMeta {
             circuit_id: circuit(env),
             circuit_hash: BytesN::from_array(env, &[6; 32]),
             verifier_hash: verifier(env),
             public_input_hash: super::batch_public_input_hash(
                 env,
-                &batch,
-                &market,
-                &old_root,
-                &new_root,
-                &settlement_digest(env),
+                batch,
+                market,
+                old_root,
+                new_root,
+                settlement_digest,
                 filled_intents,
-                &new_commitments(env),
-                &margin_change_commitments(env),
-                &spent_nullifiers(env),
-                0,
-                2,
+                new_commitments,
+                margin_change_commitments,
+                spent_nullifiers,
+                residual,
+                volume,
             ),
             proof_digest: BytesN::from_array(env, &[9; 32]),
         }
@@ -923,6 +1021,12 @@ mod tests {
 
     fn verifier(env: &Env) -> BytesN<32> {
         BytesN::from_array(env, &[7; 32])
+    }
+
+    fn high_bytes(env: &Env, last: u8) -> BytesN<32> {
+        let mut value = [0xff; 32];
+        value[31] = last;
+        BytesN::from_array(env, &value)
     }
 
     fn filled_intents(env: &Env) -> Vec<BytesN<32>> {
@@ -955,6 +1059,16 @@ mod tests {
         nullifiers.push_back(BytesN::from_array(env, &[15; 32]));
         nullifiers.push_back(BytesN::from_array(env, &[16; 32]));
         nullifiers
+    }
+
+    fn high_vec(env: &Env, first_last_byte: u8, len: u8) -> Vec<BytesN<32>> {
+        let mut values = Vec::new(env);
+        let mut index = 0u8;
+        while index < len {
+            values.push_back(high_bytes(env, first_last_byte + index));
+            index += 1;
+        }
+        values
     }
 
     fn intent_a(env: &Env) -> BytesN<32> {
