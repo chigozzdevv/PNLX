@@ -5,6 +5,9 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "PNLX | Private Perpetuals",
   description: "Private perpetuals trading with proof-backed settlement.",
+  icons: {
+    icon: "/favicon.png",
+  },
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
