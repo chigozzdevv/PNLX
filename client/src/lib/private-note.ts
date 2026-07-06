@@ -45,11 +45,12 @@ export async function createCircuitMarginNote(input: {
   assetId?: string;
   blinding: string;
   owner: string;
+  ownerDigest?: Hex;
   rho: string;
   spendSecret: string;
 }): Promise<CircuitMarginNote> {
   const assetDigest = input.assetDigest ?? (await digestToFieldHex(`asset:${input.assetId ?? "usdc"}`));
-  const ownerDigest = await digestToFieldHex(`owner:${input.owner}`);
+  const ownerDigest = input.ownerDigest ?? (await digestToFieldHex(`owner:${input.owner}`));
   const rhoDigest = await digestToFieldHex(`rho:${input.rho}`);
   const blinding = await digestToFieldHex(`blinding:${input.blinding}`);
   const spendSecretDigest = await digestToFieldHex(`spend:${input.spendSecret}`);

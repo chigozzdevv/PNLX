@@ -10,6 +10,10 @@ export async function pnlxGet<T>(path: string, token?: string): Promise<T> {
   return pnlxRequest<T>("GET", path, undefined, token);
 }
 
+function stringifyBody(data: unknown): string {
+  return JSON.stringify(data, (_key, value) => (typeof value === "bigint" ? value.toString() : value));
+}
+
 async function pnlxRequest<T>(
   method: "GET" | "POST",
   path: string,
@@ -17,7 +21,7 @@ async function pnlxRequest<T>(
   token?: string,
 ): Promise<T> {
   const response = await fetch(`/api/pnlx/${path.replace(/^\/+/, "")}`, {
-    body: data === undefined ? undefined : JSON.stringify(data),
+    body: data === undefined ? undefined : stringifyBody(data),
     cache: "no-store",
     headers: {
       ...(token ? { authorization: `Bearer ${token}` } : {}),

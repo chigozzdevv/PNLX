@@ -147,7 +147,9 @@ function PositionsView({
             <span>{privateNumber(position.marketPrice, (value) => formatNumber(value, 1), position.privateDetails)}</span>
             <span>{privateNumber(position.netValue, formatUsd, position.privateDetails)}</span>
             <span>{statusLabel(position.status)}</span>
-            <span>{position.commitment ? shortAddress(position.commitment) : "--"}</span>
+            <span title={position.commitment}>
+              {position.commitment ? shortAddress(position.commitment) : "--"}
+            </span>
             <span>
               {position.status === "open" ? (
                 <button
@@ -213,9 +215,15 @@ function OrdersView({
           <strong>{pairFromMarketId(order.marketId)}</strong>
           <span>{statusLabel(order.status)}</span>
           <span>{order.isResidual ? "Residual" : "Intent"}</span>
-          <span>{shortAddress(order.intentCommitment)}</span>
-          <span>{order.residualCommitment ? shortAddress(order.residualCommitment) : "--"}</span>
-          <span>{order.batchId}</span>
+          <span title={order.intentCommitment}>
+            {shortAddress(order.intentCommitment)}
+          </span>
+          <span title={order.residualCommitment}>
+            {order.residualCommitment ? shortAddress(order.residualCommitment) : "--"}
+          </span>
+          <span title={order.batchId}>
+            {order.batchId}
+          </span>
           <span>{formatTime(order.updatedAt)}</span>
           <span title={order.matching?.reason ?? order.matchingPayloadCommitment}>
             {order.matching ? matcherLabel(order.matching) : shortAddress(order.matchingPayloadCommitment)}
@@ -262,9 +270,15 @@ function HistoryView({ activity }: { activity: ServerOwnerActivitySnapshot[] }) 
           <strong>{activityKind(item.kind)}</strong>
           <span>{item.marketId ? pairFromMarketId(item.marketId) : "--"}</span>
           <span>{statusLabel(item.status)}</span>
-          <span>{shortAddress(item.id)}</span>
-          <span>{item.batchId ?? "--"}</span>
-          <span>{item.dataCommitment ? shortAddress(item.dataCommitment) : "--"}</span>
+          <span title={item.id}>
+            {shortAddress(item.id)}
+          </span>
+          <span title={item.batchId}>
+            {item.batchId ?? "--"}
+          </span>
+          <span title={item.dataCommitment}>
+            {item.dataCommitment ? shortAddress(item.dataCommitment) : "--"}
+          </span>
           <span>{formatTime(item.updatedAt)}</span>
           <span />
           <span />

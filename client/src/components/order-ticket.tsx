@@ -6,6 +6,9 @@ import { useEffect, useMemo, useState } from "react";
 import { formatNumber, formatUsd, shortAddress } from "@/lib/format";
 import type { SubmitTradeIntentResult, TradeSubmitStage } from "@/lib/trade-submit";
 import type { MarketDisplay, OrderDraft, Side } from "@/types/trading";
+import { privateMarginNotes } from "@/lib/private-margin-notes";
+import type { WalletSession } from "@/lib/wallet-auth";
+import { usdcToProtocolAmount } from "@/lib/asset-units";
 
 interface OrderTicketProps {
   availableCollateral?: number | null;
@@ -14,6 +17,7 @@ interface OrderTicketProps {
   onDeposit?: (input: OrderTicketDepositInput) => Promise<void>;
   onSubmit?: (input: OrderTicketSubmitInput) => Promise<SubmitTradeIntentResult>;
   order: OrderDraft;
+  session?: WalletSession | null;
 }
 
 export interface OrderTicketSubmitInput {
@@ -47,6 +51,7 @@ export function OrderTicket({
   onDeposit,
   onSubmit,
   order,
+  session,
 }: OrderTicketProps) {
   const [side, setSide] = useState<Side>(order.side);
   const [orderType, setOrderType] = useState<"market" | "limit">("market");
@@ -74,7 +79,9 @@ export function OrderTicket({
   const executionLimitPrice = orderType === "market"
     ? marketLimitPrice(side, market.price, slippagePercent)
     : limitPrice;
-  const sizingPrice = orderType === "market" ? executionLimitPrice : activePrice;
+  const sizingPrice = orderType === "market"
+    ? market.price * (1 + Math.max(slippagePercent, 0) / 100)
+    : (side === "long" ? limitPrice : Math.max(market.price, limitPrice));
   const exposure = margin * leverage;
   const size = sizingPrice > 0 ? exposure / sizingPrice : 0;
   const takeProfitPnl = estimatePnl(side, size, sizingPrice, takeProfitPrice);
@@ -83,6 +90,17 @@ export function OrderTicket({
   const stopLossPercent = percentFromPnl("sl", stopLossPnl, margin);
   const availableCollateralValue = availableCollateral ?? 0;
   const hasEnoughCollateral = availableCollateralValue >= margin;
+  const hasSufficientSingleNote = useMemo(() => {
+    if (!connected || !session || margin <= 0) return true;
+    try {
+      const notes = privateMarginNotes(session.ownerCommitment);
+      const availableNotes = notes.filter((note) => note.status === "available");
+      const marginProtocol = usdcToProtocolAmount(margin);
+      return availableNotes.some((note) => BigInt(note.amount) >= marginProtocol);
+    } catch {
+      return true;
+    }
+  }, [connected, session, margin]);
   const canSubmit = connected && Boolean(onSubmit) && !submitting && !depositing && margin > 0 && hasEnoughCollateral;
   const canDeposit = connected && Boolean(onDeposit) && !submitting && !depositing && fundAmount > 0;
   const primaryDisabled = !canSubmit;
@@ -101,6 +119,12 @@ export function OrderTicket({
     const timer = window.setTimeout(() => setSubmitSuccess(undefined), 3_500);
     return () => window.clearTimeout(timer);
   }, [depositing, submitSuccess, submitting]);
+
+  useEffect(() => {
+    if (!submitError || submitting || depositing) return;
+    const timer = window.setTimeout(() => setSubmitError(undefined), 5_000);
+    return () => window.clearTimeout(timer);
+  }, [depositing, submitError, submitting]);
 
   function selectSide(nextSide: Side) {
     setSide(nextSide);
@@ -359,7 +383,10 @@ export function OrderTicket({
         <div className="field-label">
           <span>Margin</span>
           <div className="field-balance-group">
-            <strong className={`field-balance ${hasEnoughCollateral ? "" : "field-balance-warning"}`}>
+            <strong
+              className={`field-balance ${hasEnoughCollateral && hasSufficientSingleNote ? "" : "field-balance-warning"}`}
+              title={!hasSufficientSingleNote ? "Private balance is fragmented into smaller notes. Consolidate your notes or top up to trade." : undefined}
+            >
               Available {formatUsd(availableCollateralValue, { maximumFractionDigits: 2 })}
             </strong>
             <button

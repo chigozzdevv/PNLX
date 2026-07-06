@@ -1157,7 +1157,7 @@ button:disabled {
 }
 
 .asset-pill svg {
-  color: var(--accent-blue);
+  color: var(--accent-orange);
 }
 
 .primary-trade-button {
@@ -2066,7 +2066,7 @@ button:disabled {
 }
 
 .preview-ticket-field em svg {
-  color: var(--accent-blue);
+  color: var(--accent-orange);
 }
 
 .preview-ticket button {
@@ -3768,3 +3768,207 @@ button:disabled {
     animation: pnlx-content-fade 220ms ease-out both;
   }
 }
+
+/* PnL Modal Styles */
+.pnl-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  animation: pnlx-modal-fadein 200ms ease-out;
+}
+
+.pnl-modal-container {
+  width: 100%;
+  max-width: 420px;
+  background: rgba(23, 22, 19, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  animation: pnlx-modal-slideup 250ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.pnl-modal-header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding-bottom: 12px;
+}
+
+.pnl-modal-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.pnl-modal-icon-success {
+  color: var(--accent-green);
+  filter: drop-shadow(0 0 4px rgba(39, 214, 139, 0.3));
+}
+
+.pnl-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pnl-modal-market {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.pnl-modal-market h3 {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.pnl-modal-market-size {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.pnl-modal-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.pnl-modal-label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.pnl-modal-value {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.pnl-modal-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  margin: 4px 0;
+}
+
+.pnl-modal-pnl-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 12px;
+  padding: 14px;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.pnl-modal-pnl-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.pnl-modal-pnl-val {
+  font-size: 28px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.pnl-positive {
+  color: var(--accent-green);
+  text-shadow: 0 0 16px rgba(39, 214, 139, 0.2);
+}
+
+.pnl-negative {
+  color: var(--accent-red);
+  text-shadow: 0 0 16px rgba(255, 74, 96, 0.2);
+}
+
+.pnl-modal-link {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--accent-orange);
+  text-decoration: none;
+  transition: opacity 150ms ease;
+}
+
+.pnl-modal-link:hover {
+  opacity: 0.8;
+  text-decoration: underline;
+}
+
+.pnl-modal-footer {
+  margin-top: 8px;
+}
+
+.pnl-modal-btn-done {
+  width: 100%;
+  padding: 12px;
+  background: var(--accent-orange);
+  border: none;
+  border-radius: 12px;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 100ms ease, filter 150ms ease;
+}
+
+.pnl-modal-btn-done:hover {
+  filter: brightness(1.1);
+}
+
+.pnl-modal-btn-done:active {
+  transform: scale(0.98);
+}
+
+/* Animations */
+@keyframes pnlx-modal-fadein {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pnlx-modal-slideup {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.table-link {
+  color: var(--accent-orange);
+  text-decoration: none;
+  transition: opacity 150ms ease;
+}
+
+.table-link:hover {
+  opacity: 0.8;
+  text-decoration: underline;
+}
+

@@ -7,6 +7,7 @@ import { PortfolioPage } from "@/components/portfolio-page";
 import { formatUsd, shortAddress } from "@/lib/format";
 import { withdrawAvailableCollateral } from "@/lib/collateral-withdraw";
 import { closePosition } from "@/lib/position-close";
+import { PnlModal } from "@/components/pnl-modal";
 import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useTradingData } from "@/lib/use-trading-data";
 import { useWalletSession } from "@/lib/use-wallet-session";
@@ -16,6 +17,16 @@ export function PortfolioRoute() {
   const wallet = useWalletSession();
   const [refreshKey, setRefreshKey] = useState(0);
   const [closingPositionId, setClosingPositionId] = useState<string | undefined>();
+  const [pnlModalData, setPnlModalData] = useState<{
+    marketId: string;
+    side: "long" | "short";
+    size: number;
+    entryPrice: number;
+    closePrice: number;
+    pnl: number;
+    collateral: number;
+    txHash?: string;
+  } | null>(null);
   const [withdrawingCollateral, setWithdrawingCollateral] = useState(false);
   const [positionActionMessage, setPositionActionMessage] = useState<
     { tone: "error" | "success"; text: string } | undefined
@@ -41,6 +52,27 @@ export function PortfolioRoute() {
     setPositionActionMessage(undefined);
     try {
       const record = await closePosition({ market, position, session: wallet.session });
+      
+      const entryPrice = position.entryPrice ?? 0;
+      const closePrice = Number(record.markPrice) / 100_000_000;
+      const size = position.size ?? 0;
+      const side = position.side ?? "long";
+      const collateral = position.collateral ?? 0;
+      const delta = side === "long" ? (closePrice - entryPrice) : (entryPrice - closePrice);
+      const pnl = size * delta;
+      const payout = Math.max(0, collateral + pnl);
+
+      setPnlModalData({
+        marketId: position.marketId,
+        side,
+        size,
+        entryPrice,
+        closePrice,
+        pnl,
+        collateral: payout,
+        txHash: record.txHash,
+      });
+
       setPositionActionMessage({ tone: "success", text: `Closed ${shortAddress(record.positionCommitment)}` });
       setRefreshKey((value) => value + 1);
     } catch (error) {
@@ -90,6 +122,11 @@ export function PortfolioRoute() {
         withdrawingCollateral={withdrawingCollateral}
       />
       <BottomTicker ticker={ticker.ticker} live={ticker.live} updatedAt={ticker.updatedAt} />
+      <PnlModal
+        isOpen={Boolean(pnlModalData)}
+        onClose={() => setPnlModalData(null)}
+        {...pnlModalData!}
+      />
     </AppShell>
   );
 }

@@ -29,13 +29,14 @@ export interface PositionCloseRecord {
   closeCommitment: Hex;
   marginOutputCommitment: Hex;
   marketId: string;
-  markPrice: string;
+  markPrice: bigint;
   newPositionCommitment: Hex;
   newPositionRoot: Hex;
   positionCommitment: Hex;
   positionNullifier: Hex;
   positionRoot: Hex;
   proof: ServerProofMeta;
+  txHash?: Hex;
 }
 
 export interface WithdrawalRecord {

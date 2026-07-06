@@ -37,12 +37,13 @@ export function createCircuitMarginNote(input: {
   assetId: string;
   amount: bigint;
   owner: string;
+  ownerDigest?: Hex;
   spendSecret: string;
   rho: string;
   blinding: string;
 }) {
   const assetDigest = input.assetDigest ?? digestToFieldHex(`asset:${input.assetId}`);
-  const ownerDigest = digestToFieldHex(`owner:${input.owner}`);
+  const ownerDigest = input.ownerDigest ?? digestToFieldHex(`owner:${input.owner}`);
   const rhoDigest = digestToFieldHex(`rho:${input.rho}`);
   const blinding = digestToFieldHex(`blinding:${input.blinding}`);
   const spendSecretDigest = digestToFieldHex(`spend:${input.spendSecret}`);

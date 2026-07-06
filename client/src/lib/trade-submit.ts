@@ -14,6 +14,7 @@ import {
   lockPrivateMarginNote,
   markPrivateMarginNoteSpent,
   privateMarginNoteRuntimeScopeFromHealth,
+  privateMarginNotes,
   savePendingPrivateMarginChange,
   savePrivateMarginNote,
   selectPrivateMarginNote,
@@ -133,6 +134,18 @@ export async function submitTradeIntent(input: SubmitTradeIntentInput): Promise<
 
   const health = await pnlxGet<HealthResponse>("/health", input.session.token);
   setPrivateMarginNoteRuntimeScope(privateMarginNoteRuntimeScopeFromHealth(health));
+
+  const notes = privateMarginNotes(input.session.ownerCommitment);
+  const availableNotes = notes.filter((note) => note.status === "available");
+  const hasSufficient = availableNotes.some((note) => BigInt(note.amount) >= margin);
+  if (!hasSufficient) {
+    const totalBalance = availableNotes.reduce((sum, note) => sum + BigInt(note.amount), 0n);
+    const totalBalanceDisplay = Number(totalBalance) / 10_000_000;
+    throw new Error(
+      `Your private balance ($${totalBalanceDisplay.toFixed(2)}) is fragmented into smaller notes. You need a single private note of at least $${input.margin.toFixed(2)} to trade. Please top up or withdraw/re-deposit to consolidate.`
+    );
+  }
+
   if (health.custody.required) {
     return submitCustodySharedTradeIntent({
       ...input,
@@ -233,6 +246,7 @@ async function submitCustodySharedTradeIntent(
     protocolSize: bigint;
     conditionalStrategy: PendingConditionalStrategyInput | null;
   },
+  attemptedCommitments = new Set<Hex>(),
 ): Promise<SubmitTradeIntentResult> {
   const proofProvider = input.proofProvider ?? defaultClientProofProvider();
   if (!proofProvider) {
@@ -249,107 +263,116 @@ async function submitCustodySharedTradeIntent(
   const note = selectPrivateMarginNote({
     amount: input.marginProtocol,
     assetDigest: input.collateralTokenDigest,
+    excludedCommitments: attemptedCommitments,
     ownerCommitment: input.session.ownerCommitment,
   });
-  const noteAmount = BigInt(note.amount);
-  const changeAmount = noteAmount - input.marginProtocol;
-  const changeNote = changeAmount > 0n
-    ? await createCircuitMarginNote({
-        amount: changeAmount,
-        assetDigest: note.assetDigest,
-        blinding: randomLabel("change-blind"),
-        owner: input.session.address,
-        rho: randomLabel("change-rho"),
-        spendSecret: randomLabel("change-spend"),
-      })
-    : undefined;
-  const membership = await freshMarginMembership(note.commitment, input.session.token);
-  markProgress(input, "proving");
-  const intent = {
-    batchId: `ui-${Date.now()}-${input.market.marketId}`,
-    limitPrice: input.limitPriceProtocol,
-    margin: input.marginProtocol,
-    marketId: input.market.marketId,
-    nonce: randomLabel("nonce"),
-    noteNullifier: note.noteNullifier,
-    owner: input.session.address,
-    salt: randomLabel("salt"),
-    side: input.side,
-    size: input.protocolSize,
-  };
-  const validity = await registerProofBundle(
-    await proofProvider.intentValidity({
-      assetDigest: note.assetDigest,
-      batchId: intent.batchId,
-      blinding: note.blinding,
-      changeBlinding: changeNote?.blinding ?? ZERO_HEX,
-      changeRhoDigest: changeNote?.rhoDigest ?? ZERO_HEX,
-      currentBatch: 1n,
-      expiryBatch: 2n,
-      limitPrice: intent.limitPrice,
-      margin: intent.margin,
-      marginRoot: membership.membershipProof.root,
-      marketId: intent.marketId,
-      nonce: intent.nonce,
-      noteAmount,
-      noteChangeCommitment: changeNote?.commitment ?? ZERO_HEX,
-      noteCommitment: note.commitment,
+  try {
+    const noteAmount = BigInt(note.amount);
+    const changeAmount = noteAmount - input.marginProtocol;
+    const changeNote = changeAmount > 0n
+      ? await createCircuitMarginNote({
+          amount: changeAmount,
+          assetDigest: note.assetDigest,
+          blinding: randomLabel("change-blind"),
+          owner: input.session.address,
+          ownerDigest: note.ownerDigest,
+          rho: randomLabel("change-rho"),
+          spendSecret: randomLabel("change-spend"),
+        })
+      : undefined;
+    const membership = await freshMarginMembership(note.commitment, input.session.token);
+    markProgress(input, "proving");
+    const intent = {
+      batchId: `ui-${Date.now()}-${input.market.marketId}`,
+      limitPrice: input.limitPriceProtocol,
+      margin: input.marginProtocol,
+      marketId: input.market.marketId,
+      nonce: randomLabel("nonce"),
       noteNullifier: note.noteNullifier,
-      owner: intent.owner,
-      ownerDigest: note.ownerDigest,
-      pathIndices: membership.membershipProof.indices,
-      pathSiblings: membership.membershipProof.siblings,
-      rhoDigest: note.rhoDigest,
-      salt: intent.salt,
-      side: intent.side,
-      size: intent.size,
-      spendSecretDigest: note.spendSecretDigest,
-    }),
-    input.session.token,
-  );
-  const validityRecord = normalizeIntentValidity(validity);
-  markProgress(input, "matching");
-  const response = await pnlxPost<IntentSubmitResponse>(
-    "/intents",
-    {
-      intent: {
-        ...intent,
-        limitPrice: intent.limitPrice.toString(),
-        margin: intent.margin.toString(),
-        size: intent.size.toString(),
+      owner: input.session.address,
+      salt: randomLabel("salt"),
+      side: input.side,
+      size: input.protocolSize,
+    };
+    const validity = await registerProofBundle(
+      await proofProvider.intentValidity({
+        assetDigest: note.assetDigest,
+        batchId: intent.batchId,
+        blinding: note.blinding,
+        changeBlinding: changeNote?.blinding ?? ZERO_HEX,
+        changeRhoDigest: changeNote?.rhoDigest ?? ZERO_HEX,
+        currentBatch: 1n,
+        expiryBatch: 2n,
+        limitPrice: intent.limitPrice,
+        margin: intent.margin,
+        marginRoot: membership.membershipProof.root,
+        marketId: intent.marketId,
+        nonce: intent.nonce,
+        noteAmount,
+        noteChangeCommitment: changeNote?.commitment ?? ZERO_HEX,
+        noteCommitment: note.commitment,
+        noteNullifier: note.noteNullifier,
+        owner: intent.owner,
+        ownerDigest: note.ownerDigest,
+        pathIndices: membership.membershipProof.indices,
+        pathSiblings: membership.membershipProof.siblings,
+        rhoDigest: note.rhoDigest,
+        salt: intent.salt,
+        side: intent.side,
+        size: intent.size,
+        spendSecretDigest: note.spendSecretDigest,
+      }),
+      input.session.token,
+    );
+    const validityRecord = normalizeIntentValidity(validity);
+    markProgress(input, "matching");
+    const response = await pnlxPost<IntentSubmitResponse>(
+      "/intents",
+      {
+        intent: {
+          ...intent,
+          limitPrice: intent.limitPrice.toString(),
+          margin: intent.margin.toString(),
+          size: intent.size.toString(),
+        },
+        validity: {
+          ...validityRecord,
+          currentBatch: validityRecord.currentBatch.toString(),
+          expiryBatch: validityRecord.expiryBatch.toString(),
+        },
       },
-      validity: {
-        ...validityRecord,
-        currentBatch: validityRecord.currentBatch.toString(),
-        expiryBatch: validityRecord.expiryBatch.toString(),
-      },
-    },
-    input.session.token,
-  );
-  const submittedIntent = intentRecordFromResponse(response);
-  if (changeNote) {
-    savePendingPrivateMarginChange({
-      amount: changeNote.amount.toString(),
-      assetDigest: changeNote.assetDigest,
-      blinding: changeNote.blinding,
-      commitment: changeNote.commitment,
-      lockedByIntentCommitment: submittedIntent.intentCommitment,
-      noteNullifier: changeNote.noteNullifier,
-      ownerCommitment: input.session.ownerCommitment,
-      ownerDigest: changeNote.ownerDigest,
-      rhoDigest: changeNote.rhoDigest,
-      spendSecretDigest: changeNote.spendSecretDigest,
-      walletAddress: input.session.address,
-    });
-  }
-  lockPrivateMarginNote(note.commitment, submittedIntent.intentCommitment);
-  storePendingConditionalStrategy(submittedIntent.intentCommitment, input);
-  markProgress(input, "done");
+      input.session.token,
+    );
+    const submittedIntent = intentRecordFromResponse(response);
+    if (changeNote) {
+      savePendingPrivateMarginChange({
+        amount: changeNote.amount.toString(),
+        assetDigest: changeNote.assetDigest,
+        blinding: changeNote.blinding,
+        commitment: changeNote.commitment,
+        lockedByIntentCommitment: submittedIntent.intentCommitment,
+        noteNullifier: changeNote.noteNullifier,
+        ownerCommitment: input.session.ownerCommitment,
+        ownerDigest: changeNote.ownerDigest,
+        rhoDigest: changeNote.rhoDigest,
+        spendSecretDigest: changeNote.spendSecretDigest,
+        walletAddress: input.session.address,
+      });
+    }
+    lockPrivateMarginNote(note.commitment, submittedIntent.intentCommitment);
+    storePendingConditionalStrategy(submittedIntent.intentCommitment, input);
+    markProgress(input, "done");
 
-  return {
-    intent: submittedIntent,
-    protocolSize: input.protocolSize,
-  };
+    return {
+      intent: submittedIntent,
+      protocolSize: input.protocolSize,
+    };
+  } catch (error) {
+    if (!isRecoverablePrivateMarginNoteError(error)) throw error;
+    markPrivateMarginNoteSpent(note.commitment);
+    attemptedCommitments.add(note.commitment);
+    return submitCustodySharedTradeIntent(input, attemptedCommitments);
+  }
 }
 
 export async function depositPrivateMargin(input: DepositPrivateMarginInput): Promise<DepositPrivateMarginResult> {
@@ -443,6 +466,19 @@ function isIntentRecord(value: unknown): value is ServerIntentRecord {
 
 function markProgress(input: Pick<SubmitTradeIntentInput, "onProgress">, stage: TradeSubmitStage): void {
   input.onProgress?.(stage);
+}
+
+function isRecoverablePrivateMarginNoteError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return [
+    "intent nullifier already spent",
+    "local margin note is stale",
+    "margin change commitment mismatch",
+    "margin note commitment mismatch",
+    "margin note not found",
+    "margin note nullifier mismatch",
+  ].some((needle) => message.includes(needle));
 }
 
 interface PendingConditionalStrategyInput {

@@ -27,6 +27,11 @@ const MAX_FILL_INDEX_SCAN = 512;
 
 interface PositionCloseContextResponse {
   context: {
+    market: {
+      fundingIndex: string;
+      marketId: string;
+      markPrice: string;
+    };
     membershipProof: {
       indices: boolean[];
       leaf: Hex;
@@ -60,7 +65,7 @@ interface HealthResponse {
 }
 
 interface PositionCloseResponse {
-  positionClose: PositionCloseRecord;
+  positionClose: SerializedPositionCloseRecord;
 }
 
 export interface ClosePositionInput {
@@ -71,6 +76,19 @@ export interface ClosePositionInput {
 }
 
 export async function closePosition(input: ClosePositionInput): Promise<PositionCloseRecord> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await closePositionAttempt(input);
+    } catch (error) {
+      if (!isRetryableCloseContextError(error) || attempt > 0) throw error;
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Position close failed");
+}
+
+async function closePositionAttempt(input: ClosePositionInput): Promise<PositionCloseRecord> {
   if (input.position.status !== "open") throw new Error("Position is not open");
   if (!input.position.privateState) {
     throw new Error("Private position data is unavailable in this browser");
@@ -99,24 +117,6 @@ export async function closePosition(input: ClosePositionInput): Promise<Position
   const closeCommitment = await digestToFieldHex(
     `manual-position-close:${positionCommitment}:${Date.now()}:${randomLabel("close")}`,
   );
-  const markPrice = BigInt(input.market.oraclePrice);
-  const fundingPayment = expectedFundingPayment({
-    currentFundingIndex: BigInt(input.market.fundingIndex),
-    fundingIndex: BigInt(privateState.fundingIndex),
-    side: privateState.side,
-    size: BigInt(privateState.size),
-  });
-  const fee = 0n;
-  const closeSettlement = settleClose({
-    closeSize: BigInt(privateState.size),
-    entryPrice: BigInt(privateState.entryPrice),
-    fee,
-    fundingPayment,
-    margin: BigInt(privateState.margin),
-    markPrice,
-    side: privateState.side,
-  });
-
   const newPositionRhoDigest = await digestToFieldHex(
     `rho:${positionCommitment}:closed:${randomLabel("position-rho")}`,
   );
@@ -142,6 +142,27 @@ export async function closePosition(input: ClosePositionInput): Promise<Position
       `&newPositionCommitment=${encodeURIComponent(newPositionCommitment)}`,
     input.session.token,
   )).context;
+  if (context.market.marketId !== input.market.marketId) {
+    throw new Error("Position close context market mismatch");
+  }
+
+  const markPrice = BigInt(context.market.markPrice);
+  const fundingPayment = expectedFundingPayment({
+    currentFundingIndex: BigInt(context.market.fundingIndex),
+    fundingIndex: BigInt(privateState.fundingIndex),
+    side: privateState.side,
+    size: BigInt(privateState.size),
+  });
+  const fee = 0n;
+  const closeSettlement = settleClose({
+    closeSize: BigInt(privateState.size),
+    entryPrice: BigInt(privateState.entryPrice),
+    fee,
+    fundingPayment,
+    margin: BigInt(privateState.margin),
+    markPrice,
+    side: privateState.side,
+  });
 
   const marginOutputAssetDigest = await collateralAssetDigest(input.session.token);
   const marginOutputRhoDigest = await digestToFieldHex(
@@ -202,6 +223,7 @@ export async function closePosition(input: ClosePositionInput): Promise<Position
     proven,
     input.session.token,
   );
+  const positionClose = normalizePositionCloseRecord(response.positionClose);
   if (closeSettlement.newMargin > 0n) {
     savePrivateMarginNote({
       amount: closeSettlement.newMargin.toString(),
@@ -216,7 +238,30 @@ export async function closePosition(input: ClosePositionInput): Promise<Position
       walletAddress: input.session.address,
     });
   }
-  return response.positionClose;
+  return positionClose;
+}
+
+function normalizePositionCloseRecord(
+  record: SerializedPositionCloseRecord,
+): PositionCloseRecord {
+  return {
+    ...record,
+    markPrice: BigInt(record.markPrice),
+  };
+}
+
+type SerializedPositionCloseRecord = Omit<PositionCloseRecord, "markPrice"> & {
+  markPrice: string;
+};
+
+function isRetryableCloseContextError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return [
+    "position close mark price mismatch",
+    "mark price mismatch",
+    "position root is not current",
+    "new position root mismatch",
+  ].some((entry) => message.includes(entry));
 }
 
 async function collateralAssetDigest(token?: string): Promise<Hex> {

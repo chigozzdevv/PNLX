@@ -164,10 +164,13 @@ export function savePrivateMarginNote(
 export function selectPrivateMarginNote(input: {
   amount: bigint;
   assetDigest?: Hex;
+  excludedCommitments?: Iterable<Hex>;
   ownerCommitment: Hex;
 }): StoredPrivateMarginNote {
+  const excludedCommitments = new Set(input.excludedCommitments ?? []);
   const candidates = privateMarginNotes(input.ownerCommitment)
     .filter((note) => note.status === "available")
+    .filter((note) => !excludedCommitments.has(note.commitment))
     .filter((note) => !input.assetDigest || note.assetDigest === input.assetDigest)
     .sort((a, b) => Number(BigInt(a.amount) - BigInt(b.amount)));
   const sufficient = candidates.find((note) => BigInt(note.amount) >= input.amount);

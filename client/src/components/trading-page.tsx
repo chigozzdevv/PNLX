@@ -6,6 +6,7 @@ import { BottomTicker } from "@/components/bottom-ticker";
 import { ChartToolbar } from "@/components/chart-toolbar";
 import { MarketHeader } from "@/components/market-header";
 import { OrderTicket } from "@/components/order-ticket";
+import { PnlModal } from "@/components/pnl-modal";
 import { PositionsTable, type PositionsTableView } from "@/components/positions-table";
 import { PriceChart } from "@/components/price-chart";
 import { shortAddress } from "@/lib/format";
@@ -36,6 +37,16 @@ export function TradingPage() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [tableView, setTableView] = useState<PositionsTableView>("positions");
   const [closingPositionId, setClosingPositionId] = useState<string | undefined>();
+  const [pnlModalData, setPnlModalData] = useState<{
+    marketId: string;
+    side: "long" | "short";
+    size: number;
+    entryPrice: number;
+    closePrice: number;
+    pnl: number;
+    collateral: number;
+    txHash?: string;
+  } | null>(null);
   const [cancellingOrderId, setCancellingOrderId] = useState<string | undefined>();
   const [positionActionMessage, setPositionActionMessage] = useState<
     { tone: "error" | "success"; text: string } | undefined
@@ -128,6 +139,27 @@ export function TradingPage() {
     setPositionActionMessage(undefined);
     try {
       const record = await closePosition({ market, position, session: wallet.session });
+      
+      const entryPrice = position.entryPrice ?? 0;
+      const closePrice = Number(record.markPrice) / 100_000_000;
+      const size = position.size ?? 0;
+      const side = position.side ?? "long";
+      const collateral = position.collateral ?? 0;
+      const delta = side === "long" ? (closePrice - entryPrice) : (entryPrice - closePrice);
+      const pnl = size * delta;
+      const payout = Math.max(0, collateral + pnl);
+
+      setPnlModalData({
+        marketId: position.marketId,
+        side,
+        size,
+        entryPrice,
+        closePrice,
+        pnl,
+        collateral: payout,
+        txHash: record.txHash,
+      });
+
       setPositionActionMessage({
         tone: "success",
         text: `Closed ${shortAddress(record.positionCommitment)}`,
@@ -260,6 +292,7 @@ export function TradingPage() {
             <OrderTicket
               availableCollateral={trading.data.account.availableShieldedUsdc}
               connected={Boolean(wallet.session)}
+              session={wallet.session}
               key={displaySelectedMarket.marketId}
               onDeposit={async (input) => {
                 if (!wallet.session) throw new Error("Connect a wallet first");
@@ -307,6 +340,11 @@ export function TradingPage() {
       </main>
 
       <BottomTicker ticker={ticker.ticker} live={ticker.live} updatedAt={ticker.updatedAt} />
+      <PnlModal
+        isOpen={Boolean(pnlModalData)}
+        onClose={() => setPnlModalData(null)}
+        {...pnlModalData!}
+      />
     </AppShell>
   );
 }
