@@ -127,7 +127,9 @@ export function loadEnv(): ServerEnv {
     oracleContractId: value("ORACLE_CONTRACT_ID", ""),
     oracleKind: value("ORACLE_KIND", "sep40"),
     oracleOnchainRequired,
-    oraclePriceSource: oraclePriceSource(value("ORACLE_PRICE_SOURCE", "hermes")),
+    oraclePriceSource: oraclePriceSource(
+      value("ORACLE_PRICE_SOURCE", oracleOnchainRequired ? "onchain-market" : "hermes"),
+    ),
     oracleMaxConfidenceBps: BigInt(value("ORACLE_MAX_CONFIDENCE_BPS", "100")),
     oracleCommitteeMaxAgeSeconds: Number(value("ORACLE_COMMITTEE_MAX_AGE_SECONDS", value("ORACLE_PRICE_MAX_AGE_SECONDS", "120"))),
     oracleCommitteeMaxDeviationBps: Number(value("ORACLE_COMMITTEE_MAX_DEVIATION_BPS", "100")),

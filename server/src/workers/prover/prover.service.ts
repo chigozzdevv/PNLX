@@ -370,6 +370,15 @@ export class ProverService implements Prover {
         spendSecretDigest: ZERO_HEX,
       });
       if (expectedChangeCommitment !== input.noteChangeCommitment) {
+        console.error("DEBUG: expectedChangeCommitment Mismatch!", {
+          noteChange: noteChange.toString(),
+          assetDigest: input.assetDigest,
+          changeBlinding: input.changeBlinding,
+          ownerDigest: input.ownerDigest,
+          changeRhoDigest: input.changeRhoDigest,
+          expectedChangeCommitment,
+          providedChangeCommitment: input.noteChangeCommitment,
+        });
         throw new Error("margin change commitment mismatch");
       }
     }

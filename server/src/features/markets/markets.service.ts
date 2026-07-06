@@ -139,8 +139,13 @@ export class MarketsService {
           oracleRelayConfig(market.marketId, this.env, price.price, price.publishTime),
         )
       : undefined;
-    const marketRelay = this.onchainEnabled() && !this.onchain?.isMarketActive?.(market.marketId)
-      ? this.onchain?.upsertMarket(market, marketRelayConfig(market.marketId, this.env))
+    const marketRepairRelay = this.onchain as
+      | Partial<Pick<OnchainRelayService, "isMarketActive" | "upsertMarket">>
+      | undefined;
+    const shouldRepairMarket = this.onchainEnabled() &&
+      marketRepairRelay?.isMarketActive?.(market.marketId) === false;
+    const marketRelay = shouldRepairMarket
+      ? marketRepairRelay?.upsertMarket?.(market, marketRelayConfig(market.marketId, this.env))
       : undefined;
     this.executor.store.updateMarket(market);
     return {

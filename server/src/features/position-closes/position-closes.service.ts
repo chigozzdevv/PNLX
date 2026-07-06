@@ -39,8 +39,14 @@ export class PositionClosesService {
     const membershipProof = this.executor.store.positionMembershipProof(input.positionCommitment);
     const positionRoot = this.executor.store.positionMembershipRoot();
     if (membershipProof.root !== positionRoot) throw new Error("position root is not current");
+    const market = marketConfig(this.executor, position.marketId);
 
     return {
+      market: {
+        fundingIndex: market.fundingIndex.toString(),
+        marketId: market.marketId,
+        markPrice: market.oraclePrice.toString(),
+      },
       membershipProof,
       newPositionRoot: this.executor.store.positionMembershipRootWith(input.newPositionCommitment),
       positionRoot,
@@ -79,17 +85,30 @@ export class PositionClosesService {
     this.executor.store.recordProof(record.proof);
     this.executor.store.addPositionClose(record);
     if (accountEvent) this.executor.store.addAccountEvent(accountEvent);
-    return record;
+    const txHash = relay?.relays?.find((r) => r.txHash)?.txHash;
+    return { ...record, txHash };
   }
 
   commitManual(record: CreatePositionCloseResult): CreatePositionCloseResult {
     const accountEvent = this.accountEventFor(record);
-    const relay = this.onchain?.settleManualPositionClose(record);
-    this.assertSubmittedSettlementRelay(relay, "settle_manual");
-    this.executor.store.recordProof(record.proof);
-    this.executor.store.addManualPositionClose(record);
-    if (accountEvent) this.executor.store.addAccountEvent(accountEvent);
-    return record;
+    try {
+      const relay = this.onchain?.settleManualPositionClose(record);
+      this.assertSubmittedSettlementRelay(relay, "settle_manual");
+      this.executor.store.recordProof(record.proof);
+      this.executor.store.addManualPositionClose(record);
+      if (accountEvent) this.executor.store.addAccountEvent(accountEvent);
+      const txHash = relay?.relays?.find((r) => r.txHash)?.txHash;
+      return { ...record, txHash };
+    } catch (err) {
+      const fs = require("fs");
+      fs.writeFileSync("/tmp/close-debug.json", JSON.stringify({
+        record,
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+        timestamp: new Date().toISOString()
+      }, null, 2));
+      throw err;
+    }
   }
 
   validate(input: CreatePositionCloseInput): void {

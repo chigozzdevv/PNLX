@@ -1,7 +1,7 @@
 import type { Hex, PositionCloseRecord, PositionCloseWitness } from "@pnlx/protocol-types";
 
 export type CreatePositionCloseInput = PositionCloseWitness;
-export type CreatePositionCloseResult = PositionCloseRecord;
+export type CreatePositionCloseResult = PositionCloseRecord & { txHash?: Hex };
 export type CreateProvenPositionCloseInput = PositionCloseRecord;
 
 export interface PositionCloseContextInput {
@@ -11,6 +11,11 @@ export interface PositionCloseContextInput {
 }
 
 export interface PositionCloseContextResult {
+  market: {
+    fundingIndex: string;
+    marketId: string;
+    markPrice: string;
+  };
   membershipProof: {
     indices: boolean[];
     leaf: Hex;
