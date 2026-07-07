@@ -129,23 +129,23 @@ PNLX is split into a few clear runtime parts:
 Address source:
 
 - Network: Stellar testnet.
-- Deployment file: `deployments/testnet-20260703-fresh.json`.
+- Deployment file: `deployments/testnet.json`.
 - Source identity: `pnlx-testnet`.
 - Source address:
   `GDNHJPGBEPMMAINDMU3TN6V6PCDQKXWVY4FWHLMBJXPCBSCKLUYIESOC`.
 
 The server defaults to `deployments/testnet.json` unless
 `STELLAR_DEPLOYMENT_FILE` is set. Use
-`STELLAR_DEPLOYMENT_FILE=deployments/testnet-20260703-fresh.json` to run
+`STELLAR_DEPLOYMENT_FILE=deployments/testnet.json` to run
 against the RISC Zero E2E deployment listed below.
 
 ### 5.1 RISC Zero Verifier Stack
 
 | Component | Address |
 | --- | --- |
-| RISC0 router | `CCV2P2O4B4KBWSBNH34DISK5PHNBIGUU2ZVFJ46BBC3ICJNJQTZRQ2D4` |
-| RISC0 Groth16 verifier | `CDOPJNX2ZG3PJMK23RFT5JMZEW6NVFXX3ZRB6VHPQRRTLIVHSSRXECHZ` |
-| RISC0 emergency stop | `CCPRBWQQR4W3JM2R7JT3PXJTNEJ45NOOEU6APIDPFS6PTCL2DAPIQA3P` |
+| RISC0 router | `CCGBYZWBLNVS6R6AFUGDDFU46RORQXYJHRVLVQP6TU3TZ7QCRAB2XSH3` |
+| RISC0 Groth16 verifier | `CACLGO5CSPWBPTE3GA34VCEURVSHVC7EJJ6Y3ECYQ6HV5OXA5Y3QTJFV` |
+| RISC0 emergency stop | `CA6T5WV2YKV4KAQ6ONMYSYIHULHINF6RI7F7PRRT2FXPOSKUUAKH2MR6` |
 | RISC0 stack owner | `GDNHJPGBEPMMAINDMU3TN6V6PCDQKXWVY4FWHLMBJXPCBSCKLUYIESOC` |
 | RISC0 selector | `73c457ba` |
 
@@ -153,35 +153,35 @@ against the RISC Zero E2E deployment listed below.
 
 | Contract | What it does | Address |
 | --- | --- | --- |
-| `governance` | Admin, pause state, and verifier registry | `CDDTFRBQIDYZZPHM4JCFEBBU6KAUFPDV76TQJC5GXNMHDL25D7CFHFTP` |
-| `proof-ledger` | Records accepted proof digests | `CBZPKRRE73G3QW3WI2PZRYBJ3ZFH3VBKLJXF2R2UNJETR27OLDC7ULQX` |
-| `price-oracle` | SEP-40-compatible oracle adapter | `CC6CO5OZF3KCUMHWHR7TYP5GT7DP2U4PZF5M25OXYUXJHEHD4EBEZTH4` |
-| `position-state` | Stores private position roots and authorized writers | `CDLXNH7N7HH2W3UBCUQJNHUFF355FVTPTDJHVPQV64JVJHM3J5U2CHS2` |
-| `shielded-pool` | Stores margin commitments, nullifiers, deposits, and withdrawals | `CDORFGZBQCFC6JGYK27SSUCPTNI35J6MPCHROTYHUCQ7NE356HIODUKP` |
-| `intent-registry` | Records active and cancelled intent commitments | `CCVWEJ5KQZYN4TUZT5OPUU4LPPO6423ARYHG4BBURYT237YJSUZFOSPN` |
-| `conditional-order` | Stores TP/SL close commitments and trigger records | `CC452XWNLK3K2UDXMXWU654P5442I3HAY7YM4U7C2IPETBUG72BPRQ5X` |
-| `market` | Stores market risk parameters and oracle configuration | `CBHMLMTRXPWUUHNWKD3Z53CAWUGFWWQ4QJP7OT23XWKQFFRGMQTXFH6J` |
-| `funding-settlement` | Settles proof-backed funding updates | `CDCRJXYBA4DGRZMPPQZLH3POHFWJQMNK5N2BQIPYC3ACD4JHYMRGZ7WX` |
-| `batch-settlement` | Settles RISC Zero-backed matched batches | `CD7XFWQCQ4BLEV37VWUBPYWOGUQAVLQHPRG7UTY4QC2ARBTCW4JFJEYX` |
-| `liquidation` | Records proof-backed private liquidations | `CA6STC3WL6WAS5STXSS7QRP4MBXUEDYNBCZFQ2JVG27G2EJMP6ABDQ54` |
-| `position-close` | Settles proof-backed manual and conditional closes | `CAQIVZ5SASXTOLZLJKM7XWFFHUGOJM6TWFP6NY6SYDDCWT2OZ6QK2O6P` |
-| `disclosure-verifier` | Records selective disclosure proofs | `CDRJ4ERVFMGUY73M2WHKBH5RYFFMXUKITSC6PE6AWGTOMZBTDOAXQ7LG` |
+| `governance` | Admin, pause state, and verifier registry | `CDS7LCDOSJTCVXWIKUVMSZJASCAWX6CBJ5DM65YJB42P4QK37ACCNYMN` |
+| `proof-ledger` | Records accepted proof digests | `CCMMEPEINZUOAG4GWCXINXOXPIMKIR6I42JPWFHM4OOUSU2AARRZMUD3` |
+| `price-oracle` | SEP-40-compatible oracle adapter | `CAMDZVNCICW6VAYZR6VNMJXEKGM3WEGKESYQOXEU5BIGLSLZWPPHBYRZ` |
+| `position-state` | Stores private position roots and authorized writers | `CAR733CQNSMIYNZJP4I5C255WLRA4RO4LMVTLEYZG5CSYGGBVHEGVUXN` |
+| `shielded-pool` | Stores margin commitments, nullifiers, deposits, and withdrawals | `CCKMN7O4NETE7UTAQU4X23YMR5XMFGJHHL4RMHL3JKWFY5JNCMMDLG73` |
+| `intent-registry` | Records active and cancelled intent commitments | `CBHPOBN6QL5RE56TXJ2HGK2GVXDTGH5PROC47C446ECXZXTGJSXXQMYS` |
+| `conditional-order` | Stores TP/SL close commitments and trigger records | `CBOGL3S4YQW5ZHZJY2W5VWYPGW6BOZY655L3TAP6ZWQGJDVUTBAWQBMC` |
+| `market` | Stores market risk parameters and oracle configuration | `CCXTAD5VND6ANNWKGSYDC77BHNMBYNF7DZJNSELVDZYYCJ5TVLUTM3HO` |
+| `funding-settlement` | Settles proof-backed funding updates | `CCHMPJYUI65ELKJSXXUOINRYE2WCYB7C2FLX7GZMZP723JGV6SVTZRCA` |
+| `batch-settlement` | Settles RISC Zero-backed matched batches | `CAJNJFQFGDNXEJXYJSSAQ73F44LRXOS4YACF2PCEIT33GSLBFZSEVK5H` |
+| `liquidation` | Records proof-backed private liquidations | `CAQ4FW5NYJOFQWHRDOHONUEYFPXOOPQQDUK6AW6DU3LWL5EJJ2CTOJCU` |
+| `position-close` | Settles proof-backed manual and conditional closes | `CCQKRD2VHAEAECPCO4RLF3EUYZ5JDU2BNUJ2PT65FD6THTGFEIWTWUUP` |
+| `disclosure-verifier` | Records selective disclosure proofs | `CAJYKNAK6JRB5O7CVR2INOTWERQLJ7T4OROBTARCLHPWQDFXD4W5HFKT` |
 
 ### 5.3 Proof Verifier Contracts
 
 | Verifier | Address |
 | --- | --- |
-| `batch-match-risc0-verifier` | `CABATKODYIZHQQIVLXRGXX3XZT7KMJLJJYDV2AMBLCGMFCCFTIWNCS2W` |
-| `conditional-close-proof-verifier` | `CAVJ4OOD6FJCA7W4RYFL4KVBD4FNF5GYXLJK3XI2ZUBKVDVMIEXEJVQW` |
-| `deposit-note-proof-verifier` | `CDJJOXWRUSPA432U5APWLY6RTEWI4SDDREPDYN4ULC523KPX4WAH5AWR` |
-| `disclosure-proof-verifier` | `CCP6ZP5SKPBGVEIAI2ODWSR3WZHUGV5NMTXANOIDGKNAKWKFQUDUKHEQ` |
-| `funding-update-proof-verifier` | `CBBIHVVGYRBQJ4235HSPHMJETLVANQVXJ2ZG5UWDO23PQO3KP47PMF45` |
-| `intent-validity-proof-verifier` | `CDASIF3LFOJKRYCUPGIJ55ABJMLFO4ZI2BCFVKIJ7ERJHHJQTB2RDXBF` |
-| `liquidation-check-proof-verifier` | `CAYCNSER2RDCQFDU4K5755O64UWLLK2RKWQFKKCTI6JEOYKJ6DPBC6YY` |
-| `margin-check-proof-verifier` | `CADD2AVKOQLTDXQKTA5MJHQNYMDBSKDGZY65SRJGNM7KY5TIWWCSWEOK` |
-| `position-close-proof-verifier` | `CCIVAYOXOA3Y5OBU35MYE2HAPCTMNS3JHNEBUKO4SCZTWSZIAIQNZEUC` |
-| `position-transition-proof-verifier` | `CC34QA7WI6KAKNYFL7CX3QSAT4CKOVXA5AI32XX7S5AO4ZOZXOFHMCIT` |
-| `withdraw-proof-verifier` | `CDVETLREEKM425MEFX3FQTG4XSFCYZQJYXBEHLUOAK2EAKZQIAB2A4MT` |
+| `batch-match-risc0-verifier` | `CDLJLRKUPULXTPX726TCMOAOXFWUNLVKFXLGIFE5SSRQZIBJDLXZJVHJ` |
+| `conditional-close-proof-verifier` | `CC3V4VCVRTX7EYJX42MH2YZUXKRFBNLXNRI4FNJFEGTG67STMU3LNQXL` |
+| `deposit-note-proof-verifier` | `CBIQACRM6CR3Y6APAN6XIJYPLNZS53CMWPREHZWPOS4TBFAQAF5TSSWM` |
+| `disclosure-proof-verifier` | `CCWBQ6RQG6PAUQ5BMYUSQVH6H5DEPLKL2ZOQPXV7R6TC6F32O3Z4GFST` |
+| `funding-update-proof-verifier` | `CDB4PEYTJZ3ODMRXZOECSA6DNLI4CJQHYZP4RDLUOEZLIQQFBKECZASP` |
+| `intent-validity-proof-verifier` | `CAM6DPTGVRU5DE3CF4KQW5VCA4GKEYL3I5SQBIMIPPC24D3R422S2EDK` |
+| `liquidation-check-proof-verifier` | `CB6ZJ7UFXITFZ52RAP7K27KZJNTHHQA3SPOHUQ5AMUWSSM2LPFRREIWD` |
+| `margin-check-proof-verifier` | `CCFMWZ27H2AMU6G6OBXHJHUIVWOZZOKKLHNOM5YECQELBSGYNPZ4SU47` |
+| `position-close-proof-verifier` | `CC7AFBOYAATDMZQC6ZN735BBRAVR2KXBXCKIFOBSH5BH6ZNRTMN237BB` |
+| `position-transition-proof-verifier` | `CCRUP4DGMECLOGIG34WWOWRFWJ6LIGHTRKWYZX2TDWCHE45WSMALQLME` |
+| `withdraw-proof-verifier` | `CDSZK4WEUOX7TJ7X2DJLXWVHRBL5OOH4LRNU4VUENGR6HYRJY47FV2OG` |
 
 ## 6. Supported Markets
 
