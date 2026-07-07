@@ -97,9 +97,16 @@ Ensure you have the following prerequisites installed:
 * **Docker** (for database running)
 
 ### 5.1 Run Local Infrastructure
-Start the MongoDB and Redis containers:
+You can choose to spin up only the databases (running the services locally in separate tabs) or the entire project stack:
+
+**Option A: Start databases only (recommended for local development & debugging):**
 ```sh
 bun run docker:infra
+```
+
+**Option B: Start the entire stack (databases, server, matcher, prover, and client):**
+```sh
+bun run docker:up
 ```
 
 ### 5.2 Build Circuits & Smart Contracts
