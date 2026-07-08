@@ -287,8 +287,9 @@ function selectMakerNoteAllocations(
   const candidates = notes
     .filter((note) => note.status === "available")
     .map((note) => ({ amount: BigInt(note.amount), note }))
-    .filter((candidate) => candidate.amount > 0n && candidate.amount <= requiredMargin)
+    .filter((candidate) => candidate.amount > 0n)
     .sort(compareMakerNoteCandidate);
+
   const exact = candidates.find((candidate) => candidate.amount === requiredMargin);
   if (exact) {
     return [{
@@ -298,9 +299,26 @@ function selectMakerNoteAllocations(
     }];
   }
 
+  // Pick the smallest note that can cover the required margin fully
+  const largerNotes = candidates
+    .filter((c) => c.amount >= requiredMargin)
+    .sort((a, b) => (a.amount < b.amount ? -1 : 1));
+  const bestLarger = largerNotes[0];
+  if (bestLarger) {
+    return [{
+      margin: bestLarger.amount,
+      note: bestLarger.note,
+      size: totalSize,
+    }];
+  }
+
+  // Fallback: try to combine smaller notes to cover the margin exactly
   let remainingMargin = requiredMargin;
   const selected: Array<{ amount: bigint; note: StoredMakerNote }> = [];
-  for (const candidate of candidates) {
+  const smallerCandidates = candidates
+    .filter((c) => c.amount < requiredMargin)
+    .sort((a, b) => (a.amount > b.amount ? -1 : 1));
+  for (const candidate of smallerCandidates) {
     if (candidate.amount > remainingMargin) continue;
     selected.push(candidate);
     remainingMargin -= candidate.amount;
