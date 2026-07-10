@@ -40,7 +40,9 @@ export function PositionsTable({
 }: PositionsTableProps) {
   const [internalView, setInternalView] = useState<TableView>("positions");
   const view = activeView ?? internalView;
-  const visibleActivity = activity.filter((item) => item.kind !== "account-event");
+  const visibleActivity = activity.filter(
+    (item) => item.kind !== "account-event" && item.kind !== "order" && Boolean(item.proofDigest),
+  );
   const rowCount = view === "positions" ? positions.length : view === "orders" ? orders.length : visibleActivity.length;
   const selectView = (nextView: TableView) => {
     setInternalView(nextView);
@@ -159,8 +161,8 @@ function PositionsView({
                 ) : position.commitment ? (
                   <span title={position.commitment}>{shortAddress(position.commitment)}</span>
                 ) : "--"}
-                {position.boundlessRequestId ? (
-                  <BoundlessLink requestId={position.boundlessRequestId} />
+                {!position.lifecycleTxHash && !position.settlementTxHash && position.proofDigest ? (
+                  <span title={position.proofDigest}>Proof-backed</span>
                 ) : null}
               </span>
             </span>
