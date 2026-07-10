@@ -295,6 +295,9 @@ function blockedMessage(run: BatchExecutionRunRecord): string {
   if (run.phase === "matcher") {
     return "Blocked: matcher failed";
   }
+  if (run.phase === "proving") {
+    return "Blocked: proof generation failed";
+  }
   if (run.phase === "batch-settlement") {
     return "Blocked: batch settlement relay failed";
   }
@@ -309,7 +312,7 @@ function skippedMessage(reason: string | undefined): string {
 
 function cleanReason(reason: string): string {
   return reason
-    .replace(/^(oracle|maker-liquidity|matcher|batch-settlement|settlement-commit|maker-finalize):\s*/, "")
+    .replace(/^(oracle|maker-liquidity|matcher|proving|batch-settlement|settlement-commit|maker-finalize):\s*/, "")
     .replace(/^stellar relay failed \(([^)]+)\):\s*/, "$1 failed: ")
     .trim();
 }

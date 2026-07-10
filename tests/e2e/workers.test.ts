@@ -320,7 +320,6 @@ describe("support workers", () => {
     const settlement = externalSettlement({
       batchId: "external-batch",
       marketId: market.marketId,
-      oldRoot: executor.store.positionMembershipRoot(),
       newCommitments: [
         hashFields("position", ["external-long"]),
         hashFields("position", ["external-short"]),
@@ -412,7 +411,6 @@ describe("support workers", () => {
     const settlement = externalSettlement({
       batchId: "external-batch",
       marketId: market.marketId,
-      oldRoot: executor.store.positionMembershipRoot(),
       newCommitments: [
         hashFields("position", ["relay-external-long"]),
         hashFields("position", ["relay-external-short"]),
@@ -633,14 +631,19 @@ describe("support workers", () => {
     const fixture = externalBatchFixture("remote-matcher-client");
     const previousFetch = globalThis.fetch;
     globalThis.fetch = (async (url, init) => {
-      expect(String(url)).toBe("https://matcher.pnlx.local/match/settlement");
+      expect(String(url)).toBe("https://matcher.pnlx.local/match/jobs");
       expect(init?.method).toBe("POST");
       expect((init?.headers as Record<string, string>).authorization).toBe("Bearer remote-secret");
       return new Response(body({
-        accountEvents: fixture.accountEvents,
-        positionOpenings: fixture.positionOpenings,
-        residualOrders: [],
-        settlement: fixture.settlement,
+        attempts: 1,
+        jobId: "remote-matcher-job",
+        status: "completed",
+        transcript: {
+          accountEvents: fixture.accountEvents,
+          positionOpenings: fixture.positionOpenings,
+          residualOrders: [],
+          settlement: fixture.settlement,
+        },
       }), {
         headers: { "content-type": "application/json" },
         status: 201,
@@ -1626,7 +1629,6 @@ describe("support workers", () => {
       positionRoot: hashFields("position-root", ["worker-onchain"]),
       closeCommitment,
       newPositionCommitment: hashFields("new-position", ["worker-onchain"]),
-      newPositionRoot: hashFields("new-position-root", ["worker-onchain"]),
       marginOutputCommitment: hashFields("margin-output", ["worker-onchain"]),
       proof: positionProof,
     });
@@ -1663,7 +1665,6 @@ describe("support workers", () => {
     expect(calls[8]).toContain(hashFields("position-root", ["worker-onchain"]).slice(2));
     expect(calls[8]).toContain(hashFields("position", ["worker-onchain"]).slice(2));
     expect(calls[8]).toContain(nullifier.slice(2));
-    expect(calls[8]).toContain(hashFields("new-position-root", ["worker-onchain"]).slice(2));
     expect(calls[8]).toContain((56_000n * PRICE_SCALE).toString());
   });
 
@@ -1721,7 +1722,6 @@ describe("support workers", () => {
       positionRoot: hashFields("position-root", ["worker-manual-close"]),
       closeCommitment: hashFields("close", ["worker-manual-close"]),
       newPositionCommitment: hashFields("new-position", ["worker-manual-close"]),
-      newPositionRoot: hashFields("new-position-root", ["worker-manual-close"]),
       marginOutputCommitment: hashFields("margin-output", ["worker-manual-close"]),
       proof: proof("position-close"),
     });
@@ -1796,7 +1796,6 @@ describe("support workers", () => {
       positionRoot: hashFields("position-root", ["moved-price"]),
       closeCommitment: hashFields("close", ["moved-price"]),
       newPositionCommitment: hashFields("new-position", ["moved-price"]),
-      newPositionRoot: hashFields("new-position-root", ["moved-price"]),
       marginOutputCommitment: hashFields("margin-output", ["moved-price"]),
       proof: proof("position-close"),
     })).toThrow("position close mark price mismatch: proof 5600000000000, on-chain 5599900000000");
@@ -1858,8 +1857,6 @@ describe("support workers", () => {
     onchain.settleBatch({
       batchId,
       marketId,
-      oldRoot: hashFields("old-root", [batchId]),
-      newRoot: hashFields("new-root", [batchId]),
       matchTranscriptDigest: hashFields("match-transcript", [batchId]),
       settlementDigest: hashFields("settlement-digest", [batchId]),
       newCommitments: [hashFields("position", [batchId])],
@@ -3478,7 +3475,6 @@ function externalSettlement(input: {
   batchId: string;
   marketId: string;
   newCommitments: Hex[];
-  oldRoot: Hex;
   orderUpdates: BatchSettlement["orderUpdates"];
   spentNullifiers: Hex[];
   store: ProtocolStore;
@@ -3491,8 +3487,6 @@ function externalSettlement(input: {
     marketId: input.marketId,
     matchTranscriptDigest: hashFields("external-match-transcript", [input.batchId]),
     newCommitments: input.newCommitments,
-    newRoot: input.store.positionMembershipRootWithMany(input.newCommitments),
-    oldRoot: input.oldRoot,
     openInterestDelta: BigInt(input.newCommitments.length),
     orderUpdates: input.orderUpdates,
     residualSize: 0n,
@@ -3538,19 +3532,17 @@ function prooflessProofs(): ConstructorParameters<typeof MatcherService>[1] {
         marketId: input.market.marketId,
         matchTranscriptDigest: input.match.matchTranscriptDigest,
         newCommitments: input.match.fills.map((fill) => fill.positionCommitment),
-        newRoot: input.newRoot,
-        oldRoot: input.oldRoot,
         openInterestDelta: input.match.openInterestDelta,
         orderUpdates: input.match.orderUpdates,
         residualSize: input.match.residualSize,
-        settlementDigest: hashFields("test-settlement", [input.batchId, input.newRoot]),
+        settlementDigest: hashFields("test-settlement", [input.batchId, input.match.matchTranscriptDigest]),
         spentNullifiers: input.match.spentNullifiers,
       };
       const publicInputHash = batchSettlementPublicInputHash({
         ...draft,
         proof: proof("batch-match"),
       });
-      const sealDigest = hashFields("risc0-seal", [input.batchId, input.newRoot]);
+      const sealDigest = hashFields("risc0-seal", [input.batchId, input.match.matchTranscriptDigest]);
       return {
         ...draft,
         proof: {
@@ -3587,7 +3579,6 @@ function externalBatchFixture(seed: string) {
   const settlement = externalSettlement({
     batchId: `${seed}-batch`,
     marketId: market.marketId,
-    oldRoot: executor.store.positionMembershipRoot(),
     newCommitments: [
       hashFields("position", [`${seed}-long`]),
       hashFields("position", [`${seed}-short`]),

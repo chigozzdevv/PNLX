@@ -12,7 +12,7 @@ export class RemoteMatcherClient implements MatcherGateway {
   async createSettlementTranscript(
     input: CreateExternalSettlementInput,
   ): Promise<ExternalBatchSettlementTranscript> {
-    const targetUrl = matchUrl(this.config.url);
+    const targetUrl = jobsUrl(this.config.url);
     console.log(
       "[RemoteMatcherClient] matcher call",
       JSON.stringify({
@@ -22,65 +22,62 @@ export class RemoteMatcherClient implements MatcherGateway {
       }),
     );
 
+    let job = await this.request(targetUrl, { body: input, method: "POST" });
+    const jobId = String(job.jobId ?? "");
+    if (!jobId) throw new Error("remote matcher did not return a job id");
+    while (job.status === "queued" || job.status === "proving") {
+      await delay(2_000);
+      job = await this.request(`${targetUrl}?id=${encodeURIComponent(jobId)}`, { method: "GET" });
+    }
+    if (job.status === "failed") {
+      throw new Error(typeof job.error === "string" ? job.error : "remote matcher proof job failed");
+    }
+    if (!job.transcript || typeof job.transcript !== "object") {
+      throw new Error("remote matcher completed without a settlement transcript");
+    }
+    return parseExternalBatchSettlement(job.transcript as Record<string, unknown>);
+  }
+
+  private async request(
+    url: string,
+    input: { body?: unknown; method: "GET" | "POST" },
+  ): Promise<Record<string, unknown>> {
     let response: Response;
     try {
-      response = await fetch(targetUrl, {
-        body: JSON.stringify(input),
+      response = await fetch(url, {
+        ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
         headers: {
-          "content-type": "application/json",
+          ...(input.body === undefined ? {} : { "content-type": "application/json" }),
           ...(this.config.token ? { authorization: `Bearer ${this.config.token}` } : {}),
         },
-        method: "POST",
+        method: input.method,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(
-        "[RemoteMatcherClient] matcher request failed",
-        JSON.stringify({
-          url: targetUrl,
-          message,
-          type: error instanceof Error ? error.name : typeof error,
-        }),
-      );
       throw new Error(`remote matcher request failed: ${message}`);
     }
-
     const text = await response.text();
     let body: Record<string, unknown>;
     try {
-      body = text ? (JSON.parse(text) as Record<string, unknown>) : {};
-    } catch (error) {
-      console.error(
-        "[RemoteMatcherClient] matcher response parse failed",
-        JSON.stringify({
-          url: targetUrl,
-          status: response.status,
-          preview: text.slice(0, 120),
-          parseError: error instanceof Error ? error.message : String(error),
-        }),
-      );
-      throw new Error(`matcher response parse failed from ${targetUrl} with status ${response.status}`);
+      body = text ? JSON.parse(text) as Record<string, unknown> : {};
+    } catch {
+      throw new Error(`matcher response parse failed from ${url} with status ${response.status}`);
     }
-
     if (!response.ok) {
-      const message =
+      throw new Error(
         typeof body.error === "string"
           ? body.error
-          : `remote matcher service failed with status ${response.status}`;
-      console.error(
-        "[RemoteMatcherClient] matcher response non-ok",
-        JSON.stringify({
-          url: targetUrl,
-          status: response.status,
-          message,
-        }),
+          : `remote matcher service failed with status ${response.status}`,
       );
-      throw new Error(message);
     }
-    return parseExternalBatchSettlement(body);
+    return body;
   }
 }
 
-function matchUrl(base: string): string {
-  return new URL("/match/settlement", base).toString();
+function jobsUrl(base: string): string {
+  return new URL("/match/jobs", base).toString();
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

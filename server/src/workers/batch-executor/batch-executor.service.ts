@@ -105,10 +105,11 @@ export class BatchExecutorService {
         status: "running",
         updatedAt: Date.now(),
       });
-      const transcript = await runPhase("matcher", () =>
+      const transcript = await runPhase("proving", () =>
         this.matcher.createSettlementTranscript({
           batchId,
           includeOpenMarketOrders: true,
+          intentCommitments: this.activeIntentCommitments(marketId),
           marketId,
         })
       );
@@ -246,6 +247,16 @@ export class BatchExecutorService {
       }
     }
     return [...active].sort();
+  }
+
+  private activeIntentCommitments(marketId: string): Hex[] {
+    return [...this.executor.store.orderLifecycle.values()]
+      .filter((order) =>
+        order.marketId === marketId &&
+        (order.status === "open" || order.status === "partially-filled")
+      )
+      .map((order) => order.intentCommitment)
+      .sort();
   }
 
   private batchIdForMarket(

@@ -4,6 +4,7 @@ import { createExecutor, createExecutorAsync } from "@/workers/executor/executor
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { MongoProtocolStoreOptions } from "@/shared/state/mongo-store";
 import { createMatcher } from "@/workers/matcher/matcher.worker";
+import { MatcherJobService } from "@/workers/matcher/matcher-job.service";
 import type {
   CreateExternalSettlementInput,
   MatcherGateway,
@@ -24,6 +25,20 @@ export function createMatcherApp(options: MatcherAppOptions = {}): Router {
 
   const router = new Router();
   const persistentMatcher = createRequestMatcher(options, provider);
+  const jobs = MatcherJobService.memory((input) =>
+    Promise.resolve(persistentMatcher.createSettlementTranscript(input))
+  );
+
+  router.add("POST", "/match/jobs", async (request) => {
+    assertMatcherAuth(request, options.token);
+    return json(await jobs.enqueue(await readJson<CreateExternalSettlementInput>(request)), 202);
+  }, { public: true });
+  router.add("GET", "/match/jobs", async (request) => {
+    assertMatcherAuth(request, options.token);
+    const jobId = new URL(request.url).searchParams.get("id");
+    if (!jobId) throw new Error("matcher job id is required");
+    return json(await jobs.get(jobId));
+  }, { public: true });
 
   router.add("POST", "/match/settlement", async (request) => {
     assertMatcherAuth(request, options.token);
@@ -40,6 +55,28 @@ export async function createMatcherAppAsync(options: MatcherAppOptions = {}): Pr
 
   const router = new Router();
   const persistentMatcher = options.mongo ? undefined : await createRequestMatcherRuntimeAsync(options, provider);
+  const processJob = async (input: CreateExternalSettlementInput) => {
+    const runtime = persistentMatcher ?? await createRequestMatcherRuntimeAsync(options, provider);
+    try {
+      return await runtime.matcher.createSettlementTranscript(input);
+    } finally {
+      if (!persistentMatcher) await runtime.close?.();
+    }
+  };
+  const jobs = options.mongo
+    ? await MatcherJobService.connect(options.mongo, processJob)
+    : MatcherJobService.memory(processJob);
+
+  router.add("POST", "/match/jobs", async (request) => {
+    assertMatcherAuth(request, options.token);
+    return json(await jobs.enqueue(await readJson<CreateExternalSettlementInput>(request)), 202);
+  }, { public: true });
+  router.add("GET", "/match/jobs", async (request) => {
+    assertMatcherAuth(request, options.token);
+    const jobId = new URL(request.url).searchParams.get("id");
+    if (!jobId) throw new Error("matcher job id is required");
+    return json(await jobs.get(jobId));
+  }, { public: true });
 
   router.add("POST", "/match/settlement", async (request) => {
     assertMatcherAuth(request, options.token);
