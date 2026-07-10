@@ -129,7 +129,7 @@ function PositionsView({
         <span>Net Value</span>
         <span>Status</span>
         <span>Evidence</span>
-        <span />
+        <span>Action</span>
       </div>
 
       {positions.map((position) => {
