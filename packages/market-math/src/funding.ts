@@ -1,7 +1,7 @@
 import { PRICE_SCALE, RATE_SCALE } from "./constants";
 
 export function fundingPayment(signedSize: bigint, currentIndex: bigint, lastIndex: bigint): bigint {
-  return signedSize * (currentIndex - lastIndex);
+  return (signedSize * (currentIndex - lastIndex)) / PRICE_SCALE;
 }
 
 export interface FundingIndexDeltaInput {
@@ -22,7 +22,7 @@ export function fundingIndexDelta(input: FundingIndexDeltaInput): bigint {
 
   const raw =
     (input.markPrice * input.premiumRate * BigInt(Math.trunc(input.elapsedMs))) /
-    (PRICE_SCALE * RATE_SCALE * BigInt(Math.trunc(input.intervalMs)));
+    (RATE_SCALE * BigInt(Math.trunc(input.intervalMs)));
   if (input.maxFundingDelta === undefined) return raw;
   if (raw > input.maxFundingDelta) return input.maxFundingDelta;
   if (raw < -input.maxFundingDelta) return -input.maxFundingDelta;

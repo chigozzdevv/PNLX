@@ -1,7 +1,7 @@
 market_id = 9
 old_index_abs = 1000
 old_index_is_negative = false
-new_index_abs = 1500
+new_index_abs = 50000001000
 new_index_is_negative = false
 mark_price = 5000000000000
 premium_rate_abs = 10000

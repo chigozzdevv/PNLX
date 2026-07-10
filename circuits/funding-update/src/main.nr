@@ -1,4 +1,3 @@
-global PRICE_SCALE: u128 = 100_000_000;
 global RATE_SCALE: u128 = 1_000_000;
 
 fn funding_delta(
@@ -15,7 +14,7 @@ fn funding_delta(
         assert(max_delta_enabled == 1);
     }
 
-    let raw = (mark_price * premium_rate_abs * elapsed_ms) / (PRICE_SCALE * RATE_SCALE * interval_ms);
+    let raw = (mark_price * premium_rate_abs * elapsed_ms) / (RATE_SCALE * interval_ms);
     if max_delta_enabled == 1 {
         if raw > max_delta {
             max_delta
@@ -102,17 +101,17 @@ fn main(
 
 #[test]
 fn valid_funding_update() {
-    main(9, 1_000, false, 1_500, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 0);
+    main(9, 1_000, false, 50_000_001_000, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 0);
 }
 
 #[test]
 fn valid_negative_funding_update() {
-    main(9, 1_000, false, 500, false, 50_000_00000000, 10_000, true, 3_600_000, 3_600_000, 0, 0);
+    main(9, 50_000_001_000, false, 1_000, false, 50_000_00000000, 10_000, true, 3_600_000, 3_600_000, 0, 0);
 }
 
 #[test]
 fn crosses_zero_with_negative_funding_update() {
-    main(9, 100, false, 400, true, 50_000_00000000, 10_000, true, 3_600_000, 3_600_000, 0, 0);
+    main(9, 100, false, 49_999_999_900, true, 50_000_00000000, 10_000, true, 3_600_000, 3_600_000, 0, 0);
 }
 
 #[test]
@@ -122,15 +121,15 @@ fn caps_funding_delta() {
 
 #[test(should_fail)]
 fn rejects_bad_delta() {
-    main(9, 1_000, false, 1_499, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 0);
+    main(9, 1_000, false, 50_000_000_999, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 0);
 }
 
 #[test(should_fail)]
 fn rejects_bad_cap_flag() {
-    main(9, 1_000, false, 1_500, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 2);
+    main(9, 1_000, false, 50_000_001_000, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 2);
 }
 
 #[test(should_fail)]
 fn rejects_non_normalized_negative_zero() {
-    main(9, 0, true, 500, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 0);
+    main(9, 0, true, 50_000_000_000, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 0);
 }

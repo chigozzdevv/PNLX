@@ -30,13 +30,13 @@ describe("funding settlement enforcement", () => {
       intervalMs: 3_600_000,
       markPrice: 50_000n * PRICE_SCALE,
       marketId: "btc-usd-perp",
-      maxFundingDelta: 1_000n,
-      newFundingIndex: 50n,
+      maxFundingDelta: 100n * PRICE_SCALE,
+      newFundingIndex: 50n * PRICE_SCALE,
       oldFundingIndex: 0n,
       premiumRate: 1_000n,
     });
 
-    expect(record.fundingDelta).toBe(50n);
+    expect(record.fundingDelta).toBe(50n * PRICE_SCALE);
     expect(record.proof.circuitId).toBe("funding-update");
     expect(record.proof.publicInputHash).toMatch(/^0x[0-9a-f]{64}$/);
     const artifact = prover.artifactFor(record.proof);
@@ -52,13 +52,13 @@ describe("funding settlement enforcement", () => {
       intervalMs: 3_600_000,
       markPrice: 50_000n * PRICE_SCALE,
       marketId: "btc-usd-perp",
-      maxFundingDelta: 1_000n,
-      newFundingIndex: 500n,
-      oldFundingIndex: 1_000n,
+      maxFundingDelta: 1_000n * PRICE_SCALE,
+      newFundingIndex: 500n * PRICE_SCALE,
+      oldFundingIndex: 1_000n * PRICE_SCALE,
       premiumRate: -10_000n,
     });
 
-    expect(record.fundingDelta).toBe(-500n);
+    expect(record.fundingDelta).toBe(-500n * PRICE_SCALE);
     expect(record.proof.circuitId).toBe("funding-update");
     expect(record.proof.publicInputHash).toMatch(/^0x[0-9a-f]{64}$/);
     expect(prover.artifactFor(record.proof)?.publicInputsPath).toContain("public_inputs");
@@ -68,7 +68,7 @@ describe("funding settlement enforcement", () => {
     const { closeInput, executor } = setupPositionWithConditionalClose();
     executor.store.updateMarket({
       ...executor.store.markets.get(closeInput.marketId)!,
-      fundingIndex: 5n,
+      fundingIndex: 5n * PRICE_SCALE,
     });
     let proved = false;
     const service = new PositionClosesService(
@@ -408,7 +408,7 @@ function setupPositionWithConditionalClose(options: { triggered?: boolean } = {}
 } {
   const executor = createExecutor();
   const market: MarketConfig = {
-    fundingIndex: 15n,
+    fundingIndex: 15n * PRICE_SCALE,
     initialMarginRate: 100_000n,
     maintenanceMarginRate: 50_000n,
     marketId: "btc-usd-perp",
@@ -495,7 +495,7 @@ function setupPositionWithConditionalClose(options: { triggered?: boolean } = {}
       closeSize: 2n,
       entryPrice: market.oraclePrice,
       fee: 0n,
-      fundingIndex: 10n,
+      fundingIndex: 10n * PRICE_SCALE,
       fundingPayment: 10n,
       margin: 1_000n,
       marginOutputAmount: 990n,
@@ -559,7 +559,7 @@ function setupPositionForLiquidation(): {
 } {
   const executor = createExecutor();
   const market: MarketConfig = {
-    fundingIndex: 17n,
+    fundingIndex: 17n * PRICE_SCALE,
     initialMarginRate: 100_000n,
     maintenanceMarginRate: 50_000n,
     marketId: "eth-usd-perp",
@@ -613,7 +613,7 @@ function setupPositionForLiquidation(): {
     liquidationInput: {
       blinding: hashFields("blinding", ["liquidation"]),
       entryPrice: 3_400_00000000n,
-      fundingIndex: 12n,
+      fundingIndex: 12n * PRICE_SCALE,
       fundingPayment: 15n,
       maintenanceRate: market.maintenanceMarginRate,
       margin: 500n,

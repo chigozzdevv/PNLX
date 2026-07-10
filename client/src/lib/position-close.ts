@@ -317,7 +317,7 @@ function expectedFundingPayment(input: {
   side: Side;
   size: bigint;
 }): bigint {
-  const payment = input.size * (input.currentFundingIndex - input.fundingIndex);
+  const payment = (input.size * (input.currentFundingIndex - input.fundingIndex)) / PRICE_SCALE;
   return input.side === "long" ? payment : -payment;
 }
 

@@ -1,9 +1,16 @@
-import type { FundingUpdateRecord } from "@pnlx/protocol-types";
+import type { FundingPremiumSampleRecord, FundingUpdateRecord } from "@pnlx/protocol-types";
+
+export type FundingPremiumMode = "fixed" | "impact-twap";
 
 export interface FundingEngineConfig {
+  impactMargin?: bigint;
   intervalMs: number;
   maxFundingDelta?: bigint;
+  minimumSamples?: number;
+  premiumMode?: FundingPremiumMode;
   premiumRate: bigint;
+  premiumRateCap?: bigint;
+  sampleIntervalMs?: number;
   settlementsOnchainRequired?: boolean;
 }
 
@@ -21,6 +28,10 @@ export interface FundingCycleMarketResult {
   reason?: string;
   skipped: boolean;
   update?: FundingUpdateRecord;
+}
+
+export interface FundingPremiumSampleResult {
+  record: FundingPremiumSampleRecord;
 }
 
 export interface FundingCycleResult {

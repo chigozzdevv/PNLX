@@ -207,6 +207,20 @@ export interface FundingUpdateRecord {
   marketId: string;
   newFundingIndex: bigint;
   oldFundingIndex: bigint;
+  premiumRate?: bigint;
+  premiumSampleCount?: number;
+  premiumSource?: "fixed" | "impact-twap";
+}
+
+export interface FundingPremiumSampleRecord {
+  impactAskPrice?: bigint;
+  impactBidPrice?: bigint;
+  impactNotional: bigint;
+  indexPrice: bigint;
+  marketId: string;
+  premiumRate: bigint;
+  sampledAt: number;
+  source: "impact-orderbook";
 }
 
 export interface FundingSettlementRecord extends FundingUpdateRecord {
