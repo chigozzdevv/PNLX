@@ -12,7 +12,7 @@ export class PortfolioService {
     return {
       accountEvents: this.executor.store.accountEventsFor(input.ownerCommitment),
       activities: indexer.activitiesFor(input.ownerCommitment),
-      orders: indexer.ordersFor(input.ownerCommitment, { activeOnly: true }),
+      orders: indexer.ordersFor(input.ownerCommitment),
       ownerCommitment: input.ownerCommitment,
       positions: indexer.positionsFor(input.ownerCommitment),
       publicState: indexer.snapshot(),

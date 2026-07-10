@@ -2162,7 +2162,10 @@ describe("server api", () => {
     expect(portfolioResponse.status).toBe(200);
     const portfolioResult = (await portfolioResponse.json()) as Record<string, Record<string, unknown>>;
     const orders = portfolioResult.portfolio.orders as Record<string, string>[];
-    expect(orders).toHaveLength(0);
+    expect(Object.fromEntries(orders.map((order) => [order.intentCommitment, order.status]))).toEqual({
+      [originalRecord.intentCommitment]: "cancelled",
+      [replacementCommitment]: "filled",
+    });
     const activities = portfolioResult.portfolio.activities as Record<string, string>[];
     expect(activities.find((activity) => activity.id === originalRecord.intentCommitment)?.status).toBe(
       "cancelled",
