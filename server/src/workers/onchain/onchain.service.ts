@@ -15,6 +15,7 @@ import type {
   WithdrawalRecord,
 } from "@pnlx/protocol-types";
 import type { RelayerService } from "@/workers/relayer/relayer.service";
+import { parseOnchainMarketPrice } from "@/workers/oracle/oracle.service";
 import type {
   DeploymentRegistry,
   OnchainRelay,
@@ -483,10 +484,13 @@ export class OnchainRelayService implements OnchainRelay {
 
   triggerConditionalClose(record: ConditionalOrderRecord): OnchainRelayResult {
     if (!this.config.enabled) return empty();
+    this.assertCurrentMarketPrice(record.marketId, record.markPrice, "conditional close");
+    const proofVerification = this.invokeProofVerifier(record.proof);
+    this.assertCurrentMarketPrice(record.marketId, record.markPrice, "conditional close");
     return {
       relays: [
-        this.invokeProofVerifier(record.proof),
-        this.invoke("conditional-close", "conditional-order", "trigger", [
+        proofVerification,
+        this.invokeWithMarketPriceGuard("conditional-close", "conditional-order", "trigger", [
           "--market_id",
           marketKey(record.marketId),
           "--position_nullifier",
@@ -497,7 +501,7 @@ export class OnchainRelayService implements OnchainRelay {
           record.markPrice.toString(),
           "--proof",
           proofArg(record.proof),
-        ]),
+        ], record.marketId, record.markPrice, "conditional close"),
       ],
     };
   }
@@ -515,10 +519,13 @@ export class OnchainRelayService implements OnchainRelay {
     functionName: "settle" | "settle_manual",
   ): OnchainRelayResult {
     if (!this.config.enabled) return empty();
+    this.assertCurrentMarketPrice(record.marketId, record.markPrice, "position close");
+    const proofVerification = this.invokeProofVerifier(record.proof);
+    this.assertCurrentMarketPrice(record.marketId, record.markPrice, "position close");
     return {
       relays: [
-        this.invokeProofVerifier(record.proof),
-        this.invoke("position-close", "position-close", functionName, [
+        proofVerification,
+        this.invokeWithMarketPriceGuard("position-close", "position-close", functionName, [
           "--market_id",
           marketKey(record.marketId),
           "--position_root",
@@ -539,7 +546,7 @@ export class OnchainRelayService implements OnchainRelay {
           bytes32(record.marginOutputCommitment),
           "--proof",
           proofArg(record.proof),
-        ]),
+        ], record.marketId, record.markPrice, "position close"),
       ],
     };
   }
@@ -596,10 +603,13 @@ export class OnchainRelayService implements OnchainRelay {
 
   liquidate(record: LiquidationRecord): OnchainRelayResult {
     if (!this.config.enabled) return empty();
+    this.assertCurrentMarketPrice(record.marketId, record.markPrice, "liquidation");
+    const proofVerification = this.invokeProofVerifier(record.proof);
+    this.assertCurrentMarketPrice(record.marketId, record.markPrice, "liquidation");
     return {
       relays: [
-        this.invokeProofVerifier(record.proof),
-        this.invoke("liquidation", "liquidation", "liquidate", [
+        proofVerification,
+        this.invokeWithMarketPriceGuard("liquidation", "liquidation", "liquidate", [
           "--market_id",
           marketKey(record.marketId),
           "--position_root",
@@ -616,7 +626,7 @@ export class OnchainRelayService implements OnchainRelay {
           proofArg(record.proof),
           "--reward_commitment",
           bytes32(record.rewardCommitment),
-        ]),
+        ], record.marketId, record.markPrice, "liquidation"),
       ],
     };
   }
@@ -764,6 +774,50 @@ export class OnchainRelayService implements OnchainRelay {
         : contractId(this.deployment(), contractName),
       functionName,
     });
+  }
+
+  private invokeWithMarketPriceGuard(
+    kind: RelayKind,
+    contractName: string,
+    functionName: string,
+    args: string[],
+    marketId: string,
+    expectedPrice: bigint,
+    operation: string,
+  ) {
+    try {
+      return this.invoke(kind, contractName, functionName, args);
+    } catch (error) {
+      this.assertCurrentMarketPrice(marketId, expectedPrice, operation);
+      throw error;
+    }
+  }
+
+  private assertCurrentMarketPrice(
+    marketId: string,
+    expectedPrice: bigint,
+    operation: string,
+  ): void {
+    const currentPrice = this.currentMarketPrice(marketId);
+    if (currentPrice !== expectedPrice) {
+      throw new Error(
+        `${operation} mark price mismatch: proof ${expectedPrice}, on-chain ${currentPrice}`,
+      );
+    }
+  }
+
+  private currentMarketPrice(marketId: string): bigint {
+    const deployment = this.deployment();
+    const result = this.relayer.read({
+      kind: "market",
+      payload: {
+        args: ["--market_id", marketKey(marketId)],
+        contractId: contractId(deployment, "market"),
+        functionName: "mark_price",
+        send: "no",
+      },
+    });
+    return parseOnchainMarketPrice(result.output).price;
   }
 
   private invokePayload(

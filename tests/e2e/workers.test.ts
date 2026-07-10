@@ -1564,6 +1564,13 @@ describe("support workers", () => {
       },
       runCommand: (command, args) => {
         calls.push([command, ...args]);
+        if (args.includes("mark_price")) {
+          return {
+            status: 0,
+            stderr: "",
+            stdout: JSON.stringify({ price: (56_000n * PRICE_SCALE).toString(), timestamp: 1_800_000_000 }),
+          };
+        }
         return {
           status: 0,
           stderr: "",
@@ -1574,6 +1581,7 @@ describe("support workers", () => {
     const deployment = {
       contracts: {
         "conditional-order": "conditional-order-contract",
+        market: "market-contract",
         "position-close": "position-close-contract",
       },
       network: "testnet",
@@ -1629,24 +1637,34 @@ describe("support workers", () => {
       "invoke",
       "invoke",
       "invoke",
+      "invoke",
+      "invoke",
+      "invoke",
+      "invoke",
     ]);
     expect(calls[0]).toContain("conditional-order-contract");
     expect(calls[0]).toContain("register");
-    expect(calls[1]).toContain("conditional-close-verifier");
-    expect(calls[1]).toContain("verify_and_record");
-    expect(calls[2]).toContain("conditional-order-contract");
-    expect(calls[2]).toContain("trigger");
-    expect(calls[2]).toContain((56_000n * PRICE_SCALE).toString());
-    expect(calls[3]).toContain("position-close-verifier");
-    expect(calls[3]).toContain("verify_and_record");
-    expect(calls[4]).toContain("position-close-contract");
-    expect(calls[4]).toContain("settle");
-    expect(calls[4]).toContain(hashFields("market-id", [marketId]).slice(2));
-    expect(calls[4]).toContain(hashFields("position-root", ["worker-onchain"]).slice(2));
-    expect(calls[4]).toContain(hashFields("position", ["worker-onchain"]).slice(2));
-    expect(calls[4]).toContain(nullifier.slice(2));
-    expect(calls[4]).toContain(hashFields("new-position-root", ["worker-onchain"]).slice(2));
+    expect(calls[1]).toContain("market-contract");
+    expect(calls[1]).toContain("mark_price");
+    expect(calls[2]).toContain("conditional-close-verifier");
+    expect(calls[2]).toContain("verify_and_record");
+    expect(calls[3]).toContain("market-contract");
+    expect(calls[3]).toContain("mark_price");
+    expect(calls[4]).toContain("conditional-order-contract");
+    expect(calls[4]).toContain("trigger");
     expect(calls[4]).toContain((56_000n * PRICE_SCALE).toString());
+    expect(calls[5]).toContain("market-contract");
+    expect(calls[6]).toContain("position-close-verifier");
+    expect(calls[6]).toContain("verify_and_record");
+    expect(calls[7]).toContain("market-contract");
+    expect(calls[8]).toContain("position-close-contract");
+    expect(calls[8]).toContain("settle");
+    expect(calls[8]).toContain(hashFields("market-id", [marketId]).slice(2));
+    expect(calls[8]).toContain(hashFields("position-root", ["worker-onchain"]).slice(2));
+    expect(calls[8]).toContain(hashFields("position", ["worker-onchain"]).slice(2));
+    expect(calls[8]).toContain(nullifier.slice(2));
+    expect(calls[8]).toContain(hashFields("new-position-root", ["worker-onchain"]).slice(2));
+    expect(calls[8]).toContain((56_000n * PRICE_SCALE).toString());
   });
 
   test("builds domain on-chain relays for manual position close settlement", () => {
@@ -1659,6 +1677,13 @@ describe("support workers", () => {
       },
       runCommand: (command, args) => {
         calls.push([command, ...args]);
+        if (args.includes("mark_price")) {
+          return {
+            status: 0,
+            stderr: "",
+            stdout: JSON.stringify({ price: (56_000n * PRICE_SCALE).toString(), timestamp: 1_800_000_000 }),
+          };
+        }
         return {
           status: 0,
           stderr: "",
@@ -1669,6 +1694,7 @@ describe("support workers", () => {
     const onchain = createOnchainRelay(relayer, {
       deployment: {
         contracts: {
+          market: "market-contract",
           "position-close": "position-close-contract",
         },
         network: "testnet",
@@ -1700,14 +1726,84 @@ describe("support workers", () => {
       proof: proof("position-close"),
     });
 
-    expect(calls.map((call) => call[2])).toEqual(["invoke", "invoke"]);
-    expect(calls[0]).toContain("position-close-verifier");
-    expect(calls[0]).toContain("verify_and_record");
-    expect(calls[1]).toContain("position-close-contract");
-    expect(calls[1]).toContain("settle_manual");
-    expect(calls[1]).toContain(hashFields("market-id", [marketId]).slice(2));
-    expect(calls[1]).toContain(nullifier.slice(2));
-    expect(calls[1]).toContain((56_000n * PRICE_SCALE).toString());
+    expect(calls.map((call) => call[2])).toEqual(["invoke", "invoke", "invoke", "invoke"]);
+    expect(calls[0]).toContain("market-contract");
+    expect(calls[1]).toContain("position-close-verifier");
+    expect(calls[1]).toContain("verify_and_record");
+    expect(calls[2]).toContain("market-contract");
+    expect(calls[2]).toContain("mark_price");
+    expect(calls[3]).toContain("position-close-contract");
+    expect(calls[3]).toContain("settle_manual");
+    expect(calls[3]).toContain(hashFields("market-id", [marketId]).slice(2));
+    expect(calls[3]).toContain(nullifier.slice(2));
+    expect(calls[3]).toContain((56_000n * PRICE_SCALE).toString());
+  });
+
+  test("stops a close after proof verification when the on-chain mark price moved", () => {
+    const calls: string[][] = [];
+    let priceReads = 0;
+    const relayer = createRelayer({
+      config: {
+        mode: "stellar-cli",
+        network: "testnet",
+        source: "pnlx-testnet",
+      },
+      runCommand: (command, args) => {
+        calls.push([command, ...args]);
+        if (args.includes("mark_price")) {
+          priceReads += 1;
+          return {
+            status: 0,
+            stderr: "",
+            stdout: JSON.stringify({
+              price: priceReads === 1 ? "5600000000000" : "5599900000000",
+              timestamp: 1_800_000_000,
+            }),
+          };
+        }
+        return {
+          status: 0,
+          stderr: "",
+          stdout: "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface",
+        };
+      },
+    });
+    const onchain = createOnchainRelay(relayer, {
+      deployment: {
+        contracts: {
+          market: "market-contract",
+          "position-close": "position-close-contract",
+        },
+        network: "testnet",
+        source: "pnlx-testnet",
+        sourceAddress: "GTEST",
+        verifiers: {
+          "position-close-proof-verifier": "position-close-verifier",
+        },
+      },
+      enabled: true,
+      resolveProofArtifact: () => ({
+        proofPath: "/tmp/position-close/proof",
+        publicInputsPath: "/tmp/position-close/public_inputs",
+      }),
+    });
+
+    expect(() => onchain.settleManualPositionClose({
+      marketId: "btc-usd-perp",
+      markPrice: 56_000n * PRICE_SCALE,
+      positionCommitment: hashFields("position", ["moved-price"]),
+      positionNullifier: hashFields("position-nullifier", ["moved-price"]),
+      positionRoot: hashFields("position-root", ["moved-price"]),
+      closeCommitment: hashFields("close", ["moved-price"]),
+      newPositionCommitment: hashFields("new-position", ["moved-price"]),
+      newPositionRoot: hashFields("new-position-root", ["moved-price"]),
+      marginOutputCommitment: hashFields("margin-output", ["moved-price"]),
+      proof: proof("position-close"),
+    })).toThrow("position close mark price mismatch: proof 5600000000000, on-chain 5599900000000");
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).toContain("mark_price");
+    expect(calls[1]).toContain("verify_and_record");
+    expect(calls[2]).toContain("mark_price");
   });
 
   test("builds domain on-chain relays for batch settlement", () => {

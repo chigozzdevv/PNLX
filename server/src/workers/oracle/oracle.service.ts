@@ -77,7 +77,7 @@ export class OracleService {
       throw new Error(`on-chain oracle read failed: ${output.stderr || output.stdout || output.status}`);
     }
 
-    const price = parseMarketPrice(output.stdout);
+    const price = parseOnchainMarketPrice(output.stdout);
     validateOnchainPrice(price, this.config.maxAgeSeconds);
     return {
       confidence: 0n,
@@ -90,7 +90,7 @@ export class OracleService {
   }
 }
 
-interface ParsedMarketPrice {
+export interface ParsedOnchainMarketPrice {
   price: bigint;
   timestamp: number;
 }
@@ -120,14 +120,14 @@ function defaultCommandRunner(command: string, args: string[]): CommandResult {
   };
 }
 
-function parseMarketPrice(output: string): ParsedMarketPrice {
+export function parseOnchainMarketPrice(output: string): ParsedOnchainMarketPrice {
   const parsed = parseJsonPrice(output) ?? parseTextPrice(output);
   if (!parsed) throw new Error("on-chain oracle response missing price/timestamp");
   if (parsed.price <= 0n) throw new Error("on-chain oracle price must be positive");
   return parsed;
 }
 
-function parseJsonPrice(output: string): ParsedMarketPrice | undefined {
+function parseJsonPrice(output: string): ParsedOnchainMarketPrice | undefined {
   try {
     return findPrice(JSON.parse(output));
   } catch {
@@ -135,7 +135,7 @@ function parseJsonPrice(output: string): ParsedMarketPrice | undefined {
   }
 }
 
-function findPrice(value: unknown): ParsedMarketPrice | undefined {
+function findPrice(value: unknown): ParsedOnchainMarketPrice | undefined {
   if (!value || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
   const price = numberLike(record.price);
@@ -152,7 +152,7 @@ function findPrice(value: unknown): ParsedMarketPrice | undefined {
   return undefined;
 }
 
-function parseTextPrice(output: string): ParsedMarketPrice | undefined {
+function parseTextPrice(output: string): ParsedOnchainMarketPrice | undefined {
   const price = output.match(/price["'\s:=]+(-?\d+)/i);
   const timestamp = output.match(/timestamp["'\s:=]+(\d+)/i);
   if (!price || !timestamp) return undefined;
@@ -169,7 +169,7 @@ function numberLike(value: unknown): bigint | undefined {
   return undefined;
 }
 
-function validateOnchainPrice(price: ParsedMarketPrice, maxAgeSeconds: number): void {
+function validateOnchainPrice(price: ParsedOnchainMarketPrice, maxAgeSeconds: number): void {
   const now = Math.floor(Date.now() / 1000);
   if (price.timestamp > now) throw new Error("on-chain oracle price is from the future");
   if (now - price.timestamp > maxAgeSeconds) throw new Error("on-chain oracle price is stale");

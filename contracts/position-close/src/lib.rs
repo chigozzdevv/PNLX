@@ -557,6 +557,7 @@ mod tests {
             &setup.position_state,
             &circuit(&env),
         );
+        env.set_auths(&[]);
         client.settle_manual(
             &market,
             &position_root(&env),
@@ -572,6 +573,10 @@ mod tests {
 
         assert!(client.is_settled(&close));
         assert!(client.is_position_spent(&nullifier));
+        assert_eq!(
+            PositionStateClient::new(&env, &setup.position_state).current_root(),
+            new_position_root(&env),
+        );
     }
 
     #[test]
