@@ -1,6 +1,10 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import {
   RISC0_GROTH16_SEAL_BYTES,
+  risc0ProofMetadataReady,
   validateRisc0Seal,
 } from "@/workers/risc0-matcher/risc0-proof";
 
@@ -26,5 +30,19 @@ describe("RISC0 Groth16 proof artifacts", () => {
     expect(() => validateRisc0Seal(seal, SELECTOR)).toThrow(
       "seal selector mismatch",
     );
+  });
+
+  test("recognizes completed proof artifacts without waiting for the prover process to exit", () => {
+    const proofDir = mkdtempSync(join(tmpdir(), "pnlx-risc0-ready-"));
+    const journalPath = join(proofDir, "journal.bin");
+    const sealPath = join(proofDir, "seal.bin");
+    const metadataPath = join(proofDir, "proof.json");
+
+    writeFileSync(metadataPath, JSON.stringify({ journal_path: journalPath, seal_path: sealPath }));
+    expect(risc0ProofMetadataReady(metadataPath)).toBe(false);
+
+    writeFileSync(journalPath, "journal");
+    writeFileSync(sealPath, "seal");
+    expect(risc0ProofMetadataReady(metadataPath)).toBe(true);
   });
 });

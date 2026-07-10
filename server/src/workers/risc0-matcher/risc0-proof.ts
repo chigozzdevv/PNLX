@@ -281,6 +281,7 @@ function batchMatchImageId(): Hex {
 
 function runBoundlessProver(root: string, inputPath: string, proofDir: string): Promise<ProverRun> {
   return new Promise((resolve) => {
+    const metadataPath = join(proofDir, "proof.json");
     const child = spawn(
       "cargo",
       [
@@ -305,6 +306,37 @@ function runBoundlessProver(root: string, inputPath: string, proofDir: string): 
     let stdout = "";
     let stderr = "";
     let error: string | undefined;
+    let resolved = false;
+    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+    const completionTimer = setInterval(() => {
+      if (!risc0ProofMetadataReady(metadataPath)) return;
+      resolveOnce({
+        error,
+        metadataPath,
+        stderr,
+        stdout,
+        status: 0,
+      });
+      stopCompletedChild();
+    }, 250);
+    completionTimer.unref?.();
+
+    function resolveOnce(result: ProverRun): void {
+      if (resolved) return;
+      resolved = true;
+      clearInterval(completionTimer);
+      resolve(result);
+    }
+
+    function stopCompletedChild(): void {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      child.kill("SIGTERM");
+      forceKillTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      }, 2_000);
+      forceKillTimer.unref?.();
+    }
+
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
@@ -317,7 +349,8 @@ function runBoundlessProver(root: string, inputPath: string, proofDir: string): 
       error = cause.message;
     });
     child.on("close", (status) => {
-      resolve({
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      resolveOnce({
         error,
         metadataPath: stdout.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? join(proofDir, "proof.json"),
         stderr,
@@ -326,6 +359,19 @@ function runBoundlessProver(root: string, inputPath: string, proofDir: string): 
       });
     });
   });
+}
+
+export function risc0ProofMetadataReady(metadataPath: string): boolean {
+  if (!existsSync(metadataPath)) return false;
+  try {
+    const output = JSON.parse(readFileSync(metadataPath, "utf8")) as Partial<Risc0ProverOutput>;
+    return typeof output.journal_path === "string" &&
+      typeof output.seal_path === "string" &&
+      existsSync(output.journal_path) &&
+      existsSync(output.seal_path);
+  } catch {
+    return false;
+  }
 }
 
 function risc0ToolPath(home: string, existingPath = ""): string {
