@@ -118,6 +118,15 @@ export function OrderTicket({
     setStopLossPrice(defaultStopLoss(nextSide, activePrice, leverage));
   }
 
+  function openMobileTicket(nextSide: Side) {
+    selectSide(nextSide);
+    setTicketMode("trade");
+    document.getElementById("trade-order-ticket")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
   function updateLeverage(value: number) {
     const nextLeverage = clampLeverage(value, market.maxLeverage);
     const currentTakeProfitPercent = takeProfitPercent;
@@ -231,7 +240,23 @@ export function OrderTicket({
   }
 
   return (
-    <section className="panel order-ticket">
+    <section className="panel order-ticket" id="trade-order-ticket">
+      <div className="mobile-trade-dock" aria-label="Choose trade side">
+        <button
+          className={`mobile-trade-dock-button mobile-trade-dock-long ${side === "long" ? "mobile-trade-dock-active" : ""}`}
+          type="button"
+          onClick={() => openMobileTicket("long")}
+        >
+          Long
+        </button>
+        <button
+          className={`mobile-trade-dock-button mobile-trade-dock-short ${side === "short" ? "mobile-trade-dock-active" : ""}`}
+          type="button"
+          onClick={() => openMobileTicket("short")}
+        >
+          Short
+        </button>
+      </div>
       <div className="ticket-heading">
         <p>{ticketMode === "deposit" ? "Deposit" : "Trade"}</p>
         <span>{market.pair}</span>
