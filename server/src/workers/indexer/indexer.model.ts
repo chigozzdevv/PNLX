@@ -19,6 +19,7 @@ export interface MarketPublicSnapshot {
 
 export interface OwnerOrderSnapshot {
   batchId: string;
+  cancellationTxHash?: Hex;
   createdAt: number;
   intentCommitment: Hex;
   isResidual: boolean;
@@ -28,10 +29,18 @@ export interface OwnerOrderSnapshot {
   residualCommitment?: Hex;
   sourceIntentCommitment?: Hex;
   status: OrderStatus;
+  submissionTxHash?: Hex;
   updatedAt: number;
 }
 
-export type OwnerOrderMatchingState = "blocked" | "queued" | "settled" | "waiting-liquidity";
+export type OwnerOrderMatchingState =
+  | "blocked"
+  | "matching"
+  | "proving"
+  | "queued"
+  | "settled"
+  | "settling"
+  | "waiting-liquidity";
 
 export interface OwnerOrderMatchingSnapshot {
   batchId?: string;
@@ -41,11 +50,12 @@ export interface OwnerOrderMatchingSnapshot {
   reason?: string;
   runId?: Hex;
   state: OwnerOrderMatchingState;
-  status?: "failed" | "settled" | "skipped";
+  status?: "failed" | "running" | "settled" | "skipped";
 }
 
 export interface OwnerPositionSnapshot {
   batchId: string;
+  boundlessRequestId?: Hex;
   closeCommitment?: Hex;
   liquidationRewardCommitment?: Hex;
   marginOutputCommitment?: Hex;
@@ -53,7 +63,11 @@ export interface OwnerPositionSnapshot {
   newPositionCommitment?: Hex;
   openedAt: number;
   positionCommitment: Hex;
+  proofDigest?: Hex;
+  proofVerificationTxHash?: Hex;
+  journalDigest?: Hex;
   settlementDigest: Hex;
+  settlementTxHash?: Hex;
   sourceIntentCommitment: Hex;
   status: PositionStatus;
   updatedAt: number;
@@ -63,13 +77,18 @@ export type OwnerActivityKind = "account-event" | "order" | "position";
 
 export interface OwnerActivitySnapshot {
   batchId?: string;
+  boundlessRequestId?: Hex;
   dataCommitment?: Hex;
   id: Hex;
   kind: OwnerActivityKind;
   marketId?: string;
+  proofDigest?: Hex;
+  proofTxHash?: Hex;
   residualCommitment?: Hex;
   status?: OrderStatus | PositionStatus;
+  settlementDigest?: Hex;
   timestamp: number;
+  txHash?: Hex;
   updatedAt: number;
 }
 

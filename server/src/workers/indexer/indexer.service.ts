@@ -37,19 +37,22 @@ export class IndexerService {
       .filter((order) => order.ownerCommitment === ownerCommitment)
       .map((order) => {
         const residual = this.store.residualOrders.get(order.intentCommitment);
+        const intent = this.store.intents.get(order.intentCommitment);
         return {
           batchId: order.batchId,
+          cancellationTxHash: order.cancellationTxHash,
           createdAt: order.createdAt,
           intentCommitment: order.intentCommitment,
           isResidual: Boolean(residual),
           matching: this.matchingForOrder(order),
-          matchingPayloadCommitment: this.store.intents.get(order.intentCommitment)?.matchingPayloadCommitment ??
+          matchingPayloadCommitment: intent?.matchingPayloadCommitment ??
             residual?.matchingPayloadCommitment ??
             "0x0",
           marketId: order.marketId,
           residualCommitment: order.residualCommitment,
           sourceIntentCommitment: residual?.sourceIntentCommitment,
           status: order.status,
+          submissionTxHash: intent?.submissionTxHash,
           updatedAt: order.updatedAt,
         };
       });
@@ -90,6 +93,19 @@ export class IndexerService {
       };
     }
 
+    if (latestRun.status === "running") {
+      const state = latestRun.phase === "proving"
+        ? "proving"
+        : latestRun.phase === "batch-settlement" || latestRun.phase === "settlement-commit" || latestRun.phase === "maker-finalize"
+          ? "settling"
+          : "matching";
+      return {
+        ...base,
+        message: state === "proving" ? "Generating batch proof" : state === "settling" ? "Finalizing on-chain" : "Matching batch",
+        state,
+      };
+    }
+
     if (latestRun.status === "skipped") {
       return {
         ...base,
@@ -112,7 +128,8 @@ export class IndexerService {
         run.startedAt >= order.createdAt - 5_000
       )
       .sort((left, right) =>
-        right.completedAt - left.completedAt ||
+        (right.completedAt ?? right.updatedAt ?? right.startedAt) -
+          (left.completedAt ?? left.updatedAt ?? left.startedAt) ||
         right.startedAt - left.startedAt ||
         right.runId.localeCompare(left.runId)
       )[0];
@@ -120,41 +137,56 @@ export class IndexerService {
 
   positionsFor(ownerCommitment: Hex): OwnerPositionSnapshot[] {
     return this.store.positionsFor(ownerCommitment)
-      .map((position) => ({
-        batchId: position.batchId,
-        closeCommitment: position.closeCommitment,
-        liquidationRewardCommitment: position.liquidationRewardCommitment,
-        marginOutputCommitment: position.marginOutputCommitment,
-        marketId: position.marketId,
-        newPositionCommitment: position.newPositionCommitment,
-        openedAt: position.openedAt,
-        positionCommitment: position.positionCommitment,
-        settlementDigest: position.settlementDigest,
-        sourceIntentCommitment: position.sourceIntentCommitment,
-        status: position.status,
-        updatedAt: position.updatedAt,
-      }))
+      .map((position) => {
+        const settlement = this.store.settlementByDigest(position.settlementDigest);
+        return {
+          batchId: position.batchId,
+          boundlessRequestId: settlement?.proof.boundlessRequestId,
+          closeCommitment: position.closeCommitment,
+          liquidationRewardCommitment: position.liquidationRewardCommitment,
+          marginOutputCommitment: position.marginOutputCommitment,
+          marketId: position.marketId,
+          newPositionCommitment: position.newPositionCommitment,
+          openedAt: position.openedAt,
+          positionCommitment: position.positionCommitment,
+          proofDigest: settlement?.proof.proofDigest,
+          proofVerificationTxHash: settlement?.proofVerificationTxHash,
+          journalDigest: settlement?.proof.journalDigest,
+          settlementDigest: position.settlementDigest,
+          settlementTxHash: settlement?.settlementTxHash,
+          sourceIntentCommitment: position.sourceIntentCommitment,
+          status: position.status,
+          updatedAt: position.updatedAt,
+        };
+      })
       .sort((a, b) => a.openedAt - b.openedAt || a.positionCommitment.localeCompare(b.positionCommitment));
   }
 
   activitiesFor(ownerCommitment: Hex): OwnerActivitySnapshot[] {
     const orders = this.ordersFor(ownerCommitment).map((order) => ({
       batchId: order.batchId,
+      boundlessRequestId: undefined,
       id: order.intentCommitment,
       kind: "order" as const,
       marketId: order.marketId,
       residualCommitment: order.residualCommitment,
       status: order.status,
       timestamp: order.createdAt,
+      txHash: order.cancellationTxHash ?? order.submissionTxHash,
       updatedAt: order.updatedAt,
     }));
     const positions = this.positionsFor(ownerCommitment).map((position) => ({
       batchId: position.batchId,
+      boundlessRequestId: position.boundlessRequestId,
       id: position.positionCommitment,
       kind: "position" as const,
       marketId: position.marketId,
+      proofDigest: position.proofDigest,
+      proofTxHash: position.proofVerificationTxHash,
+      settlementDigest: position.settlementDigest,
       status: position.status,
       timestamp: position.openedAt,
+      txHash: position.settlementTxHash,
       updatedAt: position.updatedAt,
     }));
     const accountEvents = this.store.accountEventsFor(ownerCommitment).map((event) => ({

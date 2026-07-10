@@ -44,7 +44,23 @@ describe("public and owner indexer", () => {
     store.addIntent(filled);
     store.addIntent(partial);
     store.addIntent(open);
+    const submissionTxHash = hashFields("tx", [filled.intentCommitment]);
+    store.updateIntentSubmissionTxHash(filled.intentCommitment, submissionTxHash);
     store.addSettlement(settlement, positionOpenings);
+    const enrichedSettlement = store.updateSettlementTransactions(settlement.settlementDigest, {
+      boundlessRequestId: hashFields("boundless-request", [filled.intentCommitment]),
+      proofVerificationTxHash: hashFields("tx", ["proof-verification", filled.intentCommitment]),
+      settlementTxHash: hashFields("tx", ["settlement", filled.intentCommitment]),
+    });
+    store.addBatchExecutionRun({
+      batchId: open.batchId,
+      marketId: market.marketId,
+      phase: "proving",
+      runId: hashFields("batch-run", [open.intentCommitment]),
+      startedAt: Date.now(),
+      status: "running",
+      updatedAt: Date.now(),
+    });
     store.addConditionalOrder({
       closeCommitment,
       marketId: market.marketId,
@@ -115,7 +131,15 @@ describe("public and owner indexer", () => {
         createdAt: expect.any(Number),
         isResidual: false,
         matchingPayloadCommitment: filled.matchingPayloadCommitment,
+        submissionTxHash,
         updatedAt: expect.any(Number),
+      });
+    expect(orders.find((order) => order.intentCommitment === open.intentCommitment)?.matching)
+      .toMatchObject({
+        message: "Generating batch proof",
+        phase: "proving",
+        state: "proving",
+        status: "running",
       });
     expect(orders.find((order) => order.intentCommitment === partial.intentCommitment)?.residualCommitment)
       .toMatch(/^0x[0-9a-f]{64}$/);
@@ -126,9 +150,13 @@ describe("public and owner indexer", () => {
     });
     expect(positions.find((position) => position.sourceIntentCommitment === filled.intentCommitment))
       .toMatchObject({
+        boundlessRequestId: enrichedSettlement.proof.boundlessRequestId,
         closeCommitment,
         marginOutputCommitment,
         newPositionCommitment,
+        proofDigest: enrichedSettlement.proof.proofDigest,
+        proofVerificationTxHash: enrichedSettlement.proofVerificationTxHash,
+        settlementTxHash: enrichedSettlement.settlementTxHash,
       });
     expect(JSON.stringify(positions)).not.toContain("positionNullifier");
     expect(activities.map((activity) => activity.kind).sort()).toEqual([
@@ -148,6 +176,8 @@ describe("public and owner indexer", () => {
       .toMatchObject({
         batchId: settlement.batchId,
         marketId: market.marketId,
+        proofTxHash: enrichedSettlement.proofVerificationTxHash,
+        txHash: enrichedSettlement.settlementTxHash,
       });
     expect(JSON.stringify(activities)).not.toContain("positionNullifier");
   });

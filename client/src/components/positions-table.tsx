@@ -126,7 +126,7 @@ function PositionsView({
         <span>Market Price</span>
         <span>Net Value</span>
         <span>Status</span>
-        <span>Commitment</span>
+        <span>Settlement</span>
         <span />
       </div>
 
@@ -147,8 +147,12 @@ function PositionsView({
             <span>{privateNumber(position.marketPrice, (value) => formatNumber(value, 1), position.privateDetails)}</span>
             <span>{privateNumber(position.netValue, formatUsd, position.privateDetails)}</span>
             <span>{statusLabel(position.status)}</span>
-            <span title={position.commitment}>
-              {position.commitment ? shortAddress(position.commitment) : "--"}
+            <span>
+              {position.settlementTxHash ? (
+                <TransactionLink hash={position.settlementTxHash} label="Settled" />
+              ) : position.commitment ? (
+                <span title={position.commitment}>{shortAddress(position.commitment)}</span>
+              ) : "--"}
             </span>
             <span>
               {position.status === "open" ? (
@@ -206,7 +210,7 @@ function OrdersView({
         <span>Batch</span>
         <span>Updated</span>
         <span>Matcher</span>
-        <span />
+        <span>Transaction</span>
       </div>
 
       {orders.map((order) => (
@@ -238,9 +242,11 @@ function OrdersView({
               >
                 {cancellingOrderId === order.intentCommitment ? "Canceling" : "Cancel"}
               </button>
-            ) : (
-              "--"
-            )}
+            ) : order.cancellationTxHash ? (
+              <TransactionLink hash={order.cancellationTxHash} label="Cancelled" />
+            ) : order.submissionTxHash ? (
+              <TransactionLink hash={order.submissionTxHash} label="Submitted" />
+            ) : "--"}
           </span>
         </div>
       ))}
@@ -258,10 +264,10 @@ function HistoryView({ activity }: { activity: ServerOwnerActivitySnapshot[] }) 
         <span>Status</span>
         <span>ID</span>
         <span>Batch</span>
-        <span>Data</span>
+        <span>Proof / Data</span>
         <span>Updated</span>
-        <span />
-        <span />
+        <span>Proof Tx</span>
+        <span>Transaction</span>
       </div>
 
       {activity.map((item) => (
@@ -276,12 +282,20 @@ function HistoryView({ activity }: { activity: ServerOwnerActivitySnapshot[] }) 
           <span title={item.batchId}>
             {item.batchId ?? "--"}
           </span>
-          <span title={item.dataCommitment}>
-            {item.dataCommitment ? shortAddress(item.dataCommitment) : "--"}
+          <span title={item.proofDigest ?? item.dataCommitment}>
+            {item.proofDigest
+              ? shortAddress(item.proofDigest)
+              : item.dataCommitment
+                ? shortAddress(item.dataCommitment)
+                : "--"}
           </span>
           <span>{formatTime(item.updatedAt)}</span>
-          <span />
-          <span />
+          <span>
+            {item.proofTxHash ? <TransactionLink hash={item.proofTxHash} label="Verified" /> : "--"}
+          </span>
+          <span>
+            {item.txHash ? <TransactionLink hash={item.txHash} label="View" /> : "--"}
+          </span>
         </div>
       ))}
     </>
@@ -308,8 +322,25 @@ function statusLabel(status?: string): string {
 function matcherLabel(matching: ServerOwnerOrderSnapshot["matching"]): string {
   if (matching.state === "blocked") return matching.message;
   if (matching.state === "waiting-liquidity") return "Waiting for liquidity";
-  if (matching.state === "settled") return "Settling";
+  if (matching.state === "matching") return "Matching";
+  if (matching.state === "proving") return "Proving";
+  if (matching.state === "settling") return "Settling";
+  if (matching.state === "settled") return "Settled";
   return "Queued";
+}
+
+function TransactionLink({ hash, label }: { hash: `0x${string}`; label: string }) {
+  return (
+    <a
+      className="transaction-link"
+      href={`https://stellar.expert/explorer/testnet/tx/${hash.replace(/^0x/, "")}`}
+      rel="noreferrer"
+      target="_blank"
+      title={hash}
+    >
+      {label}
+    </a>
+  );
 }
 
 function activityKind(kind: ServerOwnerActivitySnapshot["kind"]): string {

@@ -219,7 +219,16 @@ export class MakerLiquidityService {
       if (!this.onchain?.enabled) throw new Error("intent registry requires on-chain relay");
       if (!alreadyRegistered) assertSubmittedRelay(relay, "submit");
     }
-    return this.executor.commitPreparedIntent(prepared);
+    const submissionTxHash = relay?.relays.find(
+      (item) => item.functionName === "submit" && item.submitted,
+    )?.txHash;
+    return this.executor.commitPreparedIntent({
+      ...prepared,
+      record: {
+        ...prepared.record,
+        ...(submissionTxHash ? { submissionTxHash } : {}),
+      },
+    });
   }
 
   private submitIntentOnchain(record: IntentRecord): {

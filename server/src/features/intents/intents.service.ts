@@ -68,7 +68,16 @@ export class IntentsService {
     const prepared = this.executor.prepareIntent({ intent, validity });
     const { alreadyRegistered, relay } = this.submitIntentOnchain(prepared.record);
     if (!alreadyRegistered) this.assertSubmittedIntentRelay(relay, "submit");
-    return this.executor.commitPreparedIntent(prepared);
+    const submissionTxHash = relay?.relays.find(
+      (item) => item.functionName === "submit" && item.submitted,
+    )?.txHash;
+    return this.executor.commitPreparedIntent({
+      ...prepared,
+      record: {
+        ...prepared.record,
+        ...(submissionTxHash ? { submissionTxHash } : {}),
+      },
+    });
   }
 
   private submitIntentOnchain(record: IntentRecord): {

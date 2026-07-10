@@ -10,6 +10,7 @@ export interface ServerProofMeta {
   proofDigest: Hex;
   proofSystem?: "noir-ultrahonk" | "risc0-groth16";
   bytecodeHash?: Hex;
+  boundlessRequestId?: Hex;
   imageId?: Hex;
   journalDigest?: Hex;
   witnessHash?: Hex;
@@ -59,6 +60,7 @@ export interface ServerPublicSnapshot {
 
 export interface ServerOwnerOrderSnapshot {
   batchId: string;
+  cancellationTxHash?: Hex;
   createdAt: number;
   intentCommitment: Hex;
   isResidual: boolean;
@@ -66,22 +68,24 @@ export interface ServerOwnerOrderSnapshot {
     batchId?: string;
     completedAt?: number;
     message: string;
-    phase?: "oracle" | "maker-liquidity" | "matcher" | "batch-settlement" | "settlement-commit" | "maker-finalize";
+    phase?: "oracle" | "maker-liquidity" | "matcher" | "proving" | "batch-settlement" | "settlement-commit" | "maker-finalize";
     reason?: string;
     runId?: Hex;
-    state: "blocked" | "queued" | "settled" | "waiting-liquidity";
-    status?: "failed" | "settled" | "skipped";
+    state: "blocked" | "matching" | "proving" | "queued" | "settled" | "settling" | "waiting-liquidity";
+    status?: "failed" | "running" | "settled" | "skipped";
   };
   matchingPayloadCommitment: Hex;
   marketId: string;
   residualCommitment?: Hex;
   sourceIntentCommitment?: Hex;
   status: "open" | "filled" | "partially-filled" | "cancelled";
+  submissionTxHash?: Hex;
   updatedAt: number;
 }
 
 export interface ServerOwnerPositionSnapshot {
   batchId: string;
+  boundlessRequestId?: Hex;
   closeCommitment?: Hex;
   liquidationRewardCommitment?: Hex;
   marginOutputCommitment?: Hex;
@@ -89,7 +93,11 @@ export interface ServerOwnerPositionSnapshot {
   newPositionCommitment?: Hex;
   openedAt: number;
   positionCommitment: Hex;
+  proofDigest?: Hex;
+  proofVerificationTxHash?: Hex;
+  journalDigest?: Hex;
   settlementDigest: Hex;
+  settlementTxHash?: Hex;
   sourceIntentCommitment: Hex;
   status: "open" | "closed" | "liquidated";
   updatedAt: number;
@@ -97,13 +105,18 @@ export interface ServerOwnerPositionSnapshot {
 
 export interface ServerOwnerActivitySnapshot {
   batchId?: string;
+  boundlessRequestId?: Hex;
   dataCommitment?: Hex;
   id: Hex;
   kind: "account-event" | "order" | "position";
   marketId?: string;
+  proofDigest?: Hex;
+  proofTxHash?: Hex;
   residualCommitment?: Hex;
   status?: ServerOwnerOrderSnapshot["status"] | ServerOwnerPositionSnapshot["status"];
+  settlementDigest?: Hex;
   timestamp: number;
+  txHash?: Hex;
   updatedAt: number;
 }
 
@@ -200,6 +213,12 @@ export interface PositionRow {
   closePrice: number | null;
   unrealizedPnl?: number;
   commitment?: Hex;
+  boundlessRequestId?: Hex;
+  journalDigest?: Hex;
+  proofDigest?: Hex;
+  proofVerificationTxHash?: Hex;
+  settlementDigest?: Hex;
+  settlementTxHash?: Hex;
   privateState?: {
     entryPrice: string;
     fundingIndex: string;

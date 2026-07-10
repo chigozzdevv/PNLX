@@ -32,7 +32,7 @@ export class OrdersService {
     const relay = this.onchain?.cancelIntent(input.intentCommitment);
     this.intents.assertSubmittedIntentRelay(relay, "cancel");
     return {
-      order: this.executor.store.cancelOrder(input.intentCommitment),
+      order: this.executor.store.cancelOrder(input.intentCommitment, relayTxHash(relay, "cancel")),
     };
   }
 
@@ -47,10 +47,20 @@ export class OrdersService {
     this.intents.validate(input.replacement, authenticated);
     const relay = this.onchain?.cancelIntent(input.intentCommitment);
     this.intents.assertSubmittedIntentRelay(relay, "cancel");
-    const cancelledOrder = this.executor.store.cancelOrder(input.intentCommitment);
+    const cancelledOrder = this.executor.store.cancelOrder(
+      input.intentCommitment,
+      relayTxHash(relay, "cancel"),
+    );
     const replacementIntent = this.intents.submitValidated(input.replacement);
     return { cancelledOrder, replacementIntent };
   }
+}
+
+function relayTxHash(
+  result: ReturnType<OnchainRelayService["cancelIntent"]> | undefined,
+  functionName: string,
+) {
+  return result?.relays.find((relay) => relay.functionName === functionName && relay.submitted)?.txHash;
 }
 
 function assertOrderOwner(order: OrderLifecycleRecord, authenticated?: string): void {

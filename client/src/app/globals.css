@@ -1404,6 +1404,17 @@ button:disabled {
   opacity: 0.45;
 }
 
+.transaction-link {
+  color: var(--accent-green);
+  font-size: 12px;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.transaction-link:hover {
+  text-decoration: underline;
+}
+
 .empty-positions {
   position: absolute;
   inset: 50px 0 0;
@@ -3971,4 +3982,3 @@ button:disabled {
   opacity: 0.8;
   text-decoration: underline;
 }
-
