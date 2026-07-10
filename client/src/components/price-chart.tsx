@@ -18,8 +18,8 @@ const DEFAULT_VISIBLE_CANDLES = 90;
 export function PriceChart({ candles, market }: PriceChartProps) {
   const visibleCandles = candles.slice(-DEFAULT_VISIBLE_CANDLES).map(normalizeCandle);
   const hasCandles = visibleCandles.length > 0;
-  const highs = hasCandles ? [...visibleCandles.map((candle) => candle.high), market.price] : [market.price * 1.01];
-  const lows = hasCandles ? [...visibleCandles.map((candle) => candle.low), market.price] : [market.price * 0.99];
+  const highs = hasCandles ? visibleCandles.map((candle) => candle.high) : [market.price * 1.01];
+  const lows = hasCandles ? visibleCandles.map((candle) => candle.low) : [market.price * 0.99];
   const rawMin = Math.min(...lows);
   const rawMax = Math.max(...highs);
   const referencePrice = Math.max(Math.abs(market.price), Math.abs(rawMin), Math.abs(rawMax), Number.EPSILON);
@@ -33,7 +33,11 @@ export function PriceChart({ candles, market }: PriceChartProps) {
   const innerHeight = HEIGHT - PADDING.top - PADDING.bottom;
   const candleStep = innerWidth / Math.max(visibleCandles.length - 1, 1);
   const candleWidth = Math.max(3, Math.min(7, candleStep * 0.48));
-  const currentY = yFor(market.price, min, range, innerHeight);
+  const currentY = clamp(
+    yFor(market.price, min, range, innerHeight),
+    PADDING.top,
+    HEIGHT - PADDING.bottom,
+  );
   const maxVolume = Math.max(...visibleCandles.map((candle) => candle.volume), 1);
   const footerTime = new Intl.DateTimeFormat("en-US", {
     hour: "2-digit",
@@ -170,6 +174,7 @@ export function PriceChart({ candles, market }: PriceChartProps) {
         </g>
 
         <line
+          className="chart-live-price-line"
           x1={PADDING.left}
           x2={PRICE_MARKER_X}
           y1={currentY}
@@ -235,4 +240,8 @@ function normalizeCandle(candle: ChartCandle): ChartCandle {
 
 function yFor(price: number, min: number, range: number, innerHeight: number): number {
   return PADDING.top + ((min + range - price) / range) * innerHeight;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }

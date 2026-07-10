@@ -254,9 +254,9 @@ export function TradingPage() {
           <div className="chart-trades-grid">
             <section className="panel chart-panel">
               <ChartToolbar interval={chartInterval} onIntervalChange={setChartInterval} />
-              {liveSelectedMarket ? (
+              {displaySelectedMarket ? (
                 <div className="chart-frame">
-                  <PriceChart candles={candles.candles} market={liveSelectedMarket} />
+                  <PriceChart candles={candles.candles} market={displaySelectedMarket} />
                   {candles.loading || candles.error ? (
                     <div className="chart-data-status">
                       {candles.loading ? "Loading live candles" : candles.error}
