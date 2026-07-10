@@ -10,6 +10,8 @@ import { matchTranscriptDigest } from "@/workers/batch-matcher/match-transcript"
 import type { SettlementProof, SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
 
 export const RISC0_BATCH_MATCH_CIRCUIT_ID = "batch-match";
+export const RISC0_GROTH16_SEAL_BYTES = 260;
+export const RISC0_BATCH_MATCH_IMAGE_ID = batchMatchImageId();
 export const RISC0_BATCH_MATCH_CIRCUIT_KEY = hashFields("circuit-key", ["risc0-batch-match-v1"]);
 export const RISC0_BATCH_MATCH_CIRCUIT_HASH = sourceHash("risc0/batch-match");
 export const RISC0_STELLAR_VERIFIER_HASH = fileHash(
@@ -64,6 +66,11 @@ export function createRisc0BatchSettlement(
   };
 
   const proverOutput = runRisc0Prover(root, input, draft);
+  if (proverOutput.image_id !== RISC0_BATCH_MATCH_IMAGE_ID) {
+    throw new Error(
+      `RISC0 batch-match image id mismatch: expected ${RISC0_BATCH_MATCH_IMAGE_ID}, received ${proverOutput.image_id}`,
+    );
+  }
   const expectedJournalDigest = batchSettlementPublicInputHash({
     ...draft,
     proof: proofMeta({
@@ -164,7 +171,11 @@ function runRisc0Prover(
     `${JSON.stringify(toProverInput(input, draft), bigintReplacer, 2)}\n`,
   );
 
-  const cachedOutput = readRisc0ProverOutput(join(proofDir, "proof.json"));
+  const expectedSelector = expectedRisc0Selector(root);
+  const cachedOutput = readRisc0ProverOutput(
+    join(proofDir, "proof.json"),
+    expectedSelector,
+  );
   if (cachedOutput) return cachedOutput;
 
   const result = runBoundlessProver(root, inputPath, proofDir);
@@ -173,19 +184,76 @@ function runRisc0Prover(
     throw new Error(`Boundless RISC0 Groth16 batch prover failed\n${output}`);
   }
 
-  const output = readRisc0ProverOutput(result.metadataPath);
+  const output = readRisc0ProverOutput(result.metadataPath, expectedSelector);
   if (!output) throw new Error(`RISC0 proof metadata was not written: ${result.metadataPath}`);
   return output;
 }
 
-function readRisc0ProverOutput(metadataPath: string): Risc0ProverOutput | undefined {
+function readRisc0ProverOutput(
+  metadataPath: string,
+  expectedSelector: string,
+): Risc0ProverOutput | undefined {
   if (!existsSync(metadataPath)) return undefined;
   const output = JSON.parse(readFileSync(metadataPath, "utf8")) as Risc0ProverOutput;
+  assertHex32(output.image_id, "RISC0 image id");
+  assertHex32(output.journal_digest, "RISC0 journal digest");
+  assertHex32(output.seal_digest, "RISC0 seal digest");
   if (!existsSync(output.seal_path)) throw new Error(`RISC0 seal was not written: ${output.seal_path}`);
   if (!existsSync(output.journal_path)) throw new Error(`RISC0 journal was not written: ${output.journal_path}`);
+  validateRisc0Seal(readFileSync(output.seal_path), expectedSelector);
   if (sha256File(output.seal_path) !== output.seal_digest) throw new Error("RISC0 seal digest mismatch");
   if (sha256File(output.journal_path) !== output.journal_digest) throw new Error("RISC0 journal digest mismatch");
   return output;
+}
+
+export function validateRisc0Seal(seal: Uint8Array, expectedSelector: string): void {
+  const selector = expectedSelector.trim().replace(/^0x/i, "").toLowerCase();
+  if (!/^[0-9a-f]{8}$/.test(selector) || selector === "00000000") {
+    throw new Error("RISC0 Groth16 selector is not configured correctly");
+  }
+  if (seal.byteLength !== RISC0_GROTH16_SEAL_BYTES) {
+    throw new Error(
+      `RISC0 Groth16 seal must be ${RISC0_GROTH16_SEAL_BYTES} bytes; received ${seal.byteLength}`,
+    );
+  }
+  const actualSelector = Buffer.from(seal.subarray(0, 4)).toString("hex");
+  if (actualSelector !== selector) {
+    throw new Error(
+      `RISC0 Groth16 seal selector mismatch: expected ${selector}, received ${actualSelector}`,
+    );
+  }
+  if (seal.every((value) => value === 0)) {
+    throw new Error("RISC0 Groth16 seal cannot be all zero bytes");
+  }
+}
+
+function expectedRisc0Selector(root: string): string {
+  const deploymentPath = process.env.STELLAR_DEPLOYMENT_FILE || "deployments/testnet.json";
+  const absolutePath = deploymentPath.startsWith("/") ? deploymentPath : join(root, deploymentPath);
+  if (!existsSync(absolutePath)) {
+    throw new Error(`RISC0 deployment registry was not found: ${absolutePath}`);
+  }
+  const deployment = JSON.parse(readFileSync(absolutePath, "utf8")) as {
+    risc0VerifierStack?: { selector?: unknown };
+  };
+  const selector = deployment.risc0VerifierStack?.selector;
+  if (typeof selector !== "string") {
+    throw new Error("RISC0 deployment registry is missing the Groth16 selector");
+  }
+  return selector;
+}
+
+function assertHex32(value: unknown, label: string): asserts value is Hex {
+  if (typeof value !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(value)) {
+    throw new Error(`${label} must be bytes32 hex`);
+  }
+}
+
+function batchMatchImageId(): Hex {
+  const path = join(process.cwd(), "risc0/batch-match/image-id.json");
+  const value = JSON.parse(readFileSync(path, "utf8")) as { imageId?: unknown };
+  assertHex32(value.imageId, "RISC0 batch-match image id");
+  return value.imageId.toLowerCase() as Hex;
 }
 
 function runBoundlessProver(root: string, inputPath: string, proofDir: string): ProverRun {

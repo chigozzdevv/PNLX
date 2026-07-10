@@ -13,6 +13,7 @@ pub enum DataKey {
     ProofLedger,
     Router,
     CircuitId,
+    ImageId,
     VerifierHash,
 }
 
@@ -27,9 +28,11 @@ impl Risc0ProofVerifier {
         proof_ledger: Address,
         router: Address,
         circuit_id: BytesN<32>,
+        image_id: BytesN<32>,
         verifier_hash: BytesN<32>,
     ) {
         validate_hash(&env, &circuit_id);
+        validate_hash(&env, &image_id);
         validate_hash(&env, &verifier_hash);
         if env.storage().instance().has(&DataKey::Governance) {
             panic!("already initialized");
@@ -44,6 +47,7 @@ impl Risc0ProofVerifier {
         env.storage()
             .instance()
             .set(&DataKey::CircuitId, &circuit_id);
+        env.storage().instance().set(&DataKey::ImageId, &image_id);
         env.storage()
             .instance()
             .set(&DataKey::VerifierHash, &verifier_hash);
@@ -59,6 +63,9 @@ impl Risc0ProofVerifier {
         validate_hash(&env, &image_id);
         validate_hash(&env, &journal_digest);
         validate_hash(&env, &proof_digest);
+        if image_id != Self::image_id(env.clone()) {
+            panic!("image id mismatch");
+        }
         if env.crypto().sha256(&seal).to_bytes() != proof_digest {
             panic!("proof digest mismatch");
         }
@@ -118,6 +125,13 @@ impl Risc0ProofVerifier {
             .get(&DataKey::VerifierHash)
             .unwrap_or_else(|| panic!("not initialized"))
     }
+
+    pub fn image_id(env: Env) -> BytesN<32> {
+        env.storage()
+            .instance()
+            .get(&DataKey::ImageId)
+            .unwrap_or_else(|| panic!("not initialized"))
+    }
 }
 
 fn get_address(env: &Env, key: DataKey) -> Address {
@@ -130,5 +144,50 @@ fn get_address(env: &Env, key: DataKey) -> Address {
 fn validate_hash(env: &Env, value: &BytesN<32>) {
     if *value == BytesN::from_array(env, &[0; 32]) {
         panic!("invalid proof");
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+
+    #[test]
+    fn stores_the_expected_guest_image_id() {
+        let env = Env::default();
+        let contract = env.register(Risc0ProofVerifier, ());
+        let client = Risc0ProofVerifierClient::new(&env, &contract);
+        let image_id = BytesN::from_array(&env, &[7; 32]);
+        client.init(
+            &Address::generate(&env),
+            &Address::generate(&env),
+            &Address::generate(&env),
+            &BytesN::from_array(&env, &[1; 32]),
+            &image_id,
+            &BytesN::from_array(&env, &[2; 32]),
+        );
+        assert_eq!(client.image_id(), image_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "image id mismatch")]
+    fn rejects_a_proof_for_another_guest_before_routing() {
+        let env = Env::default();
+        let contract = env.register(Risc0ProofVerifier, ());
+        let client = Risc0ProofVerifierClient::new(&env, &contract);
+        client.init(
+            &Address::generate(&env),
+            &Address::generate(&env),
+            &Address::generate(&env),
+            &BytesN::from_array(&env, &[1; 32]),
+            &BytesN::from_array(&env, &[7; 32]),
+            &BytesN::from_array(&env, &[2; 32]),
+        );
+        client.verify_and_record(
+            &Bytes::new(&env),
+            &BytesN::from_array(&env, &[8; 32]),
+            &BytesN::from_array(&env, &[3; 32]),
+            &BytesN::from_array(&env, &[4; 32]),
+        );
     }
 }

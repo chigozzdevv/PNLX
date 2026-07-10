@@ -6,7 +6,10 @@ import { fieldMerkleRoot } from "@pnlx/crypto";
 import { circuitKey } from "@pnlx/proof-system";
 import type { Hex } from "@pnlx/protocol-types";
 import { loadEnv } from "@/config/env";
-import { RISC0_BATCH_MATCH_CIRCUIT_KEY } from "@/workers/risc0-matcher/risc0-proof";
+import {
+  RISC0_BATCH_MATCH_CIRCUIT_KEY,
+  RISC0_BATCH_MATCH_IMAGE_ID,
+} from "@/workers/risc0-matcher/risc0-proof";
 import { createDeployManifest } from "./manifest";
 
 interface Options {
@@ -24,6 +27,7 @@ interface Deployment {
   contracts: Record<string, string>;
   network: string;
   risc0VerifierStack: Risc0VerifierStackDeployment;
+  risc0BatchMatchImageId: Hex;
   source: string;
   sourceAddress: string;
   verifiers: Record<string, string>;
@@ -313,6 +317,7 @@ export function deploy(options: Options, root = process.cwd()): Deployment {
     contracts: Object.fromEntries(contracts),
     network: options.network,
     risc0VerifierStack,
+    risc0BatchMatchImageId: RISC0_BATCH_MATCH_IMAGE_ID,
     source: options.source,
     sourceAddress,
     verifiers: Object.fromEntries(verifiers),
@@ -773,12 +778,15 @@ function verifierInitArgs(
   if (verifier.verifierContract === "risc0-proof-verifier") {
     const router = ids.router;
     if (!router) throw new Error("RISC0 router deployment is required for RISC0 verifier deployment");
+    if (!verifier.imageId) throw new Error("RISC0 image id is required for RISC0 verifier deployment");
     return [
       ...base,
       "--router",
       router,
       "--circuit_id",
       bytes32(verifier.circuitKey),
+      "--image_id",
+      bytes32(verifier.imageId),
       "--verifier_hash",
       bytes32(verifier.verifierHash),
     ];

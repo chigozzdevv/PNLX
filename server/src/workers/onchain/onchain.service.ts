@@ -385,6 +385,20 @@ export class OnchainRelayService implements OnchainRelay {
     return result.output.trim().toLowerCase().includes("true");
   }
 
+  positionRoot(): Hex {
+    if (!this.config.enabled) throw new Error("position root requires on-chain relay");
+    const deployment = this.deployment();
+    const result = this.relayer.read({
+      kind: "batch-settlement",
+      payload: {
+        contractId: contractId(deployment, "position-state"),
+        functionName: "current_root",
+        send: "no",
+      },
+    });
+    return parseHex32(result.output, "position root");
+  }
+
   settleFunding(record: FundingSettlementRecord): OnchainRelayResult {
     if (!this.config.enabled) return empty();
     return {
@@ -615,6 +629,13 @@ export class OnchainRelayService implements OnchainRelay {
   private invokeRisc0ProofVerifier(proof: ProofMeta) {
     if (!proof.imageId || !proof.journalDigest || !proof.sealDigest) {
       throw new Error("missing RISC0 receipt metadata");
+    }
+    const expectedImageId = this.deployment().risc0BatchMatchImageId;
+    if (!expectedImageId) {
+      throw new Error("deployment is missing the RISC0 batch-match image id");
+    }
+    if (proof.imageId.toLowerCase() !== expectedImageId.toLowerCase()) {
+      throw new Error("RISC0 batch-match image id does not match the deployment");
     }
     const artifact = this.artifactFor(proof);
     return this.invoke("contract-invoke", `${proof.circuitId}-risc0-verifier`, "verify_and_record", [

@@ -19,6 +19,7 @@ import type { RelayedTx, StellarInvokePayload } from "@/workers/relayer/relayer.
 export interface DeploymentRegistry {
   contracts: Record<string, string>;
   network: string;
+  risc0BatchMatchImageId?: Hex;
   source: string;
   sourceAddress: string;
   verifiers: Record<string, string>;
@@ -101,6 +102,7 @@ export interface OnchainRelay {
   tokenDigest(token: string, source?: string): Hex;
   verifyProof(proof: ProofMeta): OnchainRelayResult;
   publishOraclePrice(input: OraclePriceRelayInput): OnchainRelayResult;
+  positionRoot?(): Hex;
   isBatchSettled?(batchId: string, marketId: string): boolean;
   isIntentRegistered?(intentCommitment: Hex): boolean;
   isMarketActive?(marketId: string): boolean;

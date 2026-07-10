@@ -6,6 +6,7 @@ import type { Hex } from "@pnlx/protocol-types";
 import {
   RISC0_BATCH_MATCH_CIRCUIT_HASH,
   RISC0_BATCH_MATCH_CIRCUIT_ID,
+  RISC0_BATCH_MATCH_IMAGE_ID,
   RISC0_BATCH_MATCH_CIRCUIT_KEY,
   RISC0_STELLAR_VERIFIER_HASH,
 } from "@/workers/risc0-matcher/risc0-proof";
@@ -88,6 +89,7 @@ export function createDeployManifest(root = process.cwd(), options: ManifestOpti
       circuitId: circuit.id,
       circuitKey: entry.circuitId,
       circuitHash: circuit.sourceHash,
+      imageId: undefined,
       verifierHash: entry.verifierHash,
       verifierAuthority: `${circuit.id}-proof-verifier`,
       verifierContract: "proof-verifier",
@@ -101,6 +103,7 @@ export function createDeployManifest(root = process.cwd(), options: ManifestOpti
       circuitHash: RISC0_BATCH_MATCH_CIRCUIT_HASH,
       circuitId: RISC0_BATCH_MATCH_CIRCUIT_ID,
       circuitKey: RISC0_BATCH_MATCH_CIRCUIT_KEY,
+      imageId: RISC0_BATCH_MATCH_IMAGE_ID,
       verifierAuthority: `${RISC0_BATCH_MATCH_CIRCUIT_ID}-risc0-verifier`,
       verifierContract: "risc0-proof-verifier",
       verifierHash: RISC0_STELLAR_VERIFIER_HASH,

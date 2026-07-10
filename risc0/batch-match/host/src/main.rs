@@ -16,10 +16,12 @@ use tracing_subscriber::{filter::LevelFilter, prelude::*, EnvFilter};
 use url::Url;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
+const MAX_INLINE_INPUT_BYTES: usize = 64 * 1024;
 const DEFAULT_BATCH_MATCH_CYCLES: u64 = 10_000_000;
 const DEFAULT_MIN_PRICE_WEI: u64 = 0;
 const DEFAULT_MAX_PRICE_WEI: u64 = 60_000_000_000_000;
 const DEFAULT_LOCK_COLLATERAL_ZKC_WEI: u64 = 5_000_000_000_000_000_000;
+const GROTH16_SEAL_BYTES: usize = 260;
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -28,8 +30,14 @@ const DEFAULT_LOCK_COLLATERAL_ZKC_WEI: u64 = 5_000_000_000_000_000_000;
     about = "Submit a PNLX batch-match Groth16 proof request to Boundless"
 )]
 struct Args {
-    input_path: PathBuf,
-    output_dir: PathBuf,
+    input_path: Option<PathBuf>,
+    output_dir: Option<PathBuf>,
+
+    #[clap(long)]
+    print_image_id: bool,
+
+    #[clap(long)]
+    print_program_path: bool,
 
     #[clap(long, env = "BOUNDLESS_RPC_URL")]
     rpc_url: Option<Url>,
@@ -73,15 +81,38 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
+    if args.print_image_id {
+        println!("0x{}", hex::encode(image_id_bytes()));
+        return Ok(());
+    }
+    if args.print_program_path {
+        println!("{}", pnlx_risc0_methods::BATCH_MATCH_PATH);
+        return Ok(());
+    }
+    let input_path = args
+        .input_path
+        .take()
+        .ok_or_else(|| anyhow!("INPUT_PATH is required unless an inspection flag is used"))?;
+    let output_dir = args
+        .output_dir
+        .take()
+        .ok_or_else(|| anyhow!("OUTPUT_DIR is required unless an inspection flag is used"))?;
+    args.input_path = Some(input_path);
+    args.output_dir = Some(output_dir);
     run(args).await
 }
 
 async fn run(args: Args) -> Result<()> {
     reject_dev_mode()?;
-    fs::create_dir_all(&args.output_dir).context("create output directory")?;
+    let input_path = args.input_path.as_ref().expect("validated input path");
+    let output_dir = args
+        .output_dir
+        .as_ref()
+        .expect("validated output directory");
+    fs::create_dir_all(output_dir).context("create output directory")?;
 
-    let input_bytes = fs::read(&args.input_path).context("read prover input")?;
+    let input_bytes = fs::read(input_path).context("read prover input")?;
     let request: ProofRequest =
         serde_json::from_slice(&input_bytes).context("parse prover input")?;
     let proved = prove_request(&request);
@@ -92,6 +123,7 @@ async fn run(args: Args) -> Result<()> {
         .with_deployment(args.deployment)
         .with_uploader_config(&args.storage_config)
         .await?
+        .config_storage_layer(|config| config.inline_input_max_bytes(MAX_INLINE_INPUT_BYTES))
         .with_private_key(required_private_key(args.private_key)?)
         .build()
         .await
@@ -130,7 +162,7 @@ async fn run(args: Args) -> Result<()> {
         };
 
         let (request_id, expires_at) = client.submit(proof_request).await?;
-        write_request_metadata(&args.output_dir, request_id, expires_at)?;
+        write_request_metadata(output_dir, request_id, expires_at)?;
         tracing::info!("Boundless batch-match request {:x} submitted", request_id);
         client
             .wait_for_request_fulfillment(request_id, POLL_INTERVAL, expires_at)
@@ -154,9 +186,10 @@ async fn run(args: Args) -> Result<()> {
     }
 
     let seal = fulfillment.seal.to_vec();
-    let journal_path = args.output_dir.join("journal.bin");
-    let seal_path = args.output_dir.join("seal.bin");
-    let metadata_path = args.output_dir.join("proof.json");
+    validate_groth16_seal(&seal)?;
+    let journal_path = output_dir.join("journal.bin");
+    let seal_path = output_dir.join("seal.bin");
+    let metadata_path = output_dir.join("proof.json");
     fs::write(&journal_path, &journal_bytes).context("write journal")?;
     fs::write(&seal_path, &seal).context("write seal")?;
 
@@ -170,6 +203,20 @@ async fn run(args: Args) -> Result<()> {
     fs::write(&metadata_path, serde_json::to_vec_pretty(&output)?)
         .context("write proof metadata")?;
     println!("{}", metadata_path.display());
+    Ok(())
+}
+
+fn validate_groth16_seal(seal: &[u8]) -> Result<()> {
+    if seal.len() != GROTH16_SEAL_BYTES {
+        anyhow::bail!(
+            "Boundless returned a malformed Groth16 seal: expected {} bytes, received {}",
+            GROTH16_SEAL_BYTES,
+            seal.len()
+        );
+    }
+    if seal.iter().all(|byte| *byte == 0) {
+        anyhow::bail!("Boundless returned an all-zero Groth16 seal");
+    }
     Ok(())
 }
 

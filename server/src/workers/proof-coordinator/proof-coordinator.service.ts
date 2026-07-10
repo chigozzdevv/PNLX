@@ -12,6 +12,7 @@ import {
   createRisc0BatchSettlement,
 } from "@/workers/risc0-matcher/risc0-proof";
 import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
+import { matchTranscriptDigest } from "@/workers/batch-matcher/match-transcript";
 
 export class ProofCoordinatorService {
   private readonly artifacts = new Map<string, ProofArtifact>();
@@ -27,6 +28,9 @@ export class ProofCoordinatorService {
 
   createSettlement(input: SettlementProofInput): SettlementProof {
     if (process.env.NODE_ENV === "test" && process.env.RISC0_REAL_PROVER !== "true") {
+      if (input.match.matchTranscriptDigest !== matchTranscriptDigest(input.match)) {
+        throw new Error("match transcript digest mismatch");
+      }
       return this.createOfflineTestSettlement(input);
     }
     const { artifact, settlement } = createRisc0BatchSettlement(input, this.root);

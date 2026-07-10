@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { circuitKey } from "@pnlx/proof-system";
+import { RISC0_BATCH_MATCH_IMAGE_ID } from "@/workers/risc0-matcher/risc0-proof";
 import { commandPlan, parseOptions } from "../../scripts/deploy/run";
 
 describe("deployment runner", () => {
@@ -23,6 +24,12 @@ describe("deployment runner", () => {
     expect(rendered.some((command) => command.includes("position_state.wasm"))).toBe(true);
     expect(rendered.some((command) => command.includes("position-state") && command.includes("set_writer"))).toBe(true);
     expect(rendered.some((command) => command.includes("verify_and_record"))).toBe(true);
+    expect(
+      rendered.some((command) =>
+        command.includes("batch-match-risc0-verifier") &&
+        command.includes(`--image_id ${RISC0_BATCH_MATCH_IMAGE_ID.slice(2)}`),
+      ),
+    ).toBe(true);
     expect(
       rendered.some((command) =>
         command.includes(`--circuit_id ${circuitKey("withdraw").slice(2)}`),

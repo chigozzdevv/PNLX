@@ -5,8 +5,7 @@ license.workspace = true
 version.workspace = true
 
 [build-dependencies]
-risc0-build.workspace = true
+risc0-build = { workspace = true, features = ["docker"] }
 
 [package.metadata.risc0]
 methods = ["guest"]
-

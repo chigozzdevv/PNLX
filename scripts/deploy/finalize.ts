@@ -210,12 +210,17 @@ function verifierInitArgs(
     if (!ids.router) {
       throw new Error("deployment is missing the RISC0 router contract for verifier finalization");
     }
+    if (!verifier.imageId) {
+      throw new Error("deployment is missing the RISC0 image id for verifier finalization");
+    }
     return [
       ...base,
       "--router",
       ids.router,
       "--circuit_id",
       bytes32(verifier.circuitKey),
+      "--image_id",
+      bytes32(verifier.imageId),
       "--verifier_hash",
       bytes32(verifier.verifierHash),
     ];

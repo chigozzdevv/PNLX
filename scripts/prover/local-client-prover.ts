@@ -1,9 +1,11 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { ProverService } from "@/workers/prover/prover.service";
 import type { ProofMeta } from "@pnlx/protocol-types";
 import type { ProofArtifact } from "@pnlx/proof-system";
 
 const DEFAULT_PORT = 4101;
+const BATCH_MATCH_PROGRAM_PATH = "/risc0/batch-match.bin";
 
 export function createLocalClientProverHandler(root = process.cwd()) {
   const prover = new ProverService(root);
@@ -14,6 +16,22 @@ export function createLocalClientProverHandler(root = process.cwd()) {
     try {
       if (request.method === "GET" && url.pathname === "/health") {
         return json({ ok: true, service: "pnlx-local-client-prover" });
+      }
+      if (request.method === "GET" && url.pathname === BATCH_MATCH_PROGRAM_PATH) {
+        const path = process.env.RISC0_BATCH_MATCH_PROGRAM_PATH || join(
+          root,
+          "risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/" +
+            "riscv32im-risc0-zkvm-elf/release/batch_match.bin",
+        );
+        if (!existsSync(path)) {
+          return cors(Response.json({ error: "RISC0 batch-match program is not built" }, { status: 404 }));
+        }
+        return cors(new Response(readFileSync(path), {
+          headers: {
+            "cache-control": "no-store",
+            "content-type": "application/octet-stream",
+          },
+        }));
       }
       if (request.method === "POST" && url.pathname === "/deposit-note") {
         const input = await request.json() as Record<string, unknown>;

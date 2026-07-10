@@ -3,6 +3,9 @@ import { fieldMerkleProof, fieldMerkleRoot, hashFields } from "@pnlx/crypto";
 import { PRICE_SCALE, settleClose } from "@pnlx/market-math";
 import { createCircuitMarginNote, createCircuitPositionNote } from "@pnlx/sdk";
 import type { Hex } from "@pnlx/protocol-types";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createLocalClientProverHandler } from "../../scripts/prover/local-client-prover";
 
 function body(data: unknown): BodyInit {
@@ -10,6 +13,36 @@ function body(data: unknown): BodyInit {
 }
 
 describe("local client prover", () => {
+  test("serves the current RISC0 guest program for Boundless without stale caching", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pnlx-risc0-program-"));
+    const directory = join(
+      root,
+      "risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/" +
+        "riscv32im-risc0-zkvm-elf/release",
+    );
+    mkdirSync(directory, { recursive: true });
+    const programPath = join(directory, "batch_match.bin");
+    writeFileSync(programPath, Buffer.from("pnlx-risc0-elf"));
+    const previousProgramPath = process.env.RISC0_BATCH_MATCH_PROGRAM_PATH;
+    process.env.RISC0_BATCH_MATCH_PROGRAM_PATH = programPath;
+    try {
+      const handle = createLocalClientProverHandler(root);
+      const response = await handle(
+        new Request("http://127.0.0.1:4101/risc0/batch-match.bin"),
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("application/octet-stream");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(Buffer.from(await response.arrayBuffer()).toString()).toBe("pnlx-risc0-elf");
+    } finally {
+      if (previousProgramPath === undefined) {
+        delete process.env.RISC0_BATCH_MATCH_PROGRAM_PATH;
+      } else {
+        process.env.RISC0_BATCH_MATCH_PROGRAM_PATH = previousProgramPath;
+      }
+    }
+  });
+
   test("generates deposit and intent proof bundles for client-side registration", async () => {
     const handle = createLocalClientProverHandler(process.cwd());
     const note = createCircuitMarginNote({
