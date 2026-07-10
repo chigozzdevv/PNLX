@@ -66,7 +66,7 @@ export async function createAppRuntimeAsync(): Promise<AppRuntime> {
 }
 
 function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorService): AppRuntime {
-  const auth = new AuthService(env.stellarNetworkPassphrase);
+  const auth = new AuthService(env.stellarNetworkPassphrase, env.authSessionSecret);
   const router = new Router({
     authenticate: (request) => auth.authenticateRequest(request),
     protectMutations: env.authRequired,
@@ -105,9 +105,14 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
   const fundingEngine = createFundingEngine(
     executor,
     {
+      impactMargin: env.fundingImpactMargin,
       intervalMs: env.fundingIntervalMs,
       maxFundingDelta: env.fundingMaxDelta,
+      minimumSamples: env.fundingMinimumSamples,
+      premiumMode: env.fundingPremiumMode,
       premiumRate: env.fundingPremiumRate,
+      premiumRateCap: env.fundingPremiumRateCap,
+      sampleIntervalMs: env.fundingSampleIntervalMs,
       settlementsOnchainRequired: env.settlementsOnchainRequired,
     },
     prover,
@@ -135,6 +140,11 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
           { marketId },
           env.protocolAdminAddresses[0] ?? deployment?.sourceAddress,
         ).then(() => undefined),
+      sampleFundingPremium: (marketId, sampledAt) => {
+        if (env.fundingPremiumMode === "impact-twap") {
+          fundingEngine.sampleOnce({ marketId, sampledAt });
+        }
+      },
       settlementsOnchainRequired: env.settlementsOnchainRequired,
     },
     onchain,
@@ -146,7 +156,7 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
   });
 
   registerAuthRoute(router, auth);
-  registerHealthRoute(router, env, onchain);
+  registerHealthRoute(router, env, onchain, executor.store);
   registerAccountKeysRoute(router, executor);
   registerAccountEventsRoute(router, executor);
   registerPortfolioRoute(router, executor);
@@ -212,6 +222,7 @@ async function createExecutorForEnvAsync(env: ReturnType<typeof loadEnv>): Promi
       collection: env.mongodbCollection,
       database: env.mongodbDatabase,
       documentId: env.stellarNetwork,
+      ensureIndexes: true,
       uri: env.mongodbUri,
     },
     privateMatchingRequired: env.privateMatchingRequired,

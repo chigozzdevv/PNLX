@@ -5,6 +5,7 @@ export interface BatchExecutorConfig {
   intervalMs: number;
   oracleRefreshIntervalMs?: number;
   refreshMarketOracle?: (marketId: string) => Promise<void> | void;
+  sampleFundingPremium?: (marketId: string, sampledAt: number) => Promise<void> | void;
   settlementsOnchainRequired?: boolean;
 }
 

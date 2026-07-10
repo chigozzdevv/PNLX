@@ -4,9 +4,13 @@ import { DEFAULT_SMOKE_MARKET_SYMBOLS, SUPPORTED_PERP_ASSETS } from "@/config/as
 
 export interface ServerEnv {
   authRequired: boolean;
+  authSessionSecret: string;
   batchExecutorEnabled: boolean;
   batchExecutorIntervalMs: number;
   batchExecutorPrefix: string;
+  boundlessPrivateKeyConfigured: boolean;
+  boundlessProgramUrl: string;
+  boundlessRpcConfigured: boolean;
   assetCustodyRequired: boolean;
   collateralAsset: string;
   collateralAssetCode: string;
@@ -15,9 +19,14 @@ export interface ServerEnv {
   collateralTokenDigest: string;
   conditionalOrdersOnchainRequired: boolean;
   fundingEngineEnabled: boolean;
+  fundingImpactMargin: bigint;
   fundingIntervalMs: number;
   fundingMaxDelta?: bigint;
+  fundingMinimumSamples: number;
+  fundingPremiumMode: "fixed" | "impact-twap";
   fundingPremiumRate: bigint;
+  fundingPremiumRateCap: bigint;
+  fundingSampleIntervalMs: number;
   intentRegistryOnchainRequired: boolean;
   liquidationAutomationEnabled: boolean;
   liquidationAutomationIntervalMs: number;
@@ -56,6 +65,7 @@ export interface ServerEnv {
   pythBtcUsdFeedId: string;
   pythFeedIds: Record<string, string>;
   pythHermesUrl: string;
+  risc0DevMode: boolean;
   smokeMarketSymbols: string[];
   serverWitnessRoutesEnabled: boolean;
   settlementsOnchainRequired: boolean;
@@ -80,6 +90,14 @@ export function loadEnv(): ServerEnv {
   }
   const stellarRelayerMode = value("STELLAR_RELAYER_MODE", "local");
   const oracleOnchainRequired = booleanValue("ORACLE_ONCHAIN_REQUIRED", nodeEnv === "production");
+  const authRequired = booleanValue("AUTH_REQUIRED", persistentByDefault);
+  const authSessionSecret = value(
+    "AUTH_SESSION_SECRET",
+    nodeEnv === "test" ? "pnlx-test-auth-session-secret-at-least-32-bytes" : "",
+  );
+  if (authRequired && authSessionSecret.length < 32) {
+    throw new Error("AUTH_SESSION_SECRET must contain at least 32 characters when auth is required");
+  }
   const pythFeedIds = Object.fromEntries(
     Object.entries(SUPPORTED_PERP_ASSETS).map(([symbol, asset]) => [
       symbol,
@@ -88,10 +106,14 @@ export function loadEnv(): ServerEnv {
   );
 
   return {
-    authRequired: booleanValue("AUTH_REQUIRED", persistentByDefault),
-    batchExecutorEnabled: persistentByDefault,
+    authRequired,
+    authSessionSecret,
+    batchExecutorEnabled: booleanValue("BATCH_EXECUTOR_ENABLED", persistentByDefault),
     batchExecutorIntervalMs: Number(value("BATCH_EXECUTOR_INTERVAL_MS", "5000")),
     batchExecutorPrefix: value("BATCH_EXECUTOR_PREFIX", "auto"),
+    boundlessPrivateKeyConfigured: Boolean(value("BOUNDLESS_PRIVATE_KEY", "")),
+    boundlessProgramUrl: value("BOUNDLESS_PROGRAM_URL", ""),
+    boundlessRpcConfigured: Boolean(value("BOUNDLESS_RPC_URL", "")),
     assetCustodyRequired: booleanValue("ASSET_CUSTODY_REQUIRED", persistentByDefault),
     collateralAsset: value("COLLATERAL_ASSET", ""),
     collateralAssetCode: value("COLLATERAL_ASSET_CODE", ""),
@@ -103,9 +125,14 @@ export function loadEnv(): ServerEnv {
       nodeEnv === "production",
     ),
     fundingEngineEnabled: booleanValue("FUNDING_ENGINE_ENABLED", persistentByDefault),
+    fundingImpactMargin: BigInt(value("FUNDING_IMPACT_MARGIN", "5000000000")),
     fundingIntervalMs: Number(value("FUNDING_INTERVAL_MS", String(60 * 60 * 1000))),
     fundingMaxDelta: optionalBigInt("FUNDING_MAX_DELTA"),
+    fundingMinimumSamples: Number(value("FUNDING_MINIMUM_SAMPLES", "10")),
+    fundingPremiumMode: fundingPremiumMode(value("FUNDING_PREMIUM_MODE", "fixed")),
     fundingPremiumRate: BigInt(value("FUNDING_PREMIUM_RATE", "0")),
+    fundingPremiumRateCap: BigInt(value("FUNDING_PREMIUM_RATE_CAP", "5000")),
+    fundingSampleIntervalMs: Number(value("FUNDING_SAMPLE_INTERVAL_MS", "60000")),
     intentRegistryOnchainRequired: booleanValue("INTENT_REGISTRY_ONCHAIN_REQUIRED", nodeEnv === "production"),
     liquidationAutomationEnabled: booleanValue("LIQUIDATION_AUTOMATION_ENABLED", persistentByDefault),
     liquidationAutomationIntervalMs: Number(value("LIQUIDATION_AUTOMATION_INTERVAL_MS", "5000")),
@@ -146,6 +173,7 @@ export function loadEnv(): ServerEnv {
     pythBtcUsdFeedId: pythFeedIds.BTC,
     pythFeedIds,
     pythHermesUrl: value("PYTH_HERMES_URL", "https://hermes.pyth.network"),
+    risc0DevMode: booleanValue("RISC0_DEV_MODE", false),
     smokeMarketSymbols: listValue("PNLX_SMOKE_MARKETS", DEFAULT_SMOKE_MARKET_SYMBOLS),
     serverWitnessRoutesEnabled: booleanValue("SERVER_WITNESS_ROUTES_ENABLED", nodeEnv === "test"),
     settlementsOnchainRequired: booleanValue("SETTLEMENTS_ONCHAIN_REQUIRED", nodeEnv === "production"),
@@ -227,4 +255,9 @@ function matcherProvider(value: string): ServerEnv["matcherProvider"] {
 function oraclePriceSource(value: string): "hermes" | "onchain-market" {
   if (value === "hermes" || value === "onchain-market") return value;
   throw new Error("ORACLE_PRICE_SOURCE must be hermes or onchain-market");
+}
+
+function fundingPremiumMode(value: string): ServerEnv["fundingPremiumMode"] {
+  if (value === "fixed" || value === "impact-twap") return value;
+  throw new Error("FUNDING_PREMIUM_MODE must be fixed or impact-twap");
 }

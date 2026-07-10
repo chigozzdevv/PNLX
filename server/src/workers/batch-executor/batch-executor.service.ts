@@ -81,9 +81,11 @@ export class BatchExecutorService {
   ): Promise<BatchExecutorMarketResult> {
     const batchId = this.batchIdForMarket(marketId, startedAt, input);
     try {
+      await runPhase("matcher", () => this.assertPositionRootSynchronized());
       await runPhase("oracle", () => this.refreshMarketOracleIfNeeded(marketId, startedAt));
       await runPhase("maker-liquidity", () => this.makerLiquidity?.ensureForMarket({ batchId, marketId }));
       await runPhase("maker-liquidity", () => flushStore(this.executor.store));
+      await runPhase("oracle", () => this.config.sampleFundingPremium?.(marketId, startedAt));
       const transcript = await runPhase("matcher", () =>
         this.matcher.createSettlementTranscript({
           batchId,
@@ -158,6 +160,15 @@ export class BatchExecutorService {
       return Boolean(this.onchain?.isBatchSettled?.(settlement.batchId, settlement.marketId));
     } catch {
       return false;
+    }
+  }
+
+  private assertPositionRootSynchronized(): void {
+    if (!this.config.settlementsOnchainRequired || !this.onchain?.positionRoot) return;
+    const localRoot = this.executor.store.positionMembershipRoot();
+    const onchainRoot = this.onchain.positionRoot();
+    if (localRoot.toLowerCase() !== onchainRoot.toLowerCase()) {
+      throw new Error(`position root out of sync: local ${localRoot}, on-chain ${onchainRoot}`);
     }
   }
 

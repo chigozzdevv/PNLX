@@ -34,6 +34,7 @@ import {
 
 process.env.ASSET_CUSTODY_REQUIRED = "false";
 process.env.AUTH_REQUIRED = "false";
+process.env.AUTH_SESSION_SECRET = "pnlx-test-auth-session-secret-at-least-32-bytes";
 process.env.COLLATERAL_TOKEN_CONTRACT = "";
 process.env.COLLATERAL_TOKEN_DIGEST = "";
 process.env.CONDITIONAL_ORDERS_ONCHAIN_REQUIRED = "false";
@@ -605,6 +606,9 @@ describe("server api", () => {
       expect(health.settlements).toEqual({
         onchainRequired: true,
         readyForOnchainFinality: false,
+        readinessScope: "configuration-only",
+        liveVerifierAuthorityChecked: false,
+        proofArtifactChecked: false,
         issues: [
           "STELLAR_ONCHAIN_RELAY must be enabled for on-chain settlement finality",
           "STELLAR_RELAYER_MODE must be stellar-cli for submitted settlement transactions",
@@ -648,8 +652,14 @@ describe("server api", () => {
     const previousRequired = process.env.PRIVATE_MATCHING_REQUIRED;
     const previousMatcherUrl = process.env.MATCHER_SERVICE_URL;
     const previousLegacyMatcherUrl = process.env.EXTERNAL_MATCHER_URL;
+    const previousBoundlessRpc = process.env.BOUNDLESS_RPC_URL;
+    const previousBoundlessKey = process.env.BOUNDLESS_PRIVATE_KEY;
+    const previousBoundlessProgram = process.env.BOUNDLESS_PROGRAM_URL;
     process.env.PRIVATE_MATCHING_REQUIRED = "true";
     process.env.MATCHER_SERVICE_URL = "https://matcher.pnlx.local";
+    process.env.BOUNDLESS_RPC_URL = "https://boundless-rpc.pnlx.local";
+    process.env.BOUNDLESS_PRIVATE_KEY = "test-boundless-key";
+    process.env.BOUNDLESS_PROGRAM_URL = "https://prover.pnlx.local/risc0/batch-match.bin";
     delete process.env.EXTERNAL_MATCHER_URL;
     try {
       const app = createApp();
@@ -659,6 +669,12 @@ describe("server api", () => {
       const matching = health.matching as Record<string, unknown>;
       expect(matching.readyForPrivateMatching).toBe(true);
       expect(matching.proofEngine).toEqual({
+        boundless: {
+          privateKeyConfigured: true,
+          programUrlConfigured: true,
+          rpcConfigured: true,
+        },
+        devMode: false,
         provider: "risc0",
         proofSystem: "risc0-groth16",
       });
@@ -667,6 +683,9 @@ describe("server api", () => {
       restoreEnv("PRIVATE_MATCHING_REQUIRED", previousRequired);
       restoreEnv("MATCHER_SERVICE_URL", previousMatcherUrl);
       restoreEnv("EXTERNAL_MATCHER_URL", previousLegacyMatcherUrl);
+      restoreEnv("BOUNDLESS_RPC_URL", previousBoundlessRpc);
+      restoreEnv("BOUNDLESS_PRIVATE_KEY", previousBoundlessKey);
+      restoreEnv("BOUNDLESS_PROGRAM_URL", previousBoundlessProgram);
     }
   });
 
@@ -1108,7 +1127,7 @@ describe("server api", () => {
     }
   });
 
-  test("authenticates signed sessions without file-backed auth state", async () => {
+  test("keeps signed sessions valid across API runtime recreation", async () => {
     const previousRequired = process.env.AUTH_REQUIRED;
     const previousAdmin = process.env.PROTOCOL_ADMIN_ADDRESSES;
     process.env.AUTH_REQUIRED = "true";
@@ -1137,7 +1156,8 @@ describe("server api", () => {
       );
 
       expect(response.status).toBe(201);
-      const currentSession = await app.handle(
+      const restartedApp = createApp();
+      const currentSession = await restartedApp.handle(
         new Request("http://pnlx.local/auth/session", {
           headers: {
             authorization: `Bearer ${token}`,
@@ -2590,8 +2610,8 @@ describe("server api", () => {
 
     expect(contextResponse.status).toBe(200);
     const result = (await contextResponse.json()) as Record<string, Record<string, unknown>>;
-    const context = result.context as Record<string, Record<string, string>>;
-    expect(context.market).toEqual({
+    const context = result.context as Record<string, unknown>;
+    expect(context.market as Record<string, string>).toEqual({
       fundingIndex: currentFundingIndex.toString(),
       marketId: market.marketId,
       markPrice: currentMarkPrice.toString(),
@@ -2731,7 +2751,7 @@ describe("server api", () => {
     expect(fundingCycleRows[0].skipped).toBe(false);
     const fundingEngineUpdate = fundingCycleRows[0].update as Record<string, string>;
     expect(fundingEngineUpdate.oldFundingIndex).toBe("150");
-    expect(fundingEngineUpdate.newFundingIndex).toBe("155");
+    expect(fundingEngineUpdate.newFundingIndex).toBe("160");
 
     const withdrawalNote = await depositCircuitMarginNote(app, {
       assetId: "usdc",
@@ -2846,7 +2866,7 @@ describe("server api", () => {
       allCommitments: positionCommitments,
 	      entryPrice: 51_000n * PRICE_SCALE,
 	      fillIndex: 0,
-	      fundingIndex: 155n,
+	      fundingIndex: 160n,
 	      intent: aliceTradeIntent,
       margin: 12_000n,
       owner: "alice",
@@ -2857,7 +2877,7 @@ describe("server api", () => {
       allCommitments: positionCommitments,
 	      entryPrice: 51_000n * PRICE_SCALE,
 	      fillIndex: 1,
-	      fundingIndex: 155n,
+	      fundingIndex: 160n,
 	      intent: bobTradeIntent,
       margin: 12_000n,
       owner: "bob",
@@ -2867,7 +2887,7 @@ describe("server api", () => {
     const liquidationMarket = {
       ...market,
       oraclePrice: 60_000n * PRICE_SCALE,
-      fundingIndex: 155n,
+      fundingIndex: 160n,
     };
     await post("/markets/update", liquidationMarket);
 
@@ -2883,7 +2903,7 @@ describe("server api", () => {
       markPrice: 60_000n * PRICE_SCALE,
       margin: 12_000n,
       fundingPayment: 0n,
-      fundingIndex: 155n,
+      fundingIndex: 160n,
       maintenanceRate: 100_000n,
       marketDigest: bobPosition.position.marketDigest,
       ownerDigest: bobPosition.position.ownerDigest,
@@ -2969,7 +2989,7 @@ describe("server api", () => {
       size: 0n,
       entryPrice: 51_000n * PRICE_SCALE,
       margin: 0n,
-      fundingIndex: 155n,
+      fundingIndex: 160n,
       owner: aliceOwner,
       spendSecret: "alice-closed-position-spend",
       rho: "alice-closed-position-rho",
@@ -2996,7 +3016,7 @@ describe("server api", () => {
       entryPrice: (51_000n * PRICE_SCALE).toString(),
       markPrice: (56_000n * PRICE_SCALE).toString(),
       margin: "12000",
-      fundingIndex: "155",
+      fundingIndex: "160",
       fundingPayment: "0",
       fee: "10",
       newMargin: closeSettlement.newMargin.toString(),

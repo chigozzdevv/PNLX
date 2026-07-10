@@ -3,6 +3,13 @@ import { oracleReadinessIssues } from "@/shared/protocol/oracle";
 import type { ServerEnv } from "@/config/env";
 import type { Hex } from "@pnlx/protocol-types";
 import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
+import type {
+  ProtocolPersistenceStatus,
+} from "@/shared/state/mongo-store";
+
+interface PersistenceStatusProvider {
+  persistenceStatus(): ProtocolPersistenceStatus;
+}
 
 export class HealthController {
   private collateralTokenDigestCache?: Hex | null;
@@ -10,9 +17,11 @@ export class HealthController {
   constructor(
     private readonly env: ServerEnv,
     private readonly onchain?: Pick<OnchainRelayService, "enabled" | "tokenDigest">,
+    private readonly persistence?: PersistenceStatusProvider,
   ) {}
 
   get(): Response {
+    const persistenceStatus = this.persistence?.persistenceStatus();
     const custodyIssues = custodyReadinessIssues(this.env);
     const governanceIssues = governanceReadinessIssues(this.env);
     const intentRegistryIssues = intentRegistryReadinessIssues(this.env);
@@ -21,13 +30,15 @@ export class HealthController {
     const oracleIssues = oracleReadinessIssues(this.env);
     const matchingIssues = matchingReadinessIssues(this.env);
     return json({
-      ok: true,
+      ok: persistenceStatus?.healthy ?? true,
       service: "pnlx-server",
       runtime: {
         clientStorageScope: clientStorageScope(this.env),
       },
       auth: {
         required: this.env.authRequired,
+        restartSafeSessions: this.env.authSessionSecret.length >= 32,
+        sessionMode: "signed-stateless",
       },
       privacy: {
         serverWitnessRoutesEnabled: this.env.serverWitnessRoutesEnabled,
@@ -66,11 +77,29 @@ export class HealthController {
       settlements: {
         onchainRequired: this.env.settlementsOnchainRequired,
         readyForOnchainFinality: settlementIssues.length === 0,
+        readinessScope: "configuration-only",
+        liveVerifierAuthorityChecked: false,
+        proofArtifactChecked: false,
         issues: settlementIssues,
       },
       funding: {
         enabled: this.env.fundingEngineEnabled,
+        effective:
+          this.env.fundingEngineEnabled &&
+          (this.env.fundingPremiumMode === "impact-twap" || this.env.fundingPremiumRate !== 0n),
+        impactMargin: this.env.fundingImpactMargin.toString(),
         intervalMs: this.env.fundingIntervalMs,
+        minimumSamples: this.env.fundingMinimumSamples,
+        premiumMode: this.env.fundingPremiumMode,
+        premiumRate: this.env.fundingPremiumRate.toString(),
+        premiumRateCap: this.env.fundingPremiumRateCap.toString(),
+        sampleIntervalMs: this.env.fundingSampleIntervalMs,
+        issues:
+          this.env.fundingEngineEnabled &&
+          this.env.fundingPremiumMode === "fixed" &&
+          this.env.fundingPremiumRate === 0n
+            ? ["FUNDING_PREMIUM_RATE is zero; automatic funding cycles will be skipped"]
+            : [],
       },
       batchExecutor: {
         enabled: this.env.batchExecutorEnabled,
@@ -83,11 +112,18 @@ export class HealthController {
           url: this.env.matcherServiceUrl ? redactUrl(this.env.matcherServiceUrl) : "",
         },
         proofEngine: {
+          boundless: {
+            privateKeyConfigured: this.env.boundlessPrivateKeyConfigured,
+            programUrlConfigured: Boolean(this.env.boundlessProgramUrl),
+            rpcConfigured: this.env.boundlessRpcConfigured,
+          },
+          devMode: this.env.risc0DevMode,
           provider: this.env.matcherProvider,
           proofSystem: "risc0-groth16",
         },
         privateMatchingRequired: this.env.privateMatchingRequired,
         readyForPrivateMatching: matchingIssues.length === 0,
+        readinessScope: "configuration-only",
         issues: matchingIssues,
       },
       oracle: {
@@ -111,6 +147,10 @@ export class HealthController {
           collection: this.env.mongodbCollection,
           database: this.env.mongodbDatabase,
           configured: Boolean(this.env.mongodbUri),
+          format: persistenceStatus?.format,
+          healthy: persistenceStatus?.healthy ?? Boolean(this.env.mongodbUri),
+          version: persistenceStatus?.version,
+          ...(persistenceStatus?.error ? { error: persistenceStatus.error } : {}),
         },
         protocolStore: Boolean(this.env.mongodbUri),
         workers: "direct",
@@ -199,6 +239,24 @@ function matchingReadinessIssues(env: ServerEnv): string[] {
   const issues: string[] = [];
   if (!env.matcherServiceUrl) {
     issues.push("MATCHER_SERVICE_URL is required for private matcher service");
+  }
+  if (!env.boundlessRpcConfigured) {
+    issues.push("BOUNDLESS_RPC_URL is required for RISC0 proving");
+  }
+  if (!env.boundlessPrivateKeyConfigured) {
+    issues.push("BOUNDLESS_PRIVATE_KEY is required for RISC0 proving");
+  }
+  if (!env.boundlessProgramUrl) {
+    issues.push("BOUNDLESS_PROGRAM_URL is required for reproducible remote proving");
+  } else {
+    try {
+      new URL(env.boundlessProgramUrl);
+    } catch {
+      issues.push("BOUNDLESS_PROGRAM_URL must be a valid URL");
+    }
+  }
+  if (env.risc0DevMode) {
+    issues.push("RISC0_DEV_MODE must be disabled for production proving");
   }
   return issues;
 }

@@ -521,9 +521,9 @@ describe("private batch settlement", () => {
       marketId: market.marketId,
       owner: "stale-long",
       side: "long",
-      size: 10n,
+      size: 1n,
       limitPrice: 60_000n * PRICE_SCALE,
-      margin: 1_000n,
+      margin: 12_000n,
       noteNullifier: staleLongNote.nullifier as Hex,
       nonce: "stale-long-intent",
       salt: "stale-long-salt",
@@ -533,9 +533,9 @@ describe("private batch settlement", () => {
       marketId: market.marketId,
       owner: "stale-short",
       side: "short",
-      size: 10n,
+      size: 1n,
       limitPrice: 40_000n * PRICE_SCALE,
-      margin: 1_000n,
+      margin: 12_000n,
       noteNullifier: staleShortNote.nullifier as Hex,
       nonce: "stale-short-intent",
       salt: "stale-short-salt",
@@ -630,9 +630,9 @@ describe("private batch settlement", () => {
       marketId: market.marketId,
       owner: "matcher-stale-long",
       side: "long",
-      size: 10n,
+      size: 1n,
       limitPrice: 60_000n * PRICE_SCALE,
-      margin: 1_000n,
+      margin: 12_000n,
       noteNullifier: staleLongNote.nullifier as Hex,
       nonce: "matcher-stale-long-intent",
       salt: "matcher-stale-long-salt",
@@ -642,9 +642,9 @@ describe("private batch settlement", () => {
       marketId: market.marketId,
       owner: "matcher-stale-short",
       side: "short",
-      size: 10n,
+      size: 1n,
       limitPrice: 40_000n * PRICE_SCALE,
-      margin: 1_000n,
+      margin: 12_000n,
       noteNullifier: staleShortNote.nullifier as Hex,
       nonce: "matcher-stale-short-intent",
       salt: "matcher-stale-short-salt",
@@ -697,7 +697,7 @@ describe("private batch settlement", () => {
     expect(transcript.settlement.spentNullifiers).not.toContain(staleShortNote.nullifier as Hex);
   });
 
-  test("rejects trades above market max leverage even when initial margin would pass", () => {
+  test("rejects trades above market max leverage during intent admission", () => {
     const executor = createExecutor();
     installFastSettlementProofs(executor);
 
@@ -720,17 +720,7 @@ describe("private batch settlement", () => {
       rho: "alice-max-lev-rho",
       blinding: "alice-max-lev-blind",
     });
-    const bobNote = createMarginNote({
-      assetId: "usdc",
-      amount: 20_000n,
-      owner: "bob",
-      spendSecret: "bob-max-lev-spend",
-      rho: "bob-max-lev-rho",
-      blinding: "bob-max-lev-blind",
-    });
-
     executor.deposit(aliceNote.commitment as `0x${string}`);
-    executor.deposit(bobNote.commitment as `0x${string}`);
 
     const baseIntent = {
       batchId: "batch-max-leverage",
@@ -739,31 +729,17 @@ describe("private batch settlement", () => {
       margin: 9_000n,
     };
 
-    submitBackedIntent(executor, {
-      ...baseIntent,
-      owner: "alice",
-      side: "long",
-      limitPrice: 51_000n * PRICE_SCALE,
-      noteNullifier: aliceNote.nullifier as `0x${string}`,
-      nonce: "alice-max-lev-intent",
-      salt: "alice-max-lev-salt",
-    });
-    submitBackedIntent(executor, {
-      ...baseIntent,
-      owner: "bob",
-      side: "short",
-      limitPrice: 49_000n * PRICE_SCALE,
-      noteNullifier: bobNote.nullifier as `0x${string}`,
-      nonce: "bob-max-lev-intent",
-      salt: "bob-max-lev-salt",
-    });
-
     expect(() =>
-      executor.settleBatch({
-        batchId: "batch-max-leverage",
-        marketId: market.marketId,
+      submitBackedIntent(executor, {
+        ...baseIntent,
+        owner: "alice",
+        side: "long",
+        limitPrice: 51_000n * PRICE_SCALE,
+        noteNullifier: aliceNote.nullifier as `0x${string}`,
+        nonce: "alice-max-lev-intent",
+        salt: "alice-max-lev-salt",
       }),
-    ).toThrow("max leverage exceeded");
+    ).toThrow("intent exceeds market max leverage");
   });
 
   test("rejects non-crossing private order batches", () => {

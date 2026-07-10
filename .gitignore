@@ -10,6 +10,7 @@ target/
 test_snapshots/
 contracts/**/test_snapshots/
 .DS_Store
+._*
 *.log
 *.tsbuildinfo
 package-lock.json

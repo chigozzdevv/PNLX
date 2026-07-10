@@ -1,14 +1,15 @@
 import {
   createPublicKey,
   createHash,
+  createHmac,
   randomBytes,
+  timingSafeEqual,
   verify as verifySignature,
 } from "node:crypto";
 import { ownerCommitment } from "@pnlx/crypto";
 import type {
   AuthChallengeInput,
   AuthChallengeResult,
-  AuthSession,
   AuthSessionInput,
   AuthSessionResult,
 } from "@/features/auth/auth.model";
@@ -27,12 +28,20 @@ interface PendingChallenge {
   message: string;
 }
 
+interface SignedAuthSession {
+  address: string;
+  expiresAt: number;
+  network: string;
+  nonce: string;
+  version: 1;
+}
+
 export class AuthService {
   private readonly challenges = new Map<string, PendingChallenge>();
-  private readonly sessions = new Map<string, AuthSession>();
 
   constructor(
     private readonly networkPassphrase: string,
+    private readonly sessionSecret: string,
   ) {}
 
   challenge(input: AuthChallengeInput): AuthChallengeResult {
@@ -83,9 +92,14 @@ export class AuthService {
     if (!verified) throw new Error("invalid auth signature");
 
     this.challenges.delete(input.nonce);
-    const token = randomBytes(32).toString("base64url");
     const expiresAt = Date.now() + SESSION_TTL_MS;
-    this.sessions.set(sessionKey(token), { address, expiresAt });
+    const token = this.signSession({
+      address,
+      expiresAt,
+      network: networkKey(this.networkPassphrase),
+      nonce: randomBytes(24).toString("base64url"),
+      version: 1,
+    });
 
     return {
       address,
@@ -104,20 +118,70 @@ export class AuthService {
       return Response.json({ error: "missing auth token" }, { status: 401 });
     }
 
-    const session = this.sessions.get(sessionKey(token));
+    const session = this.readSession(token);
     if (!session) {
       return Response.json({ error: "invalid auth token" }, { status: 401 });
     }
     if (session.expiresAt < Date.now()) {
-      this.sessions.delete(sessionKey(token));
       return Response.json({ error: "expired auth token" }, { status: 401 });
     }
     return { address: session.address, expiresAt: session.expiresAt };
   }
+
+  private signSession(session: SignedAuthSession): string {
+    if (this.sessionSecret.length < 32) {
+      throw new Error("auth session signing is not configured");
+    }
+    const payload = Buffer.from(JSON.stringify(session), "utf8").toString("base64url");
+    return `${payload}.${sessionSignature(payload, this.sessionSecret)}`;
+  }
+
+  private readSession(token: string): SignedAuthSession | undefined {
+    if (this.sessionSecret.length < 32) return undefined;
+    const [payload, signature, extra] = token.split(".");
+    if (!payload || !signature || extra !== undefined) return undefined;
+
+    const suppliedBytes = Buffer.from(signature, "base64url");
+    const expectedBytes = Buffer.from(
+      sessionSignature(payload, this.sessionSecret),
+      "base64url",
+    );
+    if (
+      suppliedBytes.length !== expectedBytes.length ||
+      !timingSafeEqual(suppliedBytes, expectedBytes)
+    ) {
+      return undefined;
+    }
+
+    try {
+      const parsed = JSON.parse(
+        Buffer.from(payload, "base64url").toString("utf8"),
+      ) as Partial<SignedAuthSession>;
+      if (
+        parsed.version !== 1 ||
+        typeof parsed.address !== "string" ||
+        typeof parsed.expiresAt !== "number" ||
+        !Number.isSafeInteger(parsed.expiresAt) ||
+        typeof parsed.nonce !== "string" ||
+        parsed.nonce.length < 16 ||
+        parsed.network !== networkKey(this.networkPassphrase)
+      ) {
+        return undefined;
+      }
+      decodeStellarPublicKey(parsed.address);
+      return parsed as SignedAuthSession;
+    } catch {
+      return undefined;
+    }
+  }
 }
 
-function sessionKey(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
+function sessionSignature(payload: string, secret: string): string {
+  return createHmac("sha256", secret).update(payload).digest("base64url");
+}
+
+function networkKey(networkPassphrase: string): string {
+  return createHash("sha256").update(networkPassphrase).digest("base64url");
 }
 
 export function decodeStellarPublicKey(address: string): Buffer {

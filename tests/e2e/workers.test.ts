@@ -50,7 +50,9 @@ describe("support workers", () => {
     const previousNodeEnv = process.env.NODE_ENV;
     const previousRequired = process.env.ORACLE_ONCHAIN_REQUIRED;
     const previousSource = process.env.ORACLE_PRICE_SOURCE;
+    const previousAuthSecret = process.env.AUTH_SESSION_SECRET;
     process.env.NODE_ENV = "production";
+    process.env.AUTH_SESSION_SECRET = "pnlx-test-auth-session-secret-at-least-32-bytes";
     delete process.env.ORACLE_ONCHAIN_REQUIRED;
     delete process.env.ORACLE_PRICE_SOURCE;
 
@@ -62,6 +64,7 @@ describe("support workers", () => {
       restoreEnv("NODE_ENV", previousNodeEnv);
       restoreEnv("ORACLE_ONCHAIN_REQUIRED", previousRequired);
       restoreEnv("ORACLE_PRICE_SOURCE", previousSource);
+      restoreEnv("AUTH_SESSION_SECRET", previousAuthSecret);
     }
   });
 
@@ -106,6 +109,18 @@ describe("support workers", () => {
       restoreEnv("MATCHER_SERVICE_TOKEN", previousServiceToken);
       restoreEnv("EXTERNAL_MATCHER_URL", previousLegacyUrl);
       restoreEnv("EXTERNAL_MATCHER_TOKEN", previousLegacyToken);
+    }
+  });
+
+  test("allows the production batch executor to be paused explicitly", () => {
+    const previous = process.env.BATCH_EXECUTOR_ENABLED;
+    try {
+      process.env.BATCH_EXECUTOR_ENABLED = "false";
+      expect(loadEnv().batchExecutorEnabled).toBe(false);
+      process.env.BATCH_EXECUTOR_ENABLED = "true";
+      expect(loadEnv().batchExecutorEnabled).toBe(true);
+    } finally {
+      restoreEnv("BATCH_EXECUTOR_ENABLED", previous);
     }
   });
 
@@ -751,6 +766,9 @@ describe("support workers", () => {
         settlementsOnchainRequired: true,
       },
       {
+        positionRoot() {
+          return executor.store.positionMembershipRoot();
+        },
         settleBatch(settlement: BatchSettlement) {
           return {
             relays: [
@@ -781,6 +799,53 @@ describe("support workers", () => {
     expect(executor.store.accountEvents.size).toBe(2);
     expect(executor.store.orderLifecycle.get(long.intentCommitment)?.status).toBe("filled");
     expect(executor.store.orderLifecycle.get(short.intentCommitment)?.status).toBe("filled");
+  });
+
+  test("batch executor fails before matching when the on-chain position root is out of sync", async () => {
+    const executor = createExecutor();
+    const market = {
+      marketId: "btc-usd-perp",
+      oraclePrice: 50_000n * PRICE_SCALE,
+      maxLeverage: 10n,
+      initialMarginRate: 100_000n,
+      maintenanceMarginRate: 50_000n,
+      fundingIndex: 0n,
+    };
+    executor.addMarket(market);
+    submitBackedIntent(executor, matchedTradeIntent("root-drift-long", "long", {
+      batchId: "ui-root-drift",
+      limitPrice: 50_500n * PRICE_SCALE,
+      marketId: market.marketId,
+    }));
+    let matcherCalls = 0;
+    const batchExecutor = createBatchExecutor(
+      executor,
+      {
+        createSettlementTranscript() {
+          matcherCalls += 1;
+          throw new Error("matcher should not run");
+        },
+      },
+      {
+        batchIdPrefix: "runner",
+        intervalMs: 1000,
+        settlementsOnchainRequired: true,
+      },
+      {
+        positionRoot() {
+          return hashFields("position-root", ["different-on-chain-root"]);
+        },
+      } as never,
+    );
+
+    const result = await batchExecutor.runOnce({ now: 4321 });
+
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0].record.status).toBe("failed");
+    expect(result.results[0].record.phase).toBe("matcher");
+    expect(result.results[0].record.reason).toContain("position root out of sync");
+    expect(matcherCalls).toBe(0);
+    expect(executor.store.settlements.size).toBe(0);
   });
 
   test("batch executor commits locally when optional on-chain settlement relay fails", async () => {
@@ -955,7 +1020,7 @@ describe("support workers", () => {
     });
 
     expect(uncapped.results[0].update?.oldFundingIndex).toBe(3n);
-    expect(uncapped.results[0].update?.newFundingIndex).toBe(8n);
+    expect(uncapped.results[0].update?.newFundingIndex).toBe(13n);
 
     const negative = engine.runOnce({
       appliedAt: 3_000,
@@ -966,8 +1031,8 @@ describe("support workers", () => {
     });
 
     expect(negative.results[0].update?.fundingDelta).toBe(-2n);
-    expect(negative.results[0].update?.oldFundingIndex).toBe(8n);
-    expect(negative.results[0].update?.newFundingIndex).toBe(6n);
+    expect(negative.results[0].update?.oldFundingIndex).toBe(13n);
+    expect(negative.results[0].update?.newFundingIndex).toBe(11n);
   });
 
   test("live funding cycles prove and relay funding settlement before local index update", () => {
@@ -1020,11 +1085,11 @@ describe("support workers", () => {
 
     expect(cycle.results[0].skipped).toBe(false);
     expect(proofInput?.oldFundingIndex).toBe(4n);
-    expect(proofInput?.newFundingIndex).toBe(9n);
+    expect(proofInput?.newFundingIndex).toBe(14n);
     expect(proofInput?.markPrice).toBe(50_000n * PRICE_SCALE);
     expect(proofInput?.maxFundingDelta).toBe(10n);
     expect(relayed?.proof).toBe(fundingProof);
-    expect(executor.store.markets.get(market.marketId)?.fundingIndex).toBe(9n);
+    expect(executor.store.markets.get(market.marketId)?.fundingIndex).toBe(14n);
   });
 
   test("funding cycles do not update local index without submitted on-chain settlement when required", () => {
@@ -1637,6 +1702,7 @@ describe("support workers", () => {
           "batch-settlement": "batch-settlement-contract",
         },
         network: "testnet",
+        risc0BatchMatchImageId: hashFields("risc0-image", ["batch-worker-onchain"]),
         source: "pnlx-testnet",
         sourceAddress: "GTEST",
         verifiers: {
