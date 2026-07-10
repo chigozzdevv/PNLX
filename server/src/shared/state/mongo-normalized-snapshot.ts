@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { fieldMerkleRoot } from "@pnlx/crypto";
+import { positionMerkleRoot } from "@pnlx/crypto";
 import type { Hex } from "@pnlx/protocol-types";
 import type { Collection, Db, Filter } from "mongodb";
 import {
@@ -99,7 +99,7 @@ export function normalizedSnapshotCounts(snapshot: ProtocolStoreSnapshot): Proto
 }
 
 export function normalizedSnapshotPositionRoot(snapshot: ProtocolStoreSnapshot): Hex {
-  return fieldMerkleRoot(snapshot.positionCommitments);
+  return positionMerkleRoot(snapshot.positionCommitments);
 }
 
 export function normalizedSnapshotRecords(

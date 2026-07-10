@@ -25,9 +25,9 @@ fn position_commitment(
     hash_pair(left, right)
 }
 
-fn merkle_root(leaf: Field, path_siblings: [Field; 8], path_indices: [bool; 8]) -> Field {
+fn merkle_root(leaf: Field, path_siblings: [Field; 20], path_indices: [bool; 20]) -> Field {
     let mut current = leaf;
-    for i in 0..8 {
+    for i in 0..20 {
         let sibling = path_siblings[i];
         let left = if path_indices[i] { sibling } else { current };
         let right = if path_indices[i] { current } else { sibling };
@@ -57,8 +57,8 @@ fn main(
     rho_digest: Field,
     blinding: Field,
     spend_secret_digest: Field,
-    path_siblings: [Field; 8],
-    path_indices: [bool; 8],
+    path_siblings: [Field; 20],
+    path_indices: [bool; 20],
     zero_value: Field,
 ) {
     assert(size > 0);
@@ -104,10 +104,18 @@ fn main(
     assert(equity < maintenance);
 }
 
+fn default_siblings() -> [Field; 20] {
+    [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781, 1694400271078593325, 454099272649063011117, 121698605069948886979373, 32615226158746301710471981, 8740880610544008858406490925, 2342556003625794374052939567917, 627805008971712892246187804201773, 168251742404419055121978331526075181, 45091466964384306772690192848988148525, 12084513146454994215080971683528823804717, 3238649523249938449641700411185724779664173, 867958072230983504503975710197774240949998381]
+}
+
+fn default_indices() -> [bool; 20] {
+    [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false]
+}
+
 #[test]
 fn valid_liquidation() {
-    let siblings = [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781];
-    let indices = [false, false, false, false, false, false, false, false];
+    let siblings = default_siblings();
+    let indices = default_indices();
     let commitment = position_commitment(true, 1, 50_000_000_000, 5_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, siblings, indices);
     main(true, 1, 50_000_000_000, 40_000_000_000, 5_000, 0, 0, false, 100_000, 1_000_000, 1_000_000, root, commitment, 1351, 13, 2, 3, 4, 5, 6, siblings, indices, 0);
@@ -115,8 +123,8 @@ fn valid_liquidation() {
 
 #[test]
 fn valid_short_funding_credit_liquidation() {
-    let siblings = [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781];
-    let indices = [false, false, false, false, false, false, false, false];
+    let siblings = default_siblings();
+    let indices = default_indices();
     let commitment = position_commitment(false, 1, 50_000_000_000, 5_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, siblings, indices);
     main(false, 1, 50_000_000_000, 60_000_000_000, 5_000, 0, 100, true, 100_000, 1_000_000, 1_000_000, root, commitment, 1351, 13, 2, 3, 4, 5, 6, siblings, indices, 0);
@@ -124,8 +132,8 @@ fn valid_short_funding_credit_liquidation() {
 
 #[test(should_fail)]
 fn healthy_position() {
-    let siblings = [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781];
-    let indices = [false, false, false, false, false, false, false, false];
+    let siblings = default_siblings();
+    let indices = default_indices();
     let commitment = position_commitment(true, 1, 50_000_000_000, 12_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, siblings, indices);
     main(true, 1, 50_000_000_000, 49_000_000_000, 12_000, 0, 0, false, 100_000, 1_000_000, 1_000_000, root, commitment, 1351, 13, 2, 3, 4, 5, 6, siblings, indices, 0);
@@ -133,8 +141,8 @@ fn healthy_position() {
 
 #[test(should_fail)]
 fn credit_can_keep_short_healthy() {
-    let siblings = [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781];
-    let indices = [false, false, false, false, false, false, false, false];
+    let siblings = default_siblings();
+    let indices = default_indices();
     let commitment = position_commitment(false, 1, 50_000_000_000, 5_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, siblings, indices);
     main(false, 1, 50_000_000_000, 54_000_000_000, 5_000, 0, 10_000, true, 100_000, 1_000_000, 1_000_000, root, commitment, 1351, 13, 2, 3, 4, 5, 6, siblings, indices, 0);
@@ -142,9 +150,9 @@ fn credit_can_keep_short_healthy() {
 
 #[test(should_fail)]
 fn rejects_bad_position_path() {
-    let siblings = [1, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781];
-    let correct_siblings = [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781];
-    let indices = [false, false, false, false, false, false, false, false];
+    let siblings = [1, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781, 1694400271078593325, 454099272649063011117, 121698605069948886979373, 32615226158746301710471981, 8740880610544008858406490925, 2342556003625794374052939567917, 627805008971712892246187804201773, 168251742404419055121978331526075181, 45091466964384306772690192848988148525, 12084513146454994215080971683528823804717, 3238649523249938449641700411185724779664173, 867958072230983504503975710197774240949998381];
+    let correct_siblings = default_siblings();
+    let indices = default_indices();
     let commitment = position_commitment(true, 1, 50_000_000_000, 5_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, correct_siblings, indices);
     main(true, 1, 50_000_000_000, 40_000_000_000, 5_000, 0, 0, false, 100_000, 1_000_000, 1_000_000, root, commitment, 1351, 13, 2, 3, 4, 5, 6, siblings, indices, 0);
@@ -152,8 +160,8 @@ fn rejects_bad_position_path() {
 
 #[test(should_fail)]
 fn rejects_bad_position_nullifier() {
-    let siblings = [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781];
-    let indices = [false, false, false, false, false, false, false, false];
+    let siblings = default_siblings();
+    let indices = default_indices();
     let commitment = position_commitment(true, 1, 50_000_000_000, 5_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, siblings, indices);
     main(true, 1, 50_000_000_000, 40_000_000_000, 5_000, 0, 0, false, 100_000, 1_000_000, 1_000_000, root, commitment, 999, 13, 2, 3, 4, 5, 6, siblings, indices, 0);

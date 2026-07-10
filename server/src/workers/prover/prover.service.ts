@@ -1,5 +1,6 @@
 import {
   FIELD_MERKLE_DEPTH,
+  POSITION_MERKLE_DEPTH,
   circuitDisclosureCommitment,
   circuitMarginCommitment,
   circuitNullifier,
@@ -734,7 +735,6 @@ export class ProverService implements Prover {
       input.positionNullifier,
       input.closeCommitment,
       input.newPositionCommitment,
-      input.newPositionRoot,
       input.marginOutputCommitment,
     ]);
     const artifact = buildProofArtifact(this.root, "position-close", {
@@ -763,7 +763,6 @@ export class ProverService implements Prover {
         position_nullifier: field(input.positionNullifier),
         close_commitment: field(input.closeCommitment),
         new_position_commitment: field(input.newPositionCommitment),
-        new_position_root: field(input.newPositionRoot),
         margin_output_commitment: field(input.marginOutputCommitment),
         market_digest: field(input.marketDigest),
         owner_digest: field(input.ownerDigest),
@@ -791,7 +790,6 @@ export class ProverService implements Prover {
       positionRoot: input.positionRoot,
       closeCommitment: input.closeCommitment,
       newPositionCommitment: input.newPositionCommitment,
-      newPositionRoot: input.newPositionRoot,
       marginOutputCommitment: input.marginOutputCommitment,
       proof,
     };
@@ -816,10 +814,10 @@ export class ProverService implements Prover {
       | "spendSecretDigest"
     >,
   ): void {
-    if (input.pathSiblings.length !== FIELD_MERKLE_DEPTH) {
+    if (input.pathSiblings.length !== POSITION_MERKLE_DEPTH) {
       throw new Error("invalid position membership path");
     }
-    if (input.pathIndices.length !== FIELD_MERKLE_DEPTH) {
+    if (input.pathIndices.length !== POSITION_MERKLE_DEPTH) {
       throw new Error("invalid position membership path");
     }
     const positionCommitment = circuitPositionCommitment({

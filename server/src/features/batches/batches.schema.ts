@@ -24,8 +24,6 @@ export function parseExternalBatchSettlement(input: BatchBody): CommitExternalBa
     settlement: {
       batchId: String(settlement.batchId),
       marketId: String(settlement.marketId),
-      oldRoot: String(settlement.oldRoot) as `0x${string}`,
-      newRoot: String(settlement.newRoot) as `0x${string}`,
       matchTranscriptDigest: String(settlement.matchTranscriptDigest) as `0x${string}`,
       settlementDigest: String(settlement.settlementDigest) as `0x${string}`,
       newCommitments: parseHexArray(settlement.newCommitments),

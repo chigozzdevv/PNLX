@@ -10,7 +10,6 @@ type PositionCloseBody = Record<string, unknown>;
 export function parsePositionCloseContext(request: Request): PositionCloseContextInput {
   const params = new URL(request.url).searchParams;
   return {
-    newPositionCommitment: String(params.get("newPositionCommitment") ?? "") as `0x${string}`,
     ownerCommitment: String(params.get("ownerCommitment") ?? "") as `0x${string}`,
     positionCommitment: String(params.get("positionCommitment") ?? "") as `0x${string}`,
   };
@@ -36,7 +35,6 @@ export function parsePositionClose(input: PositionCloseBody): CreatePositionClos
     remainingMargin: BigInt(String(input.remainingMargin)),
     marginOutputAmount: BigInt(String(input.marginOutputAmount)),
     newPositionCommitment: String(input.newPositionCommitment) as `0x${string}`,
-    newPositionRoot: String(input.newPositionRoot) as `0x${string}`,
     marginOutputCommitment: String(input.marginOutputCommitment) as `0x${string}`,
     marketDigest: String(input.marketDigest) as `0x${string}`,
     ownerDigest: String(input.ownerDigest) as `0x${string}`,
@@ -62,7 +60,6 @@ export function parseProvenPositionClose(input: PositionCloseBody): CreateProven
     positionRoot: String(input.positionRoot) as `0x${string}`,
     closeCommitment: String(input.closeCommitment) as `0x${string}`,
     newPositionCommitment: String(input.newPositionCommitment) as `0x${string}`,
-    newPositionRoot: String(input.newPositionRoot) as `0x${string}`,
     marginOutputCommitment: String(input.marginOutputCommitment) as `0x${string}`,
     proof: parseProofMeta(requiredObject(input.proof, "proof")),
   };

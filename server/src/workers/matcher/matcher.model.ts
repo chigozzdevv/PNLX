@@ -35,8 +35,6 @@ export interface MatcherSettlementInput {
   batchId: string;
   intents: PrivateMatchIntent[];
   market: MarketConfig;
-  oldRoot: Hex;
-  positionCommitments: Hex[];
   records: IntentRecord[];
   residuals?: ResidualOrderRecord[];
 }
@@ -67,11 +65,10 @@ export type MatcherAccountEventPayload =
 export interface CreateExternalSettlementInput {
   batchId: string;
   includeOpenMarketOrders?: boolean;
+  intentCommitments?: Hex[];
   marketId: string;
   records?: IntentRecord[];
   residuals?: ResidualOrderRecord[];
-  oldRoot?: Hex;
-  positionCommitments?: Hex[];
 }
 
 export interface MatcherGateway {

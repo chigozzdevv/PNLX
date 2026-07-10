@@ -3,12 +3,12 @@
 use governance_interface::GovernanceClient;
 use intent_registry_interface::IntentRegistryClient;
 use market_interface::{MarketClient, MarketPrice};
-use position_state_interface::PositionStateClient;
+use position_state_interface::{AppendReceipt, PositionStateClient};
 use proof_ledger_interface::ProofLedgerClient;
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
-    contract, contractimpl, contracttype, Address, Bytes, BytesN, Env, IntoVal, Symbol, Val, Vec,
-    U256,
+    contract, contractclient, contractimpl, contracttype, Address, Bytes, BytesN, Env, IntoVal,
+    Symbol, Val, Vec, U256,
 };
 
 const MAX_PUBLIC_ITEMS: u32 = 8;
@@ -21,11 +21,11 @@ const BN254_SCALAR_MODULUS_BE: [u8; 32] = [
 #[contracttype]
 pub enum DataKey {
     Batch(BytesN<32>, BytesN<32>),
-    Root(BytesN<32>),
     Governance,
     ProofLedger,
     MarketContract,
     PositionState,
+    ShieldedPool,
     IntentRegistry,
     Circuit,
 }
@@ -43,13 +43,18 @@ pub struct ProofMeta {
 #[derive(Clone)]
 #[contracttype]
 pub struct SettlementMeta {
-    pub old_root: BytesN<32>,
-    pub new_root: BytesN<32>,
+    pub first_position_index: u32,
+    pub position_root: BytesN<32>,
     pub proof: ProofMeta,
     pub oracle_price: i128,
     pub oracle_timestamp: u64,
     pub volume: i128,
     pub residual: i128,
+}
+
+#[contractclient(name = "ShieldedPoolClient")]
+pub trait ShieldedPoolInterface {
+    fn spend(env: &Env, writer: &Address, nullifier: &BytesN<32>);
 }
 
 #[contract]
@@ -63,6 +68,7 @@ impl BatchSettlement {
         proof_ledger: Address,
         market_contract: Address,
         position_state: Address,
+        shielded_pool: Address,
         intent_registry: Address,
         circuit_id: BytesN<32>,
     ) {
@@ -84,6 +90,9 @@ impl BatchSettlement {
             .set(&DataKey::PositionState, &position_state);
         env.storage()
             .persistent()
+            .set(&DataKey::ShieldedPool, &shielded_pool);
+        env.storage()
+            .persistent()
             .set(&DataKey::IntentRegistry, &intent_registry);
         env.storage()
             .persistent()
@@ -94,8 +103,6 @@ impl BatchSettlement {
         env: Env,
         batch_id: BytesN<32>,
         market_id: BytesN<32>,
-        old_root: BytesN<32>,
-        new_root: BytesN<32>,
         settlement_digest: BytesN<32>,
         proof: ProofMeta,
         filled_intents: Vec<BytesN<32>>,
@@ -119,8 +126,6 @@ impl BatchSettlement {
             &env,
             &batch_id,
             &market_id,
-            &old_root,
-            &new_root,
             &settlement_digest,
             &filled_intents,
             &new_commitments,
@@ -135,13 +140,14 @@ impl BatchSettlement {
             panic!("batch settled");
         }
         validate_active_intents(&env, &filled_intents);
+        spend_margin_nullifiers(&env, &spent_nullifiers);
         consume_filled_intents(&env, &filled_intents);
         let oracle = checked_market_price(&env, &market_id);
-        advance_position_root(&env, &old_root, &new_root);
+        let appended = append_positions(&env, &new_commitments);
 
         let meta = SettlementMeta {
-            old_root,
-            new_root: new_root.clone(),
+            first_position_index: appended.first_index,
+            position_root: appended.root,
             proof,
             oracle_price: oracle.price,
             oracle_timestamp: oracle.timestamp,
@@ -149,19 +155,46 @@ impl BatchSettlement {
             residual,
         };
         env.storage().persistent().set(&batch_key, &meta);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Root(new_root), &true);
     }
 
     pub fn has_root(env: Env, root: BytesN<32>) -> bool {
-        env.storage().persistent().has(&DataKey::Root(root))
+        let position_state_id: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PositionState)
+            .unwrap_or_else(|| panic!("not initialized"));
+        PositionStateClient::new(&env, &position_state_id).has_root(&root)
     }
 
     pub fn is_settled(env: Env, batch_id: BytesN<32>, market_id: BytesN<32>) -> bool {
         env.storage()
             .persistent()
             .has(&DataKey::Batch(batch_id, market_id))
+    }
+}
+
+fn spend_margin_nullifiers(env: &Env, nullifiers: &Vec<BytesN<32>>) {
+    let shielded_pool_id: Address = env
+        .storage()
+        .persistent()
+        .get(&DataKey::ShieldedPool)
+        .unwrap_or_else(|| panic!("not initialized"));
+    let writer = env.current_contract_address();
+    let pool = ShieldedPoolClient::new(env, &shielded_pool_id);
+    for nullifier in nullifiers.iter() {
+        authorize_as_writer(
+            env,
+            shielded_pool_id.clone(),
+            "spend",
+            Vec::from_array(
+                env,
+                [
+                    writer.clone().into_val(env),
+                    nullifier.clone().into_val(env),
+                ],
+            ),
+        );
+        pool.spend(&writer, &nullifier);
     }
 }
 
@@ -213,7 +246,7 @@ fn validate_public_items(env: &Env, values: &Vec<BytesN<32>>, require_non_empty:
     }
 }
 
-fn advance_position_root(env: &Env, old_root: &BytesN<32>, new_root: &BytesN<32>) {
+fn append_positions(env: &Env, commitments: &Vec<BytesN<32>>) -> AppendReceipt {
     let position_state_id: Address = env
         .storage()
         .persistent()
@@ -223,17 +256,16 @@ fn advance_position_root(env: &Env, old_root: &BytesN<32>, new_root: &BytesN<32>
     authorize_as_writer(
         env,
         position_state_id.clone(),
-        "advance_root",
+        "append_many",
         Vec::from_array(
             env,
             [
                 writer.clone().into_val(env),
-                old_root.clone().into_val(env),
-                new_root.clone().into_val(env),
+                commitments.clone().into_val(env),
             ],
         ),
     );
-    PositionStateClient::new(env, &position_state_id).advance_root(&writer, old_root, new_root);
+    PositionStateClient::new(env, &position_state_id).append_many(&writer, commitments)
 }
 
 fn authorize_as_writer(env: &Env, contract: Address, fn_name: &str, args: Vec<Val>) {
@@ -316,8 +348,6 @@ fn validate_public_inputs(
     env: &Env,
     batch_id: &BytesN<32>,
     market_id: &BytesN<32>,
-    old_root: &BytesN<32>,
-    new_root: &BytesN<32>,
     settlement_digest: &BytesN<32>,
     filled_intents: &Vec<BytesN<32>>,
     new_commitments: &Vec<BytesN<32>>,
@@ -331,8 +361,6 @@ fn validate_public_inputs(
         env,
         batch_id,
         market_id,
-        old_root,
-        new_root,
         settlement_digest,
         filled_intents,
         new_commitments,
@@ -350,8 +378,6 @@ fn batch_public_input_hash(
     env: &Env,
     batch_id: &BytesN<32>,
     market_id: &BytesN<32>,
-    old_root: &BytesN<32>,
-    new_root: &BytesN<32>,
     settlement_digest: &BytesN<32>,
     filled_intents: &Vec<BytesN<32>>,
     new_commitments: &Vec<BytesN<32>>,
@@ -363,8 +389,6 @@ fn batch_public_input_hash(
     let mut public_inputs = Bytes::new(env);
     append_field(env, &mut public_inputs, batch_id);
     append_field(env, &mut public_inputs, market_id);
-    append_field(env, &mut public_inputs, old_root);
-    append_field(env, &mut public_inputs, new_root);
     append_field(env, &mut public_inputs, settlement_digest);
     append_public_vec(env, &mut public_inputs, filled_intents);
     append_public_vec(env, &mut public_inputs, new_commitments);
@@ -422,6 +446,7 @@ mod tests {
     use oracle_interface::OracleAsset;
     use position_state::{PositionState, PositionStateClient};
     use proof_ledger::{ProofLedger, ProofLedgerClient};
+    use shielded_pool::{ShieldedPool, ShieldedPoolClient};
     use soroban_sdk::{
         symbol_short,
         testutils::{Address as _, Ledger},
@@ -436,15 +461,15 @@ mod tests {
         let client = BatchSettlementClient::new(&env, &id);
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
-        let old_root = BytesN::from_array(&env, &[3; 32]);
-        let new_root = BytesN::from_array(&env, &[4; 32]);
         let proof = proof(&env);
         let intent_registry = setup_intent_registry(&env, false);
+        let shielded_pool = setup_shielded_pool(&env, &id);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
-            &setup_position_state(&env, &id, &old_root),
+            &setup_position_state(&env, &id),
+            &shielded_pool,
             &intent_registry,
             &circuit(&env),
         );
@@ -453,8 +478,6 @@ mod tests {
         client.settle(
             &batch,
             &market,
-            &old_root,
-            &new_root,
             &settlement_digest(&env),
             &proof,
             &filled,
@@ -465,11 +488,14 @@ mod tests {
             &0,
         );
         assert!(client.is_settled(&batch, &market));
-        assert!(client.has_root(&new_root));
         let registry = IntentRegistryClient::new(&env, &intent_registry);
         for intent in filled.iter() {
             assert!(!registry.is_active_intent(&intent));
             assert!(registry.is_cancelled(&intent));
+        }
+        let pool = ShieldedPoolClient::new(&env, &shielded_pool);
+        for nullifier in spent_nullifiers(&env).iter() {
+            assert!(pool.is_spent(&nullifier));
         }
     }
 
@@ -480,8 +506,6 @@ mod tests {
         let client = BatchSettlementClient::new(&env, &id);
         let batch = high_bytes(&env, 0);
         let market = high_bytes(&env, 1);
-        let old_root = high_bytes(&env, 2);
-        let new_root = high_bytes(&env, 3);
         let settlement_digest = high_bytes(&env, 4);
         let filled = filled_intents(&env);
         let commitments = high_vec(&env, 5, 2);
@@ -491,8 +515,6 @@ mod tests {
             &env,
             &batch,
             &market,
-            &old_root,
-            &new_root,
             &settlement_digest,
             &filled,
             &commitments,
@@ -506,7 +528,8 @@ mod tests {
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
-            &setup_position_state(&env, &id, &old_root),
+            &setup_position_state(&env, &id),
+            &setup_shielded_pool(&env, &id),
             &intent_registry,
             &circuit(&env),
         );
@@ -514,8 +537,6 @@ mod tests {
         client.settle(
             &batch,
             &market,
-            &old_root,
-            &new_root,
             &settlement_digest,
             &proof,
             &filled,
@@ -527,7 +548,6 @@ mod tests {
         );
 
         assert!(client.is_settled(&batch, &market));
-        assert!(client.has_root(&new_root));
     }
 
     #[test]
@@ -538,14 +558,13 @@ mod tests {
         let client = BatchSettlementClient::new(&env, &id);
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
-        let old_root = BytesN::from_array(&env, &[3; 32]);
-        let new_root = BytesN::from_array(&env, &[4; 32]);
         let proof = proof(&env);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
-            &setup_position_state(&env, &id, &old_root),
+            &setup_position_state(&env, &id),
+            &setup_shielded_pool(&env, &id),
             &setup_intent_registry(&env, false),
             &circuit(&env),
         );
@@ -553,8 +572,6 @@ mod tests {
         client.settle(
             &batch,
             &market,
-            &old_root,
-            &new_root,
             &settlement_digest(&env),
             &proof,
             &filled_intents(&env),
@@ -574,14 +591,13 @@ mod tests {
         let client = BatchSettlementClient::new(&env, &id);
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
-        let old_root = BytesN::from_array(&env, &[3; 32]);
-        let new_root = BytesN::from_array(&env, &[4; 32]);
         let proof = proof(&env);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
-            &setup_position_state(&env, &id, &old_root),
+            &setup_position_state(&env, &id),
+            &setup_shielded_pool(&env, &id),
             &setup_intent_registry(&env, false),
             &circuit(&env),
         );
@@ -589,8 +605,6 @@ mod tests {
         client.settle(
             &batch,
             &market,
-            &old_root,
-            &new_root,
             &settlement_digest(&env),
             &proof,
             &filled_intents(&env),
@@ -603,8 +617,6 @@ mod tests {
         client.settle(
             &batch,
             &market,
-            &old_root,
-            &new_root,
             &settlement_digest(&env),
             &proof,
             &filled_intents(&env),
@@ -624,14 +636,13 @@ mod tests {
         let client = BatchSettlementClient::new(&env, &id);
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
-        let old_root = BytesN::from_array(&env, &[3; 32]);
-        let new_root = BytesN::from_array(&env, &[4; 32]);
         let proof = empty_proof(&env);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, None),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
-            &setup_position_state(&env, &id, &old_root),
+            &setup_position_state(&env, &id),
+            &setup_shielded_pool(&env, &id),
             &setup_intent_registry(&env, false),
             &circuit(&env),
         );
@@ -639,8 +650,6 @@ mod tests {
         client.settle(
             &batch,
             &market,
-            &old_root,
-            &new_root,
             &settlement_digest(&env),
             &proof,
             &filled_intents(&env),
@@ -660,23 +669,20 @@ mod tests {
         let client = BatchSettlementClient::new(&env, &id);
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
-        let old_root = BytesN::from_array(&env, &[3; 32]);
-        let new_root = BytesN::from_array(&env, &[4; 32]);
         let proof = proof(&env);
 
         client.init(
             &setup_governance_with_verifier(&env, &BytesN::from_array(&env, &[10; 32])),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
-            &setup_position_state(&env, &id, &old_root),
+            &setup_position_state(&env, &id),
+            &setup_shielded_pool(&env, &id),
             &setup_intent_registry(&env, false),
             &circuit(&env),
         );
         client.settle(
             &batch,
             &market,
-            &old_root,
-            &new_root,
             &settlement_digest(&env),
             &proof,
             &filled_intents(&env),
@@ -696,23 +702,20 @@ mod tests {
         let client = BatchSettlementClient::new(&env, &id);
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
-        let old_root = BytesN::from_array(&env, &[3; 32]);
-        let new_root = BytesN::from_array(&env, &[4; 32]);
         let proof = proof(&env);
 
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
-            &setup_position_state(&env, &id, &old_root),
+            &setup_position_state(&env, &id),
+            &setup_shielded_pool(&env, &id),
             &setup_intent_registry(&env, false),
             &BytesN::from_array(&env, &[11; 32]),
         );
         client.settle(
             &batch,
             &market,
-            &old_root,
-            &new_root,
             &settlement_digest(&env),
             &proof,
             &filled_intents(&env),
@@ -732,8 +735,6 @@ mod tests {
         let client = BatchSettlementClient::new(&env, &id);
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
-        let old_root = BytesN::from_array(&env, &[3; 32]);
-        let new_root = BytesN::from_array(&env, &[4; 32]);
         let proof = proof(&env);
         let governance = setup_governance(&env);
         let proof_ledger = setup_proof_ledger(&env, Some(&proof));
@@ -744,15 +745,14 @@ mod tests {
             &governance,
             &proof_ledger,
             &setup_market(&env, &market, 50_000_00000000, 950, true),
-            &setup_position_state(&env, &id, &old_root),
+            &setup_position_state(&env, &id),
+            &setup_shielded_pool(&env, &id),
             &setup_intent_registry(&env, false),
             &circuit(&env),
         );
         client.settle(
             &batch,
             &market,
-            &old_root,
-            &new_root,
             &settlement_digest(&env),
             &proof,
             &filled_intents(&env),
@@ -772,23 +772,20 @@ mod tests {
         let client = BatchSettlementClient::new(&env, &id);
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
-        let old_root = BytesN::from_array(&env, &[3; 32]);
-        let new_root = BytesN::from_array(&env, &[4; 32]);
         let proof = proof(&env);
 
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, None),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
-            &setup_position_state(&env, &id, &old_root),
+            &setup_position_state(&env, &id),
+            &setup_shielded_pool(&env, &id),
             &setup_intent_registry(&env, false),
             &circuit(&env),
         );
         client.settle(
             &batch,
             &market,
-            &old_root,
-            &new_root,
             &settlement_digest(&env),
             &proof,
             &filled_intents(&env),
@@ -809,8 +806,6 @@ mod tests {
         let client = BatchSettlementClient::new(&env, &id);
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
-        let old_root = BytesN::from_array(&env, &[3; 32]);
-        let new_root = BytesN::from_array(&env, &[4; 32]);
         let proof = proof(&env);
 
         let market_contract = setup_market(&env, &market, 50_000_00000000, 950, true);
@@ -819,15 +814,14 @@ mod tests {
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &market_contract,
-            &setup_position_state(&env, &id, &old_root),
+            &setup_position_state(&env, &id),
+            &setup_shielded_pool(&env, &id),
             &setup_intent_registry(&env, false),
             &circuit(&env),
         );
         client.settle(
             &batch,
             &market,
-            &old_root,
-            &new_root,
             &settlement_digest(&env),
             &proof,
             &filled_intents(&env),
@@ -848,23 +842,20 @@ mod tests {
         let client = BatchSettlementClient::new(&env, &id);
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
-        let old_root = BytesN::from_array(&env, &[3; 32]);
-        let new_root = BytesN::from_array(&env, &[4; 32]);
         let proof = proof(&env);
 
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, false),
-            &setup_position_state(&env, &id, &old_root),
+            &setup_position_state(&env, &id),
+            &setup_shielded_pool(&env, &id),
             &setup_intent_registry(&env, false),
             &circuit(&env),
         );
         client.settle(
             &batch,
             &market,
-            &old_root,
-            &new_root,
             &settlement_digest(&env),
             &proof,
             &filled_intents(&env),
@@ -884,14 +875,13 @@ mod tests {
         let client = BatchSettlementClient::new(&env, &id);
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
-        let old_root = BytesN::from_array(&env, &[3; 32]);
-        let new_root = BytesN::from_array(&env, &[4; 32]);
         let proof = proof(&env);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
-            &setup_position_state(&env, &id, &old_root),
+            &setup_position_state(&env, &id),
+            &setup_shielded_pool(&env, &id),
             &setup_intent_registry(&env, true),
             &circuit(&env),
         );
@@ -899,8 +889,6 @@ mod tests {
         client.settle(
             &batch,
             &market,
-            &old_root,
-            &new_root,
             &settlement_digest(&env),
             &proof,
             &filled_intents(&env),
@@ -920,15 +908,14 @@ mod tests {
         let client = BatchSettlementClient::new(&env, &id);
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
-        let old_root = BytesN::from_array(&env, &[3; 32]);
-        let new_root = BytesN::from_array(&env, &[4; 32]);
         let duplicate_intents = duplicate_filled_intents(&env);
         let proof = proof_with_intents(&env, &duplicate_intents);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
-            &setup_position_state(&env, &id, &old_root),
+            &setup_position_state(&env, &id),
+            &setup_shielded_pool(&env, &id),
             &setup_intent_registry(&env, false),
             &circuit(&env),
         );
@@ -936,8 +923,6 @@ mod tests {
         client.settle(
             &batch,
             &market,
-            &old_root,
-            &new_root,
             &settlement_digest(&env),
             &proof,
             &duplicate_intents,
@@ -956,14 +941,10 @@ mod tests {
     fn proof_with_intents(env: &Env, filled_intents: &Vec<BytesN<32>>) -> ProofMeta {
         let batch = BytesN::from_array(env, &[1; 32]);
         let market = BytesN::from_array(env, &[2; 32]);
-        let old_root = BytesN::from_array(env, &[3; 32]);
-        let new_root = BytesN::from_array(env, &[4; 32]);
         proof_with_inputs(
             env,
             &batch,
             &market,
-            &old_root,
-            &new_root,
             &settlement_digest(env),
             filled_intents,
             &new_commitments(env),
@@ -979,8 +960,6 @@ mod tests {
         env: &Env,
         batch: &BytesN<32>,
         market: &BytesN<32>,
-        old_root: &BytesN<32>,
-        new_root: &BytesN<32>,
         settlement_digest: &BytesN<32>,
         filled_intents: &Vec<BytesN<32>>,
         new_commitments: &Vec<BytesN<32>>,
@@ -997,8 +976,6 @@ mod tests {
                 env,
                 batch,
                 market,
-                old_root,
-                new_root,
                 settlement_digest,
                 filled_intents,
                 new_commitments,
@@ -1083,13 +1060,27 @@ mod tests {
         setup_governance_with_verifier(env, &verifier(env))
     }
 
-    fn setup_position_state(env: &Env, writer: &Address, initial_root: &BytesN<32>) -> Address {
+    fn setup_position_state(env: &Env, writer: &Address) -> Address {
         env.mock_all_auths();
         let state_id = env.register(PositionState, ());
         let state = PositionStateClient::new(env, &state_id);
-        state.init(&setup_governance(env), initial_root);
+        state.init(&setup_governance(env));
         state.set_writer(writer, &true);
         state_id
+    }
+
+    fn setup_shielded_pool(env: &Env, writer: &Address) -> Address {
+        env.mock_all_auths();
+        let pool_id = env.register(ShieldedPool, ());
+        let pool = ShieldedPoolClient::new(env, &pool_id);
+        pool.init(
+            &setup_governance(env),
+            &Address::generate(env),
+            &BytesN::from_array(env, &[31; 32]),
+            &BytesN::from_array(env, &[32; 32]),
+        );
+        pool.set_writer(writer, &true);
+        pool_id
     }
 
     fn setup_intent_registry(env: &Env, cancel_first: bool) -> Address {

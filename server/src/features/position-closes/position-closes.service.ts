@@ -49,7 +49,6 @@ export class PositionClosesService {
         markPrice: markPrice.toString(),
       },
       membershipProof,
-      newPositionRoot: this.executor.store.positionMembershipRootWith(input.newPositionCommitment),
       positionRoot,
     };
   }
@@ -106,12 +105,8 @@ export class PositionClosesService {
     if (input.markPrice !== this.currentMarkPrice(market)) {
       throw new Error("position close mark price mismatch");
     }
-    if (input.positionRoot !== this.executor.store.positionMembershipRoot()) {
-      throw new Error("position root is not current");
-    }
-    const expectedNewRoot = this.executor.store.positionMembershipRootWith(input.newPositionCommitment);
-    if (input.newPositionRoot !== expectedNewRoot) {
-      throw new Error("new position root mismatch");
+    if (!this.executor.store.hasPositionMembershipRoot(input.positionRoot)) {
+      throw new Error("position root is not recognized");
     }
     assertFundingPayment(
       input.fundingPayment,
@@ -130,12 +125,8 @@ export class PositionClosesService {
     if (input.markPrice !== this.currentMarkPrice(market)) {
       throw new Error("position close mark price mismatch");
     }
-    if (input.positionRoot !== this.executor.store.positionMembershipRoot()) {
-      throw new Error("position root is not current");
-    }
-    const expectedNewRoot = this.executor.store.positionMembershipRootWith(input.newPositionCommitment);
-    if (input.newPositionRoot !== expectedNewRoot) {
-      throw new Error("new position root mismatch");
+    if (!this.executor.store.hasPositionMembershipRoot(input.positionRoot)) {
+      throw new Error("position root is not recognized");
     }
     if (options.requireConditionalTrigger ?? true) {
       const conditionalClose = this.executor.store.conditionalCloses.get(input.closeCommitment);
@@ -164,7 +155,6 @@ export class PositionClosesService {
         publicField(input.positionNullifier),
         publicField(input.closeCommitment),
         publicField(input.newPositionCommitment),
-        publicField(input.newPositionRoot),
         publicField(input.marginOutputCommitment),
       ]),
     );

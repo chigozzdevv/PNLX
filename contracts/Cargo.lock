@@ -219,6 +219,7 @@ dependencies = [
  "position-state-interface",
  "proof-ledger",
  "proof-ledger-interface",
+ "shielded-pool",
  "soroban-sdk",
  "test-oracle",
 ]

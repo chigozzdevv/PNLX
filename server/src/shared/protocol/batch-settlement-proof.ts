@@ -8,8 +8,6 @@ export function batchSettlementPublicInputHash(settlement: BatchSettlement): Hex
   return contractPublicInputHash([
     publicField(hashFields("batch-id", [settlement.batchId])),
     publicField(hashFields("market-id", [settlement.marketId])),
-    publicField(settlement.oldRoot),
-    publicField(settlement.newRoot),
     publicField(settlement.settlementDigest),
     ...publicVec(settlement.orderUpdates.map((update) => update.intentCommitment)),
     ...publicVec(settlement.newCommitments),

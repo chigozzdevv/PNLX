@@ -124,6 +124,7 @@ export interface PositionLifecycleRecord {
   openedAt: number;
   ownerCommitment: Hex;
   positionCommitment: Hex;
+  positionIndex?: number;
   positionNullifier: Hex;
   settlementDigest: Hex;
   sourceIntentCommitment: Hex;
@@ -292,8 +293,6 @@ export interface Fill {
 export interface BatchSettlement {
   batchId: string;
   marketId: string;
-  oldRoot: Hex;
-  newRoot: Hex;
   matchTranscriptDigest: Hex;
   settlementDigest: Hex;
   newCommitments: Hex[];
@@ -394,7 +393,6 @@ export interface PositionCloseWitness {
   remainingMargin: bigint;
   marginOutputAmount: bigint;
   newPositionCommitment: Hex;
-  newPositionRoot: Hex;
   marginOutputCommitment: Hex;
   marketDigest: Hex;
   ownerDigest: Hex;
@@ -418,8 +416,9 @@ export interface PositionCloseRecord {
   positionRoot: Hex;
   closeCommitment: Hex;
   newPositionCommitment: Hex;
-  newPositionRoot: Hex;
   marginOutputCommitment: Hex;
+  outputPositionIndex?: number;
+  outputPositionRoot?: Hex;
   proof: ProofMeta;
   proofVerificationTxHash?: Hex;
   settlementTxHash?: Hex;

@@ -3,7 +3,7 @@
 use conditional_order_interface::ConditionalOrderClient;
 use governance_interface::GovernanceClient;
 use market_interface::MarketClient;
-use position_state_interface::PositionStateClient;
+use position_state_interface::{AppendReceipt, PositionStateClient};
 use proof_ledger_interface::ProofLedgerClient;
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
@@ -49,7 +49,8 @@ pub struct PositionCloseMeta {
     pub position_nullifier: BytesN<32>,
     pub position_root: BytesN<32>,
     pub new_position_commitment: BytesN<32>,
-    pub new_position_root: BytesN<32>,
+    pub output_position_index: u32,
+    pub output_position_root: BytesN<32>,
     pub margin_output_commitment: BytesN<32>,
     pub proof: ProofMeta,
 }
@@ -101,7 +102,6 @@ impl PositionClose {
         close_commitment: BytesN<32>,
         mark_price: i128,
         new_position_commitment: BytesN<32>,
-        new_position_root: BytesN<32>,
         margin_output_commitment: BytesN<32>,
         proof: ProofMeta,
     ) {
@@ -114,7 +114,6 @@ impl PositionClose {
             close_commitment,
             mark_price,
             new_position_commitment,
-            new_position_root,
             margin_output_commitment,
             proof,
             true,
@@ -130,7 +129,6 @@ impl PositionClose {
         close_commitment: BytesN<32>,
         mark_price: i128,
         new_position_commitment: BytesN<32>,
-        new_position_root: BytesN<32>,
         margin_output_commitment: BytesN<32>,
         proof: ProofMeta,
     ) {
@@ -143,7 +141,6 @@ impl PositionClose {
             close_commitment,
             mark_price,
             new_position_commitment,
-            new_position_root,
             margin_output_commitment,
             proof,
             false,
@@ -172,7 +169,6 @@ fn settle_position_close(
     close_commitment: BytesN<32>,
     mark_price: i128,
     new_position_commitment: BytesN<32>,
-    new_position_root: BytesN<32>,
     margin_output_commitment: BytesN<32>,
     proof: ProofMeta,
     require_conditional_trigger: bool,
@@ -183,7 +179,6 @@ fn settle_position_close(
     validate_hash(&env, &position_nullifier);
     validate_hash(&env, &close_commitment);
     validate_hash(&env, &new_position_commitment);
-    validate_hash(&env, &new_position_root);
     validate_hash(&env, &margin_output_commitment);
     if mark_price <= 0 {
         panic!("invalid mark price");
@@ -198,7 +193,6 @@ fn settle_position_close(
         &position_nullifier,
         &close_commitment,
         &new_position_commitment,
-        &new_position_root,
         &margin_output_commitment,
         &proof,
     );
@@ -214,12 +208,12 @@ fn settle_position_close(
     if env.storage().persistent().has(&spent_key) {
         panic!("position already spent");
     }
-    spend_and_advance_position(
+    let appended = spend_and_append_position(
         &env,
         &position_root,
         &position_commitment,
         &position_nullifier,
-        &new_position_root,
+        &new_position_commitment,
     );
 
     env.storage().persistent().set(
@@ -231,7 +225,8 @@ fn settle_position_close(
             position_nullifier: position_nullifier.clone(),
             position_root,
             new_position_commitment,
-            new_position_root,
+            output_position_index: appended.first_index,
+            output_position_root: appended.root,
             margin_output_commitment,
             proof,
         },
@@ -239,13 +234,13 @@ fn settle_position_close(
     env.storage().persistent().set(&spent_key, &true);
 }
 
-fn spend_and_advance_position(
+fn spend_and_append_position(
     env: &Env,
     position_root: &BytesN<32>,
     position_commitment: &BytesN<32>,
     position_nullifier: &BytesN<32>,
-    new_position_root: &BytesN<32>,
-) {
+    new_position_commitment: &BytesN<32>,
+) -> AppendReceipt {
     let position_state_id: Address = env
         .storage()
         .persistent()
@@ -276,17 +271,16 @@ fn spend_and_advance_position(
     authorize_as_writer(
         env,
         position_state_id,
-        "advance_root",
+        "append",
         Vec::from_array(
             env,
             [
                 writer.clone().into_val(env),
-                position_root.clone().into_val(env),
-                new_position_root.clone().into_val(env),
+                new_position_commitment.clone().into_val(env),
             ],
         ),
     );
-    position_state.advance_root(&writer, position_root, new_position_root);
+    position_state.append(&writer, new_position_commitment)
 }
 
 fn authorize_as_writer(env: &Env, contract: Address, fn_name: &str, args: Vec<Val>) {
@@ -389,7 +383,6 @@ fn validate_public_inputs(
     position_nullifier: &BytesN<32>,
     close_commitment: &BytesN<32>,
     new_position_commitment: &BytesN<32>,
-    new_position_root: &BytesN<32>,
     margin_output_commitment: &BytesN<32>,
     proof: &ProofMeta,
 ) {
@@ -402,7 +395,6 @@ fn validate_public_inputs(
         position_nullifier,
         close_commitment,
         new_position_commitment,
-        new_position_root,
         margin_output_commitment,
     );
     if proof.public_input_hash != expected {
@@ -419,7 +411,6 @@ fn position_close_public_input_hash(
     position_nullifier: &BytesN<32>,
     close_commitment: &BytesN<32>,
     new_position_commitment: &BytesN<32>,
-    new_position_root: &BytesN<32>,
     margin_output_commitment: &BytesN<32>,
 ) -> BytesN<32> {
     let mut public_inputs = Bytes::new(env);
@@ -430,7 +421,6 @@ fn position_close_public_input_hash(
     append_field(env, &mut public_inputs, position_nullifier);
     append_field(env, &mut public_inputs, close_commitment);
     append_field(env, &mut public_inputs, new_position_commitment);
-    append_field(env, &mut public_inputs, new_position_root);
     append_field(env, &mut public_inputs, margin_output_commitment);
     env.crypto().sha256(&public_inputs).to_bytes()
 }
@@ -466,15 +456,17 @@ mod tests {
         ConditionalOrder, ConditionalOrderClient as ConditionalOrderRegistryClient,
         ProofMeta as ConditionalProofMeta,
     };
+    use core::ops::{Add, Mul};
     use governance::{Governance, GovernanceClient};
     use market::{Market, MarketClient};
     use oracle_interface::OracleAsset;
     use position_state::{PositionState, PositionStateClient};
     use proof_ledger::{ProofLedger, ProofLedgerClient};
     use soroban_sdk::{
+        crypto::bn254::Bn254Fr,
         symbol_short,
         testutils::{Address as _, Ledger},
-        Address, BytesN, Env, Symbol,
+        Address, BytesN, Env, Symbol, U256,
     };
     use test_oracle::{TestOracle, TestOracleClient};
 
@@ -527,7 +519,6 @@ mod tests {
             &close,
             &mark_price(&env),
             &new_position,
-            &new_position_root(&env),
             &margin_output,
             &proof,
         );
@@ -566,17 +557,15 @@ mod tests {
             &close,
             &mark_price(&env),
             &new_position,
-            &new_position_root(&env),
             &margin_output,
             &proof,
         );
 
         assert!(client.is_settled(&close));
         assert!(client.is_position_spent(&nullifier));
-        assert_eq!(
-            PositionStateClient::new(&env, &setup.position_state).current_root(),
-            new_position_root(&env),
-        );
+        let state = PositionStateClient::new(&env, &setup.position_state);
+        assert_eq!(state.leaf_count(), 2);
+        assert!(state.has_root(&position_root(&env)));
     }
 
     #[test]
@@ -608,7 +597,6 @@ mod tests {
             &close,
             &mark_price(&env),
             &new_position,
-            &new_position_root(&env),
             &margin_output,
             &proof,
         );
@@ -670,7 +658,6 @@ mod tests {
             &close,
             &mark_price(&env),
             &new_position,
-            &new_position_root(&env),
             &margin_output,
             &proof,
         );
@@ -682,7 +669,6 @@ mod tests {
             &next_close,
             &mark_price(&env),
             &new_position,
-            &new_position_root(&env),
             &margin_output,
             &next_proof,
         );
@@ -713,7 +699,6 @@ mod tests {
             &BytesN::from_array(&env, &[3; 32]),
             &mark_price(&env),
             &BytesN::from_array(&env, &[4; 32]),
-            &new_position_root(&env),
             &BytesN::from_array(&env, &[5; 32]),
             &proof,
         );
@@ -752,7 +737,6 @@ mod tests {
             &BytesN::from_array(&env, &[3; 32]),
             &mark_price(&env),
             &BytesN::from_array(&env, &[4; 32]),
-            &new_position_root(&env),
             &BytesN::from_array(&env, &[5; 32]),
             &proof,
         );
@@ -787,7 +771,6 @@ mod tests {
             &close,
             &mark_price(&env),
             &BytesN::from_array(&env, &[4; 32]),
-            &new_position_root(&env),
             &BytesN::from_array(&env, &[5; 32]),
             &proof,
         );
@@ -837,7 +820,6 @@ mod tests {
             &close,
             &mark_price(&env),
             &BytesN::from_array(&env, &[4; 32]),
-            &new_position_root(&env),
             &BytesN::from_array(&env, &[5; 32]),
             &proof,
         );
@@ -882,7 +864,6 @@ mod tests {
             &close,
             &57_000_00000000,
             &new_position,
-            &new_position_root(&env),
             &margin_output,
             &proof,
         );
@@ -918,7 +899,6 @@ mod tests {
                 nullifier,
                 close,
                 new_position,
-                &new_position_root(env),
                 margin_output,
             ),
             proof_digest: BytesN::from_array(env, &[9; 32]),
@@ -930,15 +910,30 @@ mod tests {
     }
 
     fn position_root(env: &Env) -> BytesN<32> {
-        BytesN::from_array(env, &[8; 32])
+        let mut node = position_commitment(env);
+        let mut empty = BytesN::from_array(env, &[0; 32]);
+        for _ in 0..20 {
+            node = position_hash_pair(env, &node, &empty);
+            empty = position_hash_pair(env, &empty, &empty);
+        }
+        node
     }
 
     fn position_commitment(env: &Env) -> BytesN<32> {
         BytesN::from_array(env, &[9; 32])
     }
 
-    fn new_position_root(env: &Env) -> BytesN<32> {
-        BytesN::from_array(env, &[14; 32])
+    fn position_hash_pair(env: &Env, left: &BytesN<32>, right: &BytesN<32>) -> BytesN<32> {
+        let left = Bn254Fr::from_bytes(left.clone());
+        let right = Bn254Fr::from_bytes(right.clone());
+        let left_factor = Bn254Fr::from_u256(U256::from_u32(env, 131));
+        let right_factor = Bn254Fr::from_u256(U256::from_u32(env, 137));
+        let domain = Bn254Fr::from_u256(U256::from_u32(env, 17));
+        (left
+            .mul(left_factor)
+            .add(right.mul(right_factor))
+            .add(domain))
+        .to_bytes()
     }
 
     fn circuit(env: &Env) -> BytesN<32> {
@@ -1034,7 +1029,7 @@ mod tests {
         );
         let market = setup_market(env, &BytesN::from_array(env, &[1; 32]), &governance);
         let conditional_order = setup_conditional_order(env, &governance, &proof_ledger, &market);
-        let position_state = setup_position_state(env, writer, &position_root(env), &governance);
+        let position_state = setup_position_state(env, writer, &governance);
 
         ProtocolSetup {
             conditional_authority,
@@ -1047,17 +1042,14 @@ mod tests {
         }
     }
 
-    fn setup_position_state(
-        env: &Env,
-        writer: &Address,
-        initial_root: &BytesN<32>,
-        governance: &Address,
-    ) -> Address {
+    fn setup_position_state(env: &Env, writer: &Address, governance: &Address) -> Address {
         env.mock_all_auths();
         let id = env.register(PositionState, ());
         let state = PositionStateClient::new(env, &id);
-        state.init(governance, initial_root);
+        state.init(governance);
         state.set_writer(writer, &true);
+        let appended = state.append(writer, &position_commitment(env));
+        assert_eq!(appended.root, position_root(env));
         id
     }
 

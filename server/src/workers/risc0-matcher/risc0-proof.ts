@@ -12,7 +12,9 @@ import type { SettlementProof, SettlementProofInput } from "@/workers/proof-coor
 export const RISC0_BATCH_MATCH_CIRCUIT_ID = "batch-match";
 export const RISC0_GROTH16_SEAL_BYTES = 260;
 export const RISC0_BATCH_MATCH_IMAGE_ID = batchMatchImageId();
-export const RISC0_BATCH_MATCH_CIRCUIT_KEY = hashFields("circuit-key", ["risc0-batch-match-v1"]);
+export const RISC0_BATCH_MATCH_CIRCUIT_KEY = hashFields("circuit-key", [
+  "risc0-batch-match-append-tree",
+]);
 export const RISC0_BATCH_MATCH_CIRCUIT_HASH = sourceHash("risc0/batch-match");
 export const RISC0_STELLAR_VERIFIER_HASH = fileHash(
   "vendor/stellar-risc0-verifier/contracts/groth16-verifier/parameters.json",
@@ -57,8 +59,6 @@ export async function createRisc0BatchSettlement(
     marginChangeCommitments: input.match.marginChangeCommitments,
     marketId: input.market.marketId,
     newCommitments,
-    newRoot: input.newRoot,
-    oldRoot: input.oldRoot,
     openInterestDelta: input.match.openInterestDelta,
     orderUpdates: input.match.orderUpdates,
     residualSize: input.match.residualSize,
@@ -138,8 +138,6 @@ function risc0SettlementDigest(input: SettlementProofInput, newCommitments: Hex[
   return hashFields("risc0-settlement", [
     input.batchId,
     input.market.marketId,
-    normalizeHex(input.oldRoot),
-    normalizeHex(input.newRoot),
     input.match.matchTranscriptDigest,
     input.match.orderUpdates.map((update) => {
       const normalized: {
@@ -392,8 +390,6 @@ function toProverInput(input: SettlementProofInput, draft: Omit<BatchSettlement,
       market_id: draft.marketId,
       match_transcript_digest: draft.matchTranscriptDigest,
       new_commitments: draft.newCommitments,
-      new_root: draft.newRoot,
-      old_root: draft.oldRoot,
       open_interest_delta: draft.openInterestDelta,
       order_updates: draft.orderUpdates.map((update) => ({
         intent_commitment: update.intentCommitment,
@@ -422,9 +418,6 @@ function toProverInput(input: SettlementProofInput, draft: Omit<BatchSettlement,
       market_id: input.market.marketId,
       max_leverage: input.market.maxLeverage,
     },
-    new_root: input.newRoot,
-    old_root: input.oldRoot,
-    position_commitments: input.positionCommitments,
   };
 }
 
@@ -478,9 +471,6 @@ function inputHash(input: SettlementProofInput): Hex {
   return hashFields("risc0-batch-witness", [
     input.batchId,
     input.market.marketId,
-    input.oldRoot,
-    input.newRoot,
-    input.positionCommitments,
     input.intents,
   ]);
 }

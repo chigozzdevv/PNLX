@@ -31,7 +31,6 @@ export interface PositionCloseRecord {
   marketId: string;
   markPrice: bigint;
   newPositionCommitment: Hex;
-  newPositionRoot: Hex;
   positionCommitment: Hex;
   positionNullifier: Hex;
   positionRoot: Hex;
@@ -113,7 +112,6 @@ export interface ClientProofProvider {
     newPositionBlinding: Hex;
     newPositionCommitment: Hex;
     newPositionRhoDigest: Hex;
-    newPositionRoot: Hex;
     ownerDigest: Hex;
     pathIndices: boolean[];
     pathSiblings: Hex[];

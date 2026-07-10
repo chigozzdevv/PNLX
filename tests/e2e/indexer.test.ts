@@ -95,10 +95,9 @@ describe("public and owner indexer", () => {
       marketId: market.marketId,
       markPrice: market.oraclePrice,
       newPositionCommitment,
-      newPositionRoot: hashFields("position-root", ["closed"]),
       positionCommitment: positionOpenings[0].positionCommitment,
       positionNullifier: positionOpenings[0].positionNullifier,
-      positionRoot: settlement.newRoot,
+      positionRoot: store.positionMembershipRoot(),
       proof: closeProof,
       proofVerificationTxHash: closeProofTxHash,
       settlementTxHash: closeSettlementTxHash,
@@ -257,8 +256,6 @@ function settlementRecord(
     marginChangeCommitments: [],
     marketId,
     newCommitments: [hashFields("position", ["a"]), hashFields("position", ["b"])],
-    newRoot: hashFields("position-root", ["new"]),
-    oldRoot: hashFields("position-root", ["old"]),
     openInterestDelta: 2n,
     orderUpdates: [
       {

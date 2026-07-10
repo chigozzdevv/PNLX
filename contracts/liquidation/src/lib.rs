@@ -328,15 +328,17 @@ mod tests {
     extern crate std;
 
     use super::{Liquidation, LiquidationClient, ProofMeta};
+    use core::ops::{Add, Mul};
     use governance::{Governance, GovernanceClient};
     use market::{Market, MarketClient};
     use oracle_interface::OracleAsset;
     use position_state::{PositionState, PositionStateClient};
     use proof_ledger::{ProofLedger, ProofLedgerClient};
     use soroban_sdk::{
+        crypto::bn254::Bn254Fr,
         symbol_short,
         testutils::{Address as _, Ledger},
-        Address, BytesN, Env, Symbol,
+        Address, BytesN, Env, Symbol, U256,
     };
     use test_oracle::{TestOracle, TestOracleClient};
 
@@ -354,7 +356,7 @@ mod tests {
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market),
-            &setup_position_state(&env, &id, &position_root(&env)),
+            &setup_position_state(&env, &id),
             &circuit(&env),
         );
         client.liquidate(
@@ -385,7 +387,7 @@ mod tests {
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market),
-            &setup_position_state(&env, &id, &position_root(&env)),
+            &setup_position_state(&env, &id),
             &circuit(&env),
         );
         client.liquidate(
@@ -415,7 +417,7 @@ mod tests {
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market),
-            &setup_position_state(&env, &id, &position_root(&env)),
+            &setup_position_state(&env, &id),
             &circuit(&env),
         );
         client.liquidate(
@@ -455,7 +457,7 @@ mod tests {
             &setup_governance(&env),
             &setup_proof_ledger(&env, None),
             &setup_market(&env, &market),
-            &setup_position_state(&env, &id, &position_root(&env)),
+            &setup_position_state(&env, &id),
             &circuit(&env),
         );
         client.liquidate(
@@ -485,7 +487,7 @@ mod tests {
             &setup_governance_with_verifier(&env, &BytesN::from_array(&env, &[11; 32])),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market),
-            &setup_position_state(&env, &id, &position_root(&env)),
+            &setup_position_state(&env, &id),
             &circuit(&env),
         );
         client.liquidate(
@@ -515,7 +517,7 @@ mod tests {
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market),
-            &setup_position_state(&env, &id, &position_root(&env)),
+            &setup_position_state(&env, &id),
             &BytesN::from_array(&env, &[11; 32]),
         );
         client.liquidate(
@@ -549,7 +551,7 @@ mod tests {
             &governance,
             &proof_ledger,
             &setup_market(&env, &market),
-            &setup_position_state(&env, &id, &position_root(&env)),
+            &setup_position_state(&env, &id),
             &circuit(&env),
         );
         client.liquidate(
@@ -579,7 +581,7 @@ mod tests {
             &setup_governance(&env),
             &setup_proof_ledger(&env, None),
             &setup_market(&env, &market),
-            &setup_position_state(&env, &id, &position_root(&env)),
+            &setup_position_state(&env, &id),
             &circuit(&env),
         );
         client.liquidate(
@@ -621,7 +623,13 @@ mod tests {
     }
 
     fn position_root(env: &Env) -> BytesN<32> {
-        BytesN::from_array(env, &[8; 32])
+        let mut node = position_commitment(env);
+        let mut empty = BytesN::from_array(env, &[0; 32]);
+        for _ in 0..20 {
+            node = position_hash_pair(env, &node, &empty);
+            empty = position_hash_pair(env, &empty, &empty);
+        }
+        node
     }
 
     fn position_commitment(env: &Env) -> BytesN<32> {
@@ -640,12 +648,27 @@ mod tests {
         setup_governance_with_verifier(env, &verifier(env))
     }
 
-    fn setup_position_state(env: &Env, writer: &Address, initial_root: &BytesN<32>) -> Address {
+    fn position_hash_pair(env: &Env, left: &BytesN<32>, right: &BytesN<32>) -> BytesN<32> {
+        let left = Bn254Fr::from_bytes(left.clone());
+        let right = Bn254Fr::from_bytes(right.clone());
+        let left_factor = Bn254Fr::from_u256(U256::from_u32(env, 131));
+        let right_factor = Bn254Fr::from_u256(U256::from_u32(env, 137));
+        let domain = Bn254Fr::from_u256(U256::from_u32(env, 17));
+        (left
+            .mul(left_factor)
+            .add(right.mul(right_factor))
+            .add(domain))
+        .to_bytes()
+    }
+
+    fn setup_position_state(env: &Env, writer: &Address) -> Address {
         env.mock_all_auths();
         let id = env.register(PositionState, ());
         let state = PositionStateClient::new(env, &id);
-        state.init(&setup_governance(env), initial_root);
+        state.init(&setup_governance(env));
         state.set_writer(writer, &true);
+        let appended = state.append(writer, &position_commitment(env));
+        assert_eq!(appended.root, position_root(env));
         id
     }
 

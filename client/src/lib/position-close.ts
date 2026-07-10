@@ -38,7 +38,6 @@ interface PositionCloseContextResponse {
       root: Hex;
       siblings: Hex[];
     };
-    newPositionRoot: Hex;
     positionRoot: Hex;
   };
 }
@@ -138,8 +137,7 @@ async function closePositionAttempt(input: ClosePositionInput): Promise<Position
 
   const context = (await pnlxGet<PositionCloseContextResponse>(
     `/position-closes/context?ownerCommitment=${encodeURIComponent(input.session.ownerCommitment)}` +
-      `&positionCommitment=${encodeURIComponent(positionCommitment)}` +
-      `&newPositionCommitment=${encodeURIComponent(newPositionCommitment)}`,
+      `&positionCommitment=${encodeURIComponent(positionCommitment)}`,
     input.session.token,
   )).context;
   if (context.market.marketId !== input.market.marketId) {
@@ -202,7 +200,6 @@ async function closePositionAttempt(input: ClosePositionInput): Promise<Position
       newPositionBlinding,
       newPositionCommitment,
       newPositionRhoDigest,
-      newPositionRoot: context.newPositionRoot,
       ownerDigest: positionSecrets.ownerDigest,
       pathIndices: context.membershipProof.indices,
       pathSiblings: context.membershipProof.siblings,
@@ -260,7 +257,6 @@ function isRetryableCloseContextError(error: unknown): boolean {
     "position close mark price mismatch",
     "mark price mismatch",
     "position root is not current",
-    "new position root mismatch",
   ].some((entry) => message.includes(entry));
 }
 

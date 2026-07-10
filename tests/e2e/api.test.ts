@@ -8,6 +8,7 @@ import {
   fieldMerkleRoot,
   hashFields,
   ownerCommitment,
+  positionMerkleProof,
 } from "@pnlx/crypto";
 import { PRICE_SCALE, settleClose } from "@pnlx/market-math";
 import { circuitKey } from "@pnlx/proof-system";
@@ -342,7 +343,7 @@ function createSettledPositionWitness(input: {
     rho,
     blinding: `${intentCommitment}:blinding:${input.fillIndex}`,
   });
-  const membershipProof = fieldMerkleProof(input.allCommitments, position.commitment as Hex);
+  const membershipProof = positionMerkleProof(input.allCommitments, position.commitment as Hex);
 
   return { position, membershipProof };
 }
@@ -2407,7 +2408,6 @@ describe("server api", () => {
       remainingMargin: 0n,
       marginOutputAmount: closeSettlement.newMargin,
       newPositionCommitment: closedPosition.commitment as Hex,
-      newPositionRoot: fieldMerkleRoot([...positionCommitments, closedPosition.commitment as Hex]),
       marginOutputCommitment: marginOutput.commitment as Hex,
       marketDigest: longPosition.position.marketDigest,
       ownerDigest: longPosition.position.ownerDigest,
@@ -2504,10 +2504,6 @@ describe("server api", () => {
       remainingMargin: 0n,
       marginOutputAmount: closeSettlement.newMargin,
       newPositionCommitment: closedPosition.commitment as Hex,
-      newPositionRoot: fieldMerkleRoot([
-        ...fixture.positionCommitments,
-        closedPosition.commitment as Hex,
-      ]),
       marginOutputCommitment: marginOutput.commitment as Hex,
       marketDigest: fixture.longPosition.position.marketDigest,
       ownerDigest: fixture.longPosition.position.ownerDigest,
@@ -2620,7 +2616,6 @@ describe("server api", () => {
       markPrice: currentMarkPrice.toString(),
     });
     expect(context.positionRoot).toBe(runtime.executor.store.positionMembershipRoot());
-    expect(context.newPositionRoot).not.toBe(context.positionRoot);
   });
 
   test("executes queued proven liquidations and emits encrypted account events", async () => {
@@ -3026,10 +3021,6 @@ describe("server api", () => {
       remainingMargin: "0",
       marginOutputAmount: closeSettlement.newMargin.toString(),
       newPositionCommitment: closedPosition.commitment,
-      newPositionRoot: fieldMerkleRoot([
-        ...positionCommitments,
-        closedPosition.commitment as Hex,
-      ]),
       marginOutputCommitment: marginOutput.commitment,
       marketDigest: alicePosition.position.marketDigest,
       ownerDigest: alicePosition.position.ownerDigest,
@@ -3443,19 +3434,17 @@ function prooflessProofs(): ConstructorParameters<typeof MatcherService>[1] {
         marketId: input.market.marketId,
         matchTranscriptDigest: input.match.matchTranscriptDigest,
         newCommitments: input.match.fills.map((fill) => fill.positionCommitment),
-        newRoot: input.newRoot,
-        oldRoot: input.oldRoot,
         openInterestDelta: input.match.openInterestDelta,
         orderUpdates: input.match.orderUpdates,
         residualSize: input.match.residualSize,
-        settlementDigest: hashFields("test-settlement", [input.batchId, input.newRoot]),
+        settlementDigest: hashFields("test-settlement", [input.batchId, input.match.matchTranscriptDigest]),
         spentNullifiers: input.match.spentNullifiers,
       };
       const publicInputHash = batchSettlementPublicInputHash({
         ...draft,
         proof: proofMeta("batch-match"),
       });
-      const sealDigest = hashFields("risc0-seal", [input.batchId, input.newRoot]);
+      const sealDigest = hashFields("risc0-seal", [input.batchId, input.match.matchTranscriptDigest]);
       return {
         ...draft,
         proof: {

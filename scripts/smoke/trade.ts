@@ -637,7 +637,6 @@ async function closeLongTakeProfit(input: {
     blinding: `${positionNullifier}:close-margin-blinding`,
   });
   const closeContext = await positionCloseContext({
-    newPositionCommitment: position.newPositionCommitment,
     ownerCommitment: input.aliceRecord.ownerCommitment,
     positionCommitment: position.position.commitment as Hex,
   });
@@ -660,7 +659,6 @@ async function closeLongTakeProfit(input: {
     remainingMargin: 0n,
     marginOutputAmount: closeSettlement.newMargin,
     newPositionCommitment: position.newPositionCommitment,
-    newPositionRoot: closeContext.newPositionRoot,
     marginOutputCommitment: marginOutput.commitment,
     marketDigest: position.position.marketDigest,
     ownerDigest: position.position.ownerDigest,
@@ -703,16 +701,13 @@ async function closeLongTakeProfit(input: {
 }
 
 async function positionCloseContext(input: {
-  newPositionCommitment: Hex;
   ownerCommitment: Hex;
   positionCommitment: Hex;
 }): Promise<{
   membershipProof: MarginMembershipProof;
-  newPositionRoot: Hex;
   positionRoot: Hex;
 }> {
   const params = new URLSearchParams({
-    newPositionCommitment: input.newPositionCommitment,
     ownerCommitment: input.ownerCommitment,
     positionCommitment: input.positionCommitment,
   });
@@ -725,7 +720,6 @@ async function positionCloseContext(input: {
       root: String(proof.root) as Hex,
       siblings: parseHexList(proof.siblings, "positionCloseContext.membershipProof.siblings"),
     },
-    newPositionRoot: String(context.newPositionRoot) as Hex,
     positionRoot: String(context.positionRoot) as Hex,
   };
 }

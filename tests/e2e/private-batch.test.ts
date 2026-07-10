@@ -248,10 +248,7 @@ describe("private batch settlement", () => {
       proofs.createSettlement({
         batchId: "tampered-transcript",
         market,
-        oldRoot: hashFields("old-root", ["tampered-transcript"]),
-        newRoot: hashFields("new-root", ["tampered-transcript"]),
         intents,
-        positionCommitments: [],
         match: {
           ...match,
           matchTranscriptDigest: hashFields("bad-transcript", []),
@@ -346,7 +343,6 @@ describe("private batch settlement", () => {
     expect(settlement.marginChangeCommitments).toHaveLength(0);
     expect(settlement.residualSize).toBe(0n);
     expect(settlement.aggregateVolume).toBe(2n);
-    expect(settlement.oldRoot).not.toBe(settlement.newRoot);
     expect(settlement.spentNullifiers).toContain(aliceNote.nullifier as `0x${string}`);
     expect(settlement.spentNullifiers).toContain(bobNote.nullifier as `0x${string}`);
     expect(executor.store.spentNullifiers.has(aliceNote.nullifier as `0x${string}`)).toBe(true);
@@ -971,19 +967,17 @@ function createFastSettlementProofs(): Pick<ProofCoordinatorService, "artifactFo
         marginChangeCommitments: input.match.marginChangeCommitments,
         marketId: input.market.marketId,
         newCommitments: input.match.fills.map((fill) => fill.positionCommitment),
-        newRoot: input.newRoot,
-        oldRoot: input.oldRoot,
         openInterestDelta: input.match.openInterestDelta,
         orderUpdates: input.match.orderUpdates,
         residualSize: input.match.residualSize,
-        settlementDigest: hashFields("test-settlement", [input.batchId, input.newRoot]),
+        settlementDigest: hashFields("test-settlement", [input.batchId, input.match.matchTranscriptDigest]),
         spentNullifiers: input.match.spentNullifiers,
       };
       const publicInputHash = batchSettlementPublicInputHash({
         ...draft,
         proof: proofMeta("batch-match", [input.batchId]),
       });
-      const sealDigest = hashFields("risc0-seal", [input.batchId, input.newRoot]);
+      const sealDigest = hashFields("risc0-seal", [input.batchId, input.match.matchTranscriptDigest]);
       return {
         ...draft,
         proof: {

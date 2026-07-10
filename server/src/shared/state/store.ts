@@ -22,7 +22,14 @@ import type {
   ResidualOrderRecord,
   WithdrawalRecord,
 } from "@pnlx/protocol-types";
-import { EMPTY_ROOT, fieldMerkleProof, fieldMerkleRoot, merkleRoot } from "@pnlx/crypto";
+import {
+  EMPTY_ROOT,
+  fieldMerkleProof,
+  fieldMerkleRoot,
+  merkleRoot,
+  positionMerkleProof,
+  positionMerkleRoot,
+} from "@pnlx/crypto";
 import { assertPrivateMatchIntent } from "@/workers/batch-matcher/private-intent";
 
 export const BATCH_EXECUTION_RUN_RETENTION = 1_000;
@@ -75,19 +82,27 @@ export class ProtocolStore {
   }
 
   positionMembershipRoot(): Hex {
-    return fieldMerkleRoot([...this.positionCommitments]);
+    return positionMerkleRoot([...this.positionCommitments]);
   }
 
   positionMembershipProof(commitment: Hex) {
-    return fieldMerkleProof([...this.positionCommitments], commitment);
+    return positionMerkleProof([...this.positionCommitments], commitment);
   }
 
   positionMembershipRootWith(commitment: Hex): Hex {
-    return fieldMerkleRoot([...this.positionCommitments, commitment]);
+    return positionMerkleRoot([...this.positionCommitments, commitment]);
   }
 
   positionMembershipRootWithMany(commitments: Hex[]): Hex {
-    return fieldMerkleRoot([...this.positionCommitments, ...commitments]);
+    return positionMerkleRoot([...this.positionCommitments, ...commitments]);
+  }
+
+  hasPositionMembershipRoot(root: Hex): boolean {
+    const commitments = [...this.positionCommitments];
+    for (let count = 0; count <= commitments.length; count += 1) {
+      if (positionMerkleRoot(commitments.slice(0, count)) === root) return true;
+    }
+    return false;
   }
 
   addMarginCommitment(commitment: Hex): void {
@@ -302,6 +317,7 @@ export class ProtocolStore {
     assertProof(this, settlement.proof);
     this.validatePositionOpenings(settlement, positionOpenings);
     this.validateResidualOrders(settlement, residualOrders);
+    const firstPositionIndex = this.positionCommitments.size;
     for (const commitment of settlement.newCommitments) {
       this.positionCommitments.add(commitment);
     }
@@ -313,7 +329,12 @@ export class ProtocolStore {
     }
     this.applySettlementOrderUpdates(settlement);
     for (const opening of positionOpenings) {
-      this.addPositionOpening(opening);
+      const offset = settlement.newCommitments.indexOf(opening.positionCommitment);
+      if (offset < 0) throw new Error("position opening commitment is not in settlement");
+      this.addPositionOpening({
+        ...opening,
+        positionIndex: firstPositionIndex + offset,
+      });
     }
     const privateByIntent = new Map(privateMatchIntents.map((payload) => [payload.intentCommitment, payload]));
     for (const residual of residualOrders) {
@@ -435,10 +456,15 @@ export class ProtocolStore {
     }
     assertProof(this, record.proof);
     this.spend(record.positionNullifier);
+    const outputPositionIndex = this.positionCommitments.size;
     this.positionCommitments.add(record.newPositionCommitment);
     this.marginCommitments.add(record.marginOutputCommitment);
     this.markPositionClosed(record);
-    this.positionCloses.set(record.closeCommitment, record);
+    this.positionCloses.set(record.closeCommitment, {
+      ...record,
+      outputPositionIndex,
+      outputPositionRoot: this.positionMembershipRoot(),
+    });
   }
 
   addDisclosure(record: DisclosureRecord): void {

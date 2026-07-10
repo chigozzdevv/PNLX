@@ -101,7 +101,6 @@ export function createLocalClientProverHandler(root = process.cwd()) {
           newPositionBlinding: requiredHex(input.newPositionBlinding, "newPositionBlinding"),
           newPositionCommitment: requiredHex(input.newPositionCommitment, "newPositionCommitment"),
           newPositionRhoDigest: requiredHex(input.newPositionRhoDigest, "newPositionRhoDigest"),
-          newPositionRoot: requiredHex(input.newPositionRoot, "newPositionRoot"),
           ownerDigest: requiredHex(input.ownerDigest, "ownerDigest"),
           pathIndices: requiredBooleanArray(input.pathIndices, "pathIndices"),
           pathSiblings: requiredHexArray(input.pathSiblings, "pathSiblings"),

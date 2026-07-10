@@ -5,7 +5,6 @@ export type CreatePositionCloseResult = PositionCloseRecord & { txHash?: Hex };
 export type CreateProvenPositionCloseInput = PositionCloseRecord;
 
 export interface PositionCloseContextInput {
-  newPositionCommitment: Hex;
   ownerCommitment: Hex;
   positionCommitment: Hex;
 }
@@ -22,6 +21,5 @@ export interface PositionCloseContextResult {
     root: Hex;
     siblings: Hex[];
   };
-  newPositionRoot: Hex;
   positionRoot: Hex;
 }

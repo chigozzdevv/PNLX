@@ -283,8 +283,6 @@ function fastSettlementProofs() {
         marginChangeCommitments: input.match.marginChangeCommitments,
         marketId: input.market.marketId,
         newCommitments: input.match.fills.map((fill) => fill.positionCommitment),
-        newRoot: input.newRoot,
-        oldRoot: input.oldRoot,
         openInterestDelta: input.match.openInterestDelta,
         orderUpdates: input.match.orderUpdates,
         residualSize: input.match.residualSize,
@@ -297,13 +295,13 @@ function fastSettlementProofs() {
       };
       const publicInputHash = batchSettlementPublicInputHash({
         ...draft,
-        proof: proofMeta("batch-match", [input.batchId, input.market.marketId, input.newRoot]),
+        proof: proofMeta("batch-match", [input.batchId, input.market.marketId, input.match.matchTranscriptDigest]),
       });
-      const sealDigest = hashFields("risc0-seal", [input.batchId, input.market.marketId, input.newRoot]);
+      const sealDigest = hashFields("risc0-seal", [input.batchId, input.market.marketId, input.match.matchTranscriptDigest]);
       return {
         ...draft,
         proof: {
-          ...proofMeta("batch-match", [input.batchId, input.market.marketId, input.newRoot]),
+          ...proofMeta("batch-match", [input.batchId, input.market.marketId, input.match.matchTranscriptDigest]),
           imageId: hashFields("risc0-image", [input.batchId, input.market.marketId]),
           journalDigest: publicInputHash,
           proofDigest: sealDigest,

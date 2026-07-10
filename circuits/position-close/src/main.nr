@@ -38,9 +38,9 @@ fn note_commitment(
     hash_pair(left, right)
 }
 
-fn merkle_root(leaf: Field, path_siblings: [Field; 8], path_indices: [bool; 8]) -> Field {
+fn merkle_root(leaf: Field, path_siblings: [Field; 20], path_indices: [bool; 20]) -> Field {
     let mut current = leaf;
-    for i in 0..8 {
+    for i in 0..20 {
         let sibling = path_siblings[i];
         let left = if path_indices[i] { sibling } else { current };
         let right = if path_indices[i] { current } else { sibling };
@@ -69,7 +69,6 @@ fn main(
     position_nullifier: pub Field,
     close_commitment: pub Field,
     new_position_commitment: pub Field,
-    new_position_root: pub Field,
     margin_output_commitment: pub Field,
     market_digest: Field,
     owner_digest: Field,
@@ -81,8 +80,8 @@ fn main(
     margin_output_asset_digest: Field,
     margin_output_rho_digest: Field,
     margin_output_blinding: Field,
-    path_siblings: [Field; 8],
-    path_indices: [bool; 8],
+    path_siblings: [Field; 20],
+    path_indices: [bool; 20],
     zero_value: Field,
 ) {
     assert(size > 0);
@@ -96,10 +95,8 @@ fn main(
     assert(position_nullifier != zero_value);
     assert(close_commitment != zero_value);
     assert(new_position_commitment != zero_value);
-    assert(new_position_root != zero_value);
     assert(margin_output_commitment != zero_value);
     assert(new_position_commitment != close_commitment);
-    assert(new_position_root != position_root);
     assert(margin_output_commitment != close_commitment);
     assert(new_position_rho_digest != zero_value);
     assert(new_position_blinding != zero_value);
@@ -178,12 +175,12 @@ fn main(
     assert(expected_margin_output == margin_output_commitment);
 }
 
-fn default_siblings() -> [Field; 8] {
-    [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781]
+fn default_siblings() -> [Field; 20] {
+    [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781, 1694400271078593325, 454099272649063011117, 121698605069948886979373, 32615226158746301710471981, 8740880610544008858406490925, 2342556003625794374052939567917, 627805008971712892246187804201773, 168251742404419055121978331526075181, 45091466964384306772690192848988148525, 12084513146454994215080971683528823804717, 3238649523249938449641700411185724779664173, 867958072230983504503975710197774240949998381]
 }
 
-fn default_indices() -> [bool; 8] {
-    [false, false, false, false, false, false, false, false]
+fn default_indices() -> [bool; 20] {
+    [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false]
 }
 
 fn exercise_close(
@@ -203,8 +200,8 @@ fn exercise_close(
     position_root: Field,
     position_commitment_public: Field,
     position_nullifier: Field,
-    path_siblings: [Field; 8],
-    path_indices: [bool; 8],
+    path_siblings: [Field; 20],
+    path_indices: [bool; 20],
 ) {
     let market_digest = 2;
     let owner_digest = 3;
@@ -240,7 +237,6 @@ fn exercise_close(
         position_nullifier,
         13,
         new_position,
-        16,
         margin_output,
         market_digest,
         owner_digest,
@@ -332,7 +328,7 @@ fn rejects_insolvent_close() {
 
 #[test(should_fail)]
 fn rejects_bad_position_path() {
-    let siblings = [1, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781];
+    let siblings = [1, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781, 1694400271078593325, 454099272649063011117, 121698605069948886979373, 32615226158746301710471981, 8740880610544008858406490925, 2342556003625794374052939567917, 627805008971712892246187804201773, 168251742404419055121978331526075181, 45091466964384306772690192848988148525, 12084513146454994215080971683528823804717, 3238649523249938449641700411185724779664173, 867958072230983504503975710197774240949998381];
     let correct_siblings = default_siblings();
     let indices = default_indices();
     let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
@@ -355,5 +351,5 @@ fn rejects_bad_output_commitment() {
     let indices = default_indices();
     let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, siblings, indices);
-    main(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, 100_000_000, root, commitment, 1351, 13, 14, 16, note_commitment(9, 17_990, 3, 10, 11), 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, siblings, indices, 0);
+    main(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, 100_000_000, root, commitment, 1351, 13, 14, note_commitment(9, 17_990, 3, 10, 11), 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, siblings, indices, 0);
 }

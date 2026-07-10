@@ -99,8 +99,8 @@ export class LiquidationsService {
     if (input.maintenanceRate !== market.maintenanceMarginRate) {
       throw new Error("liquidation maintenance rate mismatch");
     }
-    if (input.positionRoot !== this.executor.store.positionMembershipRoot()) {
-      throw new Error("position root is not current");
+    if (!this.executor.store.hasPositionMembershipRoot(input.positionRoot)) {
+      throw new Error("position root is not recognized");
     }
   }
 

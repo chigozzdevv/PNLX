@@ -33,6 +33,7 @@ pub enum DataKey {
     ProofLedger,
     DepositCircuit,
     WithdrawCircuit,
+    Writer(Address),
 }
 
 #[contract]
@@ -70,6 +71,13 @@ impl ShieldedPool {
         record_commitment(&env, commitment);
     }
 
+    pub fn set_writer(env: Env, writer: Address, enabled: bool) {
+        require_admin(&env);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Writer(writer), &enabled);
+    }
+
     pub fn deposit_asset(
         env: Env,
         token: Address,
@@ -100,7 +108,16 @@ impl ShieldedPool {
             .has(&DataKey::Commitment(commitment))
     }
 
-    pub fn spend(env: Env, nullifier: BytesN<32>) {
+    pub fn spend(env: Env, writer: Address, nullifier: BytesN<32>) {
+        writer.require_auth();
+        if !env
+            .storage()
+            .persistent()
+            .get(&DataKey::Writer(writer))
+            .unwrap_or(false)
+        {
+            panic!("unauthorized writer");
+        }
         record_nullifier(&env, nullifier);
     }
 
@@ -192,6 +209,17 @@ impl ShieldedPool {
             .persistent()
             .has(&DataKey::AssetWithdrawal(nullifier))
     }
+}
+
+fn require_admin(env: &Env) {
+    let governance_id: Address = env
+        .storage()
+        .persistent()
+        .get(&DataKey::Governance)
+        .unwrap_or_else(|| panic!("not initialized"));
+    GovernanceClient::new(env, &governance_id)
+        .admin()
+        .require_auth();
 }
 
 fn record_commitment(env: &Env, commitment: BytesN<32>) {
@@ -378,15 +406,24 @@ mod tests {
     #[test]
     fn deposit_and_spend() {
         let env = Env::default();
+        env.mock_all_auths();
         let id = env.register(ShieldedPool, ());
         let client = ShieldedPoolClient::new(&env, &id);
+        let writer = Address::generate(&env);
         let commitment = BytesN::from_array(&env, &[7; 32]);
         let nullifier = BytesN::from_array(&env, &[9; 32]);
 
+        client.init(
+            &setup_governance(&env),
+            &Address::generate(&env),
+            &deposit_circuit(&env),
+            &circuit(&env),
+        );
+        client.set_writer(&writer, &true);
         client.deposit(&commitment);
         assert!(client.has_commitment(&commitment));
 
-        client.spend(&nullifier);
+        client.spend(&writer, &nullifier);
         assert!(client.is_spent(&nullifier));
     }
 
@@ -599,12 +636,21 @@ mod tests {
     #[should_panic(expected = "duplicate nullifier")]
     fn rejects_duplicate_nullifier() {
         let env = Env::default();
+        env.mock_all_auths();
         let id = env.register(ShieldedPool, ());
         let client = ShieldedPoolClient::new(&env, &id);
+        let writer = Address::generate(&env);
         let nullifier = BytesN::from_array(&env, &[3; 32]);
 
-        client.spend(&nullifier);
-        client.spend(&nullifier);
+        client.init(
+            &setup_governance(&env),
+            &Address::generate(&env),
+            &deposit_circuit(&env),
+            &circuit(&env),
+        );
+        client.set_writer(&writer, &true);
+        client.spend(&writer, &nullifier);
+        client.spend(&writer, &nullifier);
     }
 
     #[test]

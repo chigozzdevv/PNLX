@@ -7,7 +7,6 @@ import type {
   PositionLifecycleRecord,
   ResidualOrderRecord,
 } from "@pnlx/protocol-types";
-import { fieldMerkleRoot } from "@pnlx/crypto";
 import {
   createPositionOpeningAccountEvent,
   createResidualOrderAccountEvent,
@@ -51,9 +50,12 @@ export class MatcherService {
     const market = this.store.markets.get(input.marketId);
     if (!market) throw new Error("unknown market");
 
-    const records = input.records ??
-      activeIntents(this.store, input.marketId, input.batchId, Boolean(input.includeOpenMarketOrders));
-    const residuals = input.residuals ?? activeResiduals(this.store, input.marketId, input.batchId);
+    const selected = input.intentCommitments ? new Set(input.intentCommitments) : undefined;
+    const records = (input.records ??
+      activeIntents(this.store, input.marketId, input.batchId, Boolean(input.includeOpenMarketOrders)))
+      .filter((record) => !selected || selected.has(record.intentCommitment));
+    const residuals = (input.residuals ?? activeResiduals(this.store, input.marketId, input.batchId))
+      .filter((record) => !selected || selected.has(record.intentCommitment));
     if (records.length === 0 && residuals.length === 0) {
       throw new Error("batch has no active intents");
     }
@@ -63,8 +65,6 @@ export class MatcherService {
       batchId: input.batchId,
       intents: privateMatchIntentsFor(this.store, input.batchId, records, residuals),
       market,
-      oldRoot: input.oldRoot ?? this.store.positionMembershipRoot(),
-      positionCommitments: input.positionCommitments ?? [...this.store.positionCommitments],
       records,
       residuals,
     };
@@ -116,18 +116,11 @@ class EmbeddedMatcherProviderGateway implements MatcherProviderGateway {
       intents: input.intents,
       market: input.market,
     });
-    const newRoot = fieldMerkleRoot([
-      ...input.positionCommitments,
-      ...match.fills.map((fill) => fill.positionCommitment),
-    ]);
     const settlementInput = {
       batchId: input.batchId,
       intents: input.intents,
       market: input.market,
       match,
-      newRoot,
-      oldRoot: input.oldRoot,
-      positionCommitments: input.positionCommitments,
     };
     const proofTask = typeof proofs.createSettlementAsync === "function"
       ? proofs.createSettlementAsync(settlementInput)

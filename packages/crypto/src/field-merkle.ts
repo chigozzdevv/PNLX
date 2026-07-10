@@ -2,6 +2,7 @@ import type { Hex } from "@pnlx/protocol-types";
 import { FIELD_PRIME, hashToField, mod } from "./field";
 
 export const FIELD_MERKLE_DEPTH = 8;
+export const POSITION_MERKLE_DEPTH = 20;
 const LEFT_FACTOR = 131n;
 const RIGHT_FACTOR = 137n;
 const DOMAIN_FACTOR = 17n;
@@ -36,6 +37,7 @@ export interface CircuitDisclosureInput {
 }
 
 export interface FieldMerkleProof {
+  index: number;
   leaf: Hex;
   root: Hex;
   siblings: Hex[];
@@ -122,11 +124,84 @@ export function fieldMerkleProof(
   }
 
   return {
+    index: levels[0].findIndex((candidate) => candidate === normalizedLeaf),
     leaf: normalizedLeaf,
     root: levels[depth][0],
     siblings,
     indices,
   };
+}
+
+export function positionMerkleRoot(
+  leaves: Hex[],
+  depth = POSITION_MERKLE_DEPTH,
+): Hex {
+  return buildIncrementalFieldMerkleLevels(leaves, depth).levels[depth].get(0) ??
+    emptyRoots(depth)[depth];
+}
+
+export function positionMerkleProof(
+  leaves: Hex[],
+  leaf: Hex,
+  depth = POSITION_MERKLE_DEPTH,
+): FieldMerkleProof {
+  const normalizedLeaf = fieldHex(toField(leaf));
+  const index = leaves.findIndex((candidate) => fieldHex(toField(candidate)) === normalizedLeaf);
+  if (index < 0) throw new Error("leaf not found");
+  const { levels, empties } = buildIncrementalFieldMerkleLevels(leaves, depth);
+  const siblings: Hex[] = [];
+  const indices: boolean[] = [];
+  let cursor = index;
+  for (let level = 0; level < depth; level += 1) {
+    siblings.push(levels[level].get(cursor ^ 1) ?? empties[level]);
+    indices.push((cursor & 1) === 1);
+    cursor = Math.floor(cursor / 2);
+  }
+  return {
+    index,
+    indices,
+    leaf: normalizedLeaf,
+    root: levels[depth].get(0) ?? empties[depth],
+    siblings,
+  };
+}
+
+function buildIncrementalFieldMerkleLevels(
+  leaves: Hex[],
+  depth: number,
+): { empties: Hex[]; levels: Map<number, Hex>[] } {
+  const capacity = 2 ** depth;
+  if (leaves.length > capacity) throw new Error("position merkle tree is full");
+  const empties = emptyRoots(depth);
+  const levels: Map<number, Hex>[] = [
+    new Map(leaves.map((leaf, index) => [index, fieldHex(toField(leaf))])),
+  ];
+  let width = leaves.length;
+  for (let level = 0; level < depth; level += 1) {
+    const current = levels[level];
+    const next = new Map<number, Hex>();
+    const parentCount = Math.ceil(width / 2);
+    for (let parent = 0; parent < parentCount; parent += 1) {
+      next.set(
+        parent,
+        fieldHashPair(
+          current.get(parent * 2) ?? empties[level],
+          current.get(parent * 2 + 1) ?? empties[level],
+        ),
+      );
+    }
+    levels.push(next);
+    width = parentCount;
+  }
+  return { empties, levels };
+}
+
+function emptyRoots(depth: number): Hex[] {
+  const roots = [emptyLeaf()];
+  for (let level = 0; level < depth; level += 1) {
+    roots.push(fieldHashPair(roots[level], roots[level]));
+  }
+  return roots;
 }
 
 function buildFieldMerkleLevels(leaves: Hex[], depth: number): Hex[][] {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fieldMerkleProof, fieldMerkleRoot, hashFields } from "@pnlx/crypto";
+import { fieldMerkleProof, hashFields, positionMerkleProof } from "@pnlx/crypto";
 import { PRICE_SCALE, settleClose } from "@pnlx/market-math";
 import { createCircuitMarginNote, createCircuitPositionNote } from "@pnlx/sdk";
 import type { Hex } from "@pnlx/protocol-types";
@@ -207,7 +207,7 @@ describe("local client prover", () => {
       spendSecret: "local-close-position-spend",
     });
     const positionCommitment = position.commitment as Hex;
-    const membership = fieldMerkleProof([positionCommitment], positionCommitment);
+    const membership = positionMerkleProof([positionCommitment], positionCommitment);
     const closeSettlement = settleClose({
       closeSize: 1n,
       entryPrice: 50_000n * PRICE_SCALE,
@@ -261,7 +261,6 @@ describe("local client prover", () => {
           newPositionBlinding: closedPosition.blinding,
           newPositionCommitment: closedPosition.commitment,
           newPositionRhoDigest: closedPosition.rhoDigest,
-          newPositionRoot: fieldMerkleRoot([positionCommitment, closedPosition.commitment as Hex]),
           ownerDigest: position.ownerDigest,
           pathIndices: membership.indices,
           pathSiblings: membership.siblings,

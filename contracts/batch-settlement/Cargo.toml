@@ -23,4 +23,5 @@ test-oracle = { path = "../test-oracle" }
 oracle-interface = { path = "../oracle-interface" }
 position-state = { path = "../position-state" }
 proof-ledger = { path = "../proof-ledger" }
+shielded-pool = { path = "../shielded-pool" }
 soroban-sdk = { workspace = true, features = ["testutils"] }

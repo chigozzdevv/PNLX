@@ -5,7 +5,6 @@ use sha2::{Digest, Sha256};
 
 const FIELD_PRIME_DEC: &str =
     "21888242871839275222246405745257275088548364400416034343698204186575808495617";
-const FIELD_MERKLE_DEPTH: usize = 8;
 const LEFT_FACTOR: u32 = 131;
 const RIGHT_FACTOR: u32 = 137;
 const DOMAIN_FACTOR: u32 = 17;
@@ -18,9 +17,6 @@ pub struct ProofRequest {
     pub batch_id: String,
     pub intents: Vec<RecoveredIntent>,
     pub market: MarketInput,
-    pub new_root: String,
-    pub old_root: String,
-    pub position_commitments: Vec<String>,
     pub expected: SettlementDraft,
 }
 
@@ -55,8 +51,6 @@ pub struct SettlementDraft {
     pub market_id: String,
     pub match_transcript_digest: String,
     pub new_commitments: Vec<String>,
-    pub new_root: String,
-    pub old_root: String,
     pub open_interest_delta: String,
     pub order_updates: Vec<OrderUpdate>,
     pub residual_size: String,
@@ -159,21 +153,8 @@ pub fn prove_request(request: &ProofRequest) -> ProvedSettlement {
         .iter()
         .map(|fill| fill.position_commitment.clone())
         .collect::<Vec<_>>();
-    let old_root = field_merkle_root(&request.position_commitments);
-    assert_eq!(normalize_hex(&request.old_root), old_root, "old root mismatch");
-
-    let mut new_leaves = request.position_commitments.clone();
-    new_leaves.extend(fill_commitments.clone());
-    let new_root = field_merkle_root(&new_leaves);
-    assert_eq!(normalize_hex(&request.new_root), new_root, "new root mismatch");
-
-    let settlement_digest = settlement_digest(
-        &request.batch_id,
-        &request.market.market_id,
-        &request.old_root,
-        &request.new_root,
-        &matched,
-    );
+    let settlement_digest =
+        settlement_digest(&request.batch_id, &request.market.market_id, &matched);
     let draft = SettlementDraft {
         aggregate_volume: matched.aggregate_volume.to_string(),
         batch_id: request.batch_id.clone(),
@@ -182,8 +163,6 @@ pub fn prove_request(request: &ProofRequest) -> ProvedSettlement {
         market_id: request.market.market_id.clone(),
         match_transcript_digest: matched.match_transcript_digest.clone(),
         new_commitments: fill_commitments,
-        new_root: normalize_hex(&request.new_root),
-        old_root: normalize_hex(&request.old_root),
         open_interest_delta: matched.open_interest_delta.to_string(),
         order_updates: matched.order_updates.clone(),
         residual_size: matched.residual_size.to_string(),
@@ -237,15 +216,35 @@ fn match_batch(request: &ProofRequest) -> MatchOutput {
             break;
         }
 
-        let size = longs[long_index].remaining.min(shorts[short_index].remaining);
+        let size = longs[long_index]
+            .remaining
+            .min(shorts[short_index].remaining);
         let price = execution_price(&longs[long_index], &shorts[short_index]);
         let long_fill = create_fill(request, &mut longs[long_index], size, price, fills.len());
-        let short_fill =
-            create_fill(request, &mut shorts[short_index], size, price, fills.len() + 1);
-        let execution = create_execution(&longs[long_index], &shorts[short_index], size, price, &long_fill, &short_fill);
+        let short_fill = create_fill(
+            request,
+            &mut shorts[short_index],
+            size,
+            price,
+            fills.len() + 1,
+        );
+        let execution = create_execution(
+            &longs[long_index],
+            &shorts[short_index],
+            size,
+            price,
+            &long_fill,
+            &short_fill,
+        );
 
-        push_unique(&mut spent_nullifiers, longs[long_index].intent.note_nullifier.clone());
-        push_unique(&mut spent_nullifiers, shorts[short_index].intent.note_nullifier.clone());
+        push_unique(
+            &mut spent_nullifiers,
+            longs[long_index].intent.note_nullifier.clone(),
+        );
+        push_unique(
+            &mut spent_nullifiers,
+            shorts[short_index].intent.note_nullifier.clone(),
+        );
         fills.push(long_fill);
         fills.push(short_fill);
         executions.push(execution);
@@ -263,7 +262,10 @@ fn match_batch(request: &ProofRequest) -> MatchOutput {
     assert!(!fills.is_empty(), "batch has no crossed liquidity");
 
     for source in longs.into_iter().chain(shorts.into_iter()) {
-        if let Some(order) = orders.iter_mut().find(|candidate| candidate.sequence == source.sequence) {
+        if let Some(order) = orders
+            .iter_mut()
+            .find(|candidate| candidate.sequence == source.sequence)
+        {
             order.filled = source.filled;
             order.allocated_margin = source.allocated_margin;
             order.remaining = source.remaining;
@@ -312,7 +314,11 @@ fn match_batch(request: &ProofRequest) -> MatchOutput {
 
 fn to_book_order(intent: RecoveredIntent, sequence: usize) -> BookOrder {
     let signed_size = parse_i128(&intent.signed_size);
-    let side = if signed_size >= 0 { Side::Long } else { Side::Short };
+    let side = if signed_size >= 0 {
+        Side::Long
+    } else {
+        Side::Short
+    };
     let size = signed_size.unsigned_abs();
     let limit_price = parse_u128(&intent.limit_price);
     let margin = parse_u128(&intent.margin);
@@ -363,11 +369,21 @@ fn create_fill(
 ) -> Fill {
     let margin = allocate_margin(order, size);
     assert!(
-        has_initial_margin(size, price, margin, parse_u128(&request.market.initial_margin_rate)),
+        has_initial_margin(
+            size,
+            price,
+            margin,
+            parse_u128(&request.market.initial_margin_rate)
+        ),
         "insufficient initial margin"
     );
     assert!(
-        has_max_leverage(size, price, margin, parse_u128(&request.market.max_leverage)),
+        has_max_leverage(
+            size,
+            price,
+            margin,
+            parse_u128(&request.market.max_leverage)
+        ),
         "max leverage exceeded"
     );
 
@@ -377,10 +393,8 @@ fn create_fill(
     let owner_digest = digest_to_field_hex(&format!("owner:{}", order.intent.owner_commitment));
     let rho_digest = digest_to_field_hex(&format!("rho:{rho}"));
     let blinding = digest_to_field_hex(&format!("blinding:{blinding_raw}"));
-    let spend_secret_digest = digest_to_field_hex(&format!(
-        "spend:{}:{}",
-        order.intent.owner_commitment, rho
-    ));
+    let spend_secret_digest =
+        digest_to_field_hex(&format!("spend:{}:{}", order.intent.owner_commitment, rho));
     let position_commitment = circuit_position_commitment(
         &market_digest,
         order.side,
@@ -424,8 +438,16 @@ fn create_execution(
     long_fill: &Fill,
     short_fill: &Fill,
 ) -> Execution {
-    let maker = if long.sequence <= short.sequence { long } else { short };
-    let taker = if maker.sequence == long.sequence { short } else { long };
+    let maker = if long.sequence <= short.sequence {
+        long
+    } else {
+        short
+    };
+    let taker = if maker.sequence == long.sequence {
+        short
+    } else {
+        long
+    };
     Execution {
         long_intent_commitment: long.intent.intent_commitment.clone(),
         long_limit_price: long.limit_price,
@@ -591,7 +613,13 @@ fn match_transcript_digest(output: &MatchOutput) -> String {
                     })
                     .collect(),
             ),
-            Norm::Array(output.margin_change_commitments.iter().map(|value| Norm::text(value.as_str())).collect()),
+            Norm::Array(
+                output
+                    .margin_change_commitments
+                    .iter()
+                    .map(|value| Norm::text(value.as_str()))
+                    .collect(),
+            ),
             Norm::Array(
                 output
                     .order_updates
@@ -623,7 +651,13 @@ fn match_transcript_digest(output: &MatchOutput) -> String {
                     })
                     .collect(),
             ),
-            Norm::Array(output.spent_nullifiers.iter().map(|value| Norm::text(value.as_str())).collect()),
+            Norm::Array(
+                output
+                    .spent_nullifiers
+                    .iter()
+                    .map(|value| Norm::text(value.as_str()))
+                    .collect(),
+            ),
             Norm::num(output.aggregate_volume),
             Norm::num(output.open_interest_delta),
             Norm::num(output.residual_size),
@@ -633,25 +667,35 @@ fn match_transcript_digest(output: &MatchOutput) -> String {
     )
 }
 
-fn settlement_digest(
-    batch_id: &str,
-    market_id: &str,
-    old_root: &str,
-    new_root: &str,
-    output: &MatchOutput,
-) -> String {
+fn settlement_digest(batch_id: &str, market_id: &str, output: &MatchOutput) -> String {
     hash_fields(
         "risc0-settlement",
         &[
             Norm::text(batch_id),
             Norm::text(market_id),
-            Norm::text(normalize_hex(old_root)),
-            Norm::text(normalize_hex(new_root)),
             Norm::text(&output.match_transcript_digest),
             Norm::Array(output.order_updates.iter().map(order_update_norm).collect()),
-            Norm::Array(output.fills.iter().map(|fill| Norm::text(&fill.position_commitment)).collect()),
-            Norm::Array(output.margin_change_commitments.iter().map(|value| Norm::text(value.as_str())).collect()),
-            Norm::Array(output.spent_nullifiers.iter().map(|value| Norm::text(value.as_str())).collect()),
+            Norm::Array(
+                output
+                    .fills
+                    .iter()
+                    .map(|fill| Norm::text(&fill.position_commitment))
+                    .collect(),
+            ),
+            Norm::Array(
+                output
+                    .margin_change_commitments
+                    .iter()
+                    .map(|value| Norm::text(value.as_str()))
+                    .collect(),
+            ),
+            Norm::Array(
+                output
+                    .spent_nullifiers
+                    .iter()
+                    .map(|value| Norm::text(value.as_str()))
+                    .collect(),
+            ),
             Norm::num(output.aggregate_volume),
             Norm::num(output.open_interest_delta),
             Norm::num(output.residual_size),
@@ -661,7 +705,10 @@ fn settlement_digest(
 
 fn order_update_norm(update: &OrderUpdate) -> Norm {
     let mut entries = vec![
-        ("intentCommitment".to_string(), Norm::text(&update.intent_commitment)),
+        (
+            "intentCommitment".to_string(),
+            Norm::text(&update.intent_commitment),
+        ),
         ("status".to_string(), Norm::text(&update.status)),
     ];
     if let Some(residual) = &update.residual_commitment {
@@ -672,10 +719,14 @@ fn order_update_norm(update: &OrderUpdate) -> Norm {
 
 fn batch_public_input_bytes(draft: &SettlementDraft) -> Vec<u8> {
     let mut out = Vec::new();
-    append_field(&mut out, &hash_fields("batch-id", &[Norm::text(&draft.batch_id)]));
-    append_field(&mut out, &hash_fields("market-id", &[Norm::text(&draft.market_id)]));
-    append_field(&mut out, &draft.old_root);
-    append_field(&mut out, &draft.new_root);
+    append_field(
+        &mut out,
+        &hash_fields("batch-id", &[Norm::text(&draft.batch_id)]),
+    );
+    append_field(
+        &mut out,
+        &hash_fields("market-id", &[Norm::text(&draft.market_id)]),
+    );
     append_field(&mut out, &draft.settlement_digest);
     append_public_vec(
         &mut out,
@@ -726,12 +777,16 @@ fn assert_settlement(actual: &SettlementDraft, expected: &SettlementDraft) {
     assert_eq!(actual.aggregate_volume, expected.aggregate_volume);
     assert_eq!(actual.batch_id, expected.batch_id);
     assert_eq!(actual.fill_count, expected.fill_count);
-    assert_eq!(actual.margin_change_commitments, expected.margin_change_commitments);
+    assert_eq!(
+        actual.margin_change_commitments,
+        expected.margin_change_commitments
+    );
     assert_eq!(actual.market_id, expected.market_id);
-    assert_eq!(actual.match_transcript_digest, expected.match_transcript_digest);
+    assert_eq!(
+        actual.match_transcript_digest,
+        expected.match_transcript_digest
+    );
     assert_eq!(actual.new_commitments, expected.new_commitments);
-    assert_eq!(actual.new_root, normalize_hex(&expected.new_root));
-    assert_eq!(actual.old_root, normalize_hex(&expected.old_root));
     assert_eq!(actual.open_interest_delta, expected.open_interest_delta);
     assert_eq!(actual.order_updates, expected.order_updates);
     assert_eq!(actual.residual_size, expected.residual_size);
@@ -774,24 +829,6 @@ fn circuit_position_commitment(
     field_hash_pair(&left, &right)
 }
 
-fn field_merkle_root(leaves: &[String]) -> String {
-    let width = 1usize << FIELD_MERKLE_DEPTH;
-    assert!(leaves.len() <= width, "field merkle tree is full");
-    let mut current = leaves.iter().map(|leaf| field_hex(to_field_biguint(leaf))).collect::<Vec<_>>();
-    current.sort();
-    while current.len() < width {
-        current.push(field_hex(BigUint::zero()));
-    }
-    for _ in 0..FIELD_MERKLE_DEPTH {
-        let mut next = Vec::with_capacity(current.len() / 2);
-        for pair in current.chunks_exact(2) {
-            next.push(field_hash_pair(&pair[0], &pair[1]));
-        }
-        current = next;
-    }
-    current[0].clone()
-}
-
 fn field_hash_pair(left: &str, right: &str) -> String {
     let prime = field_prime();
     let value = (to_field_biguint(left) * LEFT_FACTOR
@@ -811,7 +848,10 @@ fn field_hex(value: BigUint) -> String {
 
 fn to_field_biguint(value: &str) -> BigUint {
     let prime = field_prime();
-    parse_bigint(value).mod_floor(&BigInt::from(prime)).to_biguint().unwrap()
+    parse_bigint(value)
+        .mod_floor(&BigInt::from(prime))
+        .to_biguint()
+        .unwrap()
 }
 
 trait ModFloor {
@@ -834,7 +874,8 @@ fn parse_bigint(value: &str) -> BigInt {
     if let Some(hex) = trimmed.strip_prefix("0x") {
         BigInt::parse_bytes(hex.as_bytes(), 16).unwrap_or_else(|| panic!("invalid hex: {value}"))
     } else {
-        BigInt::parse_bytes(trimmed.as_bytes(), 10).unwrap_or_else(|| panic!("invalid integer: {value}"))
+        BigInt::parse_bytes(trimmed.as_bytes(), 10)
+            .unwrap_or_else(|| panic!("invalid integer: {value}"))
     }
 }
 
@@ -883,7 +924,11 @@ impl Norm {
         match self {
             Self::Array(items) => format!(
                 "[{}]",
-                items.iter().map(Self::normalize).collect::<Vec<_>>().join(",")
+                items
+                    .iter()
+                    .map(Self::normalize)
+                    .collect::<Vec<_>>()
+                    .join(",")
             ),
             Self::I128(value) => value.to_string(),
             Self::Num(value) => value.to_string(),
@@ -904,23 +949,16 @@ impl Norm {
     }
 }
 
-fn normalize_hex(value: &str) -> String {
-    if value == "0x0" {
-        return "0x0".to_string();
-    }
-    if let Some(hex) = value.strip_prefix("0x") {
-        format!("0x{}", hex.to_lowercase())
-    } else {
-        value.to_string()
-    }
-}
-
 fn parse_u128(value: &str) -> u128 {
-    value.parse::<u128>().unwrap_or_else(|_| panic!("invalid u128: {value}"))
+    value
+        .parse::<u128>()
+        .unwrap_or_else(|_| panic!("invalid u128: {value}"))
 }
 
 fn parse_i128(value: &str) -> i128 {
-    value.parse::<i128>().unwrap_or_else(|_| panic!("invalid i128: {value}"))
+    value
+        .parse::<i128>()
+        .unwrap_or_else(|_| panic!("invalid i128: {value}"))
 }
 
 fn side_str(side: Side) -> &'static str {

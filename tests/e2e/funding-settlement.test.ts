@@ -82,7 +82,6 @@ describe("funding settlement enforcement", () => {
             marketId: input.marketId,
             markPrice: input.markPrice,
             newPositionCommitment: input.newPositionCommitment,
-            newPositionRoot: input.newPositionRoot,
             positionCommitment: input.positionCommitment,
             positionNullifier: input.positionNullifier,
             positionRoot: input.positionRoot,
@@ -120,7 +119,6 @@ describe("funding settlement enforcement", () => {
             marketId: input.marketId,
             markPrice: input.markPrice,
             newPositionCommitment: input.newPositionCommitment,
-            newPositionRoot: input.newPositionRoot,
             positionCommitment: input.positionCommitment,
             positionNullifier: input.positionNullifier,
             positionRoot: input.positionRoot,
@@ -169,7 +167,6 @@ describe("funding settlement enforcement", () => {
     );
 
     const context = service.context({
-      newPositionCommitment: closeInput.newPositionCommitment,
       ownerCommitment: owner,
       positionCommitment,
     });
@@ -192,7 +189,6 @@ describe("funding settlement enforcement", () => {
             marketId: input.marketId,
             markPrice: input.markPrice,
             newPositionCommitment: input.newPositionCommitment,
-            newPositionRoot: input.newPositionRoot,
             positionCommitment: input.positionCommitment,
             positionNullifier: input.positionNullifier,
             positionRoot: input.positionRoot,
@@ -283,7 +279,6 @@ describe("funding settlement enforcement", () => {
             marketId: input.marketId,
             markPrice: input.markPrice,
             newPositionCommitment: input.newPositionCommitment,
-            newPositionRoot: input.newPositionRoot,
             positionCommitment: input.positionCommitment,
             positionNullifier: input.positionNullifier,
             positionRoot: input.positionRoot,
@@ -342,7 +337,6 @@ describe("funding settlement enforcement", () => {
             marketId: input.marketId,
             markPrice: input.markPrice,
             newPositionCommitment: input.newPositionCommitment,
-            newPositionRoot: input.newPositionRoot,
             positionCommitment: input.positionCommitment,
             positionNullifier: input.positionNullifier,
             positionRoot: input.positionRoot,
@@ -537,8 +531,6 @@ function setupPositionWithConditionalClose(options: { triggered?: boolean } = {}
     marginChangeCommitments: [],
     marketId: market.marketId,
     newCommitments: [positionCommitment],
-    newRoot: executor.store.positionMembershipRootWith(positionCommitment),
-    oldRoot: executor.store.positionMembershipRoot(),
     openInterestDelta: 1n,
     orderUpdates: [],
     proof: settlementProof,
@@ -575,7 +567,6 @@ function setupPositionWithConditionalClose(options: { triggered?: boolean } = {}
     });
   }
 
-  const newPositionRoot = executor.store.positionMembershipRootWith(newPositionCommitment);
   return {
     closeCommitment,
     closeInput: {
@@ -599,10 +590,9 @@ function setupPositionWithConditionalClose(options: { triggered?: boolean } = {}
       newPositionBlinding: hashFields("new-position-blinding", ["funding"]),
       newPositionCommitment,
       newPositionRhoDigest: hashFields("new-position-rho", ["funding"]),
-      newPositionRoot,
       ownerDigest: hashFields("owner", [owner]),
-      pathIndices: Array(8).fill(false),
-      pathSiblings: Array(8).fill("0x0" as Hex),
+      pathIndices: Array(20).fill(false),
+      pathSiblings: Array(20).fill("0x0" as Hex),
       positionCommitment,
       positionNullifier,
       positionRoot: executor.store.positionMembershipRoot(),
@@ -674,8 +664,6 @@ function setupPositionForLiquidation(): {
     marginChangeCommitments: [],
     marketId: market.marketId,
     newCommitments: [positionCommitment],
-    newRoot: executor.store.positionMembershipRootWith(positionCommitment),
-    oldRoot: executor.store.positionMembershipRoot(),
     openInterestDelta: 3n,
     orderUpdates: [],
     proof: settlementProof,

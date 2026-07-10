@@ -1,4 +1,4 @@
-import { commitIntent, fieldMerkleRoot, intentBindingFields, ownerCommitment } from "@pnlx/crypto";
+import { commitIntent, intentBindingFields, ownerCommitment } from "@pnlx/crypto";
 import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
 import {
   assertPositionOpeningAccountEvent,
@@ -164,18 +164,11 @@ export class ExecutorService implements PnlxExecutor {
       intents: privateIntents,
       market,
     });
-    const newRoot = fieldMerkleRoot([
-      ...this.store.positionCommitments,
-      ...match.fills.map((fill) => fill.positionCommitment),
-    ]);
     const settlement = this.proofs.createSettlement({
       batchId: input.batchId,
       intents: privateIntents,
       market,
       match,
-      newRoot,
-      oldRoot: this.store.positionMembershipRoot(),
-      positionCommitments: [...this.store.positionCommitments],
     });
     const positionOpenings = createPositionOpenings(settlement, match.fills);
     const residualPrivateIntents = match.residuals;
@@ -215,18 +208,11 @@ export class ExecutorService implements PnlxExecutor {
       intents: privateIntents,
       market,
     });
-    const newRoot = fieldMerkleRoot([
-      ...this.store.positionCommitments,
-      ...match.fills.map((fill) => fill.positionCommitment),
-    ]);
     const settlement = await this.proofs.createSettlementAsync({
       batchId: input.batchId,
       intents: privateIntents,
       market,
       match,
-      newRoot,
-      oldRoot: this.store.positionMembershipRoot(),
-      positionCommitments: [...this.store.positionCommitments],
     });
     const positionOpenings = createPositionOpenings(settlement, match.fills);
     const residualPrivateIntents = match.residuals;
@@ -277,13 +263,6 @@ export class ExecutorService implements PnlxExecutor {
     const { settlement } = transcript;
     const market = this.store.markets.get(settlement.marketId);
     if (!market) throw new Error("unknown market");
-    if (settlement.oldRoot !== this.store.positionMembershipRoot()) {
-      throw new Error("external settlement old root mismatch");
-    }
-    const expectedNewRoot = this.store.positionMembershipRootWithMany(settlement.newCommitments);
-    if (settlement.newRoot !== expectedNewRoot) {
-      throw new Error("external settlement new root mismatch");
-    }
     if (settlement.fillCount !== settlement.newCommitments.length) {
       throw new Error("external settlement fill count mismatch");
     }
