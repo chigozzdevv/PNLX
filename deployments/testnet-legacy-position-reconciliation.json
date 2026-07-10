@@ -1,0 +1,126 @@
+{
+  "schema": "pnlx-legacy-position-reconciliation-v1",
+  "network": "testnet",
+  "documentId": "testnet",
+  "positionStateContract": "CAR733CQNSMIYNZJP4I5C255WLRA4RO4LMVTLEYZG5CSYGGBVHEGVUXN",
+  "reconciledAt": "2026-07-09T23:34:48Z",
+  "reconciledRoot": "0x306282a50ccf65082f1694e4b0ff0fe43f6d6caa0f0e04e7b1a6e43aba03055b",
+  "records": [
+    {
+      "ordinal": 0,
+      "commitment": "0x1e077e3823bb46cfa799707cabe24e1dec33503ef0f17d80f11d2a6eddd8a143",
+      "classification": "position-opening",
+      "sourceFunction": "settle",
+      "sourceTxHash": "342e24b4e97a25105dbdb3ee9caeb18119560cc68f7695f2f5e9f63967b3d502",
+      "lifecycleEvidence": {
+        "status": "spent-by-position-close",
+        "positionNullifier": "0x167c645430d009dfcdc7080db86e984f5c1dc9c4ab881b97a749a9655baa282c",
+        "txHash": "9111dafab0b090650da3ef5308146ff00f18ffd2a5a6c10c54ade0660a4f1410"
+      }
+    },
+    {
+      "ordinal": 1,
+      "commitment": "0x11643a9939cf353dfaa0e37d5b1b39ecc8e3932f23c6995e85a68279bc8c958e",
+      "classification": "position-opening",
+      "sourceFunction": "settle",
+      "sourceTxHash": "342e24b4e97a25105dbdb3ee9caeb18119560cc68f7695f2f5e9f63967b3d502"
+    },
+    {
+      "ordinal": 2,
+      "commitment": "0x28b15a654526330858f47edc2c267fe1adb3ebe1afb184ad8d8f7149192878d1",
+      "classification": "position-opening",
+      "sourceFunction": "settle",
+      "sourceTxHash": "47f8989af2348291c9ebd7cbe8f4a1bbbae56d3e6e6fff37f3af3523ca4dc69b",
+      "lifecycleEvidence": {
+        "status": "spent-by-position-close",
+        "positionNullifier": "0x06f9865e680bd0248b1abb6f2549eca0b36676951489a503dc19a3ca319de5ec",
+        "txHash": "390586aba81994efa4af7b33d0218148ecf4c02ce93f13340668ade14ab4abcf"
+      }
+    },
+    {
+      "ordinal": 3,
+      "commitment": "0x2472f98f7c39697cfb5100ab1c75479f35081bfcb151bb5b79a2f632ee6a0fdc",
+      "classification": "position-opening",
+      "sourceFunction": "settle",
+      "sourceTxHash": "47f8989af2348291c9ebd7cbe8f4a1bbbae56d3e6e6fff37f3af3523ca4dc69b"
+    },
+    {
+      "ordinal": 4,
+      "commitment": "0x17184e86f15a50c78ec65dfd3dc826ef4b15ed86225053e80bf6321b4e553803",
+      "classification": "position-opening",
+      "sourceFunction": "settle",
+      "sourceTxHash": "666c1bc30d4cdf6101888869f0978e71e334df679c33331c36201d48c4e0e633",
+      "lifecycleEvidence": {
+        "status": "spent-by-position-close",
+        "positionNullifier": "0x29db090fd9559a101a7a6966a67e96bcbb72788d940022f912cb67d6b853c841",
+        "txHash": "5c7771965a8c2c86c14f2e294057e425e0f49a1e0837416d17d18051ebb6fdd6"
+      }
+    },
+    {
+      "ordinal": 5,
+      "commitment": "0x03b534047d4cd202fe5a2aa99ffe1eeabfce16e6f8148c00dd4432fa46e126d5",
+      "classification": "position-opening",
+      "sourceFunction": "settle",
+      "sourceTxHash": "666c1bc30d4cdf6101888869f0978e71e334df679c33331c36201d48c4e0e633"
+    },
+    {
+      "ordinal": 6,
+      "commitment": "0x2038cc05f0b2c2a4bea3f5038e8749d4d7572e822139ceb99e96fc1ec20fbd6b",
+      "classification": "position-close-output",
+      "sourceFunction": "settle_manual",
+      "sourceTxHash": "5c7771965a8c2c86c14f2e294057e425e0f49a1e0837416d17d18051ebb6fdd6"
+    },
+    {
+      "ordinal": 7,
+      "commitment": "0x2392fe587f64466b06dd90bbe5ff878582c335ea3ed6d532e89ddde72c0b7d81",
+      "classification": "position-close-output",
+      "sourceFunction": "settle_manual",
+      "sourceTxHash": "390586aba81994efa4af7b33d0218148ecf4c02ce93f13340668ade14ab4abcf"
+    },
+    {
+      "ordinal": 8,
+      "commitment": "0x0467128c2202ab4becece309efa67a02532e818d0c67c9b0d3f02e7367225eb5",
+      "classification": "position-opening",
+      "sourceFunction": "settle",
+      "sourceTxHash": "40fc196d2441e1a73b3caf78b993ba2d14768af487c4cdc9a34e9ea06b4bd0af",
+      "lifecycleEvidence": {
+        "status": "spent-by-position-close",
+        "positionNullifier": "0x0a95dadb1d752676a1420405146e4572d702dfbf13b13310a22bc02f5306c80f",
+        "txHash": "1696199c0995b591a98f8b20596ac7af1f7230284e4df10ceefd4c740d0fec28"
+      }
+    },
+    {
+      "ordinal": 9,
+      "commitment": "0x061f57bf33a9ff737f6e0b042bd0693e578ec70783d6b59f2fa84f23173b4b35",
+      "classification": "position-opening",
+      "sourceFunction": "settle",
+      "sourceTxHash": "40fc196d2441e1a73b3caf78b993ba2d14768af487c4cdc9a34e9ea06b4bd0af",
+      "lifecycleEvidence": {
+        "status": "spent-by-position-close",
+        "positionNullifier": "0x2c65fd2d5b4750252c869bb781b4ef3015b2b1f9b88ba72b4d3c2e7c7a445737",
+        "txHash": "e8762c19eb8dad402d343e366b6e3a797756e429eeaf81c59c84e7c495ca871d"
+      }
+    },
+    {
+      "ordinal": 10,
+      "commitment": "0x05f4c7f65ee1d579d14adce46ca7b3fead6b52ca81718a9761c5a1b905b6f33c",
+      "classification": "position-close-output",
+      "sourceFunction": "settle_manual",
+      "sourceTxHash": "9111dafab0b090650da3ef5308146ff00f18ffd2a5a6c10c54ade0660a4f1410"
+    },
+    {
+      "ordinal": 11,
+      "commitment": "0x07e30d7d3481c172677796ca9a03e64eade5ec11e4f1b90c979f09b99d4235c0",
+      "classification": "position-close-output",
+      "sourceFunction": "settle_manual",
+      "sourceTxHash": "e8762c19eb8dad402d343e366b6e3a797756e429eeaf81c59c84e7c495ca871d"
+    },
+    {
+      "ordinal": 12,
+      "commitment": "0x0d3c2d27682a3a530be404e2a5d699fe12a6c517c33d247e1475719c18f5245c",
+      "classification": "position-close-output",
+      "sourceFunction": "settle_manual",
+      "sourceTxHash": "1696199c0995b591a98f8b20596ac7af1f7230284e4df10ceefd4c740d0fec28"
+    }
+  ]
+}

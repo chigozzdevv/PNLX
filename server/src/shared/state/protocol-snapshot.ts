@@ -7,6 +7,7 @@ import type {
   ConditionalOrderRecord,
   DisclosureRecord,
   FundingUpdateRecord,
+  FundingPremiumSampleRecord,
   Hex,
   IntentRecord,
   LiquidationAutomationJobRecord,
@@ -21,7 +22,11 @@ import type {
   ResidualOrderRecord,
   WithdrawalRecord,
 } from "@pnlx/protocol-types";
-import type { ProtocolStore } from "@/shared/state/store";
+import {
+  retainedBatchExecutionRuns,
+  retainedFundingPremiumSamples,
+  type ProtocolStore,
+} from "@/shared/state/store";
 
 const ZERO_HEX = "0x0" as Hex;
 
@@ -33,6 +38,7 @@ export interface ProtocolStoreSnapshot {
   conditionalOrders: [Hex, ConditionalOrderCommitment][];
   disclosures: [Hex, DisclosureRecord][];
   fundingUpdates: [string, FundingUpdateRecord][];
+  fundingPremiumSamples: [string, FundingPremiumSampleRecord][];
   intents: [string, IntentRecord][];
   liquidationAutomationJobs: [Hex, LiquidationAutomationJobRecord][];
   liquidations: [Hex, LiquidationRecord][];
@@ -59,8 +65,9 @@ export function snapshotProtocolStore(store: ProtocolStore): ProtocolStoreSnapsh
     conditionalOrders: [...store.conditionalOrders.entries()],
     disclosures: [...store.disclosures.entries()],
     fundingUpdates: [...store.fundingUpdates.entries()],
+    fundingPremiumSamples: retainedFundingPremiumSamples([...store.fundingPremiumSamples.entries()]),
     liquidationAutomationJobs: [...store.liquidationAutomationJobs.entries()],
-    batchExecutionRuns: [...store.batchExecutionRuns.entries()],
+    batchExecutionRuns: retainedBatchExecutionRuns([...store.batchExecutionRuns.entries()]),
     intents: [...store.intents.entries()],
     liquidations: [...store.liquidations.entries()],
     marginCommitments: [...store.marginCommitments],
@@ -95,6 +102,7 @@ export function applyProtocolStoreSnapshot(store: ProtocolStore, snapshot: Parti
   store.positionCloses.clear();
   store.disclosures.clear();
   store.fundingUpdates.clear();
+  store.fundingPremiumSamples.clear();
   store.liquidationAutomationJobs.clear();
   store.batchExecutionRuns.clear();
   store.withdrawals.clear();
@@ -144,10 +152,15 @@ export function applyProtocolStoreSnapshot(store: ProtocolStore, snapshot: Parti
   for (const [key, value] of snapshot.positionCloses ?? []) store.positionCloses.set(key, value);
   for (const [key, value] of snapshot.disclosures ?? []) store.disclosures.set(key, value);
   for (const [key, value] of snapshot.fundingUpdates ?? []) store.fundingUpdates.set(key, value);
+  for (const [key, value] of retainedFundingPremiumSamples(snapshot.fundingPremiumSamples ?? [])) {
+    store.fundingPremiumSamples.set(key, value);
+  }
   for (const [key, value] of snapshot.liquidationAutomationJobs ?? []) {
     store.liquidationAutomationJobs.set(key, value);
   }
-  for (const [key, value] of snapshot.batchExecutionRuns ?? []) store.batchExecutionRuns.set(key, value);
+  for (const [key, value] of retainedBatchExecutionRuns(snapshot.batchExecutionRuns ?? [])) {
+    store.batchExecutionRuns.set(key, value);
+  }
   for (const [key, value] of snapshot.withdrawals ?? []) store.withdrawals.set(key, value);
   for (const value of snapshot.proofs ?? []) store.proofs.add(value);
 }

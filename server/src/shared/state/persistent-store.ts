@@ -9,6 +9,7 @@ import type {
   ConditionalOrderRecord,
   DisclosureRecord,
   FundingUpdateRecord,
+  FundingPremiumSampleRecord,
   Hex,
   IntentRecord,
   LiquidationAutomationJobRecord,
@@ -23,7 +24,7 @@ import type {
   ResidualOrderRecord,
   WithdrawalRecord,
 } from "@pnlx/protocol-types";
-import { ProtocolStore } from "@/shared/state/store";
+import { ProtocolStore, retainedBatchExecutionRuns } from "@/shared/state/store";
 
 const ZERO_HEX = "0x0" as Hex;
 
@@ -86,6 +87,10 @@ export class FileProtocolStore extends ProtocolStore {
 
   override addFundingUpdate(record: FundingUpdateRecord): void {
     this.persist(() => super.addFundingUpdate(record));
+  }
+
+  override addFundingPremiumSamples(records: FundingPremiumSampleRecord[]): void {
+    this.persist(() => super.addFundingPremiumSamples(records));
   }
 
   override addLiquidationAutomationJob(record: LiquidationAutomationJobRecord): void {
@@ -256,7 +261,9 @@ export class FileProtocolStore extends ProtocolStore {
     for (const [key, value] of snapshot.liquidationAutomationJobs ?? []) {
       this.liquidationAutomationJobs.set(key, value);
     }
-    for (const [key, value] of snapshot.batchExecutionRuns ?? []) this.batchExecutionRuns.set(key, value);
+    for (const [key, value] of retainedBatchExecutionRuns(snapshot.batchExecutionRuns ?? [])) {
+      this.batchExecutionRuns.set(key, value);
+    }
     for (const [key, value] of snapshot.withdrawals) this.withdrawals.set(key, value);
     for (const value of snapshot.proofs) this.proofs.add(value);
   }
@@ -270,7 +277,7 @@ export class FileProtocolStore extends ProtocolStore {
       disclosures: [...this.disclosures.entries()],
       fundingUpdates: [...this.fundingUpdates.entries()],
       liquidationAutomationJobs: [...this.liquidationAutomationJobs.entries()],
-      batchExecutionRuns: [...this.batchExecutionRuns.entries()],
+      batchExecutionRuns: retainedBatchExecutionRuns([...this.batchExecutionRuns.entries()]),
       intents: [...this.intents.entries()],
       liquidations: [...this.liquidations.entries()],
       marginCommitments: [...this.marginCommitments],

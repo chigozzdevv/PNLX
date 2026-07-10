@@ -7,6 +7,7 @@ import type {
   ConditionalOrderRecord,
   DisclosureRecord,
   FundingUpdateRecord,
+  FundingPremiumSampleRecord,
   Hex,
   IntentRecord,
   LiquidationAutomationJobRecord,
@@ -24,6 +25,9 @@ import type {
 import { EMPTY_ROOT, fieldMerkleProof, fieldMerkleRoot, merkleRoot } from "@pnlx/crypto";
 import { assertPrivateMatchIntent } from "@/workers/batch-matcher/private-intent";
 
+export const BATCH_EXECUTION_RUN_RETENTION = 1_000;
+export const FUNDING_PREMIUM_SAMPLE_RETENTION = 120;
+
 export class ProtocolStore {
   readonly marginCommitments = new Set<Hex>();
   readonly positionCommitments = new Set<Hex>();
@@ -40,6 +44,7 @@ export class ProtocolStore {
   readonly positionCloses = new Map<Hex, PositionCloseRecord>();
   readonly disclosures = new Map<Hex, DisclosureRecord>();
   readonly fundingUpdates = new Map<string, FundingUpdateRecord>();
+  readonly fundingPremiumSamples = new Map<string, FundingPremiumSampleRecord>();
   readonly liquidationAutomationJobs = new Map<Hex, LiquidationAutomationJobRecord>();
   readonly batchExecutionRuns = new Map<Hex, BatchExecutionRunRecord>();
   readonly withdrawals = new Map<Hex, WithdrawalRecord>();
@@ -135,6 +140,14 @@ export class ProtocolStore {
     this.fundingUpdates.set(key, record);
   }
 
+  addFundingPremiumSamples(records: FundingPremiumSampleRecord[]): void {
+    for (const record of records) {
+      const key = `${record.marketId}:${record.sampledAt}`;
+      this.fundingPremiumSamples.set(key, record);
+    }
+    trimFundingPremiumSamples(this.fundingPremiumSamples);
+  }
+
   addLiquidationAutomationJob(record: LiquidationAutomationJobRecord): void {
     if (this.liquidationAutomationJobs.has(record.jobId)) {
       throw new Error("liquidation automation job already exists");
@@ -154,6 +167,7 @@ export class ProtocolStore {
       throw new Error("batch execution run already exists");
     }
     this.batchExecutionRuns.set(record.runId, record);
+    trimBatchExecutionRuns(this.batchExecutionRuns);
   }
 
   addIntent(record: IntentRecord, privateMatchIntent?: PrivateMatchIntent): void {
@@ -512,6 +526,41 @@ export class ProtocolStore {
     return [...this.positionLifecycle.values()].find(
       (position) => position.positionNullifier === positionNullifier,
     );
+  }
+}
+
+export function retainedBatchExecutionRuns(
+  entries: [Hex, BatchExecutionRunRecord][],
+): [Hex, BatchExecutionRunRecord][] {
+  return entries.slice(-BATCH_EXECUTION_RUN_RETENTION);
+}
+
+export function retainedFundingPremiumSamples(
+  entries: [string, FundingPremiumSampleRecord][],
+): [string, FundingPremiumSampleRecord][] {
+  const retained = new Set<string>();
+  const counts = new Map<string, number>();
+  for (const [key, record] of [...entries].reverse()) {
+    const count = counts.get(record.marketId) ?? 0;
+    if (count >= FUNDING_PREMIUM_SAMPLE_RETENTION) continue;
+    counts.set(record.marketId, count + 1);
+    retained.add(key);
+  }
+  return entries.filter(([key]) => retained.has(key));
+}
+
+function trimBatchExecutionRuns(runs: Map<Hex, BatchExecutionRunRecord>): void {
+  while (runs.size > BATCH_EXECUTION_RUN_RETENTION) {
+    const oldest = runs.keys().next().value as Hex | undefined;
+    if (!oldest) return;
+    runs.delete(oldest);
+  }
+}
+
+function trimFundingPremiumSamples(samples: Map<string, FundingPremiumSampleRecord>): void {
+  const retained = new Map(retainedFundingPremiumSamples([...samples.entries()]));
+  for (const key of samples.keys()) {
+    if (!retained.has(key)) samples.delete(key);
   }
 }
 

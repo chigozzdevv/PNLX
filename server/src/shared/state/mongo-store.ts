@@ -1,4 +1,5 @@
-import { MongoClient, type Collection } from "mongodb";
+import { randomUUID } from "node:crypto";
+import { MongoClient, type Collection, type Db } from "mongodb";
 import type {
   AccountEventRecord,
   AccountEncryptionKeyRecord,
@@ -8,6 +9,7 @@ import type {
   ConditionalOrderRecord,
   DisclosureRecord,
   FundingUpdateRecord,
+  FundingPremiumSampleRecord,
   Hex,
   IntentRecord,
   LiquidationAutomationJobRecord,
@@ -27,29 +29,51 @@ import {
   applyProtocolStoreSnapshot,
   parseProtocolSnapshot,
   snapshotProtocolStore,
-  stringifyProtocolSnapshot,
 } from "@/shared/state/protocol-snapshot";
+import {
+  NORMALIZED_PROTOCOL_FORMAT,
+  StaleProtocolStateError,
+  backupLegacyProtocolSnapshot,
+  commitProtocolCheckpoint,
+  deleteNormalizedSnapshot,
+  ensureNormalizedSnapshotIndexes,
+  normalizedSnapshotCounts,
+  normalizedSnapshotPositionRoot,
+  pruneNormalizedSnapshots,
+  readNormalizedSnapshot,
+  recordProtocolCheckpointHistory,
+  writeNormalizedSnapshot,
+  type ProtocolCheckpointDocument,
+} from "@/shared/state/mongo-normalized-snapshot";
 
-interface MongoProtocolStoreDocument {
-  _id: string;
-  payload: string;
-  updatedAt: Date;
+export interface ProtocolPersistenceStatus {
+  error?: string;
+  format: "empty" | "legacy-json" | typeof NORMALIZED_PROTOCOL_FORMAT;
+  healthy: boolean;
+  version: number;
 }
 
 export interface MongoProtocolStoreOptions {
   collection?: string;
   database?: string;
   documentId?: string;
+  ensureIndexes?: boolean;
   uri: string;
 }
 
 export class MongoProtocolStore extends ProtocolStore {
+  private format: ProtocolPersistenceStatus["format"] = "empty";
+  private legacyPayload?: string;
   private pendingSave: Promise<void> = Promise.resolve();
+  private persistenceFailure?: Error;
   private saveDepth = 0;
+  private version = 0;
 
   private constructor(
     private readonly client: MongoClient,
-    private readonly collection: Collection<MongoProtocolStoreDocument>,
+    private readonly db: Db,
+    private readonly collection: Collection<ProtocolCheckpointDocument>,
+    private readonly baseCollection: string,
     private readonly documentId: string,
   ) {
     super();
@@ -59,9 +83,19 @@ export class MongoProtocolStore extends ProtocolStore {
     const client = new MongoClient(options.uri);
     await client.connect();
     const db = client.db(options.database || "pnlx");
-    const collection = db.collection<MongoProtocolStoreDocument>(options.collection || "protocol_state");
-    const store = new MongoProtocolStore(client, collection, options.documentId || "default");
+    const baseCollection = options.collection || "protocol_state";
+    const collection = db.collection<ProtocolCheckpointDocument>(baseCollection);
+    const store = new MongoProtocolStore(
+      client,
+      db,
+      collection,
+      baseCollection,
+      options.documentId || "default",
+    );
     await store.load();
+    if (options.ensureIndexes) {
+      await ensureNormalizedSnapshotIndexes(db, baseCollection);
+    }
     return store;
   }
 
@@ -72,6 +106,23 @@ export class MongoProtocolStore extends ProtocolStore {
   async close(): Promise<void> {
     await this.flush();
     await this.client.close();
+  }
+
+  async migrate(): Promise<ProtocolPersistenceStatus> {
+    this.assertWritable();
+    if (this.format === NORMALIZED_PROTOCOL_FORMAT) return this.persistenceStatus();
+    this.queueSave();
+    await this.flush();
+    return this.persistenceStatus();
+  }
+
+  persistenceStatus(): ProtocolPersistenceStatus {
+    return {
+      ...(this.persistenceFailure ? { error: this.persistenceFailure.message } : {}),
+      format: this.format,
+      healthy: !this.persistenceFailure,
+      version: this.version,
+    };
   }
 
   override addMarginCommitment(commitment: Hex): void {
@@ -99,6 +150,10 @@ export class MongoProtocolStore extends ProtocolStore {
 
   override addFundingUpdate(record: FundingUpdateRecord): void {
     this.persist(() => super.addFundingUpdate(record));
+  }
+
+  override addFundingPremiumSamples(records: FundingPremiumSampleRecord[]): void {
+    this.persist(() => super.addFundingPremiumSamples(records));
   }
 
   override addLiquidationAutomationJob(record: LiquidationAutomationJobRecord): void {
@@ -186,6 +241,7 @@ export class MongoProtocolStore extends ProtocolStore {
   }
 
   private persist<T>(operation: () => T): T {
+    this.assertWritable();
     this.saveDepth += 1;
     try {
       const result = operation();
@@ -198,26 +254,125 @@ export class MongoProtocolStore extends ProtocolStore {
 
   private async load(): Promise<void> {
     const document = await this.collection.findOne({ _id: this.documentId });
-    if (!document?.payload) return;
+    if (!document) return;
+    this.version = parseVersion(document.version);
+    if (document.format === NORMALIZED_PROTOCOL_FORMAT) {
+      applyProtocolStoreSnapshot(
+        this,
+        await readNormalizedSnapshot(this.db, this.baseCollection, document),
+      );
+      this.format = NORMALIZED_PROTOCOL_FORMAT;
+      return;
+    }
+    if (!document.payload) {
+      throw new Error(`protocol checkpoint ${this.documentId} has no readable state`);
+    }
+    this.legacyPayload = document.payload;
     applyProtocolStoreSnapshot(this, parseProtocolSnapshot(document.payload));
+    this.format = "legacy-json";
   }
 
   private queueSave(): void {
-    const payload = stringifyProtocolSnapshot(snapshotProtocolStore(this));
-    this.pendingSave = this.pendingSave.then(async () => {
-      await this.collection.updateOne(
-        { _id: this.documentId },
-        {
-          $set: {
-            payload,
-            updatedAt: new Date(),
-          },
-        },
-        { upsert: true },
-      );
-    });
-    this.pendingSave.catch((error) => {
-      console.error("failed to persist protocol state to MongoDB", error);
+    const snapshot = snapshotProtocolStore(this);
+    const operation = this.pendingSave.then(() => this.saveSnapshot(snapshot));
+    this.pendingSave = operation;
+    void operation.catch((error) => {
+      const failure = asError(error);
+      this.persistenceFailure ??= failure;
+      console.error("failed to persist protocol state to MongoDB", failure);
     });
   }
+
+  private async saveSnapshot(snapshot: ReturnType<typeof snapshotProtocolStore>): Promise<void> {
+    const expectedVersion = this.version;
+    const nextVersion = expectedVersion + 1;
+    const snapshotId = randomUUID();
+    const counts = normalizedSnapshotCounts(snapshot);
+    const positionRoot = normalizedSnapshotPositionRoot(snapshot);
+
+    await writeNormalizedSnapshot(
+      this.db,
+      this.baseCollection,
+      this.documentId,
+      snapshotId,
+      nextVersion,
+      snapshot,
+    );
+    try {
+      if (this.legacyPayload) {
+        await backupLegacyProtocolSnapshot(
+          this.db,
+          this.baseCollection,
+          this.documentId,
+          this.legacyPayload,
+        );
+      }
+      const committedAt = new Date();
+      const checkpoint = {
+        _id: this.documentId,
+        counts,
+        format: NORMALIZED_PROTOCOL_FORMAT,
+        positionRoot,
+        snapshotId,
+        updatedAt: committedAt,
+        version: nextVersion,
+      } as const;
+      const committed = await commitProtocolCheckpoint(
+        this.collection,
+        checkpoint,
+        expectedVersion,
+      );
+      if (!committed) throw new StaleProtocolStateError(expectedVersion);
+
+      this.format = NORMALIZED_PROTOCOL_FORMAT;
+      this.legacyPayload = undefined;
+      this.version = nextVersion;
+      await Promise.all([
+        recordProtocolCheckpointHistory(this.db, this.baseCollection, {
+          _id: snapshotId,
+          committedAt,
+          counts,
+          documentId: this.documentId,
+          format: NORMALIZED_PROTOCOL_FORMAT,
+          positionRoot,
+          snapshotId,
+          version: nextVersion,
+        }),
+        pruneNormalizedSnapshots(
+          this.db,
+          this.baseCollection,
+          this.documentId,
+          nextVersion,
+        ),
+      ]).catch((error) => {
+        console.error("failed to maintain protocol snapshot history", error);
+      });
+    } catch (error) {
+      await deleteNormalizedSnapshot(
+        this.db,
+        this.baseCollection,
+        this.documentId,
+        snapshotId,
+      ).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private assertWritable(): void {
+    if (this.persistenceFailure) {
+      throw new Error(`protocol persistence is unhealthy: ${this.persistenceFailure.message}`);
+    }
+  }
+}
+
+function parseVersion(value: unknown): number {
+  if (value === undefined) return 0;
+  if (!Number.isSafeInteger(value) || Number(value) < 0) {
+    throw new Error("protocol checkpoint version is invalid");
+  }
+  return Number(value);
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
