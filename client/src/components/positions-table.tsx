@@ -281,7 +281,7 @@ function HistoryView({ activity }: { activity: ServerOwnerActivitySnapshot[] }) 
         <span>Market</span>
         <span>Status</span>
         <span>ID</span>
-        <span>Batch</span>
+        <span>Opening Batch</span>
         <span>ZK Proof</span>
         <span>Updated</span>
         <span>Proof Tx</span>
@@ -298,7 +298,7 @@ function HistoryView({ activity }: { activity: ServerOwnerActivitySnapshot[] }) 
             {shortAddress(item.id)}
           </span>
           <span title={item.batchId}>
-            {item.batchId ?? "--"}
+            {item.batchId ? shortAddress(item.batchId) : "--"}
           </span>
           <span>
             {item.boundlessRequestId ? (
@@ -314,7 +314,9 @@ function HistoryView({ activity }: { activity: ServerOwnerActivitySnapshot[] }) 
             {item.proofTxHash ? <TransactionLink hash={item.proofTxHash} label="Verified" /> : "--"}
           </span>
           <span>
-            {item.txHash ? <TransactionLink hash={item.txHash} label="View" /> : "--"}
+            {item.txHash ? (
+              <TransactionLink hash={item.txHash} label={settlementTransactionLabel(item.kind)} />
+            ) : "--"}
           </span>
         </div>
       ))}
@@ -381,6 +383,12 @@ function BoundlessLink({ requestId }: { requestId: `0x${string}` }) {
 
 function proofLabel(system?: "noir-ultrahonk" | "risc0-groth16"): string {
   return system === "risc0-groth16" ? "zkVM" : "Noir";
+}
+
+function settlementTransactionLabel(kind: ServerOwnerActivitySnapshot["kind"]): string {
+  if (kind === "position-close") return "Closed";
+  if (kind === "liquidation") return "Liquidated";
+  return "Settled";
 }
 
 function activityKind(kind: ServerOwnerActivitySnapshot["kind"]): string {

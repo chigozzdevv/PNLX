@@ -1404,8 +1404,9 @@ button:disabled {
 
 .positions-head.history-grid,
 .positions-row.history-grid {
-  grid-template-columns: 66px 108px 86px 84px 112px minmax(145px, 1fr) 106px 74px 92px 104px;
-  min-width: 1080px;
+  grid-template-columns: 66px 108px 86px 84px 112px minmax(124px, 1fr) 140px 74px 100px 110px;
+  min-width: 1160px;
+  column-gap: 12px;
 }
 
 .positions-head > span,
