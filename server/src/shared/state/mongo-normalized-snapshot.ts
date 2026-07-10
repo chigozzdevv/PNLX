@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { positionMerkleRoot } from "@pnlx/crypto";
+import { fieldMerkleRoot, positionMerkleRoot } from "@pnlx/crypto";
 import type { Hex } from "@pnlx/protocol-types";
 import type { Collection, Db, Filter } from "mongodb";
 import {
@@ -102,6 +102,10 @@ export function normalizedSnapshotPositionRoot(snapshot: ProtocolStoreSnapshot):
   return positionMerkleRoot(snapshot.positionCommitments);
 }
 
+export function legacyNormalizedSnapshotPositionRoot(snapshot: ProtocolStoreSnapshot): Hex {
+  return fieldMerkleRoot(snapshot.positionCommitments);
+}
+
 export function normalizedSnapshotRecords(
   documentId: string,
   snapshotId: string,
@@ -194,6 +198,7 @@ export async function readNormalizedSnapshot(
   db: Db,
   baseCollection: string,
   checkpoint: ProtocolCheckpointDocument,
+  positionRoot: (snapshot: ProtocolStoreSnapshot) => Hex = normalizedSnapshotPositionRoot,
 ): Promise<ProtocolStoreSnapshot> {
   if (
     checkpoint.format !== NORMALIZED_PROTOCOL_FORMAT ||
@@ -224,7 +229,7 @@ export async function readNormalizedSnapshot(
     ...checkpoint.counts,
     fundingPremiumSamples: checkpoint.counts.fundingPremiumSamples ?? 0,
   });
-  const actualRoot = normalizedSnapshotPositionRoot(snapshot);
+  const actualRoot = positionRoot(snapshot);
   if (actualRoot.toLowerCase() !== checkpoint.positionRoot.toLowerCase()) {
     throw new Error(
       `normalized protocol snapshot position root mismatch: expected ${checkpoint.positionRoot}, received ${actualRoot}`,

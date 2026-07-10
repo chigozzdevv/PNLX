@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { fieldMerkleRoot, positionMerkleRoot } from "@pnlx/crypto";
 import { loadEnv } from "../../server/src/config/env";
 import { readMakerNotes } from "../../server/src/shared/maker-note-store";
 import { MongoProtocolStore } from "../../server/src/shared/state/mongo-store";
@@ -30,16 +31,18 @@ const store = await MongoProtocolStore.connect({
   collection: env.mongodbCollection,
   database: env.mongodbDatabase,
   documentId: env.stellarNetwork,
+  positionTree: "legacy-sorted",
   uri: env.mongodbUri,
 });
 
 try {
   const snapshot = snapshotProtocolStore(store);
-  const localPositionRoot = store.positionMembershipRoot();
+  const sourcePositionRoot = fieldMerkleRoot(snapshot.positionCommitments);
+  const targetPositionRoot = positionMerkleRoot(snapshot.positionCommitments);
   const onchainPositionRoot = onchain.positionRoot();
-  if (localPositionRoot.toLowerCase() !== onchainPositionRoot.toLowerCase()) {
+  if (sourcePositionRoot.toLowerCase() !== onchainPositionRoot.toLowerCase()) {
     throw new Error(
-      `refusing inconsistent export: Mongo position root ${localPositionRoot}, on-chain ${onchainPositionRoot}`,
+      `refusing inconsistent export: Mongo source position root ${sourcePositionRoot}, on-chain ${onchainPositionRoot}`,
     );
   }
   const makerNotes = await readMakerNotes();
@@ -63,7 +66,8 @@ try {
     network: env.stellarNetwork,
     roots: {
       margin: store.marginMembershipRoot(),
-      position: localPositionRoot,
+      position: targetPositionRoot,
+      sourcePosition: sourcePositionRoot,
     },
     schema: "pnlx-protocol-transition-v1",
     snapshot,

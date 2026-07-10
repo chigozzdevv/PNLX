@@ -38,6 +38,7 @@ import {
   deleteNormalizedSnapshot,
   ensureNormalizedSnapshotIndexes,
   normalizedSnapshotCounts,
+  legacyNormalizedSnapshotPositionRoot,
   normalizedSnapshotPositionRoot,
   pruneNormalizedSnapshots,
   readNormalizedSnapshot,
@@ -58,6 +59,7 @@ export interface MongoProtocolStoreOptions {
   database?: string;
   documentId?: string;
   ensureIndexes?: boolean;
+  positionTree?: "canonical-append" | "legacy-sorted";
   uri: string;
 }
 
@@ -75,6 +77,7 @@ export class MongoProtocolStore extends ProtocolStore {
     private readonly collection: Collection<ProtocolCheckpointDocument>,
     private readonly baseCollection: string,
     private readonly documentId: string,
+    private readonly positionTree: "canonical-append" | "legacy-sorted",
   ) {
     super();
   }
@@ -91,6 +94,7 @@ export class MongoProtocolStore extends ProtocolStore {
       collection,
       baseCollection,
       options.documentId || "default",
+      options.positionTree ?? "canonical-append",
     );
     await store.load();
     if (options.ensureIndexes) {
@@ -274,7 +278,14 @@ export class MongoProtocolStore extends ProtocolStore {
     if (document.format === NORMALIZED_PROTOCOL_FORMAT) {
       applyProtocolStoreSnapshot(
         this,
-        await readNormalizedSnapshot(this.db, this.baseCollection, document),
+        await readNormalizedSnapshot(
+          this.db,
+          this.baseCollection,
+          document,
+          this.positionTree === "legacy-sorted"
+            ? legacyNormalizedSnapshotPositionRoot
+            : normalizedSnapshotPositionRoot,
+        ),
       );
       this.format = NORMALIZED_PROTOCOL_FORMAT;
       return;
