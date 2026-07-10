@@ -63,6 +63,20 @@ describe("public and owner indexer", () => {
       status: "running",
       updatedAt: Date.now(),
     });
+    const provingRun = [...store.batchExecutionRuns.values()].find(
+      (run) => run.phase === "proving" && run.status === "running",
+    );
+    if (!provingRun) throw new Error("expected proving run");
+    store.addBatchExecutionRun({
+      batchId: open.batchId,
+      completedAt: provingRun.startedAt + 20_000,
+      marketId: market.marketId,
+      phase: "matcher",
+      reason: "matcher: earlier request timed out",
+      runId: hashFields("batch-run", [open.intentCommitment, "older-failure"]),
+      startedAt: provingRun.startedAt - 1_000,
+      status: "failed",
+    });
     store.addConditionalOrder({
       closeCommitment,
       marketId: market.marketId,

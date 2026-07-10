@@ -128,9 +128,9 @@ export class IndexerService {
         run.startedAt >= order.createdAt - 5_000
       )
       .sort((left, right) =>
+        right.startedAt - left.startedAt ||
         (right.completedAt ?? right.updatedAt ?? right.startedAt) -
           (left.completedAt ?? left.updatedAt ?? left.startedAt) ||
-        right.startedAt - left.startedAt ||
         right.runId.localeCompare(left.runId)
       )[0];
   }
