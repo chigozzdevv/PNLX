@@ -96,6 +96,12 @@ export interface ServerOwnerPositionSnapshot {
   proofDigest?: Hex;
   proofVerificationTxHash?: Hex;
   journalDigest?: Hex;
+  lifecycleKind?: "close" | "liquidation";
+  lifecycleProofDigest?: Hex;
+  lifecycleProofSystem?: ServerProofMeta["proofSystem"];
+  lifecycleProofTxHash?: Hex;
+  lifecycleTxHash?: Hex;
+  proofSystem?: ServerProofMeta["proofSystem"];
   settlementDigest: Hex;
   settlementTxHash?: Hex;
   sourceIntentCommitment: Hex;
@@ -108,9 +114,10 @@ export interface ServerOwnerActivitySnapshot {
   boundlessRequestId?: Hex;
   dataCommitment?: Hex;
   id: Hex;
-  kind: "account-event" | "order" | "position";
+  kind: "account-event" | "order" | "position" | "position-close" | "liquidation";
   marketId?: string;
   proofDigest?: Hex;
+  proofSystem?: ServerProofMeta["proofSystem"];
   proofTxHash?: Hex;
   residualCommitment?: Hex;
   status?: ServerOwnerOrderSnapshot["status"] | ServerOwnerPositionSnapshot["status"];
@@ -217,6 +224,12 @@ export interface PositionRow {
   journalDigest?: Hex;
   proofDigest?: Hex;
   proofVerificationTxHash?: Hex;
+  lifecycleKind?: "close" | "liquidation";
+  lifecycleProofDigest?: Hex;
+  lifecycleProofSystem?: ServerProofMeta["proofSystem"];
+  lifecycleProofTxHash?: Hex;
+  lifecycleTxHash?: Hex;
+  proofSystem?: ServerProofMeta["proofSystem"];
   settlementDigest?: Hex;
   settlementTxHash?: Hex;
   privateState?: {

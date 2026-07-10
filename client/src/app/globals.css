@@ -1405,10 +1405,31 @@ button:disabled {
 }
 
 .transaction-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: var(--accent-green);
   font-size: 12px;
   font-weight: 900;
   text-decoration: none;
+}
+
+.proof-evidence-link {
+  color: #b8a7ff;
+}
+
+.evidence-stack,
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.evidence-stack {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
 }
 
 .transaction-link:hover {

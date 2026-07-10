@@ -1,4 +1,4 @@
-import { ShieldCheck } from "lucide-react";
+import { ExternalLink, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { formatNumber, formatUsd, shortAddress } from "@/lib/format";
 import type {
@@ -26,7 +26,6 @@ type TableView = "positions" | "orders" | "history";
 export type PositionsTableView = TableView;
 
 export function PositionsTable({
-  accountEventCount = 0,
   actionMessage,
   cancellingOrderId,
   activity = [],
@@ -41,7 +40,8 @@ export function PositionsTable({
 }: PositionsTableProps) {
   const [internalView, setInternalView] = useState<TableView>("positions");
   const view = activeView ?? internalView;
-  const rowCount = view === "positions" ? positions.length : view === "orders" ? orders.length : activity.length;
+  const visibleActivity = activity.filter((item) => item.kind !== "account-event");
+  const rowCount = view === "positions" ? positions.length : view === "orders" ? orders.length : visibleActivity.length;
   const selectView = (nextView: TableView) => {
     setInternalView(nextView);
     onViewChange?.(nextView);
@@ -70,7 +70,7 @@ export function PositionsTable({
             type="button"
             onClick={() => selectView("history")}
           >
-            History ({activity.length || accountEventCount})
+            History ({visibleActivity.length})
           </button>
         </div>
         {actionMessage ? (
@@ -90,7 +90,7 @@ export function PositionsTable({
         ) : view === "orders" ? (
           <OrdersView cancellingOrderId={cancellingOrderId} onCancelOrder={onCancelOrder} orders={orders} />
         ) : (
-          <HistoryView activity={activity} />
+          <HistoryView activity={visibleActivity} />
         )}
 
         {rowCount === 0 ? (
@@ -126,7 +126,7 @@ function PositionsView({
         <span>Market Price</span>
         <span>Net Value</span>
         <span>Status</span>
-        <span>Settlement</span>
+        <span>Evidence</span>
         <span />
       </div>
 
@@ -148,11 +148,21 @@ function PositionsView({
             <span>{privateNumber(position.netValue, formatUsd, position.privateDetails)}</span>
             <span>{statusLabel(position.status)}</span>
             <span>
-              {position.settlementTxHash ? (
-                <TransactionLink hash={position.settlementTxHash} label="Settled" />
-              ) : position.commitment ? (
-                <span title={position.commitment}>{shortAddress(position.commitment)}</span>
-              ) : "--"}
+              <span className="evidence-stack">
+                {position.lifecycleTxHash ? (
+                  <TransactionLink
+                    hash={position.lifecycleTxHash}
+                    label={position.lifecycleKind === "liquidation" ? "Liquidated" : "Closed"}
+                  />
+                ) : position.settlementTxHash ? (
+                  <TransactionLink hash={position.settlementTxHash} label="Opened" />
+                ) : position.commitment ? (
+                  <span title={position.commitment}>{shortAddress(position.commitment)}</span>
+                ) : "--"}
+                {position.boundlessRequestId ? (
+                  <BoundlessLink requestId={position.boundlessRequestId} />
+                ) : null}
+              </span>
             </span>
             <span>
               {position.status === "open" ? (
@@ -233,20 +243,26 @@ function OrdersView({
             {order.matching ? matcherLabel(order.matching) : shortAddress(order.matchingPayloadCommitment)}
           </span>
           <span>
-            {order.status === "open" || order.status === "partially-filled" ? (
-              <button
-                className="row-action-button"
-                disabled={!onCancelOrder || cancellingOrderId === order.intentCommitment}
-                type="button"
-                onClick={() => onCancelOrder?.(order)}
-              >
-                {cancellingOrderId === order.intentCommitment ? "Canceling" : "Cancel"}
-              </button>
-            ) : order.cancellationTxHash ? (
-              <TransactionLink hash={order.cancellationTxHash} label="Cancelled" />
-            ) : order.submissionTxHash ? (
-              <TransactionLink hash={order.submissionTxHash} label="Submitted" />
-            ) : "--"}
+            <span className="row-actions">
+              {order.cancellationTxHash ? (
+                <TransactionLink hash={order.cancellationTxHash} label="Cancelled" />
+              ) : order.submissionTxHash ? (
+                <TransactionLink hash={order.submissionTxHash} label="Submitted" />
+              ) : null}
+              {order.status === "open" || order.status === "partially-filled" ? (
+                <button
+                  className="row-action-button"
+                  disabled={!onCancelOrder || cancellingOrderId === order.intentCommitment}
+                  type="button"
+                  onClick={() => onCancelOrder?.(order)}
+                >
+                  {cancellingOrderId === order.intentCommitment ? "Canceling" : "Cancel"}
+                </button>
+              ) : null}
+              {!order.submissionTxHash && !order.cancellationTxHash && order.status !== "open" && order.status !== "partially-filled"
+                ? "--"
+                : null}
+            </span>
           </span>
         </div>
       ))}
@@ -264,10 +280,10 @@ function HistoryView({ activity }: { activity: ServerOwnerActivitySnapshot[] }) 
         <span>Status</span>
         <span>ID</span>
         <span>Batch</span>
-        <span>Proof / Data</span>
+        <span>ZK Proof</span>
         <span>Updated</span>
         <span>Proof Tx</span>
-        <span>Transaction</span>
+        <span>Settlement Tx</span>
       </div>
 
       {activity.map((item) => (
@@ -282,12 +298,14 @@ function HistoryView({ activity }: { activity: ServerOwnerActivitySnapshot[] }) 
           <span title={item.batchId}>
             {item.batchId ?? "--"}
           </span>
-          <span title={item.proofDigest ?? item.dataCommitment}>
-            {item.proofDigest
-              ? shortAddress(item.proofDigest)
-              : item.dataCommitment
-                ? shortAddress(item.dataCommitment)
-                : "--"}
+          <span>
+            {item.boundlessRequestId ? (
+              <BoundlessLink requestId={item.boundlessRequestId} />
+            ) : item.proofDigest ? (
+              <span title={`${proofLabel(item.proofSystem)}: ${item.proofDigest}`}>
+                {proofLabel(item.proofSystem)} {shortAddress(item.proofDigest)}
+              </span>
+            ) : "--"}
           </span>
           <span>{formatTime(item.updatedAt)}</span>
           <span>
@@ -338,12 +356,35 @@ function TransactionLink({ hash, label }: { hash: `0x${string}`; label: string }
       target="_blank"
       title={hash}
     >
-      {label}
+      <span>{label}</span>
+      <ExternalLink aria-hidden="true" size={12} strokeWidth={2.5} />
     </a>
   );
 }
 
+function BoundlessLink({ requestId }: { requestId: `0x${string}` }) {
+  return (
+    <a
+      className="transaction-link proof-evidence-link"
+      href={`https://explorer.boundless.network/orders/${requestId}`}
+      rel="noreferrer"
+      target="_blank"
+      title={`Boundless request ${requestId}`}
+    >
+      <span>Boundless</span>
+      <ExternalLink aria-hidden="true" size={12} strokeWidth={2.5} />
+    </a>
+  );
+}
+
+function proofLabel(system?: "noir-ultrahonk" | "risc0-groth16"): string {
+  return system === "risc0-groth16" ? "zkVM" : "Noir";
+}
+
 function activityKind(kind: ServerOwnerActivitySnapshot["kind"]): string {
+  if (kind === "position") return "Trade opened";
+  if (kind === "position-close") return "Trade closed";
+  if (kind === "liquidation") return "Liquidated";
   return kind
     .split("-")
     .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)

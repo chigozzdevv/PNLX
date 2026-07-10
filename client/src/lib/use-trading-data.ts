@@ -184,7 +184,13 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
         marketPrice,
         netValue: collateral ? collateral + (unrealizedPnl ?? 0) : undefined,
         journalDigest: position.journalDigest,
+        lifecycleKind: position.lifecycleKind,
+        lifecycleProofDigest: position.lifecycleProofDigest,
+        lifecycleProofSystem: position.lifecycleProofSystem,
+        lifecycleProofTxHash: position.lifecycleProofTxHash,
+        lifecycleTxHash: position.lifecycleTxHash,
         proofDigest: position.proofDigest,
+        proofSystem: position.proofSystem,
         proofVerificationTxHash: position.proofVerificationTxHash,
         privateState: opening
           ? {
