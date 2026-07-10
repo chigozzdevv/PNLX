@@ -40,12 +40,13 @@ export class PositionClosesService {
     const positionRoot = this.executor.store.positionMembershipRoot();
     if (membershipProof.root !== positionRoot) throw new Error("position root is not current");
     const market = marketConfig(this.executor, position.marketId);
+    const markPrice = this.currentMarkPrice(market);
 
     return {
       market: {
         fundingIndex: market.fundingIndex.toString(),
         marketId: market.marketId,
-        markPrice: market.oraclePrice.toString(),
+        markPrice: markPrice.toString(),
       },
       membershipProof,
       newPositionRoot: this.executor.store.positionMembershipRootWith(input.newPositionCommitment),
@@ -102,7 +103,7 @@ export class PositionClosesService {
 
   validate(input: CreatePositionCloseInput): void {
     const market = marketConfig(this.executor, input.marketId);
-    if (input.markPrice !== market.oraclePrice) {
+    if (input.markPrice !== this.currentMarkPrice(market)) {
       throw new Error("position close mark price mismatch");
     }
     if (input.positionRoot !== this.executor.store.positionMembershipRoot()) {
@@ -126,7 +127,7 @@ export class PositionClosesService {
     options: { requireConditionalTrigger?: boolean } = { requireConditionalTrigger: true },
   ): void {
     const market = marketConfig(this.executor, input.marketId);
-    if (input.markPrice !== market.oraclePrice) {
+    if (input.markPrice !== this.currentMarkPrice(market)) {
       throw new Error("position close mark price mismatch");
     }
     if (input.positionRoot !== this.executor.store.positionMembershipRoot()) {
@@ -178,6 +179,12 @@ export class PositionClosesService {
       throw new Error("settlements require on-chain relay");
     }
     assertSubmittedRelay(result, functionName);
+  }
+
+  private currentMarkPrice(market: MarketConfig): bigint {
+    return this.onchain?.enabled
+      ? this.onchain.marketPrice(market.marketId)
+      : market.oraclePrice;
   }
 
   private accountEventFor(record: CreatePositionCloseResult) {

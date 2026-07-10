@@ -90,7 +90,10 @@ export class LiquidationsService {
     positionRoot: `0x${string}`;
   }): void {
     const market = marketConfig(this.executor, input.marketId);
-    if (input.markPrice !== market.oraclePrice) {
+    const currentMarkPrice = this.onchain?.enabled
+      ? this.onchain.marketPrice(input.marketId)
+      : market.oraclePrice;
+    if (input.markPrice !== currentMarkPrice) {
       throw new Error("liquidation mark price mismatch");
     }
     if (input.maintenanceRate !== market.maintenanceMarginRate) {

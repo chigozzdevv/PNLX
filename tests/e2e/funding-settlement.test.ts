@@ -148,6 +148,36 @@ describe("funding settlement enforcement", () => {
     );
   });
 
+  test("uses the live on-chain mark price for close context and validation", () => {
+    const {
+      closeInput,
+      executor,
+      ownerCommitment: owner,
+      positionCommitment,
+    } = setupPositionWithConditionalClose();
+    const liveMarkPrice = closeInput.markPrice + 25n;
+    const service = new PositionClosesService(
+      executor,
+      {} as ProverService,
+      {
+        enabled: true,
+        marketPrice(marketId: string) {
+          expect(marketId).toBe(closeInput.marketId);
+          return liveMarkPrice;
+        },
+      } as never,
+    );
+
+    const context = service.context({
+      newPositionCommitment: closeInput.newPositionCommitment,
+      ownerCommitment: owner,
+      positionCommitment,
+    });
+
+    expect(context.market.markPrice).toBe(liveMarkPrice.toString());
+    expect(() => service.validate(closeInput)).toThrow("position close mark price mismatch");
+  });
+
   test("persists manual close proof and settlement transaction evidence", () => {
     const { closeInput, executor } = setupPositionWithConditionalClose();
     const proofTxHash = hashFields("tx", ["manual-close-proof"]);
@@ -399,6 +429,9 @@ describe("funding settlement enforcement", () => {
       testConditionalEnv(true),
       {
         enabled: true,
+        marketPrice() {
+          return closeInput.markPrice;
+        },
         registerConditionalOrder() {
           calls.push("register-relay");
           return { relays: [unsubmittedRelay("register")] };
@@ -458,6 +491,7 @@ function setupPositionWithConditionalClose(options: { triggered?: boolean } = {}
   closeCommitment: Hex;
   closeInput: PositionCloseWitness;
   executor: ExecutorService;
+  ownerCommitment: Hex;
   positionCommitment: Hex;
   positionNullifier: Hex;
 } {
@@ -579,6 +613,7 @@ function setupPositionWithConditionalClose(options: { triggered?: boolean } = {}
       spendSecretDigest: hashFields("spend", ["funding"]),
     },
     executor,
+    ownerCommitment: owner,
     positionCommitment,
     positionNullifier,
   };

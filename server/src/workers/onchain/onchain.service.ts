@@ -53,6 +53,11 @@ export class OnchainRelayService implements OnchainRelay {
     return this.config.enabled;
   }
 
+  marketPrice(marketId: string): bigint {
+    if (!this.config.enabled) throw new Error("on-chain relay is disabled");
+    return this.currentMarketPrice(marketId);
+  }
+
   deposit(commitment: Hex): OnchainRelayResult {
     if (!this.config.enabled) return empty();
     return {

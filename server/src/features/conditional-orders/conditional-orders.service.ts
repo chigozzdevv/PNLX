@@ -35,7 +35,7 @@ export class ConditionalOrdersService {
   trigger(input: CreateConditionalOrderInput): CreateConditionalOrderResult {
     const market = this.executor.store.markets.get(input.marketId);
     if (!market) throw new Error("unknown market");
-    if (input.markPrice !== market.oraclePrice) {
+    if (input.markPrice !== this.currentMarkPrice(market.marketId, market.oraclePrice)) {
       throw new Error("conditional close mark price mismatch");
     }
     const closeCommitment = commitConditionalOrder(input);
@@ -55,7 +55,7 @@ export class ConditionalOrdersService {
   triggerProven(input: CreateProvenConditionalOrderInput): CreateConditionalOrderResult {
     const market = this.executor.store.markets.get(input.marketId);
     if (!market) throw new Error("unknown market");
-    if (input.markPrice !== market.oraclePrice) {
+    if (input.markPrice !== this.currentMarkPrice(market.marketId, market.oraclePrice)) {
       throw new Error("conditional close mark price mismatch");
     }
     const registered = this.executor.store.conditionalOrders.get(input.closeCommitment);
@@ -111,6 +111,10 @@ export class ConditionalOrdersService {
       throw new Error("conditional orders require on-chain relay");
     }
     assertSubmittedRelay(result, functionName);
+  }
+
+  private currentMarkPrice(marketId: string, fallback: bigint): bigint {
+    return this.onchain?.enabled ? this.onchain.marketPrice(marketId) : fallback;
   }
 }
 
