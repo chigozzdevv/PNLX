@@ -341,6 +341,8 @@ export interface LiquidationRecord {
   positionRoot: Hex;
   rewardCommitment: Hex;
   proof: ProofMeta;
+  proofVerificationTxHash?: Hex;
+  settlementTxHash?: Hex;
 }
 
 export type ConditionalOrderKind = "take-profit" | "stop-loss";
@@ -369,6 +371,8 @@ export interface ConditionalOrderRecord {
   positionNullifier: Hex;
   closeCommitment: Hex;
   proof: ProofMeta;
+  proofVerificationTxHash?: Hex;
+  triggerTxHash?: Hex;
 }
 
 export interface PositionCloseWitness {
@@ -417,6 +421,8 @@ export interface PositionCloseRecord {
   newPositionRoot: Hex;
   marginOutputCommitment: Hex;
   proof: ProofMeta;
+  proofVerificationTxHash?: Hex;
+  settlementTxHash?: Hex;
 }
 
 export interface DisclosureInput {

@@ -1,4 +1,4 @@
-import type { BatchExecutionPhase, Hex, OrderStatus, PositionStatus } from "@pnlx/protocol-types";
+import type { BatchExecutionPhase, Hex, OrderStatus, PositionStatus, ProofMeta } from "@pnlx/protocol-types";
 
 export interface MarketPublicSnapshot {
   aggregateVolume: string;
@@ -66,6 +66,12 @@ export interface OwnerPositionSnapshot {
   proofDigest?: Hex;
   proofVerificationTxHash?: Hex;
   journalDigest?: Hex;
+  lifecycleKind?: "close" | "liquidation";
+  lifecycleProofDigest?: Hex;
+  lifecycleProofSystem?: ProofMeta["proofSystem"];
+  lifecycleProofTxHash?: Hex;
+  lifecycleTxHash?: Hex;
+  proofSystem?: ProofMeta["proofSystem"];
   settlementDigest: Hex;
   settlementTxHash?: Hex;
   sourceIntentCommitment: Hex;
@@ -73,7 +79,7 @@ export interface OwnerPositionSnapshot {
   updatedAt: number;
 }
 
-export type OwnerActivityKind = "account-event" | "order" | "position";
+export type OwnerActivityKind = "account-event" | "order" | "position" | "position-close" | "liquidation";
 
 export interface OwnerActivitySnapshot {
   batchId?: string;
@@ -83,6 +89,7 @@ export interface OwnerActivitySnapshot {
   kind: OwnerActivityKind;
   marketId?: string;
   proofDigest?: Hex;
+  proofSystem?: ProofMeta["proofSystem"];
   proofTxHash?: Hex;
   residualCommitment?: Hex;
   status?: OrderStatus | PositionStatus;

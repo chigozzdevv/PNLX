@@ -148,6 +148,53 @@ describe("funding settlement enforcement", () => {
     );
   });
 
+  test("persists manual close proof and settlement transaction evidence", () => {
+    const { closeInput, executor } = setupPositionWithConditionalClose();
+    const proofTxHash = hashFields("tx", ["manual-close-proof"]);
+    const settlementTxHash = hashFields("tx", ["manual-close-settlement"]);
+    const service = new PositionClosesService(
+      executor,
+      {
+        provePositionClose(input: PositionCloseWitness): PositionCloseRecord {
+          return {
+            closeCommitment: input.closeCommitment,
+            marginOutputCommitment: input.marginOutputCommitment,
+            marketId: input.marketId,
+            markPrice: input.markPrice,
+            newPositionCommitment: input.newPositionCommitment,
+            newPositionRoot: input.newPositionRoot,
+            positionCommitment: input.positionCommitment,
+            positionNullifier: input.positionNullifier,
+            positionRoot: input.positionRoot,
+            proof: proofMeta("manual-close-evidence"),
+          };
+        },
+      } as unknown as ProverService,
+      {
+        settleManualPositionClose() {
+          return {
+            relays: [
+              submittedRelay("verify_and_record", proofTxHash),
+              submittedRelay("settle_manual", settlementTxHash),
+            ],
+          };
+        },
+      } as never,
+    );
+
+    const record = service.createManual(closeInput);
+
+    expect(record).toMatchObject({
+      proofVerificationTxHash: proofTxHash,
+      settlementTxHash,
+      txHash: settlementTxHash,
+    });
+    expect(executor.store.positionCloses.get(record.closeCommitment)).toMatchObject({
+      proofVerificationTxHash: proofTxHash,
+      settlementTxHash,
+    });
+  });
+
   test("derives liquidation funding payment from market and position funding indexes", () => {
     const { executor, liquidationInput, positionCommitment, positionNullifier, rewardCommitment } =
       setupPositionForLiquidation();
@@ -396,6 +443,14 @@ function unsubmittedRelay(functionName: string) {
     relayId: hashFields("relay", [functionName]),
     submitted: false,
     submittedAt: Date.now(),
+  };
+}
+
+function submittedRelay(functionName: string, txHash: Hex) {
+  return {
+    ...unsubmittedRelay(functionName),
+    submitted: true,
+    txHash,
   };
 }
 

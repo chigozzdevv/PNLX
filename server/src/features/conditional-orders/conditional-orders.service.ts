@@ -46,9 +46,10 @@ export class ConditionalOrdersService {
     const record = this.prover.proveConditionalClose(input);
     const relay = this.onchain?.triggerConditionalClose(record);
     this.assertSubmittedConditionalRelay(relay, "trigger");
-    this.executor.store.recordProof(record.proof);
-    this.executor.store.addConditionalClose(record);
-    return record;
+    const committed = withRelayEvidence(record, relay);
+    this.executor.store.recordProof(committed.proof);
+    this.executor.store.addConditionalClose(committed);
+    return committed;
   }
 
   triggerProven(input: CreateProvenConditionalOrderInput): CreateConditionalOrderResult {
@@ -82,9 +83,10 @@ export class ConditionalOrdersService {
 
     const relay = this.onchain?.triggerConditionalClose(input);
     this.assertSubmittedConditionalRelay(relay, "trigger");
-    this.executor.store.recordProof(input.proof);
-    this.executor.store.addConditionalClose(input);
-    return input;
+    const committed = withRelayEvidence(input, relay);
+    this.executor.store.recordProof(committed.proof);
+    this.executor.store.addConditionalClose(committed);
+    return committed;
   }
 
   execute(input: ExecuteConditionalCloseInput): ExecuteConditionalCloseResult {
@@ -110,6 +112,23 @@ export class ConditionalOrdersService {
     }
     assertSubmittedRelay(result, functionName);
   }
+}
+
+function withRelayEvidence(
+  record: CreateConditionalOrderResult,
+  result: OnchainRelayResult | undefined,
+): CreateConditionalOrderResult {
+  const proofVerificationTxHash = result?.relays.find(
+    (relay) => relay.functionName === "verify_and_record" && relay.submitted,
+  )?.txHash;
+  const triggerTxHash = result?.relays.find(
+    (relay) => relay.functionName === "trigger" && relay.submitted,
+  )?.txHash;
+  return {
+    ...record,
+    ...(proofVerificationTxHash ? { proofVerificationTxHash } : {}),
+    ...(triggerTxHash ? { triggerTxHash } : {}),
+  };
 }
 
 function assertTriggerMatchesClose(

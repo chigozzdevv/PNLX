@@ -35,6 +35,8 @@ describe("public and owner indexer", () => {
     const positionOpenings = lifecycleOpenings(settlement, owner, filled, partial);
     const closeProof = proofMeta("indexer-close-proof");
     const closeCommitment = hashFields("conditional-close", ["filled"]);
+    const closeProofTxHash = hashFields("tx", ["close-proof", filled.intentCommitment]);
+    const closeSettlementTxHash = hashFields("tx", ["close-settlement", filled.intentCommitment]);
     const marginOutputCommitment = hashFields("margin-output", ["filled"]);
     const newPositionCommitment = hashFields("position", ["filled-closed"]);
 
@@ -84,6 +86,8 @@ describe("public and owner indexer", () => {
       positionNullifier: positionOpenings[0].positionNullifier,
       positionRoot: settlement.newRoot,
       proof: closeProof,
+      proofVerificationTxHash: closeProofTxHash,
+      settlementTxHash: closeSettlementTxHash,
     });
     store.addAccountEvent({
       ciphertext: "base64:client-encrypted-order-history",
@@ -154,6 +158,10 @@ describe("public and owner indexer", () => {
         closeCommitment,
         marginOutputCommitment,
         newPositionCommitment,
+        lifecycleKind: "close",
+        lifecycleProofDigest: closeProof.proofDigest,
+        lifecycleProofTxHash: closeProofTxHash,
+        lifecycleTxHash: closeSettlementTxHash,
         proofDigest: enrichedSettlement.proof.proofDigest,
         proofVerificationTxHash: enrichedSettlement.proofVerificationTxHash,
         settlementTxHash: enrichedSettlement.settlementTxHash,
@@ -166,18 +174,22 @@ describe("public and owner indexer", () => {
       "order",
       "position",
       "position",
+      "position-close",
     ]);
-    expect(activities.find((activity) => activity.kind === "account-event"))
-      .toMatchObject({
-        dataCommitment: hashFields("account-event-data", ["filled"]),
-        id: hashFields("account-event", ["filled"]),
-      });
-    expect(activities.find((activity) => activity.kind === "position" && activity.status === "closed"))
+    expect(activities.find((activity) => activity.kind === "position"))
       .toMatchObject({
         batchId: settlement.batchId,
         marketId: market.marketId,
         proofTxHash: enrichedSettlement.proofVerificationTxHash,
         txHash: enrichedSettlement.settlementTxHash,
+      });
+    expect(activities.find((activity) => activity.kind === "position-close"))
+      .toMatchObject({
+        id: closeCommitment,
+        proofDigest: closeProof.proofDigest,
+        proofTxHash: closeProofTxHash,
+        status: "closed",
+        txHash: closeSettlementTxHash,
       });
     expect(JSON.stringify(activities)).not.toContain("positionNullifier");
   });

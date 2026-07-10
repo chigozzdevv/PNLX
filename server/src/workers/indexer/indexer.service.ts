@@ -139,6 +139,13 @@ export class IndexerService {
     return this.store.positionsFor(ownerCommitment)
       .map((position) => {
         const settlement = this.store.settlementByDigest(position.settlementDigest);
+        const close = position.closeCommitment
+          ? this.store.positionCloses.get(position.closeCommitment)
+          : undefined;
+        const liquidation = position.status === "liquidated"
+          ? this.store.liquidations.get(position.positionNullifier)
+          : undefined;
+        const lifecycle = close ?? liquidation;
         return {
           batchId: position.batchId,
           boundlessRequestId: settlement?.proof.boundlessRequestId,
@@ -152,6 +159,12 @@ export class IndexerService {
           proofDigest: settlement?.proof.proofDigest,
           proofVerificationTxHash: settlement?.proofVerificationTxHash,
           journalDigest: settlement?.proof.journalDigest,
+          lifecycleKind: close ? "close" as const : liquidation ? "liquidation" as const : undefined,
+          lifecycleProofDigest: lifecycle?.proof.proofDigest,
+          lifecycleProofSystem: lifecycle?.proof.proofSystem,
+          lifecycleProofTxHash: lifecycle?.proofVerificationTxHash,
+          lifecycleTxHash: lifecycle?.settlementTxHash,
+          proofSystem: settlement?.proof.proofSystem,
           settlementDigest: position.settlementDigest,
           settlementTxHash: settlement?.settlementTxHash,
           sourceIntentCommitment: position.sourceIntentCommitment,
@@ -175,20 +188,38 @@ export class IndexerService {
       txHash: order.cancellationTxHash ?? order.submissionTxHash,
       updatedAt: order.updatedAt,
     }));
-    const positions = this.positionsFor(ownerCommitment).map((position) => ({
+    const ownerPositions = this.positionsFor(ownerCommitment);
+    const positions = ownerPositions.map((position) => ({
       batchId: position.batchId,
       boundlessRequestId: position.boundlessRequestId,
       id: position.positionCommitment,
       kind: "position" as const,
       marketId: position.marketId,
       proofDigest: position.proofDigest,
+      proofSystem: position.proofSystem,
       proofTxHash: position.proofVerificationTxHash,
       settlementDigest: position.settlementDigest,
-      status: position.status,
+      status: "open" as const,
       timestamp: position.openedAt,
       txHash: position.settlementTxHash,
-      updatedAt: position.updatedAt,
+      updatedAt: position.openedAt,
     }));
+    const lifecycle = ownerPositions.flatMap((position) => {
+      if (!position.lifecycleKind || !position.lifecycleProofDigest) return [];
+      return [{
+        batchId: position.batchId,
+        id: position.closeCommitment ?? position.liquidationRewardCommitment ?? position.positionCommitment,
+        kind: position.lifecycleKind === "close" ? "position-close" as const : "liquidation" as const,
+        marketId: position.marketId,
+        proofDigest: position.lifecycleProofDigest,
+        proofSystem: position.lifecycleProofSystem,
+        proofTxHash: position.lifecycleProofTxHash,
+        status: position.lifecycleKind === "close" ? "closed" as const : "liquidated" as const,
+        timestamp: position.updatedAt,
+        txHash: position.lifecycleTxHash,
+        updatedAt: position.updatedAt,
+      }];
+    });
     const accountEvents = this.store.accountEventsFor(ownerCommitment).map((event) => ({
       dataCommitment: event.dataCommitment,
       id: event.eventId,
@@ -197,7 +228,7 @@ export class IndexerService {
       updatedAt: event.createdAt,
     }));
 
-    return [...orders, ...positions, ...accountEvents]
+    return [...orders, ...positions, ...lifecycle, ...accountEvents]
       .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
   }
 

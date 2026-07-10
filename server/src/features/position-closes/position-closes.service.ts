@@ -82,33 +82,22 @@ export class PositionClosesService {
     const accountEvent = this.accountEventFor(record);
     const relay = this.onchain?.settlePositionClose(record);
     this.assertSubmittedSettlementRelay(relay, "settle");
-    this.executor.store.recordProof(record.proof);
-    this.executor.store.addPositionClose(record);
+    const committed = withRelayEvidence(record, relay, "settle");
+    this.executor.store.recordProof(committed.proof);
+    this.executor.store.addPositionClose(committed);
     if (accountEvent) this.executor.store.addAccountEvent(accountEvent);
-    const txHash = relay?.relays?.find((r) => r.txHash)?.txHash;
-    return { ...record, txHash };
+    return { ...committed, txHash: committed.settlementTxHash };
   }
 
   commitManual(record: CreatePositionCloseResult): CreatePositionCloseResult {
     const accountEvent = this.accountEventFor(record);
-    try {
-      const relay = this.onchain?.settleManualPositionClose(record);
-      this.assertSubmittedSettlementRelay(relay, "settle_manual");
-      this.executor.store.recordProof(record.proof);
-      this.executor.store.addManualPositionClose(record);
-      if (accountEvent) this.executor.store.addAccountEvent(accountEvent);
-      const txHash = relay?.relays?.find((r) => r.txHash)?.txHash;
-      return { ...record, txHash };
-    } catch (err) {
-      const fs = require("fs");
-      fs.writeFileSync("/tmp/close-debug.json", JSON.stringify({
-        record,
-        error: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-        timestamp: new Date().toISOString()
-      }, (_key, value) => (typeof value === "bigint" ? value.toString() : value), 2));
-      throw err;
-    }
+    const relay = this.onchain?.settleManualPositionClose(record);
+    this.assertSubmittedSettlementRelay(relay, "settle_manual");
+    const committed = withRelayEvidence(record, relay, "settle_manual");
+    this.executor.store.recordProof(committed.proof);
+    this.executor.store.addManualPositionClose(committed);
+    if (accountEvent) this.executor.store.addAccountEvent(accountEvent);
+    return { ...committed, txHash: committed.settlementTxHash };
   }
 
   validate(input: CreatePositionCloseInput): void {
@@ -198,6 +187,24 @@ export class PositionClosesService {
     if (!publicKey) return undefined;
     return createPositionCloseAccountEvent(record, position, publicKey);
   }
+}
+
+function withRelayEvidence(
+  record: CreatePositionCloseResult,
+  result: OnchainRelayResult | undefined,
+  settlementFunction: "settle" | "settle_manual",
+): CreatePositionCloseResult {
+  const proofVerificationTxHash = result?.relays.find(
+    (relay) => relay.functionName === "verify_and_record" && relay.submitted,
+  )?.txHash;
+  const settlementTxHash = result?.relays.find(
+    (relay) => relay.functionName === settlementFunction && relay.submitted,
+  )?.txHash;
+  return {
+    ...record,
+    ...(proofVerificationTxHash ? { proofVerificationTxHash } : {}),
+    ...(settlementTxHash ? { settlementTxHash } : {}),
+  };
 }
 
 function marketConfig(executor: ExecutorService, marketId: string): MarketConfig {

@@ -905,7 +905,10 @@ export class ProverService implements Prover {
   }
 
   private bindArtifact(circuitId: Parameters<typeof loadCircuit>[1], publicInputs: Hex, artifact: ProofArtifact): ProofMeta {
-    const proof = bindProof(loadCircuit(this.root, circuitId), publicInputs, artifact);
+    const proof = {
+      ...bindProof(loadCircuit(this.root, circuitId), publicInputs, artifact),
+      proofSystem: "noir-ultrahonk" as const,
+    };
     this.artifacts.set(proofKey(proof), artifact);
     this.artifactRegistry.set(proof, artifact);
     return proof;

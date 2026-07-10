@@ -39,10 +39,11 @@ export class LiquidationsService {
     const accountEvent = this.accountEventFor(record);
     const relay = this.onchain?.liquidate(record);
     this.assertSubmittedSettlementRelay(relay);
-    this.executor.store.recordProof(record.proof);
-    this.executor.store.addLiquidation(record);
+    const committed = withRelayEvidence(record, relay);
+    this.executor.store.recordProof(committed.proof);
+    this.executor.store.addLiquidation(committed);
     if (accountEvent) this.executor.store.addAccountEvent(accountEvent);
-    return record;
+    return committed;
   }
 
   createProven(input: CreateProvenLiquidationInput): CreateLiquidationResult {
@@ -67,10 +68,11 @@ export class LiquidationsService {
     const accountEvent = this.accountEventFor(input);
     const relay = this.onchain?.liquidate(input);
     this.assertSubmittedSettlementRelay(relay);
-    this.executor.store.recordProof(input.proof);
-    this.executor.store.addLiquidation(input);
+    const committed = withRelayEvidence(input, relay);
+    this.executor.store.recordProof(committed.proof);
+    this.executor.store.addLiquidation(committed);
     if (accountEvent) this.executor.store.addAccountEvent(accountEvent);
-    return input;
+    return committed;
   }
 
   private assertSubmittedSettlementRelay(result: OnchainRelayResult | undefined): void {
@@ -106,6 +108,23 @@ export class LiquidationsService {
     if (!publicKey) return undefined;
     return createLiquidationAccountEvent(record, position, publicKey);
   }
+}
+
+function withRelayEvidence(
+  record: CreateLiquidationResult,
+  result: OnchainRelayResult | undefined,
+): CreateLiquidationResult {
+  const proofVerificationTxHash = result?.relays.find(
+    (relay) => relay.functionName === "verify_and_record" && relay.submitted,
+  )?.txHash;
+  const settlementTxHash = result?.relays.find(
+    (relay) => relay.functionName === "liquidate" && relay.submitted,
+  )?.txHash;
+  return {
+    ...record,
+    ...(proofVerificationTxHash ? { proofVerificationTxHash } : {}),
+    ...(settlementTxHash ? { settlementTxHash } : {}),
+  };
 }
 
 function marketConfig(executor: ExecutorService, marketId: string): MarketConfig {
