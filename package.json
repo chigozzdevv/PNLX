@@ -38,6 +38,8 @@
     "smoke:custody:prepare": "bun scripts/smoke/custody.ts --prepare-only",
     "smoke:trade": "bun scripts/smoke/trade.ts",
     "state:migrate-mongo": "bun scripts/operations/migrate-protocol-state.ts",
+    "state:export-transition": "bun scripts/operations/export-protocol-transition.ts",
+    "state:bootstrap-transition": "bun scripts/operations/bootstrap-protocol-transition.ts",
     "state:reconcile-legacy-positions": "bun scripts/operations/reconcile-legacy-positions.ts",
     "test": "bun test",
     "test:e2e": "bun test tests/e2e",

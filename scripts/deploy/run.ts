@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fieldMerkleRoot } from "@pnlx/crypto";
 import { circuitKey } from "@pnlx/proof-system";
 import type { Hex } from "@pnlx/protocol-types";
 import { loadEnv } from "@/config/env";
@@ -43,7 +42,6 @@ interface Risc0VerifierStackDeployment {
 
 const LOCAL_PASSPHRASE = "Standalone Network ; February 2017";
 const LOCAL_RPC = "http://localhost:8000/soroban/rpc";
-const INITIAL_POSITION_ROOT = fieldMerkleRoot([]);
 
 export function parseOptions(argv = process.argv.slice(2)): Options {
   return {
@@ -145,8 +143,6 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
     invokeCommand(options, "position-state", "init", [
       "--governance",
       "$governance",
-      "--initial_root",
-      bytes32(INITIAL_POSITION_ROOT),
     ]),
     invokeCommand(options, "batch-settlement", "init", [
       "--governance",
@@ -157,6 +153,8 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
       "$market",
       "--position_state",
       "$position-state",
+      "--shielded_pool",
+      "$shielded-pool",
       "--intent_registry",
       "$intent-registry",
       "--circuit_id",
@@ -199,6 +197,12 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
       bytes32(circuitKey("position-close")),
     ]),
     invokeCommand(options, "position-state", "set_writer", [
+      "--writer",
+      "$batch-settlement",
+      "--enabled",
+      "true",
+    ]),
+    invokeCommand(options, "shielded-pool", "set_writer", [
       "--writer",
       "$batch-settlement",
       "--enabled",
@@ -354,8 +358,6 @@ function initProofConsumers(options: Options, contracts: Map<string, string>): v
   invoke(options, positionState, "init", [
     "--governance",
     governance,
-    "--initial_root",
-    bytes32(INITIAL_POSITION_ROOT),
   ]);
   invoke(options, contracts.get("batch-settlement")!, "init", [
     "--governance",
@@ -366,6 +368,8 @@ function initProofConsumers(options: Options, contracts: Map<string, string>): v
     contracts.get("market")!,
     "--position_state",
     positionState,
+    "--shielded_pool",
+    contracts.get("shielded-pool")!,
     "--intent_registry",
     contracts.get("intent-registry")!,
     "--circuit_id",
@@ -408,6 +412,12 @@ function initProofConsumers(options: Options, contracts: Map<string, string>): v
     bytes32(circuitKey("position-close")),
   ]);
   invoke(options, positionState, "set_writer", [
+    "--writer",
+    contracts.get("batch-settlement")!,
+    "--enabled",
+    "true",
+  ]);
+  invoke(options, contracts.get("shielded-pool")!, "set_writer", [
     "--writer",
     contracts.get("batch-settlement")!,
     "--enabled",

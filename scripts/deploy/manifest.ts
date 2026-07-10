@@ -146,7 +146,7 @@ export function createDeployManifest(root = process.cwd(), options: ManifestOpti
       {
         contract: "position-state",
         method: "init",
-        args: ["governance", "initialPositionRoot"],
+        args: ["governance"],
       },
       {
         contract: "batch-settlement",
@@ -156,6 +156,7 @@ export function createDeployManifest(root = process.cwd(), options: ManifestOpti
           "proof-ledger",
           "market",
           "position-state",
+          "shielded-pool",
           "intent-registry",
           RISC0_BATCH_MATCH_CIRCUIT_KEY,
         ],
@@ -184,6 +185,11 @@ export function createDeployManifest(root = process.cwd(), options: ManifestOpti
       },
       {
         contract: "position-state",
+        method: "set_writer",
+        args: ["batch-settlement", true],
+      },
+      {
+        contract: "shielded-pool",
         method: "set_writer",
         args: ["batch-settlement", true],
       },

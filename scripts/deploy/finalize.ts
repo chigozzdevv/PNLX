@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { fieldMerkleRoot } from "@pnlx/crypto";
 import { circuitKey } from "@pnlx/proof-system";
 import type { Hex } from "@pnlx/protocol-types";
 import { loadEnv } from "@/config/env";
@@ -24,7 +23,6 @@ const env = loadEnv();
 const root = process.cwd();
 const deployment = readDeployment();
 const manifest = createDeployManifest(root);
-const INITIAL_POSITION_ROOT = fieldMerkleRoot([]);
 
 invoke(deployment.contracts.governance, "init", ["--admin", deployment.sourceAddress], true);
 invoke(deployment.contracts["proof-ledger"], "init", [
@@ -87,8 +85,6 @@ invoke(deployment.contracts["funding-settlement"], "init", [
 invoke(deployment.contracts["position-state"], "init", [
   "--governance",
   deployment.contracts.governance,
-  "--initial_root",
-  bytes32(INITIAL_POSITION_ROOT),
 ], true);
 invoke(deployment.contracts["batch-settlement"], "init", [
   "--governance",
@@ -99,6 +95,8 @@ invoke(deployment.contracts["batch-settlement"], "init", [
   deployment.contracts.market,
   "--position_state",
   deployment.contracts["position-state"],
+  "--shielded_pool",
+  deployment.contracts["shielded-pool"],
   "--intent_registry",
   deployment.contracts["intent-registry"],
   "--circuit_id",
@@ -155,6 +153,12 @@ invoke(deployment.contracts.market, "set_funding_updater", [
   "true",
 ]);
 invoke(deployment.contracts["position-state"], "set_writer", [
+  "--writer",
+  deployment.contracts["batch-settlement"],
+  "--enabled",
+  "true",
+]);
+invoke(deployment.contracts["shielded-pool"], "set_writer", [
   "--writer",
   deployment.contracts["batch-settlement"],
   "--enabled",

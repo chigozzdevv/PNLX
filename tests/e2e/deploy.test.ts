@@ -92,6 +92,9 @@ describe("deployment manifest", () => {
     const positionStateWriters = manifest.initPlan.filter(
       (item) => item.contract === "position-state" && item.method === "set_writer",
     );
+    const shieldedPoolWriters = manifest.initPlan.filter(
+      (item) => item.contract === "shielded-pool" && item.method === "set_writer",
+    );
     const batchInit = manifest.initPlan.find((item) => item.contract === "batch-settlement");
     const liquidationInit = manifest.initPlan.find((item) => item.contract === "liquidation");
     const conditionalOrderInit = manifest.initPlan.find(
@@ -159,12 +162,13 @@ describe("deployment manifest", () => {
       "market",
       circuitKey("funding-update"),
     ]);
-    expect(positionStateInit?.args).toEqual(["governance", "initialPositionRoot"]);
+    expect(positionStateInit?.args).toEqual(["governance"]);
     expect(batchInit?.args).toEqual([
       "governance",
       "proof-ledger",
       "market",
       "position-state",
+      "shielded-pool",
       "intent-registry",
       RISC0_BATCH_MATCH_CIRCUIT_KEY,
     ]);
@@ -193,6 +197,9 @@ describe("deployment manifest", () => {
       ["batch-settlement", true],
       ["liquidation", true],
       ["position-close", true],
+    ]);
+    expect(shieldedPoolWriters.map((item) => item.args)).toEqual([
+      ["batch-settlement", true],
     ]);
     expect(fundingUpdater?.args).toEqual(["funding-settlement", true]);
     expect(disclosureInit?.args).toEqual(["governance", "proof-ledger", circuitKey("disclosure")]);
