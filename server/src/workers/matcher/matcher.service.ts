@@ -110,7 +110,7 @@ class EmbeddedMatcherProviderGateway implements MatcherProviderGateway {
   createSettlementTranscript(
     input: MatcherSettlementInput,
     proofs: ProofCoordinatorService,
-  ): MatcherSettlementTranscript {
+  ): Promise<MatcherSettlementTranscript> {
     const match = this.matcher.match({
       batchId: input.batchId,
       intents: input.intents,
@@ -120,7 +120,7 @@ class EmbeddedMatcherProviderGateway implements MatcherProviderGateway {
       ...input.positionCommitments,
       ...match.fills.map((fill) => fill.positionCommitment),
     ]);
-    const settlement = proofs.createSettlement({
+    const settlementInput = {
       batchId: input.batchId,
       intents: input.intents,
       market: input.market,
@@ -128,16 +128,20 @@ class EmbeddedMatcherProviderGateway implements MatcherProviderGateway {
       newRoot,
       oldRoot: input.oldRoot,
       positionCommitments: input.positionCommitments,
-    });
-    const positionOpenings = createPositionOpenings(settlement, match.fills);
-
-    return {
-      positionEvents: createPositionEvents(match.fills, input.market.fundingIndex),
-      positionOpenings,
-      privateMatchIntents: match.residuals,
-      residualOrders: createResidualOrderRecords(settlement, match.residuals),
-      settlement,
     };
+    const proofTask = typeof proofs.createSettlementAsync === "function"
+      ? proofs.createSettlementAsync(settlementInput)
+      : Promise.resolve(proofs.createSettlement(settlementInput));
+    return proofTask.then((settlement) => {
+      const positionOpenings = createPositionOpenings(settlement, match.fills);
+      return {
+        positionEvents: createPositionEvents(match.fills, input.market.fundingIndex),
+        positionOpenings,
+        privateMatchIntents: match.residuals,
+        residualOrders: createResidualOrderRecords(settlement, match.residuals),
+        settlement,
+      };
+    });
   }
 }
 

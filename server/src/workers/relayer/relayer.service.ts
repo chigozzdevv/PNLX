@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { hashFields } from "@pnlx/crypto";
 import type {
   CommandResult,
@@ -56,6 +56,46 @@ export class RelayerService {
       sendMode,
       submittedAt: Date.now(),
       submitted: Boolean(txHash && command && sendsTransaction(command)),
+      txHash,
+    };
+    this.sent.push(tx);
+    return tx;
+  }
+
+  async relayAsync(request: RelayRequest): Promise<RelayedTx> {
+    if (this.config.mode !== "stellar-cli" || this.runCommand !== defaultCommandRunner) {
+      return this.relay(request);
+    }
+    const payloadDigest = hashFields("relay-payload", [request.kind, request.payload]);
+    const command = stellarInvokeCommand(this.config, request.payload);
+    const invokePayload = parseInvokePayload(request.payload);
+    const output = await runCommandWithRetryAsync(command);
+    const commandOutputDigest = hashFields(
+      "relay-command-output",
+      [payloadDigest, output.status ?? "null", output.stdout, output.stderr],
+    );
+    const sendMode = commandSendMode(command);
+    if (output.status !== 0) {
+      throw new Error(`stellar relay failed (${relayTarget(request.kind, invokePayload)}): ${formatStellarFailure(output)}`);
+    }
+    const txHash = parseTxHash(commandOutput(output));
+    if (sendsTransaction(command) && !txHash) {
+      throw new Error("stellar relay did not return a transaction hash");
+    }
+    if (sendsTransaction(command)) await delay(3_500);
+    const tx: RelayedTx = {
+      command,
+      commandOutputDigest,
+      commandStatus: output.status,
+      contractId: invokePayload.contractId,
+      functionName: invokePayload.functionName,
+      relayId: hashFields("relay-id", [request.kind, payloadDigest, this.sent.length]),
+      kind: request.kind,
+      mode: this.config.mode,
+      payloadDigest,
+      sendMode,
+      submittedAt: Date.now(),
+      submitted: Boolean(txHash && sendsTransaction(command)),
       txHash,
     };
     this.sent.push(tx);
@@ -307,6 +347,41 @@ function runCommandWithRetry(runCommand: CommandRunner, command: string[]): Comm
     output = runCommand(command[0], command.slice(1));
   }
   return output;
+}
+
+async function runCommandWithRetryAsync(command: string[]): Promise<CommandResult> {
+  let output = await runCommandAsync(command);
+  for (let attempt = 1; attempt < 4 && isTransientStellarFailure(output); attempt += 1) {
+    await delay(2_500 * attempt);
+    output = await runCommandAsync(command);
+  }
+  return output;
+}
+
+function runCommandAsync(command: string[]): Promise<CommandResult> {
+  return new Promise((resolve) => {
+    const child = spawn(command[0], command.slice(1));
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      stderr += `${stderr ? "\n" : ""}${error.message}`;
+    });
+    child.on("close", (status) => {
+      resolve({ status, stderr, stdout });
+    });
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function hashTransactionXdr(

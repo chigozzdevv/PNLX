@@ -170,6 +170,11 @@ export class ProtocolStore {
     trimBatchExecutionRuns(this.batchExecutionRuns);
   }
 
+  upsertBatchExecutionRun(record: BatchExecutionRunRecord): void {
+    this.batchExecutionRuns.set(record.runId, record);
+    trimBatchExecutionRuns(this.batchExecutionRuns);
+  }
+
   addIntent(record: IntentRecord, privateMatchIntent?: PrivateMatchIntent): void {
     if (this.intents.has(record.intentCommitment)) {
       throw new Error("intent commitment already exists");
@@ -210,7 +215,44 @@ export class ProtocolStore {
     });
   }
 
-  cancelOrder(intentCommitment: Hex): OrderLifecycleRecord {
+  updateIntentSubmissionTxHash(intentCommitment: Hex, submissionTxHash: Hex): IntentRecord {
+    const intent = this.intents.get(intentCommitment);
+    if (!intent) throw new Error("unknown intent");
+    const updated = { ...intent, submissionTxHash };
+    this.intents.set(intentCommitment, updated);
+    return updated;
+  }
+
+  updateSettlementTransactions(
+    settlementDigest: Hex,
+    transactions: Pick<BatchSettlement, "proofVerificationTxHash" | "settlementTxHash"> & {
+      boundlessRequestId?: Hex;
+    },
+  ): BatchSettlement {
+    const entry = [...this.settlements.entries()].find(([, settlement]) =>
+      settlement.settlementDigest === settlementDigest
+    );
+    if (!entry) throw new Error("unknown settlement");
+    const [key, settlement] = entry;
+    const { boundlessRequestId, ...transactionHashes } = transactions;
+    const updated = {
+      ...settlement,
+      ...transactionHashes,
+      proof: boundlessRequestId
+        ? { ...settlement.proof, boundlessRequestId }
+        : settlement.proof,
+    };
+    this.settlements.set(key, updated);
+    return updated;
+  }
+
+  settlementByDigest(settlementDigest: Hex): BatchSettlement | undefined {
+    return [...this.settlements.values()].find((settlement) =>
+      settlement.settlementDigest === settlementDigest
+    );
+  }
+
+  cancelOrder(intentCommitment: Hex, cancellationTxHash?: Hex): OrderLifecycleRecord {
     const existing = this.orderLifecycle.get(intentCommitment);
     if (!existing) throw new Error("unknown order");
     if (existing.status === "filled") throw new Error("filled order cannot be cancelled");
@@ -218,6 +260,7 @@ export class ProtocolStore {
 
     const record = {
       ...existing,
+      ...(cancellationTxHash ? { cancellationTxHash } : {}),
       status: "cancelled" as const,
       updatedAt: Date.now(),
     };

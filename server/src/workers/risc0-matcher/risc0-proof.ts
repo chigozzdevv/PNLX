@@ -1,7 +1,7 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { hashFields } from "@pnlx/crypto";
 import type { ProofArtifact } from "@pnlx/proof-system";
 import type { BatchSettlement, Hex, ProofMeta } from "@pnlx/protocol-types";
@@ -19,6 +19,7 @@ export const RISC0_STELLAR_VERIFIER_HASH = fileHash(
 );
 
 interface Risc0ProverOutput {
+  boundless_request_id?: Hex;
   image_id: Hex;
   journal_digest: Hex;
   journal_path: string;
@@ -39,10 +40,10 @@ export interface Risc0BatchSettlementResult {
   settlement: SettlementProof;
 }
 
-export function createRisc0BatchSettlement(
+export async function createRisc0BatchSettlement(
   input: SettlementProofInput,
   root = process.cwd(),
-): Risc0BatchSettlementResult {
+): Promise<Risc0BatchSettlementResult> {
   assertMatchTranscript(input);
 
   const newCommitments = input.match.fills.map((fill) => fill.positionCommitment);
@@ -65,7 +66,7 @@ export function createRisc0BatchSettlement(
     spentNullifiers: input.match.spentNullifiers,
   };
 
-  const proverOutput = runRisc0Prover(root, input, draft);
+  const proverOutput = await runRisc0Prover(root, input, draft);
   if (proverOutput.image_id !== RISC0_BATCH_MATCH_IMAGE_ID) {
     throw new Error(
       `RISC0 batch-match image id mismatch: expected ${RISC0_BATCH_MATCH_IMAGE_ID}, received ${proverOutput.image_id}`,
@@ -74,6 +75,7 @@ export function createRisc0BatchSettlement(
   const expectedJournalDigest = batchSettlementPublicInputHash({
     ...draft,
     proof: proofMeta({
+      boundlessRequestId: proverOutput.boundless_request_id,
       imageId: proverOutput.image_id,
       journalDigest: proverOutput.journal_digest,
       sealDigest: proverOutput.seal_digest,
@@ -84,6 +86,7 @@ export function createRisc0BatchSettlement(
   }
 
   const proof = proofMeta({
+    boundlessRequestId: proverOutput.boundless_request_id,
     imageId: proverOutput.image_id,
     journalDigest: proverOutput.journal_digest,
     sealDigest: proverOutput.seal_digest,
@@ -110,8 +113,14 @@ export function createRisc0BatchSettlement(
   };
 }
 
-function proofMeta(receipt: { imageId: Hex; journalDigest: Hex; sealDigest: Hex }): ProofMeta {
+function proofMeta(receipt: {
+  boundlessRequestId?: Hex;
+  imageId: Hex;
+  journalDigest: Hex;
+  sealDigest: Hex;
+}): ProofMeta {
   return {
+    boundlessRequestId: receipt.boundlessRequestId,
     circuitHash: RISC0_BATCH_MATCH_CIRCUIT_HASH,
     circuitId: RISC0_BATCH_MATCH_CIRCUIT_ID,
     circuitKey: RISC0_BATCH_MATCH_CIRCUIT_KEY,
@@ -158,11 +167,11 @@ function normalizeHex(value: Hex): Hex {
   return value.startsWith("0x") ? (`0x${value.slice(2).toLowerCase()}` as Hex) : value;
 }
 
-function runRisc0Prover(
+async function runRisc0Prover(
   root: string,
   input: SettlementProofInput,
   draft: Omit<BatchSettlement, "proof">,
-): Risc0ProverOutput {
+): Promise<Risc0ProverOutput> {
   const proofDir = join(root, ".pnlx", "risc0", safeName(`${input.batchId}-${input.market.marketId}`));
   const inputPath = join(proofDir, "input.json");
   mkdirSync(proofDir, { recursive: true });
@@ -178,7 +187,7 @@ function runRisc0Prover(
   );
   if (cachedOutput) return cachedOutput;
 
-  const result = runBoundlessProver(root, inputPath, proofDir);
+  const result = await runBoundlessProver(root, inputPath, proofDir);
   if (result.status !== 0) {
     const output = [result.error, result.stdout, result.stderr].filter(Boolean).join("\n");
     throw new Error(`Boundless RISC0 Groth16 batch prover failed\n${output}`);
@@ -195,6 +204,14 @@ function readRisc0ProverOutput(
 ): Risc0ProverOutput | undefined {
   if (!existsSync(metadataPath)) return undefined;
   const output = JSON.parse(readFileSync(metadataPath, "utf8")) as Risc0ProverOutput;
+  const requestPath = join(dirname(metadataPath), "request.json");
+  if (existsSync(requestPath)) {
+    const request = JSON.parse(readFileSync(requestPath, "utf8")) as { request_id?: unknown };
+    if (typeof request.request_id === "string") {
+      assertHex(request.request_id, "Boundless request id");
+      output.boundless_request_id = request.request_id.toLowerCase() as Hex;
+    }
+  }
   assertHex32(output.image_id, "RISC0 image id");
   assertHex32(output.journal_digest, "RISC0 journal digest");
   assertHex32(output.seal_digest, "RISC0 seal digest");
@@ -249,6 +266,12 @@ function assertHex32(value: unknown, label: string): asserts value is Hex {
   }
 }
 
+function assertHex(value: unknown, label: string): asserts value is Hex {
+  if (typeof value !== "string" || !/^0x[0-9a-fA-F]+$/.test(value)) {
+    throw new Error(`${label} is not valid hex`);
+  }
+}
+
 function batchMatchImageId(): Hex {
   const path = join(process.cwd(), "risc0/batch-match/image-id.json");
   const value = JSON.parse(readFileSync(path, "utf8")) as { imageId?: unknown };
@@ -256,38 +279,53 @@ function batchMatchImageId(): Hex {
   return value.imageId.toLowerCase() as Hex;
 }
 
-function runBoundlessProver(root: string, inputPath: string, proofDir: string): ProverRun {
-  const result = spawnSync(
-    "cargo",
-    [
-      "run",
-      "--release",
-      "--manifest-path",
-      join(root, "risc0/batch-match/host/Cargo.toml"),
-      "--",
-      inputPath,
-      proofDir,
-    ],
-    {
-      cwd: root,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        BOUNDLESS_IGNORE_PREFLIGHT: process.env.BOUNDLESS_IGNORE_PREFLIGHT ?? "1",
-        PATH: risc0ToolPath(process.env.HOME || "", process.env.PATH),
-        RISC0_DEV_MODE: "0",
+function runBoundlessProver(root: string, inputPath: string, proofDir: string): Promise<ProverRun> {
+  return new Promise((resolve) => {
+    const child = spawn(
+      "cargo",
+      [
+        "run",
+        "--release",
+        "--manifest-path",
+        join(root, "risc0/batch-match/host/Cargo.toml"),
+        "--",
+        inputPath,
+        proofDir,
+      ],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          BOUNDLESS_IGNORE_PREFLIGHT: process.env.BOUNDLESS_IGNORE_PREFLIGHT ?? "1",
+          PATH: risc0ToolPath(process.env.HOME || "", process.env.PATH),
+          RISC0_DEV_MODE: "0",
+        },
       },
-    },
-  );
-  const stdout = result.stdout ?? "";
-  const stderr = result.stderr ?? "";
-  return {
-    error: result.error?.message,
-    metadataPath: stdout.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? join(proofDir, "proof.json"),
-    stderr,
-    stdout,
-    status: result.status,
-  };
+    );
+    let stdout = "";
+    let stderr = "";
+    let error: string | undefined;
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", (cause) => {
+      error = cause.message;
+    });
+    child.on("close", (status) => {
+      resolve({
+        error,
+        metadataPath: stdout.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? join(proofDir, "proof.json"),
+        stderr,
+        stdout,
+        status,
+      });
+    });
+  });
 }
 
 function risc0ToolPath(home: string, existingPath = ""): string {

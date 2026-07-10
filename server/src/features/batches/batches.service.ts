@@ -26,21 +26,54 @@ export class BatchesService {
     });
   }
 
-  settle(input: SettleBatchRequest, authenticated?: string): BatchSettlement {
+  async settle(input: SettleBatchRequest, authenticated?: string): Promise<BatchSettlement> {
     this.assertAuthorized(authenticated);
-    const settlement = this.executor.createBatchSettlement(input);
-    this.onchain?.settleBatch(settlement);
-    return this.executor.commitBatchSettlement(settlement);
+    const settlement = await this.executor.createBatchSettlementAsync(input);
+    const relay = await this.settleOnchain(settlement);
+    return this.executor.commitBatchSettlement(withOnchainTransactions(settlement, relay));
   }
 
-  commitExternal(input: CommitExternalBatchSettlementRequest, authenticated?: string): BatchSettlement {
+  async commitExternal(
+    input: CommitExternalBatchSettlementRequest,
+    authenticated?: string,
+  ): Promise<BatchSettlement> {
     this.assertAuthorized(authenticated);
     this.executor.validateExternalBatchSettlement(input);
-    const relay = this.onchain?.settleBatch(input.settlement);
-    return this.executor.commitExternalBatchSettlement(input, {
+    const relay = await this.settleOnchain(input.settlement);
+    return this.executor.commitExternalBatchSettlement({
+      ...input,
+      settlement: withOnchainTransactions(input.settlement, relay),
+    }, {
       proofVerified: hasSubmittedProofVerification(relay) || !this.settlementConfig.settlementsOnchainRequired,
     });
   }
+
+  private async settleOnchain(settlement: BatchSettlement): Promise<OnchainRelayResult | undefined> {
+    if (this.onchain?.settleBatchAsync) return this.onchain.settleBatchAsync(settlement);
+    return this.onchain?.settleBatch(settlement);
+  }
+}
+
+function withOnchainTransactions(
+  settlement: BatchSettlement,
+  result: OnchainRelayResult | undefined,
+): BatchSettlement {
+  const {
+    proofVerificationTxHash: _untrustedProofTxHash,
+    settlementTxHash: _untrustedSettlementTxHash,
+    ...verifiedSettlement
+  } = settlement;
+  const proofVerificationTxHash = result?.relays.find(
+    (relay) => relay.functionName === "verify_and_record" && relay.submitted,
+  )?.txHash;
+  const settlementTxHash = result?.relays.find(
+    (relay) => relay.functionName === "settle" && relay.kind === "batch-settlement" && relay.submitted,
+  )?.txHash;
+  return {
+    ...verifiedSettlement,
+    ...(proofVerificationTxHash ? { proofVerificationTxHash } : {}),
+    ...(settlementTxHash ? { settlementTxHash } : {}),
+  };
 }
 
 function hasSubmittedProofVerification(result: OnchainRelayResult | undefined): boolean {

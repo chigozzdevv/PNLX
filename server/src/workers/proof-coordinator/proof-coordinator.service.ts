@@ -33,7 +33,14 @@ export class ProofCoordinatorService {
       }
       return this.createOfflineTestSettlement(input);
     }
-    const { artifact, settlement } = createRisc0BatchSettlement(input, this.root);
+    throw new Error("production settlement proofs must use createSettlementAsync");
+  }
+
+  async createSettlementAsync(input: SettlementProofInput): Promise<SettlementProof> {
+    if (process.env.NODE_ENV === "test" && process.env.RISC0_REAL_PROVER !== "true") {
+      return this.createSettlement(input);
+    }
+    const { artifact, settlement } = await createRisc0BatchSettlement(input, this.root);
     this.artifacts.set(proofKey(settlement.proof), artifact);
     this.artifactRegistry.set(settlement.proof, artifact);
     return settlement;

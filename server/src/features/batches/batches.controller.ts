@@ -13,7 +13,7 @@ export class BatchesController {
       batchId: string;
       marketId: string;
     }>(request);
-    return json({ settlement: this.batches.settle(parseSettleBatch(body), authenticated) });
+    return json({ settlement: await this.batches.settle(parseSettleBatch(body), authenticated) });
   }
 
   async settleExternal(request: Request): Promise<Response> {
@@ -21,7 +21,7 @@ export class BatchesController {
     this.batches.assertAuthorized(authenticated);
     const body = await readJson<Record<string, unknown>>(request);
     return json({
-      settlement: this.batches.commitExternal(
+      settlement: await this.batches.commitExternal(
         parseExternalBatchSettlement(body),
         authenticated,
       ),

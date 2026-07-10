@@ -365,6 +365,41 @@ export class OnchainRelayService implements OnchainRelay {
     };
   }
 
+  async settleBatchAsync(record: BatchSettlement): Promise<OnchainRelayResult> {
+    if (!this.config.enabled) return empty();
+    return {
+      relays: [
+        await this.invokeProofVerifierAsync(record.proof),
+        await this.invokeAsync("batch-settlement", "batch-settlement", "settle", [
+          "--batch_id",
+          bytes32(batchKey(record.batchId)),
+          "--market_id",
+          marketKey(record.marketId),
+          "--old_root",
+          bytes32(record.oldRoot),
+          "--new_root",
+          bytes32(record.newRoot),
+          "--settlement_digest",
+          bytes32(record.settlementDigest),
+          "--proof",
+          proofArg(record.proof),
+          "--filled_intents",
+          bytes32Vec(record.orderUpdates.map((update) => update.intentCommitment)),
+          "--new_commitments",
+          bytes32Vec(record.newCommitments),
+          "--margin_change_commitments",
+          bytes32Vec(record.marginChangeCommitments),
+          "--spent_nullifiers",
+          bytes32Vec(record.spentNullifiers),
+          "--volume",
+          record.aggregateVolume.toString(),
+          "--residual",
+          record.residualSize.toString(),
+        ]),
+      ],
+    };
+  }
+
   isBatchSettled(batchId: string, marketId: string): boolean {
     if (!this.config.enabled) return false;
     const deployment = this.deployment();
@@ -626,6 +661,23 @@ export class OnchainRelayService implements OnchainRelay {
     ], true);
   }
 
+  private async invokeProofVerifierAsync(proof: ProofMeta) {
+    if (proof.proofSystem === "risc0-groth16") {
+      return this.invokeRisc0ProofVerifierAsync(proof);
+    }
+    const artifact = this.artifactFor(proof);
+    return this.invokeAsync("contract-invoke", `${proof.circuitId}-proof-verifier`, "verify_and_record", [
+      "--public_inputs-file-path",
+      artifact.publicInputsPath,
+      "--proof_bytes-file-path",
+      artifact.proofPath,
+      "--public_input_hash",
+      bytes32(proof.publicInputHash),
+      "--proof_digest",
+      bytes32(proof.proofDigest),
+    ], true);
+  }
+
   private invokeRisc0ProofVerifier(proof: ProofMeta) {
     if (!proof.imageId || !proof.journalDigest || !proof.sealDigest) {
       throw new Error("missing RISC0 receipt metadata");
@@ -639,6 +691,30 @@ export class OnchainRelayService implements OnchainRelay {
     }
     const artifact = this.artifactFor(proof);
     return this.invoke("contract-invoke", `${proof.circuitId}-risc0-verifier`, "verify_and_record", [
+      "--seal-file-path",
+      artifact.proofPath,
+      "--image_id",
+      bytes32(proof.imageId),
+      "--journal_digest",
+      bytes32(proof.journalDigest),
+      "--proof_digest",
+      bytes32(proof.sealDigest),
+    ], true);
+  }
+
+  private async invokeRisc0ProofVerifierAsync(proof: ProofMeta) {
+    if (!proof.imageId || !proof.journalDigest || !proof.sealDigest) {
+      throw new Error("missing RISC0 receipt metadata");
+    }
+    const expectedImageId = this.deployment().risc0BatchMatchImageId;
+    if (!expectedImageId) {
+      throw new Error("deployment is missing the RISC0 batch-match image id");
+    }
+    if (proof.imageId.toLowerCase() !== expectedImageId.toLowerCase()) {
+      throw new Error("RISC0 batch-match image id does not match the deployment");
+    }
+    const artifact = this.artifactFor(proof);
+    return this.invokeAsync("contract-invoke", `${proof.circuitId}-risc0-verifier`, "verify_and_record", [
       "--seal-file-path",
       artifact.proofPath,
       "--image_id",
@@ -674,6 +750,22 @@ export class OnchainRelayService implements OnchainRelay {
     });
   }
 
+  private invokeAsync(
+    kind: RelayKind,
+    contractName: string,
+    functionName: string,
+    args: string[],
+    verifier = false,
+  ) {
+    return this.invokePayloadAsync(kind, {
+      args,
+      contractId: verifier
+        ? verifierId(this.deployment(), contractName)
+        : contractId(this.deployment(), contractName),
+      functionName,
+    });
+  }
+
   private invokePayload(
     kind: RelayKind,
     payload: {
@@ -687,6 +779,21 @@ export class OnchainRelayService implements OnchainRelay {
     },
   ) {
     return this.relayer.relay({ kind, payload });
+  }
+
+  private invokePayloadAsync(
+    kind: RelayKind,
+    payload: {
+      args?: string[];
+      autoSign?: boolean;
+      buildOnly?: boolean;
+      contractId: string;
+      functionName: string;
+      send?: "default" | "no" | "yes";
+      source?: string;
+    },
+  ) {
+    return this.relayer.relayAsync({ kind, payload });
   }
 
   private depositAssetPayload(input: AssetDepositRelayInput, buildOnly = false) {

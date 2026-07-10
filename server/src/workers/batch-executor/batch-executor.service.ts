@@ -80,12 +80,31 @@ export class BatchExecutorService {
     input: RunBatchExecutorInput,
   ): Promise<BatchExecutorMarketResult> {
     const batchId = this.batchIdForMarket(marketId, startedAt, input);
+    const currentRunId = runId(batchId, marketId, startedAt);
     try {
+      await this.progress({
+        batchId,
+        marketId,
+        phase: "matcher",
+        runId: currentRunId,
+        startedAt,
+        status: "running",
+        updatedAt: Date.now(),
+      });
       await runPhase("matcher", () => this.assertPositionRootSynchronized());
       await runPhase("oracle", () => this.refreshMarketOracleIfNeeded(marketId, startedAt));
       await runPhase("maker-liquidity", () => this.makerLiquidity?.ensureForMarket({ batchId, marketId }));
       await runPhase("maker-liquidity", () => flushStore(this.executor.store));
       await runPhase("oracle", () => this.config.sampleFundingPremium?.(marketId, startedAt));
+      await this.progress({
+        batchId,
+        marketId,
+        phase: "proving",
+        runId: currentRunId,
+        startedAt,
+        status: "running",
+        updatedAt: Date.now(),
+      });
       const transcript = await runPhase("matcher", () =>
         this.matcher.createSettlementTranscript({
           batchId,
@@ -93,6 +112,16 @@ export class BatchExecutorService {
           marketId,
         })
       );
+      await this.progress({
+        batchId,
+        marketId,
+        phase: "batch-settlement",
+        runId: currentRunId,
+        settlementDigest: transcript.settlement.settlementDigest,
+        startedAt,
+        status: "running",
+        updatedAt: Date.now(),
+      });
       const alreadySettledOnchain = this.isSettledOnchain(transcript.settlement);
       const relay = alreadySettledOnchain
         ? undefined
@@ -101,11 +130,22 @@ export class BatchExecutorService {
       if (this.config.settlementsOnchainRequired && !proofVerified) {
         throw new Error("settlements require on-chain relay");
       }
+      const settledTranscript = withOnchainTransactions(transcript, relay);
       const settlement = await runPhase("settlement-commit", () =>
-        this.executor.commitExternalBatchSettlement(transcript, {
+        this.executor.commitExternalBatchSettlement(settledTranscript, {
           proofVerified: proofVerified || !this.config.settlementsOnchainRequired,
         })
       );
+      await this.progress({
+        batchId,
+        marketId,
+        phase: "maker-finalize",
+        runId: currentRunId,
+        settlementDigest: settlement.settlementDigest,
+        startedAt,
+        status: "running",
+        updatedAt: Date.now(),
+      });
       await runPhase("maker-finalize", () => this.makerLiquidity?.finalizeSettlement(settlement));
       await runPhase("maker-finalize", () => flushStore(this.executor.store));
       return this.record({
@@ -114,7 +154,7 @@ export class BatchExecutorService {
         completedAt: Date.now(),
         fillCount: settlement.fillCount,
         marketId,
-        runId: runId(batchId, marketId, startedAt),
+        runId: currentRunId,
         settlementDigest: settlement.settlementDigest,
         startedAt,
         status: "settled",
@@ -131,7 +171,7 @@ export class BatchExecutorService {
         marketId,
         phase,
         reason,
-        runId: runId(batchId, marketId, startedAt),
+        runId: currentRunId,
         startedAt,
         status: shouldSkip(reason) ? "skipped" : "failed",
       });
@@ -139,15 +179,25 @@ export class BatchExecutorService {
   }
 
   private record(record: BatchExecutionRunRecord): BatchExecutorMarketResult {
-    this.executor.store.addBatchExecutionRun(record);
+    this.executor.store.upsertBatchExecutionRun(record);
     return {
       marketId: record.marketId,
       record,
     };
   }
 
-  private trySettleOnchain(settlement: Parameters<NonNullable<OnchainRelay>["settleBatch"]>[0]): OnchainRelayResult | undefined {
+  private async progress(record: BatchExecutionRunRecord): Promise<void> {
+    this.executor.store.upsertBatchExecutionRun(record);
+    await flushStore(this.executor.store);
+  }
+
+  private async trySettleOnchain(
+    settlement: Parameters<NonNullable<OnchainRelay>["settleBatch"]>[0],
+  ): Promise<OnchainRelayResult | undefined> {
     try {
+      if (this.onchain?.settleBatchAsync) {
+        return await this.onchain.settleBatchAsync(settlement);
+      }
       return this.onchain?.settleBatch(settlement);
     } catch (error) {
       if (this.config.settlementsOnchainRequired) throw error;
@@ -234,6 +284,31 @@ export class BatchExecutorService {
     }
     return true;
   }
+}
+
+function withOnchainTransactions(
+  transcript: Parameters<ExecutorService["commitExternalBatchSettlement"]>[0],
+  result: OnchainRelayResult | undefined,
+): Parameters<ExecutorService["commitExternalBatchSettlement"]>[0] {
+  const {
+    proofVerificationTxHash: _untrustedProofTxHash,
+    settlementTxHash: _untrustedSettlementTxHash,
+    ...verifiedSettlement
+  } = transcript.settlement;
+  const proofVerificationTxHash = result?.relays.find(
+    (relay) => relay.functionName === "verify_and_record" && relay.submitted,
+  )?.txHash;
+  const settlementTxHash = result?.relays.find(
+    (relay) => relay.functionName === "settle" && relay.kind === "batch-settlement" && relay.submitted,
+  )?.txHash;
+  return {
+    ...transcript,
+    settlement: {
+      ...verifiedSettlement,
+      ...(proofVerificationTxHash ? { proofVerificationTxHash } : {}),
+      ...(settlementTxHash ? { settlementTxHash } : {}),
+    },
+  };
 }
 
 async function runPhase<T>(

@@ -102,6 +102,7 @@ export function parseProofMeta(input: IntentBody): ProofMeta {
     proofDigest: String(input.proofDigest) as Hex,
     proofSystem: parseProofSystem(input.proofSystem),
     bytecodeHash: optionalHex(input.bytecodeHash),
+    boundlessRequestId: optionalHex(input.boundlessRequestId),
     imageId: optionalHex(input.imageId),
     journalDigest: optionalHex(input.journalDigest),
     witnessHash: optionalHex(input.witnessHash),

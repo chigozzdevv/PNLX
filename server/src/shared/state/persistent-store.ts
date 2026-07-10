@@ -105,12 +105,27 @@ export class FileProtocolStore extends ProtocolStore {
     this.persist(() => super.addBatchExecutionRun(record));
   }
 
+  override upsertBatchExecutionRun(record: BatchExecutionRunRecord): void {
+    this.persist(() => super.upsertBatchExecutionRun(record));
+  }
+
   override addIntent(record: IntentRecord, privateMatchIntent?: PrivateMatchIntent): void {
     this.persist(() => super.addIntent(record, privateMatchIntent));
   }
 
-  override cancelOrder(intentCommitment: Hex): OrderLifecycleRecord {
-    return this.persist(() => super.cancelOrder(intentCommitment));
+  override updateIntentSubmissionTxHash(intentCommitment: Hex, submissionTxHash: Hex): IntentRecord {
+    return this.persist(() => super.updateIntentSubmissionTxHash(intentCommitment, submissionTxHash));
+  }
+
+  override updateSettlementTransactions(
+    settlementDigest: Hex,
+    transactions: Parameters<ProtocolStore["updateSettlementTransactions"]>[1],
+  ) {
+    return this.persist(() => super.updateSettlementTransactions(settlementDigest, transactions));
+  }
+
+  override cancelOrder(intentCommitment: Hex, cancellationTxHash?: Hex): OrderLifecycleRecord {
+    return this.persist(() => super.cancelOrder(intentCommitment, cancellationTxHash));
   }
 
   override spend(nullifier: Hex): void {

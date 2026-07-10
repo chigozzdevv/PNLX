@@ -391,7 +391,7 @@ describe("support workers", () => {
     expect(fixture.executor.store.settlements.size).toBe(0);
   });
 
-  test("indexes external settlements after a submitted verifier relay", () => {
+  test("indexes external settlements after a submitted verifier relay", async () => {
     const executor = createExecutor();
     const market = {
       marketId: "btc-usd-perp",
@@ -451,7 +451,7 @@ describe("support workers", () => {
       positionOpening(settlement, long, settlement.newCommitments[0]),
       positionOpening(settlement, short, settlement.newCommitments[1]),
     ];
-    const result = service.commitExternal({
+    const result = await service.commitExternal({
       accountEvents: accountEventsForOpenings(positionOpenings),
       settlement,
       positionOpenings,
@@ -516,7 +516,7 @@ describe("support workers", () => {
       batchId: "worker-produced-batch",
       marketId: market.marketId,
     });
-    const result = service.commitExternal(transcript);
+    const result = await service.commitExternal(transcript);
 
     expect(transcript.settlement.proof.proofSystem).toBe("risc0-groth16");
     expect(result.settlementDigest).toBe(transcript.settlement.settlementDigest);
@@ -756,7 +756,17 @@ describe("support workers", () => {
         updatedAt: now,
       });
     }
-    const matcher = createProoflessMatcher(executor);
+    const embeddedMatcher = createProoflessMatcher(executor);
+    let releaseProof!: () => void;
+    const proofGate = new Promise<void>((resolve) => {
+      releaseProof = resolve;
+    });
+    const matcher = {
+      async createSettlementTranscript(input: Parameters<typeof embeddedMatcher.createSettlementTranscript>[0]) {
+        await proofGate;
+        return embeddedMatcher.createSettlementTranscript(input);
+      },
+    };
     const batchExecutor = createBatchExecutor(
       executor,
       matcher,
@@ -769,7 +779,7 @@ describe("support workers", () => {
         positionRoot() {
           return executor.store.positionMembershipRoot();
         },
-        settleBatch(settlement: BatchSettlement) {
+        async settleBatchAsync(settlement: BatchSettlement) {
           return {
             relays: [
               {
@@ -782,13 +792,30 @@ describe("support workers", () => {
                 submittedAt: Date.now(),
                 txHash: hashFields("tx", [settlement.settlementDigest]),
               },
+              {
+                functionName: "settle",
+                kind: "batch-settlement",
+                mode: "stellar-cli",
+                payloadDigest: hashFields("payload", ["settle", settlement.settlementDigest]),
+                relayId: hashFields("relay", ["settle", settlement.settlementDigest]),
+                submitted: true,
+                submittedAt: Date.now(),
+                txHash: hashFields("tx", ["settle", settlement.settlementDigest]),
+              },
             ],
           };
         },
       } as never,
     );
 
-    const result = await batchExecutor.runOnce({ now: 1234 });
+    const execution = batchExecutor.runOnce({ now: 1234 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect([...executor.store.batchExecutionRuns.values()][0]).toMatchObject({
+      phase: "proving",
+      status: "running",
+    });
+    releaseProof();
+    const result = await execution;
 
     expect(result.results).toHaveLength(1);
     expect(result.results[0].record.status).toBe("settled");
@@ -796,6 +823,10 @@ describe("support workers", () => {
     expect(result.results[0].record.fillCount).toBe(2);
     expect(executor.store.settlements.size).toBe(1);
     expect(executor.store.batchExecutionRuns.size).toBe(1);
+    expect([...executor.store.settlements.values()][0]).toMatchObject({
+      proofVerificationTxHash: expect.stringMatching(/^0x/),
+      settlementTxHash: expect.stringMatching(/^0x/),
+    });
     expect(executor.store.accountEvents.size).toBe(2);
     expect(executor.store.orderLifecycle.get(long.intentCommitment)?.status).toBe("filled");
     expect(executor.store.orderLifecycle.get(short.intentCommitment)?.status).toBe("filled");

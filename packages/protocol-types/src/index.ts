@@ -9,6 +9,7 @@ export interface ProofMeta {
   proofDigest: Hex;
   proofSystem?: "noir-ultrahonk" | "risc0-groth16";
   bytecodeHash?: Hex;
+  boundlessRequestId?: Hex;
   imageId?: Hex;
   journalDigest?: Hex;
   witnessHash?: Hex;
@@ -79,6 +80,7 @@ export interface IntentRecord {
   noteChangeCommitment: Hex;
   proof: ProofMeta;
   noteNullifier: Hex;
+  submissionTxHash?: Hex;
 }
 
 export type OrderStatus = "open" | "partially-filled" | "filled" | "cancelled";
@@ -94,6 +96,7 @@ export interface OrderLifecycleRecord extends OrderLifecycleUpdate {
   createdAt: number;
   marketId: string;
   ownerCommitment: Hex;
+  cancellationTxHash?: Hex;
   updatedAt: number;
 }
 
@@ -232,11 +235,12 @@ export interface FundingSettlementRecord extends FundingUpdateRecord {
   proof: ProofMeta;
 }
 
-export type BatchExecutionRunStatus = "failed" | "settled" | "skipped";
+export type BatchExecutionRunStatus = "failed" | "running" | "settled" | "skipped";
 export type BatchExecutionPhase =
   | "oracle"
   | "maker-liquidity"
   | "matcher"
+  | "proving"
   | "batch-settlement"
   | "settlement-commit"
   | "maker-finalize";
@@ -244,7 +248,7 @@ export type BatchExecutionPhase =
 export interface BatchExecutionRunRecord {
   aggregateVolume?: bigint;
   batchId: string;
-  completedAt: number;
+  completedAt?: number;
   fillCount?: number;
   marketId: string;
   phase?: BatchExecutionPhase;
@@ -253,6 +257,7 @@ export interface BatchExecutionRunRecord {
   settlementDigest?: Hex;
   startedAt: number;
   status: BatchExecutionRunStatus;
+  updatedAt?: number;
 }
 
 export type LiquidationAutomationJobStatus = "pending" | "executed" | "failed" | "stale";
@@ -300,6 +305,8 @@ export interface BatchSettlement {
   orderUpdates: OrderLifecycleUpdate[];
   residualSize: bigint;
   proof: ProofMeta;
+  proofVerificationTxHash?: Hex;
+  settlementTxHash?: Hex;
 }
 
 export interface LiquidationWitness {

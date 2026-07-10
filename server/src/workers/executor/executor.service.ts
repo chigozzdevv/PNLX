@@ -194,6 +194,51 @@ export class ExecutorService implements PnlxExecutor {
     return settlement;
   }
 
+  async createBatchSettlementAsync(input: SettleBatchInput): Promise<BatchSettlement> {
+    const market = this.store.markets.get(input.marketId);
+    if (!market) throw new Error("unknown market");
+
+    const relevant = Array.from(this.store.intents.values()).filter(
+      (intent) =>
+        intent.batchId === input.batchId &&
+        intent.marketId === input.marketId &&
+        this.store.orderLifecycle.get(intent.intentCommitment)?.status === "open",
+    );
+    const residuals = activeResiduals(this.store, input.marketId, input.batchId);
+    if (relevant.length === 0 && residuals.length === 0) {
+      throw new Error("batch has no active intents");
+    }
+
+    const privateIntents = privateMatchIntentsFor(this.store, input.batchId, relevant, residuals);
+    const match = this.matcher.match({
+      batchId: input.batchId,
+      intents: privateIntents,
+      market,
+    });
+    const newRoot = fieldMerkleRoot([
+      ...this.store.positionCommitments,
+      ...match.fills.map((fill) => fill.positionCommitment),
+    ]);
+    const settlement = await this.proofs.createSettlementAsync({
+      batchId: input.batchId,
+      intents: privateIntents,
+      market,
+      match,
+      newRoot,
+      oldRoot: this.store.positionMembershipRoot(),
+      positionCommitments: [...this.store.positionCommitments],
+    });
+    const positionOpenings = createPositionOpenings(settlement, match.fills);
+    const residualPrivateIntents = match.residuals;
+    const residualOrders = createResidualOrderRecords(settlement, residualPrivateIntents);
+    this.pendingPositionOpenings.set(settlement.settlementDigest, positionOpenings);
+    this.pendingResidualOrders.set(settlement.settlementDigest, residualOrders);
+    for (const privateIntent of residualPrivateIntents) {
+      this.store.privateMatchIntents.set(privateIntent.intentCommitment, privateIntent);
+    }
+    return settlement;
+  }
+
   commitExternalBatchSettlement(
     transcript: ExternalBatchSettlementTranscript,
     options: ExternalBatchSettlementCommitOptions = {},

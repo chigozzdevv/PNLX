@@ -110,6 +110,7 @@ export interface OnchainRelay {
   cancelIntent(intentCommitment: Hex): OnchainRelayResult;
   upsertMarket(record: MarketConfig, config: OnchainMarketConfig): OnchainRelayResult;
   settleBatch(record: BatchSettlement): OnchainRelayResult;
+  settleBatchAsync?(record: BatchSettlement): Promise<OnchainRelayResult>;
   registerConditionalOrder(record: ConditionalOrderCommitment): OnchainRelayResult;
   triggerConditionalClose(record: ConditionalOrderRecord): OnchainRelayResult;
   settlePositionClose(record: PositionCloseRecord): OnchainRelayResult;
