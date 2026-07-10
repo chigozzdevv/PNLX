@@ -15,10 +15,12 @@ import {
   markPrivateMarginNoteSpent,
   privateMarginNoteRuntimeScopeFromHealth,
   privateMarginNotes,
+  planPrivateMarginNoteAllocations,
+  reconcilePrivateMarginNotes,
   savePendingPrivateMarginChange,
   savePrivateMarginNote,
-  selectPrivateMarginNote,
   setPrivateMarginNoteRuntimeScope,
+  type PrivateMarginNoteAllocation,
 } from "@/lib/private-margin-notes";
 import { usdcToProtocolAmount } from "@/lib/asset-units";
 import type { Hex, MarketDisplay, ServerIntentRecord, Side } from "@/types/trading";
@@ -98,6 +100,7 @@ export interface SubmitTradeIntentInput {
 
 export interface SubmitTradeIntentResult {
   intent: ServerIntentRecord;
+  intents: ServerIntentRecord[];
   protocolSize: bigint;
 }
 
@@ -136,13 +139,15 @@ export async function submitTradeIntent(input: SubmitTradeIntentInput): Promise<
   setPrivateMarginNoteRuntimeScope(privateMarginNoteRuntimeScopeFromHealth(health));
 
   const notes = privateMarginNotes(input.session.ownerCommitment);
-  const availableNotes = notes.filter((note) => note.status === "available");
-  const hasSufficient = availableNotes.some((note) => BigInt(note.amount) >= margin);
-  if (!hasSufficient) {
-    const totalBalance = availableNotes.reduce((sum, note) => sum + BigInt(note.amount), 0n);
+  const availableNotes = notes
+    .filter((note) => note.status === "available")
+    .filter((note) => !health.custody.collateralAsset.tokenDigest ||
+      note.assetDigest === health.custody.collateralAsset.tokenDigest);
+  const totalBalance = availableNotes.reduce((sum, note) => sum + BigInt(note.amount), 0n);
+  if (totalBalance < margin) {
     const totalBalanceDisplay = Number(totalBalance) / 10_000_000;
     throw new Error(
-      `Your private balance ($${totalBalanceDisplay.toFixed(2)}) is fragmented into smaller notes. You need a single private note of at least $${input.margin.toFixed(2)} to trade. Please top up or withdraw/re-deposit to consolidate.`
+      `Your spendable private balance is $${totalBalanceDisplay.toFixed(2)}. Deposit at least $${input.margin.toFixed(2)} before trading.`
     );
   }
 
@@ -232,6 +237,7 @@ async function submitDevWitnessTradeIntent(
 
   return {
     intent: submittedIntent,
+    intents: [submittedIntent],
     protocolSize: input.protocolSize,
   };
 }
@@ -246,7 +252,6 @@ async function submitCustodySharedTradeIntent(
     protocolSize: bigint;
     conditionalStrategy: PendingConditionalStrategyInput | null;
   },
-  attemptedCommitments = new Set<Hex>(),
 ): Promise<SubmitTradeIntentResult> {
   const proofProvider = input.proofProvider ?? defaultClientProofProvider();
   if (!proofProvider) {
@@ -260,15 +265,90 @@ async function submitCustodySharedTradeIntent(
   }
 
   markProgress(input, "shielding");
-  const note = selectPrivateMarginNote({
+  let allocations = planPrivateMarginNoteAllocations({
     amount: input.marginProtocol,
     assetDigest: input.collateralTokenDigest,
-    excludedCommitments: attemptedCommitments,
     ownerCommitment: input.session.ownerCommitment,
   });
+  let memberships: MarginMembershipResponse["note"][];
+  try {
+    memberships = await preflightMarginMemberships(allocations, input.session.token);
+  } catch (error) {
+    if (!isRecoverablePrivateMarginNoteError(error)) throw error;
+    try {
+      allocations = planPrivateMarginNoteAllocations({
+        amount: input.marginProtocol,
+        assetDigest: input.collateralTokenDigest,
+        ownerCommitment: input.session.ownerCommitment,
+      });
+      memberships = await preflightMarginMemberships(allocations, input.session.token);
+    } catch (retryError) {
+      throw new Error(
+        "Your private balance included notes that are no longer spendable. The balance has been refreshed; deposit the remaining amount before trading.",
+        { cause: retryError },
+      );
+    }
+  }
+  const sizes = allocateProtocolSizes(
+    input.protocolSize,
+    input.marginProtocol,
+    allocations.map((allocation) => allocation.amount),
+  );
+  const groupId = `ui-${Date.now()}-${input.market.marketId}`;
+  const submitted: ServerIntentRecord[] = [];
+
+  try {
+    for (const [index, allocation] of allocations.entries()) {
+      submitted.push(await submitCustodyIntentFragment({
+        ...input,
+        allocation,
+        batchId: `${groupId}-${index + 1}`,
+        collateralTokenDigest: input.collateralTokenDigest,
+        membership: memberships[index],
+        protocolSize: sizes[index],
+      }));
+    }
+  } catch (error) {
+    const uncancelled = await cancelSubmittedIntentFragments(submitted, input.session.token);
+    if (uncancelled.length > 0) {
+      throw new Error(
+        `Private order submission stopped after ${submitted.length} fragment(s), and ${uncancelled.length} could not be cancelled. Refresh Orders before trading again.`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+
+  const first = submitted[0];
+  if (!first) throw new Error("Private intent submission produced no orders");
+  markProgress(input, "done");
+  return {
+    intent: first,
+    intents: submitted,
+    protocolSize: input.protocolSize,
+  };
+}
+
+async function submitCustodyIntentFragment(
+  input: SubmitTradeIntentInput & {
+    allocation: PrivateMarginNoteAllocation;
+    batchId: string;
+    collateralToken: string;
+    collateralTokenDigest: Hex;
+    conditionalStrategy: PendingConditionalStrategyInput | null;
+    entryPriceProtocol: bigint;
+    limitPriceProtocol: bigint;
+    marginProtocol: bigint;
+    membership: MarginMembershipResponse["note"];
+    protocolSize: bigint;
+  },
+): Promise<ServerIntentRecord> {
+  const proofProvider = input.proofProvider ?? defaultClientProofProvider();
+  if (!proofProvider) throw new Error("Client proof provider is not configured");
+  const { amount: margin, note } = input.allocation;
   try {
     const noteAmount = BigInt(note.amount);
-    const changeAmount = noteAmount - input.marginProtocol;
+    const changeAmount = noteAmount - margin;
     const changeNote = changeAmount > 0n
       ? await createCircuitMarginNote({
           amount: changeAmount,
@@ -280,12 +360,11 @@ async function submitCustodySharedTradeIntent(
           spendSecret: randomLabel("change-spend"),
         })
       : undefined;
-    const membership = await freshMarginMembership(note.commitment, input.session.token);
     markProgress(input, "proving");
     const intent = {
-      batchId: `ui-${Date.now()}-${input.market.marketId}`,
+      batchId: input.batchId,
       limitPrice: input.limitPriceProtocol,
-      margin: input.marginProtocol,
+      margin,
       marketId: input.market.marketId,
       nonce: randomLabel("nonce"),
       noteNullifier: note.noteNullifier,
@@ -305,7 +384,7 @@ async function submitCustodySharedTradeIntent(
         expiryBatch: 2n,
         limitPrice: intent.limitPrice,
         margin: intent.margin,
-        marginRoot: membership.membershipProof.root,
+        marginRoot: input.membership.membershipProof.root,
         marketId: intent.marketId,
         nonce: intent.nonce,
         noteAmount,
@@ -314,8 +393,8 @@ async function submitCustodySharedTradeIntent(
         noteNullifier: note.noteNullifier,
         owner: intent.owner,
         ownerDigest: note.ownerDigest,
-        pathIndices: membership.membershipProof.indices,
-        pathSiblings: membership.membershipProof.siblings,
+        pathIndices: input.membership.membershipProof.indices,
+        pathSiblings: input.membership.membershipProof.siblings,
         rhoDigest: note.rhoDigest,
         salt: intent.salt,
         side: intent.side,
@@ -361,17 +440,10 @@ async function submitCustodySharedTradeIntent(
     }
     lockPrivateMarginNote(note.commitment, submittedIntent.intentCommitment);
     storePendingConditionalStrategy(submittedIntent.intentCommitment, input);
-    markProgress(input, "done");
-
-    return {
-      intent: submittedIntent,
-      protocolSize: input.protocolSize,
-    };
+    return submittedIntent;
   } catch (error) {
-    if (!isRecoverablePrivateMarginNoteError(error)) throw error;
-    markPrivateMarginNoteSpent(note.commitment);
-    attemptedCommitments.add(note.commitment);
-    return submitCustodySharedTradeIntent(input, attemptedCommitments);
+    if (isRecoverablePrivateMarginNoteError(error)) markPrivateMarginNoteSpent(note.commitment);
+    throw error;
   }
 }
 
@@ -438,11 +510,81 @@ export async function depositPrivateMargin(input: DepositPrivateMarginInput): Pr
   };
 }
 
-function splitDepositAmounts(amount: bigint, preferredNoteAmount?: number): bigint[] {
-  if (!preferredNoteAmount || preferredNoteAmount <= 0) return [amount];
-  const preferred = usdcToProtocolAmount(preferredNoteAmount, "Preferred note amount");
-  if (preferred <= 0n || preferred >= amount) return [amount];
-  return [preferred, amount - preferred];
+export function splitDepositAmounts(amount: bigint, preferredNoteAmount?: number): bigint[] {
+  void preferredNoteAmount;
+  if (amount <= 0n) throw new Error("Deposit amount must be positive");
+  return [amount];
+}
+
+async function preflightMarginMemberships(
+  allocations: PrivateMarginNoteAllocation[],
+  token?: string,
+): Promise<MarginMembershipResponse["note"][]> {
+  const results = await Promise.allSettled(
+    allocations.map((allocation) => freshMarginMembership(allocation.note.commitment, token)),
+  );
+  let firstError: unknown;
+  const memberships: MarginMembershipResponse["note"][] = [];
+  for (const [index, result] of results.entries()) {
+    if (result.status === "fulfilled") {
+      memberships[index] = result.value;
+      continue;
+    }
+    firstError ??= result.reason;
+    if (isRecoverablePrivateMarginNoteError(result.reason)) {
+      markPrivateMarginNoteSpent(allocations[index].note.commitment);
+    }
+  }
+  if (firstError) throw firstError;
+  return memberships;
+}
+
+async function cancelSubmittedIntentFragments(
+  submitted: ServerIntentRecord[],
+  token?: string,
+): Promise<ServerIntentRecord[]> {
+  const uncancelled: ServerIntentRecord[] = [];
+  for (const intent of [...submitted].reverse()) {
+    try {
+      await pnlxPost(
+        "/orders/cancel",
+        { intentCommitment: intent.intentCommitment },
+        token,
+      );
+      reconcilePrivateMarginNotes({
+        orders: [{ intentCommitment: intent.intentCommitment, status: "cancelled" }],
+      });
+    } catch {
+      uncancelled.push(intent);
+    }
+  }
+  return uncancelled;
+}
+
+export function allocateProtocolSizes(
+  totalSize: bigint,
+  totalMargin: bigint,
+  margins: bigint[],
+): bigint[] {
+  if (totalSize <= 0n || totalMargin <= 0n || margins.length === 0) {
+    throw new Error("Invalid fragmented private order allocation");
+  }
+  if (margins.some((margin) => margin <= 0n)) {
+    throw new Error("Private order fragments must have positive margin");
+  }
+  if (margins.reduce((sum, margin) => sum + margin, 0n) !== totalMargin) {
+    throw new Error("Private order fragment margin mismatch");
+  }
+
+  let assigned = 0n;
+  return margins.map((margin, index) => {
+    const size = index === margins.length - 1
+      ? totalSize - assigned
+      : (totalSize * margin) / totalMargin;
+    if (size <= 0n) throw new Error("A private balance fragment is too small for this order");
+    assigned += size;
+    return size;
+  });
 }
 
 function intentRecordFromResponse(response: ProveAndSubmitIntentResponse | IntentSubmitResponse): ServerIntentRecord {

@@ -47,6 +47,11 @@ export interface StoredPrivateMarginNote {
   runtimeScope?: string;
 }
 
+export interface PrivateMarginNoteAllocation {
+  amount: bigint;
+  note: StoredPrivateMarginNote;
+}
+
 export function privateSpendableBalance(ownerCommitment?: Hex): bigint {
   return privateMarginNotes(ownerCommitment)
     .filter((note) => note.status === "available")
@@ -167,16 +172,45 @@ export function selectPrivateMarginNote(input: {
   excludedCommitments?: Iterable<Hex>;
   ownerCommitment: Hex;
 }): StoredPrivateMarginNote {
+  const allocation = planPrivateMarginNoteAllocations(input)[0];
+  if (allocation) return allocation.note;
+
+  throw new Error("Deposit private USDC before trading");
+}
+
+export function planPrivateMarginNoteAllocations(input: {
+  amount: bigint;
+  assetDigest?: Hex;
+  excludedCommitments?: Iterable<Hex>;
+  notes?: StoredPrivateMarginNote[];
+  ownerCommitment: Hex;
+}): PrivateMarginNoteAllocation[] {
+  if (input.amount <= 0n) throw new Error("Private margin must be positive");
   const excludedCommitments = new Set(input.excludedCommitments ?? []);
-  const candidates = privateMarginNotes(input.ownerCommitment)
+  const candidates = (input.notes ?? privateMarginNotes(input.ownerCommitment))
+    .filter((note) => note.ownerCommitment === input.ownerCommitment)
     .filter((note) => note.status === "available")
     .filter((note) => !excludedCommitments.has(note.commitment))
     .filter((note) => !input.assetDigest || note.assetDigest === input.assetDigest)
-    .sort((a, b) => Number(BigInt(a.amount) - BigInt(b.amount)));
+    .sort((left, right) => compareBigInt(BigInt(left.amount), BigInt(right.amount)));
   const sufficient = candidates.find((note) => BigInt(note.amount) >= input.amount);
-  if (sufficient) return sufficient;
+  if (sufficient) return [{ amount: input.amount, note: sufficient }];
 
-  throw new Error("Deposit private USDC before trading");
+  const total = candidates.reduce((sum, note) => sum + BigInt(note.amount), 0n);
+  if (total < input.amount) throw new Error("Deposit private USDC before trading");
+
+  let remaining = input.amount;
+  const allocations: PrivateMarginNoteAllocation[] = [];
+  for (const note of [...candidates].reverse()) {
+    if (remaining === 0n) break;
+    const noteAmount = BigInt(note.amount);
+    const amount = noteAmount < remaining ? noteAmount : remaining;
+    if (amount <= 0n) continue;
+    allocations.push({ amount, note });
+    remaining -= amount;
+  }
+  if (remaining !== 0n) throw new Error("Deposit private USDC before trading");
+  return allocations;
 }
 
 export function selectWithdrawablePrivateMarginNote(input: {
@@ -186,7 +220,7 @@ export function selectWithdrawablePrivateMarginNote(input: {
   const candidates = privateMarginNotes(input.ownerCommitment)
     .filter((note) => note.status === "available")
     .filter((note) => !input.assetDigest || note.assetDigest === input.assetDigest)
-    .sort((a, b) => Number(BigInt(b.amount) - BigInt(a.amount)));
+    .sort((left, right) => compareBigInt(BigInt(right.amount), BigInt(left.amount)));
   const note = candidates[0];
   if (note) return note;
 
@@ -339,4 +373,9 @@ function normalizeRuntimeScope(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim();
   return normalized ? normalized : undefined;
+}
+
+function compareBigInt(left: bigint, right: bigint): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
 }

@@ -1,5 +1,10 @@
 import { createECDH, createHash } from "node:crypto";
-import { ownerCommitment } from "@pnlx/crypto";
+import {
+  circuitMarginCommitment,
+  circuitNullifier,
+  digestToFieldHex,
+  ownerCommitment,
+} from "@pnlx/crypto";
 import type {
   BatchSettlement,
   Hex,
@@ -130,15 +135,31 @@ export class MakerLiquidityService {
     if (filled.size === 0) return;
 
     const notes = normalizeMakerNotes(await readMakerNotes());
-    const next = notes.map((note) =>
-      note.lockedByIntentCommitment && filled.has(note.lockedByIntentCommitment)
-        ? {
-            ...note,
-            status: "spent" as const,
-            updatedAt: Date.now(),
-          }
-        : note,
-    );
+    const next: StoredMakerNote[] = [];
+    for (const note of notes) {
+      if (!note.lockedByIntentCommitment || !filled.has(note.lockedByIntentCommitment)) {
+        next.push(note);
+        continue;
+      }
+
+      next.push({
+        ...note,
+        status: "spent",
+        updatedAt: Date.now(),
+      });
+      const makerPayload = this.executor.store.privateMatchIntents.get(
+        note.lockedByIntentCommitment,
+      );
+      if (!makerPayload || !note.sourceIntentCommitment) continue;
+      const change = buildMakerChangeNote(
+        note,
+        makerPayload.margin,
+        note.sourceIntentCommitment,
+      );
+      if (change && !next.some((candidate) => candidate.commitment === change.commitment)) {
+        next.push(change);
+      }
+    }
     await saveMakerNotes(next);
   }
 
@@ -153,9 +174,12 @@ export class MakerLiquidityService {
     const size = input.size;
     const side = input.payload.signedSize >= 0n ? "short" : "long";
     const noteAmount = BigInt(input.note.amount);
-    if (noteAmount !== input.margin) {
-      throw new Error("maker note allocation requires exact note spend");
-    }
+    if (noteAmount < input.margin) throw new Error("maker note allocation exceeds note amount");
+    const change = buildMakerChangeNote(
+      input.note,
+      input.margin,
+      input.clientIntent.intentCommitment,
+    );
     const membershipProof = this.executor.store.marginMembershipProof(input.note.commitment);
     const intent: TradeIntent = {
       batchId: input.batchId,
@@ -173,13 +197,13 @@ export class MakerLiquidityService {
       intent,
       assetDigest: input.note.assetDigest,
       blinding: input.note.blinding,
-      changeBlinding: ZERO_HEX,
-      changeRhoDigest: ZERO_HEX,
+      changeBlinding: change?.blinding ?? ZERO_HEX,
+      changeRhoDigest: change?.rhoDigest ?? ZERO_HEX,
       currentBatch: 1n,
       expiryBatch: 2n,
       marginRoot: membershipProof.root,
       noteAmount,
-      noteChangeCommitment: ZERO_HEX,
+      noteChangeCommitment: change?.commitment ?? ZERO_HEX,
       noteCommitment: input.note.commitment,
       ownerDigest: input.note.ownerDigest,
       pathIndices: membershipProof.indices,
@@ -276,7 +300,7 @@ function noteOwnerCommitment(note: StoredMakerNote): Hex {
   return note.ownerCommitment ?? ownerCommitment(note.walletAddress);
 }
 
-function selectMakerNoteAllocations(
+export function selectMakerNoteAllocations(
   notes: StoredMakerNote[],
   payload: PrivateMatchIntent,
 ): MakerNoteAllocation[] {
@@ -306,22 +330,23 @@ function selectMakerNoteAllocations(
   const bestLarger = largerNotes[0];
   if (bestLarger) {
     return [{
-      margin: bestLarger.amount,
+      margin: requiredMargin,
       note: bestLarger.note,
       size: totalSize,
     }];
   }
 
-  // Fallback: try to combine smaller notes to cover the margin exactly
+  // Fallback: combine smaller notes and spend only the required amount from the final note.
   let remainingMargin = requiredMargin;
-  const selected: Array<{ amount: bigint; note: StoredMakerNote }> = [];
+  const selected: Array<{ margin: bigint; note: StoredMakerNote }> = [];
   const smallerCandidates = candidates
     .filter((c) => c.amount < requiredMargin)
     .sort((a, b) => (a.amount > b.amount ? -1 : 1));
   for (const candidate of smallerCandidates) {
-    if (candidate.amount > remainingMargin) continue;
-    selected.push(candidate);
-    remainingMargin -= candidate.amount;
+    const margin = candidate.amount < remainingMargin ? candidate.amount : remainingMargin;
+    if (margin <= 0n) continue;
+    selected.push({ margin, note: candidate.note });
+    remainingMargin -= margin;
     if (remainingMargin === 0n) break;
   }
   if (remainingMargin !== 0n) return [];
@@ -331,14 +356,60 @@ function selectMakerNoteAllocations(
     const isLast = index === selected.length - 1;
     const size = isLast
       ? remainingSize
-      : (totalSize * candidate.amount) / requiredMargin;
+      : (totalSize * candidate.margin) / requiredMargin;
     remainingSize -= size;
     return {
-      margin: candidate.amount,
+      margin: candidate.margin,
       note: candidate.note,
       size,
     };
   }).filter((allocation) => allocation.size > 0n);
+}
+
+export function buildMakerChangeNote(
+  note: StoredMakerNote,
+  margin: bigint,
+  sourceIntentCommitment: Hex,
+): StoredMakerNote | undefined {
+  const amount = BigInt(note.amount) - margin;
+  if (amount < 0n) throw new Error("maker note change exceeds note amount");
+  if (amount === 0n) return undefined;
+
+  const scope = [
+    sourceIntentCommitment,
+    note.commitment,
+    note.rhoDigest,
+    note.blinding,
+    note.spendSecretDigest,
+  ].join(":");
+  const rhoDigest = digestToFieldHex(`maker-change-rho-v1:${scope}`);
+  const blinding = digestToFieldHex(`maker-change-blinding-v1:${scope}`);
+  const spendSecretDigest = digestToFieldHex(`maker-change-spend-v1:${scope}`);
+  const commitment = circuitMarginCommitment({
+    amount,
+    assetDigest: note.assetDigest,
+    blinding,
+    ownerDigest: note.ownerDigest,
+    rhoDigest,
+    spendSecretDigest,
+  });
+
+  return {
+    amount: amount.toString(),
+    assetDigest: note.assetDigest,
+    blinding,
+    commitment,
+    createdAt: Date.now(),
+    noteNullifier: circuitNullifier({ rhoDigest, spendSecretDigest }),
+    ownerCommitment: noteOwnerCommitment(note),
+    ownerDigest: note.ownerDigest,
+    rhoDigest,
+    source: "maker-change",
+    spendSecretDigest,
+    status: "available",
+    updatedAt: Date.now(),
+    walletAddress: note.walletAddress,
+  };
 }
 
 function compareMakerNoteCandidate(

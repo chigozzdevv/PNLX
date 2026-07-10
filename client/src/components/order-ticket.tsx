@@ -6,9 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { formatNumber, formatUsd, shortAddress } from "@/lib/format";
 import type { SubmitTradeIntentResult, TradeSubmitStage } from "@/lib/trade-submit";
 import type { MarketDisplay, OrderDraft, Side } from "@/types/trading";
-import { privateMarginNotes } from "@/lib/private-margin-notes";
 import type { WalletSession } from "@/lib/wallet-auth";
-import { usdcToProtocolAmount } from "@/lib/asset-units";
 
 interface OrderTicketProps {
   availableCollateral?: number | null;
@@ -51,7 +49,6 @@ export function OrderTicket({
   onDeposit,
   onSubmit,
   order,
-  session,
 }: OrderTicketProps) {
   const [side, setSide] = useState<Side>(order.side);
   const [orderType, setOrderType] = useState<"market" | "limit">("market");
@@ -90,17 +87,6 @@ export function OrderTicket({
   const stopLossPercent = percentFromPnl("sl", stopLossPnl, margin);
   const availableCollateralValue = availableCollateral ?? 0;
   const hasEnoughCollateral = availableCollateralValue >= margin;
-  const hasSufficientSingleNote = useMemo(() => {
-    if (!connected || !session || margin <= 0) return true;
-    try {
-      const notes = privateMarginNotes(session.ownerCommitment);
-      const availableNotes = notes.filter((note) => note.status === "available");
-      const marginProtocol = usdcToProtocolAmount(margin);
-      return availableNotes.some((note) => BigInt(note.amount) >= marginProtocol);
-    } catch {
-      return true;
-    }
-  }, [connected, session, margin]);
   const canSubmit = connected && Boolean(onSubmit) && !submitting && !depositing && margin > 0 && hasEnoughCollateral;
   const canDeposit = connected && Boolean(onDeposit) && !submitting && !depositing && fundAmount > 0;
   const primaryDisabled = !canSubmit;
@@ -192,7 +178,11 @@ export function OrderTicket({
         takeProfitPrice: tpSlEnabled ? takeProfitPrice : null,
       });
       setSubmitStage(undefined);
-      setSubmitSuccess(`Submitted ${shortAddress(result.intent.intentCommitment)}`);
+      setSubmitSuccess(
+        result.intents.length > 1
+          ? `Submitted ${result.intents.length} private order fragments`
+          : `Submitted ${shortAddress(result.intent.intentCommitment)}`,
+      );
     } catch (error) {
       setSubmitStage(undefined);
       setSubmitError(error instanceof Error ? error.message : "Trade submission failed");
@@ -228,7 +218,6 @@ export function OrderTicket({
         amount,
         collateralAsset: order.collateralAsset,
         onProgress: setSubmitStage,
-        preferredNoteAmount: amount > margin ? margin : undefined,
       });
       setSubmitStage(undefined);
       setTicketMode("trade");
@@ -383,10 +372,7 @@ export function OrderTicket({
         <div className="field-label">
           <span>Margin</span>
           <div className="field-balance-group">
-            <strong
-              className={`field-balance ${hasEnoughCollateral && hasSufficientSingleNote ? "" : "field-balance-warning"}`}
-              title={!hasSufficientSingleNote ? "Private balance is fragmented into smaller notes. Consolidate your notes or top up to trade." : undefined}
-            >
+            <strong className={`field-balance ${hasEnoughCollateral ? "" : "field-balance-warning"}`}>
               Available {formatUsd(availableCollateralValue, { maximumFractionDigits: 2 })}
             </strong>
             <button
