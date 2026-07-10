@@ -1379,6 +1379,30 @@ button:disabled {
   font-weight: 700;
 }
 
+.positions-head.trades-grid,
+.positions-row.trades-grid {
+  grid-template-columns: 70px minmax(130px, 1.15fr) 82px 96px 96px 102px 102px 82px 112px 78px;
+  min-width: 1080px;
+}
+
+.positions-head.orders-grid,
+.positions-row.orders-grid {
+  grid-template-columns: 70px 88px 94px 72px 112px 112px minmax(150px, 1fr) 76px 122px 154px;
+  min-width: 1120px;
+}
+
+.positions-head.history-grid,
+.positions-row.history-grid {
+  grid-template-columns: 66px 108px 86px 84px 112px minmax(145px, 1fr) 106px 74px 92px 104px;
+  min-width: 1080px;
+}
+
+.positions-head > span,
+.positions-row > span,
+.positions-row > strong {
+  min-width: 0;
+}
+
 .row-action-button {
   min-height: 30px;
   border: 1px solid rgba(255, 255, 255, 0.12);

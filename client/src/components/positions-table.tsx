@@ -117,7 +117,7 @@ function PositionsView({
 }) {
   return (
     <>
-      <div className="positions-head">
+      <div className="positions-head trades-grid">
         <span>Time</span>
         <span>Market & Side</span>
         <span>Size</span>
@@ -135,7 +135,7 @@ function PositionsView({
           ? closeDisabledReason(position, onClosePosition)
           : undefined;
         return (
-          <div className="positions-row" key={position.id}>
+          <div className="positions-row trades-grid" key={position.id}>
             <span>{position.time}</span>
             <strong>
               {position.market}
@@ -210,7 +210,7 @@ function OrdersView({
 }) {
   return (
     <>
-      <div className="positions-head">
+      <div className="positions-head orders-grid">
         <span>Created</span>
         <span>Market</span>
         <span>Status</span>
@@ -224,7 +224,7 @@ function OrdersView({
       </div>
 
       {orders.map((order) => (
-        <div className="positions-row" key={order.intentCommitment}>
+        <div className="positions-row orders-grid" key={order.intentCommitment}>
           <span>{formatTime(order.createdAt)}</span>
           <strong>{pairFromMarketId(order.marketId)}</strong>
           <span>{statusLabel(order.status)}</span>
@@ -273,7 +273,7 @@ function OrdersView({
 function HistoryView({ activity }: { activity: ServerOwnerActivitySnapshot[] }) {
   return (
     <>
-      <div className="positions-head">
+      <div className="positions-head history-grid">
         <span>Time</span>
         <span>Type</span>
         <span>Market</span>
@@ -287,7 +287,7 @@ function HistoryView({ activity }: { activity: ServerOwnerActivitySnapshot[] }) 
       </div>
 
       {activity.map((item) => (
-        <div className="positions-row" key={`${item.kind}:${item.id}`}>
+        <div className="positions-row history-grid" key={`${item.kind}:${item.id}`}>
           <span>{formatTime(item.timestamp)}</span>
           <strong>{activityKind(item.kind)}</strong>
           <span>{item.marketId ? pairFromMarketId(item.marketId) : "--"}</span>
