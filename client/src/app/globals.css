@@ -1381,8 +1381,19 @@ button:disabled {
 
 .positions-head.trades-grid,
 .positions-row.trades-grid {
-  grid-template-columns: 70px minmax(130px, 1.15fr) 82px 96px 96px 102px 102px 82px 112px 78px;
-  min-width: 1080px;
+  grid-template-columns: 70px minmax(130px, 1.15fr) 104px 96px 96px 102px 102px 82px 112px 78px;
+  min-width: 1150px;
+  column-gap: 16px;
+}
+
+.trades-grid > :nth-child(3) {
+  justify-self: end;
+  white-space: nowrap;
+}
+
+.trades-grid > :nth-child(4) {
+  justify-self: start;
+  white-space: nowrap;
 }
 
 .positions-head.orders-grid,
