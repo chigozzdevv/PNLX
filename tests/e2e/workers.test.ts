@@ -1050,6 +1050,45 @@ describe("support workers", () => {
     expect(refreshes.every((marketId) => marketId === "xlm-usd-perp")).toBe(true);
   });
 
+  test("batch executor serializes oracle refreshes across markets", async () => {
+    const executor = createExecutor();
+    for (const marketId of ["btc-usd-perp", "xlm-usd-perp"]) {
+      executor.addMarket({
+        marketId,
+        oraclePrice: 20_000_000n,
+        maxLeverage: 10n,
+        initialMarginRate: 100_000n,
+        maintenanceMarginRate: 50_000n,
+        fundingIndex: 0n,
+      });
+    }
+    let active = 0;
+    let maximumActive = 0;
+    const refreshed: string[] = [];
+    const batchExecutor = createBatchExecutor(
+      executor,
+      createProoflessMatcher(executor),
+      {
+        intervalMs: 60_000,
+        oracleRefreshIntervalMs: 60_000,
+        async refreshMarketOracle(marketId) {
+          active += 1;
+          maximumActive = Math.max(maximumActive, active);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          refreshed.push(marketId);
+          active -= 1;
+        },
+      },
+    );
+
+    batchExecutor.start();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    batchExecutor.stop();
+
+    expect(maximumActive).toBe(1);
+    expect(refreshed).toEqual(["btc-usd-perp", "xlm-usd-perp"]);
+  });
+
   test("normalizes Pyth feed ids with or without a hex prefix", async () => {
     const originalFetch = globalThis.fetch;
     const requestedIds: string[] = [];

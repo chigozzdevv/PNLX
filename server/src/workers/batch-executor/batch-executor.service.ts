@@ -30,6 +30,7 @@ export class BatchExecutorService {
   private failedBatchRetryAfter = new Map<string, number>();
   private oracleRefreshAfter = new Map<string, number>();
   private oracleRefreshInFlight = new Map<string, Promise<void>>();
+  private oracleRefreshRunning = false;
   private oracleTimer: ReturnType<typeof setInterval> | undefined;
   private running = false;
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -81,17 +82,25 @@ export class BatchExecutorService {
 
   private startOracleRefresh(): void {
     if (!this.config.refreshMarketOracle || this.oracleTimer) return;
-    const refresh = () => {
+    const refresh = async () => {
+      if (this.oracleRefreshRunning) return;
+      this.oracleRefreshRunning = true;
       const now = Date.now();
-      for (const marketId of this.executor.store.markets.keys()) {
-        void this.refreshMarketOracleIfNeeded(marketId, now).catch((error) => {
-          console.error(`[BatchExecutorService] oracle refresh failed for ${marketId}: ${errorMessage(error)}`);
-        });
+      try {
+        for (const marketId of this.executor.store.markets.keys()) {
+          try {
+            await this.refreshMarketOracleIfNeeded(marketId, now);
+          } catch (error) {
+            console.error(`[BatchExecutorService] oracle refresh failed for ${marketId}: ${errorMessage(error)}`);
+          }
+        }
+      } finally {
+        this.oracleRefreshRunning = false;
       }
     };
-    refresh();
+    void refresh();
     this.oracleTimer = setInterval(
-      refresh,
+      () => void refresh(),
       this.config.oracleRefreshIntervalMs ?? DEFAULT_ORACLE_REFRESH_INTERVAL_MS,
     );
     (this.oracleTimer as { unref?: () => void }).unref?.();
