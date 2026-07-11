@@ -19,6 +19,7 @@ use url::Url;
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_BATCH_MATCH_CYCLES: u64 = 10_000_000;
 const DEFAULT_LOCK_COLLATERAL_ZKC_WEI: u64 = 5_000_000_000_000_000_000;
+const DEFAULT_MAX_PRICE_USD_MICRO: u64 = 100_000;
 const GROTH16_SEAL_BYTES: usize = 260;
 
 #[derive(Parser, Debug)]
@@ -293,6 +294,10 @@ fn write_request_metadata(output_dir: &PathBuf, request_id: U256, expires_at: u6
 
 fn default_offer() -> OfferParams {
     OfferParams::builder()
+        .max_price(Amount::new(
+            env_u256("BOUNDLESS_MAX_PRICE_USD_MICRO", DEFAULT_MAX_PRICE_USD_MICRO),
+            Asset::USD,
+        ))
         .lock_collateral(Amount::new(
             env_u256(
                 "BOUNDLESS_LOCK_COLLATERAL_ZKC_WEI",
