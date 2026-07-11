@@ -30,6 +30,7 @@ export class BatchExecutorService {
   private failedBatchRetryAfter = new Map<string, number>();
   private oracleRefreshAfter = new Map<string, number>();
   private oracleRefreshInFlight = new Map<string, Promise<void>>();
+  private oracleRefreshQueue: Promise<void> = Promise.resolve();
   private oracleRefreshRunning = false;
   private oracleTimer: ReturnType<typeof setInterval> | undefined;
   private running = false;
@@ -261,7 +262,8 @@ export class BatchExecutorService {
     if (retryAfter && retryAfter > now) return;
     const active = this.oracleRefreshInFlight.get(marketId);
     if (active) return active;
-    const refresh = Promise.resolve(this.config.refreshMarketOracle(marketId))
+    const refresh = this.oracleRefreshQueue
+      .then(() => this.config.refreshMarketOracle?.(marketId))
       .then(() => {
         this.oracleRefreshAfter.set(
           marketId,
@@ -269,6 +271,7 @@ export class BatchExecutorService {
         );
       })
       .finally(() => this.oracleRefreshInFlight.delete(marketId));
+    this.oracleRefreshQueue = refresh.catch(() => undefined);
     this.oracleRefreshInFlight.set(marketId, refresh);
     return refresh;
   }
