@@ -18,7 +18,7 @@ use url::Url;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_BATCH_MATCH_CYCLES: u64 = 10_000_000;
-const DEFAULT_LOCK_COLLATERAL_ZKC_WEI: u64 = 5_000_000_000_000_000_000;
+const DEFAULT_LOCK_COLLATERAL_ZKC_WEI: &str = "20000000000000000000";
 const DEFAULT_MAX_PRICE_USD_MICRO: u64 = 100_000;
 const GROTH16_SEAL_BYTES: usize = 260;
 
@@ -311,11 +311,11 @@ fn default_offer() -> OfferParams {
         .into()
 }
 
-fn env_u256(name: &str, default: u64) -> U256 {
+fn env_u256(name: &str, default: impl ToString) -> U256 {
     env::var(name)
         .ok()
         .and_then(|raw| parse_u256(&raw).ok())
-        .unwrap_or_else(|| U256::from(default))
+        .unwrap_or_else(|| parse_u256(&default.to_string()).expect("valid default U256"))
 }
 
 fn parse_u256(raw: &str) -> Result<U256> {
