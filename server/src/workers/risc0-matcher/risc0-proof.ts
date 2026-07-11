@@ -280,6 +280,7 @@ function batchMatchImageId(): Hex {
 function runBoundlessProver(root: string, inputPath: string, proofDir: string): Promise<ProverRun> {
   return new Promise((resolve) => {
     const metadataPath = join(proofDir, "proof.json");
+    const request = resumableBoundlessRequest(join(proofDir, "request.json"));
     const child = spawn(
       "cargo",
       [
@@ -295,6 +296,12 @@ function runBoundlessProver(root: string, inputPath: string, proofDir: string): 
         cwd: root,
         env: {
           ...process.env,
+          ...(request
+            ? {
+              BOUNDLESS_REQUEST_EXPIRES_AT: String(request.expiresAt),
+              BOUNDLESS_REQUEST_ID: request.requestId,
+            }
+            : {}),
           BOUNDLESS_IGNORE_PREFLIGHT: process.env.BOUNDLESS_IGNORE_PREFLIGHT ?? "1",
           PATH: risc0ToolPath(process.env.HOME || "", process.env.PATH),
           RISC0_DEV_MODE: "0",
@@ -357,6 +364,27 @@ function runBoundlessProver(root: string, inputPath: string, proofDir: string): 
       });
     });
   });
+}
+
+function resumableBoundlessRequest(
+  requestPath: string,
+): { expiresAt: number; requestId: string } | undefined {
+  if (!existsSync(requestPath)) return undefined;
+  try {
+    const request = JSON.parse(readFileSync(requestPath, "utf8")) as {
+      expires_at?: unknown;
+      request_id?: unknown;
+    };
+    if (
+      typeof request.expires_at !== "number" ||
+      request.expires_at <= Math.floor(Date.now() / 1_000) ||
+      typeof request.request_id !== "string"
+    ) return undefined;
+    assertHex(request.request_id, "Boundless request id");
+    return { expiresAt: request.expires_at, requestId: request.request_id };
+  } catch {
+    return undefined;
+  }
 }
 
 export function risc0ProofMetadataReady(metadataPath: string): boolean {

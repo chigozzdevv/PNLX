@@ -12,6 +12,7 @@ interface MatcherJobDocument {
   createdAt: Date;
   error?: string;
   input: string;
+  nextAttemptAt?: Date;
   result?: string;
   status: MatcherJobStatus;
   updatedAt: Date;
@@ -21,6 +22,7 @@ export interface MatcherJobView {
   attempts: number;
   error?: string;
   jobId: string;
+  nextAttemptAt?: number;
   status: MatcherJobStatus;
   transcript?: ExternalBatchSettlementTranscript;
   updatedAt: number;
@@ -89,8 +91,16 @@ export class MatcherJobService {
         { upsert: true },
       );
       await this.collection.updateOne(
-        { _id: jobId, attempts: { $lt: 5 }, status: "failed" },
-        { $set: { error: undefined, status: "queued", updatedAt: now } },
+        {
+          _id: jobId,
+          attempts: { $lt: 5 },
+          nextAttemptAt: { $lte: now },
+          status: "failed",
+        },
+        {
+          $set: { error: undefined, status: "queued", updatedAt: now },
+          $unset: { nextAttemptAt: "" },
+        },
       );
     } else if (!this.memory.has(jobId)) {
       this.memory.set(jobId, {
@@ -101,6 +111,22 @@ export class MatcherJobService {
         status: "queued",
         updatedAt: now,
       });
+    } else {
+      const current = this.memory.get(jobId)!;
+      if (
+        current.status === "failed" &&
+        current.attempts < 5 &&
+        current.nextAttemptAt &&
+        current.nextAttemptAt <= now
+      ) {
+        this.memory.set(jobId, {
+          ...current,
+          error: undefined,
+          nextAttemptAt: undefined,
+          status: "queued",
+          updatedAt: now,
+        });
+      }
     }
     this.kick(jobId);
     return this.get(jobId);
@@ -115,6 +141,7 @@ export class MatcherJobService {
       attempts: document.attempts,
       ...(document.error ? { error: document.error } : {}),
       jobId: document._id,
+      ...(document.nextAttemptAt ? { nextAttemptAt: document.nextAttemptAt.getTime() } : {}),
       status: document.status,
       ...(document.result
         ? { transcript: decode<ExternalBatchSettlementTranscript>(document.result) }
@@ -174,7 +201,16 @@ export class MatcherJobService {
   }
 
   private async fail(jobId: string, error: string): Promise<void> {
-    const update = { error, status: "failed" as const, updatedAt: new Date() };
+    const current = this.collection
+      ? await this.collection.findOne({ _id: jobId }, { projection: { attempts: 1 } })
+      : this.memory.get(jobId);
+    const attempts = current?.attempts ?? 1;
+    const update = {
+      error,
+      nextAttemptAt: new Date(Date.now() + retryDelayMs(attempts)),
+      status: "failed" as const,
+      updatedAt: new Date(),
+    };
     if (this.collection) {
       await this.collection.updateOne({ _id: jobId, status: "proving" }, { $set: update });
     } else {
@@ -182,6 +218,11 @@ export class MatcherJobService {
       if (current) this.memory.set(jobId, { ...current, ...update });
     }
   }
+}
+
+function retryDelayMs(attempts: number): number {
+  const delays = [5 * 60_000, 15 * 60_000, 60 * 60_000, 4 * 60 * 60_000];
+  return delays[Math.min(Math.max(attempts - 1, 0), delays.length - 1)]!;
 }
 
 function matcherJobId(input: CreateExternalSettlementInput): string {

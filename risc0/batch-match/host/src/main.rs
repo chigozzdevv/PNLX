@@ -129,13 +129,12 @@ async fn run(args: Args) -> Result<()> {
         .await
         .context("failed to build Boundless client")?;
 
-    let fulfillment = if let Some(request_id) = existing_request_id()? {
+    let fulfillment = if let Some((request_id, expires_at)) = existing_request()? {
         tracing::info!("Fetching fulfilled Boundless request {:x}", request_id);
         client
-            .boundless_market
-            .get_request_fulfillment(request_id, None, None)
+            .wait_for_request_fulfillment(request_id, POLL_INTERVAL, expires_at)
             .await
-            .context("fetch Boundless proof fulfillment")?
+            .context("wait for existing Boundless proof fulfillment")?
     } else {
         let env = GuestEnv::builder()
             .write(&request)
@@ -254,11 +253,16 @@ fn reject_dev_mode() -> Result<()> {
     Ok(())
 }
 
-fn existing_request_id() -> Result<Option<U256>> {
-    env::var("BOUNDLESS_REQUEST_ID")
-        .ok()
-        .map(|raw| parse_u256(&raw).context("parse BOUNDLESS_REQUEST_ID"))
-        .transpose()
+fn existing_request() -> Result<Option<(U256, u64)>> {
+    let Some(raw_id) = env::var("BOUNDLESS_REQUEST_ID").ok() else {
+        return Ok(None);
+    };
+    let request_id = parse_u256(&raw_id).context("parse BOUNDLESS_REQUEST_ID")?;
+    let expires_at = env::var("BOUNDLESS_REQUEST_EXPIRES_AT")
+        .context("BOUNDLESS_REQUEST_EXPIRES_AT is required when resuming a request")?
+        .parse::<u64>()
+        .context("parse BOUNDLESS_REQUEST_EXPIRES_AT")?;
+    Ok(Some((request_id, expires_at)))
 }
 
 fn write_request_metadata(output_dir: &PathBuf, request_id: U256, expires_at: u64) -> Result<()> {
