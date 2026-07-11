@@ -1019,6 +1019,67 @@ describe("support workers", () => {
     ]);
   });
 
+  test("batch executor keeps idle market oracle prices fresh", async () => {
+    const executor = createExecutor();
+    executor.addMarket({
+      marketId: "xlm-usd-perp",
+      oraclePrice: 20_000_000n,
+      maxLeverage: 10n,
+      initialMarginRate: 100_000n,
+      maintenanceMarginRate: 50_000n,
+      fundingIndex: 0n,
+    });
+    const refreshes: string[] = [];
+    const batchExecutor = createBatchExecutor(
+      executor,
+      createProoflessMatcher(executor),
+      {
+        intervalMs: 60_000,
+        oracleRefreshIntervalMs: 10,
+        refreshMarketOracle(marketId) {
+          refreshes.push(marketId);
+        },
+      },
+    );
+
+    batchExecutor.start();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    batchExecutor.stop();
+
+    expect(refreshes.length).toBeGreaterThanOrEqual(2);
+    expect(refreshes.every((marketId) => marketId === "xlm-usd-perp")).toBe(true);
+  });
+
+  test("normalizes Pyth feed ids with or without a hex prefix", async () => {
+    const originalFetch = globalThis.fetch;
+    const requestedIds: string[] = [];
+    globalThis.fetch = (input) => {
+      const url = new URL(String(input));
+      requestedIds.push(url.searchParams.get("ids[]") ?? "");
+      return Promise.resolve(new Response(JSON.stringify({
+        parsed: [{
+          id: "abcd",
+          price: { conf: "1", expo: -8, price: "20000000", publish_time: Math.floor(Date.now() / 1000) },
+        }],
+      }), { status: 200 }));
+    };
+    const oracle = new OracleService({
+      hermesUrl: "https://hermes.example",
+      maxAgeSeconds: 120,
+      maxConfidenceBps: 100n,
+      priceSource: "hermes",
+    });
+
+    try {
+      await oracle.latest("abcd" as Hex);
+      await oracle.latest("0xabcd" as Hex);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(requestedIds).toEqual(["abcd", "abcd"]);
+  });
+
   test("runs bounded funding engine cycles from market oracle price", () => {
     const executor = createExecutor();
     const market = {

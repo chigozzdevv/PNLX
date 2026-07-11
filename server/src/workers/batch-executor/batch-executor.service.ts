@@ -29,6 +29,8 @@ class BatchPhaseError extends Error {
 export class BatchExecutorService {
   private failedBatchRetryAfter = new Map<string, number>();
   private oracleRefreshAfter = new Map<string, number>();
+  private oracleRefreshInFlight = new Map<string, Promise<void>>();
+  private oracleTimer: ReturnType<typeof setInterval> | undefined;
   private running = false;
   private timer: ReturnType<typeof setInterval> | undefined;
 
@@ -58,6 +60,7 @@ export class BatchExecutorService {
 
   start(input: Omit<RunBatchExecutorInput, "now"> = {}): void {
     if (this.timer) return;
+    this.startOracleRefresh();
     this.timer = setInterval(() => {
       if (this.running) return;
       this.running = true;
@@ -72,6 +75,26 @@ export class BatchExecutorService {
     if (!this.timer) return;
     clearInterval(this.timer);
     this.timer = undefined;
+    if (this.oracleTimer) clearInterval(this.oracleTimer);
+    this.oracleTimer = undefined;
+  }
+
+  private startOracleRefresh(): void {
+    if (!this.config.refreshMarketOracle || this.oracleTimer) return;
+    const refresh = () => {
+      const now = Date.now();
+      for (const marketId of this.executor.store.markets.keys()) {
+        void this.refreshMarketOracleIfNeeded(marketId, now).catch((error) => {
+          console.error(`[BatchExecutorService] oracle refresh failed for ${marketId}: ${errorMessage(error)}`);
+        });
+      }
+    };
+    refresh();
+    this.oracleTimer = setInterval(
+      refresh,
+      this.config.oracleRefreshIntervalMs ?? DEFAULT_ORACLE_REFRESH_INTERVAL_MS,
+    );
+    (this.oracleTimer as { unref?: () => void }).unref?.();
   }
 
   private async runMarket(
@@ -227,12 +250,18 @@ export class BatchExecutorService {
     if (!this.config.refreshMarketOracle) return;
     const retryAfter = this.oracleRefreshAfter.get(marketId);
     if (retryAfter && retryAfter > now) return;
-
-    await this.config.refreshMarketOracle(marketId);
-    this.oracleRefreshAfter.set(
-      marketId,
-      now + (this.config.oracleRefreshIntervalMs ?? DEFAULT_ORACLE_REFRESH_INTERVAL_MS),
-    );
+    const active = this.oracleRefreshInFlight.get(marketId);
+    if (active) return active;
+    const refresh = Promise.resolve(this.config.refreshMarketOracle(marketId))
+      .then(() => {
+        this.oracleRefreshAfter.set(
+          marketId,
+          now + (this.config.oracleRefreshIntervalMs ?? DEFAULT_ORACLE_REFRESH_INTERVAL_MS),
+        );
+      })
+      .finally(() => this.oracleRefreshInFlight.delete(marketId));
+    this.oracleRefreshInFlight.set(marketId, refresh);
+    return refresh;
   }
 
   private marketIds(marketId?: string): string[] {

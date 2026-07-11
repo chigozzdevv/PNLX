@@ -16,8 +16,9 @@ export class OracleService {
   }
 
   async latest(feedId: Hex): Promise<OraclePrice> {
+    const normalizedFeedId = feedId.replace(/^0x/i, "");
     const url = new URL("/v2/updates/price/latest", this.config.hermesUrl);
-    url.searchParams.append("ids[]", feedId.slice(2));
+    url.searchParams.append("ids[]", normalizedFeedId);
 
     const response = await fetch(url);
     if (!response.ok) {
@@ -25,7 +26,7 @@ export class OracleService {
     }
 
     const body = (await response.json()) as PythPriceResponse;
-    const parsed = body.parsed.find((entry) => entry.id === feedId.slice(2));
+    const parsed = body.parsed.find((entry) => entry.id.replace(/^0x/i, "") === normalizedFeedId);
     if (!parsed) throw new Error("pyth feed missing from response");
 
     const price = scalePythPrice(BigInt(parsed.price.price), parsed.price.expo);
