@@ -1,6 +1,7 @@
 use alloy::{primitives::U256, signers::local::PrivateKeySigner};
 use anyhow::{anyhow, Context, Result};
 use boundless_market::{
+    client::FundingMode,
     input::GuestEnv,
     price_oracle::{Amount, Asset},
     request_builder::OfferParams,
@@ -18,8 +19,6 @@ use url::Url;
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_INLINE_INPUT_BYTES: usize = 64 * 1024;
 const DEFAULT_BATCH_MATCH_CYCLES: u64 = 10_000_000;
-const DEFAULT_MIN_PRICE_WEI: u64 = 0;
-const DEFAULT_MAX_PRICE_WEI: u64 = 60_000_000_000_000;
 const DEFAULT_LOCK_COLLATERAL_ZKC_WEI: u64 = 5_000_000_000_000_000_000;
 const GROTH16_SEAL_BYTES: usize = 260;
 
@@ -133,6 +132,7 @@ async fn run(args: Args) -> Result<()> {
         .with_uploader_config(&args.storage_config)
         .await?
         .config_storage_layer(|config| config.inline_input_max_bytes(MAX_INLINE_INPUT_BYTES))
+        .with_funding_mode(FundingMode::AvailableBalance)
         .with_private_key(required_private_key(args.private_key)?)
         .build()
         .await
@@ -154,7 +154,7 @@ async fn run(args: Args) -> Result<()> {
                 .with_program_url(program_url)?
                 .with_env(env)
                 .with_image_id(image_id_digest())
-                .with_cycles(batch_match_cycles()?)
+                .with_cycles(cycles)
                 .with_journal(journal)
                 .with_offer(default_offer())
                 .with_groth16_proof(),
@@ -163,7 +163,7 @@ async fn run(args: Args) -> Result<()> {
                 .with_program(pnlx_risc0_methods::BATCH_MATCH_ELF)
                 .with_env(env)
                 .with_image_id(image_id_digest())
-                .with_cycles(batch_match_cycles()?)
+                .with_cycles(cycles)
                 .with_journal(journal)
                 .with_offer(default_offer())
                 .with_groth16_proof(),
@@ -308,14 +308,6 @@ fn write_request_metadata(output_dir: &PathBuf, request_id: U256, expires_at: u6
 
 fn default_offer() -> OfferParams {
     OfferParams::builder()
-        .min_price(Amount::new(
-            env_u256("BOUNDLESS_MIN_PRICE_WEI", DEFAULT_MIN_PRICE_WEI),
-            Asset::ETH,
-        ))
-        .max_price(Amount::new(
-            env_u256("BOUNDLESS_MAX_PRICE_WEI", DEFAULT_MAX_PRICE_WEI),
-            Asset::ETH,
-        ))
         .lock_collateral(Amount::new(
             env_u256(
                 "BOUNDLESS_LOCK_COLLATERAL_ZKC_WEI",
