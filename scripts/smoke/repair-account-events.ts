@@ -12,7 +12,7 @@ import type {
 } from "@pnlx/protocol-types";
 import { loadEnv } from "@/config/env";
 import { createPositionOpeningAccountEvent } from "@/shared/protocol/account-event-outcomes";
-import { MongoProtocolStore } from "@/shared/state/mongo-store";
+import { MongoProtocolStore } from "@/shared/mongo/store";
 
 type BookState = {
   allocatedMargin: bigint;

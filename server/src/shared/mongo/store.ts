@@ -45,7 +45,7 @@ import {
   recordProtocolCheckpointHistory,
   writeNormalizedSnapshot,
   type ProtocolCheckpointDocument,
-} from "@/shared/state/mongo-normalized-snapshot";
+} from "@/shared/mongo/snapshot";
 
 export interface ProtocolPersistenceStatus {
   error?: string;

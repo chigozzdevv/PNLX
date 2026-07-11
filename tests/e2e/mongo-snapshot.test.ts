@@ -12,7 +12,7 @@ import {
   protocolCheckpointFilter,
   type NormalizedSnapshotField,
   type NormalizedSnapshotRecord,
-} from "@/shared/state/mongo-normalized-snapshot";
+} from "@/shared/mongo/snapshot";
 import {
   snapshotProtocolStore,
 } from "@/shared/state/protocol-snapshot";

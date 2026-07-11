@@ -2,7 +2,7 @@ import type { Router } from "@/shared/http/router";
 import type { ServerEnv } from "@/config/env";
 import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
 import { HealthController } from "@/features/health/health.controller";
-import type { ProtocolPersistenceStatus } from "@/shared/state/mongo-store";
+import type { ProtocolPersistenceStatus } from "@/shared/mongo/store";
 
 interface PersistenceStatusProvider {
   persistenceStatus(): ProtocolPersistenceStatus;

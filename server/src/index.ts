@@ -1,5 +1,5 @@
 export * from "@/shared/state/store";
-export * from "@/shared/state/mongo-store";
+export * from "@/shared/mongo/store";
 export * from "@/shared/state/protocol-snapshot";
 export * from "@/features/account-keys/account-keys.index";
 export * from "@/features/liquidation-automation/liquidation-automation.index";

@@ -1,5 +1,5 @@
 import { ExecutorService } from "@/workers/executor/executor.service";
-import { MongoProtocolStore, type MongoProtocolStoreOptions } from "@/shared/state/mongo-store";
+import { MongoProtocolStore, type MongoProtocolStoreOptions } from "@/shared/mongo/store";
 
 interface CreateExecutorOptions {
   mongo?: MongoProtocolStoreOptions;

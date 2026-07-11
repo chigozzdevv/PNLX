@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { MongoClient, type Collection } from "mongodb";
-import type { MongoProtocolStoreOptions } from "@/shared/state/mongo-store";
+import type { MongoProtocolStoreOptions } from "@/shared/mongo/store";
 import type { ExternalBatchSettlementTranscript } from "@/workers/executor/executor.model";
 import type { CreateExternalSettlementInput } from "@/workers/matcher/matcher.model";
 

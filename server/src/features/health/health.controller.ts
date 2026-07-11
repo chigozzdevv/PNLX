@@ -5,7 +5,7 @@ import type { Hex } from "@pnlx/protocol-types";
 import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
 import type {
   ProtocolPersistenceStatus,
-} from "@/shared/state/mongo-store";
+} from "@/shared/mongo/store";
 
 interface PersistenceStatusProvider {
   persistenceStatus(): ProtocolPersistenceStatus;

@@ -1,5 +1,5 @@
 import { loadEnv } from "../../server/src/config/env";
-import { MongoProtocolStore } from "../../server/src/shared/state/mongo-store";
+import { MongoProtocolStore } from "../../server/src/shared/mongo/store";
 
 const env = loadEnv();
 const store = await MongoProtocolStore.connect({

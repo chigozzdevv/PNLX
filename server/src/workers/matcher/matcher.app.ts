@@ -2,7 +2,7 @@ import { json, readJson } from "@/shared/http/json";
 import { Router } from "@/shared/http/router";
 import { createExecutor, createExecutorAsync } from "@/workers/executor/executor.worker";
 import type { ExecutorService } from "@/workers/executor/executor.service";
-import type { MongoProtocolStoreOptions } from "@/shared/state/mongo-store";
+import type { MongoProtocolStoreOptions } from "@/shared/mongo/store";
 import { createMatcher } from "@/workers/matcher/matcher.worker";
 import { MatcherJobService } from "@/workers/matcher/matcher-job.service";
 import type {
