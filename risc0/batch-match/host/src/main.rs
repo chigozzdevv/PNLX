@@ -8,7 +8,7 @@ use boundless_market::{
 };
 use clap::Parser;
 use pnlx_risc0_batch_match_core::{prove_request, ProofRequest};
-use risc0_zkvm::{sha::Digest, Journal};
+use risc0_zkvm::{default_executor, sha::Digest, ExecutorEnv, Journal};
 use serde::Serialize;
 use sha2::{Digest as ShaDigest, Sha256};
 use std::{env, fs, path::PathBuf, str::FromStr, time::Duration};
@@ -38,6 +38,9 @@ struct Args {
 
     #[clap(long)]
     print_program_path: bool,
+
+    #[clap(long)]
+    preflight_only: bool,
 
     #[clap(long, env = "BOUNDLESS_RPC_URL")]
     rpc_url: Option<Url>,
@@ -117,6 +120,12 @@ async fn run(args: Args) -> Result<()> {
         serde_json::from_slice(&input_bytes).context("parse prover input")?;
     let proved = prove_request(&request);
     let journal = Journal::new(proved.journal.clone());
+
+    let cycles = preflight(&request, &proved.journal)?;
+    tracing::info!("RISC0 batch-match preflight completed in {cycles} cycles");
+    if args.preflight_only {
+        return Ok(());
+    }
 
     let client = Client::builder()
         .with_rpc_url(required_url(args.rpc_url)?)
@@ -203,6 +212,26 @@ async fn run(args: Args) -> Result<()> {
         .context("write proof metadata")?;
     println!("{}", metadata_path.display());
     Ok(())
+}
+
+fn preflight(request: &ProofRequest, expected_journal: &[u8]) -> Result<u64> {
+    let env = ExecutorEnv::builder()
+        .write(request)
+        .context("encode zkVM preflight input")?
+        .build()
+        .context("build zkVM preflight environment")?;
+    let session = default_executor()
+        .execute(env, pnlx_risc0_methods::BATCH_MATCH_ELF)
+        .context("execute batch-match guest preflight")?;
+    if session.journal.bytes != expected_journal {
+        anyhow::bail!("RISC0 guest preflight journal does not match expected batch output");
+    }
+    let cycles = session.cycles();
+    let limit = batch_match_cycles()?;
+    if cycles > limit {
+        anyhow::bail!("RISC0 guest needs {cycles} cycles but the request limit is {limit}");
+    }
+    Ok(cycles)
 }
 
 fn validate_groth16_seal(seal: &[u8]) -> Result<()> {
