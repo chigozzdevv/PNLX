@@ -17,7 +17,6 @@ use tracing_subscriber::{filter::LevelFilter, prelude::*, EnvFilter};
 use url::Url;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
-const MAX_INLINE_INPUT_BYTES: usize = 64 * 1024;
 const DEFAULT_BATCH_MATCH_CYCLES: u64 = 10_000_000;
 const DEFAULT_LOCK_COLLATERAL_ZKC_WEI: u64 = 5_000_000_000_000_000_000;
 const GROTH16_SEAL_BYTES: usize = 260;
@@ -46,9 +45,6 @@ struct Args {
 
     #[clap(long, env = "BOUNDLESS_PRIVATE_KEY")]
     private_key: Option<PrivateKeySigner>,
-
-    #[clap(long, env = "BOUNDLESS_PROGRAM_URL")]
-    program_url: Option<Url>,
 
     #[clap(flatten, next_help_heading = "Storage Uploader")]
     storage_config: StorageUploaderConfig,
@@ -131,7 +127,7 @@ async fn run(args: Args) -> Result<()> {
         .with_deployment(args.deployment)
         .with_uploader_config(&args.storage_config)
         .await?
-        .config_storage_layer(|config| config.inline_input_max_bytes(MAX_INLINE_INPUT_BYTES))
+        .config_storage_layer(|config| config.inline_input_max_bytes(0))
         .with_funding_mode(FundingMode::AvailableBalance)
         .with_private_key(required_private_key(args.private_key)?)
         .build()
@@ -148,26 +144,15 @@ async fn run(args: Args) -> Result<()> {
         let env = GuestEnv::builder()
             .write(&request)
             .context("encode zkVM input for Boundless")?;
-        let proof_request = match args.program_url {
-            Some(program_url) => client
-                .new_request()
-                .with_program_url(program_url)?
-                .with_env(env)
-                .with_image_id(image_id_digest())
-                .with_cycles(cycles)
-                .with_journal(journal)
-                .with_offer(default_offer())
-                .with_groth16_proof(),
-            None => client
-                .new_request()
-                .with_program(pnlx_risc0_methods::BATCH_MATCH_ELF)
-                .with_env(env)
-                .with_image_id(image_id_digest())
-                .with_cycles(cycles)
-                .with_journal(journal)
-                .with_offer(default_offer())
-                .with_groth16_proof(),
-        };
+        let proof_request = client
+            .new_request()
+            .with_program(pnlx_risc0_methods::BATCH_MATCH_ELF)
+            .with_env(env)
+            .with_image_id(image_id_digest())
+            .with_cycles(cycles)
+            .with_journal(journal)
+            .with_offer(default_offer())
+            .with_groth16_proof();
 
         let (request_id, expires_at) = client.submit(proof_request).await?;
         write_request_metadata(output_dir, request_id, expires_at)?;

@@ -9,7 +9,7 @@ export interface ServerEnv {
   batchExecutorIntervalMs: number;
   batchExecutorPrefix: string;
   boundlessPrivateKeyConfigured: boolean;
-  boundlessProgramUrl: string;
+  pinataJwtConfigured: boolean;
   boundlessRpcConfigured: boolean;
   assetCustodyRequired: boolean;
   collateralAsset: string;
@@ -112,7 +112,7 @@ export function loadEnv(): ServerEnv {
     batchExecutorIntervalMs: Number(value("BATCH_EXECUTOR_INTERVAL_MS", "5000")),
     batchExecutorPrefix: value("BATCH_EXECUTOR_PREFIX", "auto"),
     boundlessPrivateKeyConfigured: Boolean(value("BOUNDLESS_PRIVATE_KEY", "")),
-    boundlessProgramUrl: value("BOUNDLESS_PROGRAM_URL", ""),
+    pinataJwtConfigured: Boolean(value("PINATA_JWT", "")),
     boundlessRpcConfigured: Boolean(value("BOUNDLESS_RPC_URL", "")),
     assetCustodyRequired: booleanValue("ASSET_CUSTODY_REQUIRED", persistentByDefault),
     collateralAsset: value("COLLATERAL_ASSET", ""),

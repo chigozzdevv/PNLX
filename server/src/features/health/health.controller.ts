@@ -114,7 +114,7 @@ export class HealthController {
         proofEngine: {
           boundless: {
             privateKeyConfigured: this.env.boundlessPrivateKeyConfigured,
-            programUrlConfigured: Boolean(this.env.boundlessProgramUrl),
+            ipfsStorageConfigured: this.env.pinataJwtConfigured,
             rpcConfigured: this.env.boundlessRpcConfigured,
           },
           devMode: this.env.risc0DevMode,
@@ -246,14 +246,8 @@ function matchingReadinessIssues(env: ServerEnv): string[] {
   if (!env.boundlessPrivateKeyConfigured) {
     issues.push("BOUNDLESS_PRIVATE_KEY is required for RISC0 proving");
   }
-  if (!env.boundlessProgramUrl) {
-    issues.push("BOUNDLESS_PROGRAM_URL is required for reproducible remote proving");
-  } else {
-    try {
-      new URL(env.boundlessProgramUrl);
-    } catch {
-      issues.push("BOUNDLESS_PROGRAM_URL must be a valid URL");
-    }
+  if (!env.pinataJwtConfigured) {
+    issues.push("PINATA_JWT is required for durable Boundless proof artifacts");
   }
   if (env.risc0DevMode) {
     issues.push("RISC0_DEV_MODE must be disabled for production proving");

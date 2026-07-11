@@ -655,12 +655,12 @@ describe("server api", () => {
     const previousLegacyMatcherUrl = process.env.EXTERNAL_MATCHER_URL;
     const previousBoundlessRpc = process.env.BOUNDLESS_RPC_URL;
     const previousBoundlessKey = process.env.BOUNDLESS_PRIVATE_KEY;
-    const previousBoundlessProgram = process.env.BOUNDLESS_PROGRAM_URL;
+    const previousPinataJwt = process.env.PINATA_JWT;
     process.env.PRIVATE_MATCHING_REQUIRED = "true";
     process.env.MATCHER_SERVICE_URL = "https://matcher.pnlx.local";
     process.env.BOUNDLESS_RPC_URL = "https://boundless-rpc.pnlx.local";
     process.env.BOUNDLESS_PRIVATE_KEY = "test-boundless-key";
-    process.env.BOUNDLESS_PROGRAM_URL = "https://prover.pnlx.local/risc0/batch-match.bin";
+    process.env.PINATA_JWT = "test-pinata-jwt";
     delete process.env.EXTERNAL_MATCHER_URL;
     try {
       const app = createApp();
@@ -671,8 +671,8 @@ describe("server api", () => {
       expect(matching.readyForPrivateMatching).toBe(true);
       expect(matching.proofEngine).toEqual({
         boundless: {
+          ipfsStorageConfigured: true,
           privateKeyConfigured: true,
-          programUrlConfigured: true,
           rpcConfigured: true,
         },
         devMode: false,
@@ -686,7 +686,7 @@ describe("server api", () => {
       restoreEnv("EXTERNAL_MATCHER_URL", previousLegacyMatcherUrl);
       restoreEnv("BOUNDLESS_RPC_URL", previousBoundlessRpc);
       restoreEnv("BOUNDLESS_PRIVATE_KEY", previousBoundlessKey);
-      restoreEnv("BOUNDLESS_PROGRAM_URL", previousBoundlessProgram);
+      restoreEnv("PINATA_JWT", previousPinataJwt);
     }
   });
 
