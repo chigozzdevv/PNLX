@@ -34,6 +34,13 @@ describe("local client prover", () => {
       expect(response.headers.get("content-type")).toBe("application/octet-stream");
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(Buffer.from(await response.arrayBuffer()).toString()).toBe("pnlx-risc0-elf");
+      const metadata = await handle(
+        new Request("http://127.0.0.1:4101/risc0/batch-match.bin", { method: "HEAD" }),
+      );
+      expect(metadata.status).toBe(200);
+      expect(metadata.headers.get("content-length")).toBe(String(Buffer.byteLength("pnlx-risc0-elf")));
+      expect(metadata.headers.get("content-type")).toBe("application/octet-stream");
+      expect(await metadata.arrayBuffer()).toHaveLength(0);
     } finally {
       if (previousProgramPath === undefined) {
         delete process.env.RISC0_BATCH_MATCH_PROGRAM_PATH;

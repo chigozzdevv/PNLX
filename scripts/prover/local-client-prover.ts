@@ -17,7 +17,10 @@ export function createLocalClientProverHandler(root = process.cwd()) {
       if (request.method === "GET" && url.pathname === "/health") {
         return json({ ok: true, service: "pnlx-local-client-prover" });
       }
-      if (request.method === "GET" && url.pathname === BATCH_MATCH_PROGRAM_PATH) {
+      if (
+        (request.method === "GET" || request.method === "HEAD") &&
+        url.pathname === BATCH_MATCH_PROGRAM_PATH
+      ) {
         const path = process.env.RISC0_BATCH_MATCH_PROGRAM_PATH || join(
           root,
           "risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/" +
@@ -26,9 +29,11 @@ export function createLocalClientProverHandler(root = process.cwd()) {
         if (!existsSync(path)) {
           return cors(Response.json({ error: "RISC0 batch-match program is not built" }, { status: 404 }));
         }
-        return cors(new Response(readFileSync(path), {
+        const program = readFileSync(path);
+        return cors(new Response(request.method === "HEAD" ? null : program, {
           headers: {
             "cache-control": "no-store",
+            "content-length": String(program.byteLength),
             "content-type": "application/octet-stream",
           },
         }));
