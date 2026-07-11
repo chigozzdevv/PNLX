@@ -57,8 +57,19 @@ const shieldedPool = deployment.contracts["shielded-pool"];
 const intentRegistry = deployment.contracts["intent-registry"];
 const conditionalOrder = deployment.contracts["conditional-order"];
 
+const importedPositionCount = readU32(positionState, "leaf_count", []);
+if (importedPositionCount > positionCommitments.length) {
+  throw new Error("target position tree contains more leaves than the transition export");
+}
+const importedPositionRoot = readBytes32(positionState, "current_root", []);
+const expectedImportedRoot = positionMerkleRoot(positionCommitments.slice(0, importedPositionCount));
+if (importedPositionRoot !== expectedImportedRoot) {
+  throw new Error(
+    `target position prefix mismatch at leaf ${importedPositionCount}: expected ${expectedImportedRoot}, received ${importedPositionRoot}`,
+  );
+}
 invoke(positionState, "set_writer", ["--writer", sourceAddress, "--enabled", "true"]);
-for (const commitments of chunks(positionCommitments, 8)) {
+for (const commitments of chunks(positionCommitments.slice(importedPositionCount), 8)) {
   invoke(positionState, "append_many", [
     "--writer",
     sourceAddress,
@@ -74,6 +85,9 @@ if (targetRoot !== transition.roots.position) {
 }
 
 for (const spend of positionSpends(transition.snapshot)) {
+  if (readBool(positionState, "is_spent", ["--position_nullifier", bytes32(spend.positionNullifier)])) {
+    continue;
+  }
   invoke(positionState, "spend_position", [
     "--writer",
     sourceAddress,
@@ -88,6 +102,7 @@ for (const spend of positionSpends(transition.snapshot)) {
 invoke(positionState, "set_writer", ["--writer", sourceAddress, "--enabled", "false"]);
 
 for (const commitment of transition.snapshot.marginCommitments) {
+  if (readBool(shieldedPool, "has_commitment", ["--commitment", bytes32(commitment)])) continue;
   invoke(shieldedPool, "deposit", ["--commitment", bytes32(commitment)]);
 }
 const positionNullifiers = new Set(positionSpends(transition.snapshot).map((spend) => spend.positionNullifier));
@@ -96,6 +111,7 @@ const marginNullifiers = transition.snapshot.spentNullifiers.filter(
 );
 invoke(shieldedPool, "set_writer", ["--writer", sourceAddress, "--enabled", "true"]);
 for (const nullifier of marginNullifiers) {
+  if (readBool(shieldedPool, "is_spent", ["--nullifier", bytes32(nullifier)])) continue;
   invoke(shieldedPool, "spend", [
     "--writer",
     sourceAddress,
@@ -115,6 +131,10 @@ for (const [, order] of transition.snapshot.orderLifecycle) {
   )?.[1];
   const record = intent ?? residual;
   if (!record) throw new Error(`active order ${order.intentCommitment} has no sealed record`);
+  if (readBool(intentRegistry, "has_intent", [
+    "--intent_commitment",
+    bytes32(record.intentCommitment),
+  ])) continue;
   invoke(intentRegistry, "submit", [
     "--batch_id",
     bytes32(batchKey(record.batchId)),
@@ -188,6 +208,22 @@ function readBytes32(contractId: string, method: string, args: string[]): Hex {
   const match = output.match(/(?:0x)?([0-9a-fA-F]{64})/);
   if (!match) throw new Error(`${method} did not return bytes32`);
   return `0x${match[1].toLowerCase()}`;
+}
+
+function readBool(contractId: string, method: string, args: string[]): boolean {
+  const output = invoke(contractId, method, args).trim();
+  if (output === "true") return true;
+  if (output === "false") return false;
+  throw new Error(`${method} did not return a boolean`);
+}
+
+function readU32(contractId: string, method: string, args: string[]): number {
+  const output = invoke(contractId, method, args).trim();
+  const value = Number(output.match(/\d+/)?.[0]);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${method} did not return a u32`);
+  }
+  return value;
 }
 
 function stellarCommand(contractId: string, method: string, args: string[]): string[] {
