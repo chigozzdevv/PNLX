@@ -48,6 +48,7 @@ All smart contracts are deployed and active on Stellar Testnet. Click any addres
 | `position-state` | Stores the active commitments of the shielded pool | [`CAR733CQNSMIYNZJP4I5C255WLRA4RO4LMVTLEYZG5CSYGGBVHEGVUXN`](https://stellar.expert/explorer/testnet/contract/CAR733CQNSMIYNZJP4I5C255WLRA4RO4LMVTLEYZG5CSYGGBVHEGVUXN) |
 | `proof-ledger` | Registers settled proof digests to prevent double-spending | [`CCMMEPEINZUOAG4GWCXINXOXPIMKIR6I42JPWFHM4OOUSU2AARRZMUD3`](https://stellar.expert/explorer/testnet/contract/CCMMEPEINZUOAG4GWCXINXOXPIMKIR6I42JPWFHM4OOUSU2AARRZMUD3) |
 | `governance` | Enforces timelocked multisig controls for upgrades/configs | [`CDS7LCDOSJTCVXWIKUVMSZJASCAWX6CBJ5DM65YJB42P4QK37ACCNYMN`](https://stellar.expert/explorer/testnet/contract/CDS7LCDOSJTCVXWIKUVMSZJASCAWX6CBJ5DM65YJB42P4QK37ACCNYMN) |
+| `intent-registry` | Registers trade intents for off-chain matching and execution | [`CBHPOBN6QL5RE56TXJ2HGK2GVXDTGH5PROC47C446ECXZXTGJSXXQMYS`](https://stellar.expert/explorer/testnet/contract/CBHPOBN6QL5RE56TXJ2HGK2GVXDTGH5PROC47C446ECXZXTGJSXXQMYS) |
 
 ### 3.2 RISC Zero Verifier Stack
 
@@ -61,7 +62,7 @@ All smart contracts are deployed and active on Stellar Testnet. Click any addres
 
 | Verifier | Description | Stellar.expert Address (Link) |
 | :--- | :--- | :--- |
-| `batch-match-risc0-verifier` | Verifies the zkVM batch matching execution proof | [`CDLJLRKUPULXTPX726TCMOAOXFWUNLVKFXLGIFE5SSRQZIBJDLXZJVHJ`](https://stellar.expert/explorer/testnet/contract/CDLJLRKUPULXTPX726TCMOAOXFWUNLVKFXLGIFE5SSRQZIBJDLXZJVHJ) |
+| `batch-match-risc0-verifier` | Verifies the zkVM batch matching execution proof | [`CCLWLSK474KD57DPV3NEAK45FNR3L3LZK6IFXAPV54MVSPMU5TV6E24Y`](https://stellar.expert/explorer/testnet/contract/CCLWLSK474KD57DPV3NEAK45FNR3L3LZK6IFXAPV54MVSPMU5TV6E24Y) |
 | `intent-validity-proof-verifier` | Noir verifier ensuring order sizes and keys are sound | [`CAM6DPTGVRU5DE3CF4KQW5VCA4GKEYL3I5SQBIMIPPC24D3R422S2EDK`](https://stellar.expert/explorer/testnet/contract/CAM6DPTGVRU5DE3CF4KQW5VCA4GKEYL3I5SQBIMIPPC24D3R422S2EDK) |
 | `margin-check-proof-verifier` | Noir verifier checking that margin matches requested size | [`CCFMWZ27H2AMU6G6OBXHJHUIVWOZZOKKLHNOM5YECQELBSGYNPZ4SU47`](https://stellar.expert/explorer/testnet/contract/CCFMWZ27H2AMU6G6OBXHJHUIVWOZZOKKLHNOM5YECQELBSGYNPZ4SU47) |
 | `position-transition-proof-verifier` | Noir verifier checking state transitions on note updates | [`CCRUP4DGMECLOGIG34WWOWRFWJ6LIGHTRKWYZX2TDWCHE45WSMALQLME`](https://stellar.expert/explorer/testnet/contract/CCRUP4DGMECLOGIG34WWOWRFWJ6LIGHTRKWYZX2TDWCHE45WSMALQLME) |
@@ -70,7 +71,7 @@ All smart contracts are deployed and active on Stellar Testnet. Click any addres
 | `conditional-close-proof-verifier` | Noir verifier gating Stop-Loss/Take-Profit triggers | [`CC3V4VCVRTX7EYJX42MH2YZUXKRFBNLXNRI4FNJFEGTG67STMU3LNQXL`](https://stellar.expert/explorer/testnet/contract/CC3V4VCVRTX7EYJX42MH2YZUXKRFBNLXNRI4FNJFEGTG67STMU3LNQXL) |
 | `deposit-note-proof-verifier` | Noir verifier ensuring valid collateral shielded deposits | [`CBIQACRM6CR3Y6APAN6XIJYPLNZS53CMWPREHZWPOS4TBFAQAF5TSSWM`](https://stellar.expert/explorer/testnet/contract/CBIQACRM6CR3Y6APAN6XIJYPLNZS53CMWPREHZWPOS4TBFAQAF5TSSWM) |
 | `disclosure-proof-verifier` | Noir verifier gating selective data disclosures | [`CCWBQ6RQG6PAUQ5BMYUSQVH6H5DEPLKL2ZOQPXV7R6TC6F32O3Z4GFST`](https://stellar.expert/explorer/testnet/contract/CCWBQ6RQG6PAUQ5BMYUSQVH6H5DEPLKL2ZOQPXV7R6TC6F32O3Z4GFST) |
-| `funding-update-proof-verifier` | Noir verifier validating fee distributions across pool notes | [`CDB4PEYTJZ3ODMRXZOECSA6DNLI4CJQHYZP4RDLUOEZLIQQFBKECZASP`](https://stellar.expert/explorer/testnet/contract/CDB4PEYTJZ3ODMRXZOECSA6DNLI4CJQHYZP4RDLUOEZLIQQFBKECZASP) |
+| `funding-update-proof-verifier` | Noir verifier validating fee distributions across pool notes | [`CDM4DEOBW6VYEHZ5Z4DXODE567I5EOLNPYP6FZ5CCMOIGCL2KIVLO7PW`](https://stellar.expert/explorer/testnet/contract/CDM4DEOBW6VYEHZ5Z4DXODE567I5EOLNPYP6FZ5CCMOIGCL2KIVLO7PW) |
 | `liquidation-check-proof-verifier` | Noir verifier checking position status on liquidations | [`CB6ZJ7UFXITFZ52RAP7K27KZJNTHHQA3SPOHUQ5AMUWSSM2LPFRREIWD`](https://stellar.expert/explorer/testnet/contract/CB6ZJ7UFXITFZ52RAP7K27KZJNTHHQA3SPOHUQ5AMUWSSM2LPFRREIWD) |
 
 ---
