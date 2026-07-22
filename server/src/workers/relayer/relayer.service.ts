@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { hashFields } from "@pnlx/crypto";
 import type {
   CommandResult,
@@ -406,36 +406,41 @@ async function runCommandWithRetryAsync(
 }
 
 function runCommandAsync(command: string[], timeoutMs: number): Promise<CommandResult> {
-  return new Promise((resolve) => {
-    const child = spawn(command[0], command.slice(1));
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-    let forceKill: ReturnType<typeof setTimeout> | undefined;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      stderr += `${stderr ? "\n" : ""}stellar command timed out after ${timeoutMs}ms`;
-      child.kill("SIGTERM");
-      forceKill = setTimeout(() => child.kill("SIGKILL"), 1_000);
-      forceKill.unref?.();
-    }, timeoutMs);
-    timeout.unref?.();
-    child.stdout?.setEncoding("utf8");
-    child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk: string) => {
-      stdout += chunk;
+  let child: ReturnType<typeof Bun.spawn>;
+  try {
+    child = Bun.spawn(command, {
+      stderr: "pipe",
+      stdin: "ignore",
+      stdout: "pipe",
     });
-    child.stderr?.on("data", (chunk: string) => {
-      stderr += chunk;
+  } catch (error) {
+    return Promise.resolve({
+      status: null,
+      stderr: error instanceof Error ? error.message : String(error),
+      stdout: "",
     });
-    child.on("error", (error) => {
-      stderr += `${stderr ? "\n" : ""}${error.message}`;
-    });
-    child.on("close", (status) => {
-      clearTimeout(timeout);
-      if (forceKill) clearTimeout(forceKill);
-      resolve({ status: timedOut ? null : status, stderr, stdout });
-    });
+  }
+
+  let timedOut = false;
+  let forceKill: ReturnType<typeof setTimeout> | undefined;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGTERM");
+    forceKill = setTimeout(() => child.kill("SIGKILL"), 1_000);
+    forceKill.unref?.();
+  }, timeoutMs);
+  timeout.unref?.();
+
+  return Promise.all([
+    new Response(child.stdout as ReadableStream<Uint8Array>).text(),
+    new Response(child.stderr as ReadableStream<Uint8Array>).text(),
+    child.exited,
+  ]).then(([stdout, rawStderr, status]) => {
+    clearTimeout(timeout);
+    if (forceKill) clearTimeout(forceKill);
+    const timeoutMessage = timedOut ? `stellar command timed out after ${timeoutMs}ms` : "";
+    const stderr = [rawStderr, timeoutMessage].filter(Boolean).join("\n");
+    return { status: timedOut ? null : status, stderr, stdout };
   });
 }
 
