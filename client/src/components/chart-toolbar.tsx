@@ -5,13 +5,12 @@ import type { ChartCandle } from "@/types/trading";
 interface ChartToolbarProps {
   interval: CandleInterval;
   latest?: ChartCandle;
-  live: boolean;
   onIntervalChange: (interval: CandleInterval) => void;
 }
 
 const intervals: CandleInterval[] = ["1m", "5m", "15m", "1h", "1d"];
 
-export function ChartToolbar({ interval, latest, live, onIntervalChange }: ChartToolbarProps) {
+export function ChartToolbar({ interval, latest, onIntervalChange }: ChartToolbarProps) {
   return (
     <div className="chart-toolbar">
       <span className="chart-label">Price</span>
@@ -38,11 +37,6 @@ export function ChartToolbar({ interval, latest, live, onIntervalChange }: Chart
           <span>Vol <strong>{latest.volume > 0 ? formatNumber(latest.volume, 2) : "—"}</strong></span>
         </div>
       ) : null}
-
-      <span className="chart-feed-status" data-live={live}>
-        <i aria-hidden="true" />
-        Pyth Index · {live ? "Live" : "Reconnecting"}
-      </span>
     </div>
   );
 }

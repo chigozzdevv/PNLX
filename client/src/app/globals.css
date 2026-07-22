@@ -574,33 +574,6 @@ button:disabled {
   font-weight: 900;
 }
 
-.chart-feed-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
-  color: var(--text-faint);
-  font-size: 11px;
-  font-weight: 850;
-  white-space: nowrap;
-}
-
-.chart-feed-status i {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--accent-orange);
-}
-
-.chart-feed-status[data-live="true"] {
-  color: var(--text-muted);
-}
-
-.chart-feed-status[data-live="true"] i {
-  background: var(--accent-green);
-  box-shadow: 0 0 8px rgba(39, 214, 139, 0.48);
-}
-
 .chart-label {
   min-width: 54px;
   color: white;

@@ -256,7 +256,6 @@ export function TradingPage() {
               <ChartToolbar
                 interval={chartInterval}
                 latest={candles.candles.at(-1)}
-                live={candles.live}
                 onIntervalChange={setChartInterval}
               />
               {displaySelectedMarket ? (
