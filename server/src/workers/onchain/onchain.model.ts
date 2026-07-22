@@ -104,12 +104,18 @@ export interface OnchainRelay {
   publishOraclePrice(input: OraclePriceRelayInput): OnchainRelayResult;
   publishOraclePriceAsync?(input: OraclePriceRelayInput): Promise<OnchainRelayResult>;
   positionRoot?(): Hex;
+  positionRootAsync?(): Promise<Hex>;
   isBatchSettled?(batchId: string, marketId: string): boolean;
+  isBatchSettledAsync?(batchId: string, marketId: string): Promise<boolean>;
   isIntentRegistered?(intentCommitment: Hex): boolean;
+  isIntentRegisteredAsync?(intentCommitment: Hex): Promise<boolean>;
   isMarketActive?(marketId: string): boolean;
+  isMarketActiveAsync?(marketId: string): Promise<boolean>;
   submitIntent(record: IntentRecord): OnchainRelayResult;
+  submitIntentAsync?(record: IntentRecord): Promise<OnchainRelayResult>;
   cancelIntent(intentCommitment: Hex): OnchainRelayResult;
   upsertMarket(record: MarketConfig, config: OnchainMarketConfig): OnchainRelayResult;
+  upsertMarketAsync?(record: MarketConfig, config: OnchainMarketConfig): Promise<OnchainRelayResult>;
   settleBatch(record: BatchSettlement): OnchainRelayResult;
   settleBatchAsync?(record: BatchSettlement): Promise<OnchainRelayResult>;
   registerConditionalOrder(record: ConditionalOrderCommitment): OnchainRelayResult;

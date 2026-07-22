@@ -103,7 +103,7 @@ export class MakerLiquidityService {
       }
 
       for (const allocation of allocations) {
-        const record = this.submitMakerIntent({
+        const record = await this.submitMakerIntent({
           batchId: makerBatchId(input.batchId, clientIntent.intentCommitment, allocation.note.commitment),
           clientIntent,
           margin: allocation.margin,
@@ -163,14 +163,14 @@ export class MakerLiquidityService {
     await saveMakerNotes(next);
   }
 
-  private submitMakerIntent(input: {
+  private async submitMakerIntent(input: {
     batchId: string;
     clientIntent: IntentRecord;
     margin: bigint;
     note: StoredMakerNote;
     payload: PrivateMatchIntent;
     size: bigint;
-  }): IntentRecord {
+  }): Promise<IntentRecord> {
     const size = input.size;
     const side = input.payload.signedSize >= 0n ? "short" : "long";
     const noteAmount = BigInt(input.note.amount);
@@ -214,7 +214,7 @@ export class MakerLiquidityService {
 
     this.executor.store.recordProof(validity.proof);
     const prepared = this.executor.prepareIntent({ intent, validity });
-    const { alreadyRegistered, relay } = this.submitIntentOnchain(prepared.record);
+    const { alreadyRegistered, relay } = await this.submitIntentOnchain(prepared.record);
     if (this.env.intentRegistryOnchainRequired) {
       if (!this.onchain?.enabled) throw new Error("intent registry requires on-chain relay");
       if (!alreadyRegistered) assertSubmittedRelay(relay, "submit");
@@ -231,17 +231,22 @@ export class MakerLiquidityService {
     });
   }
 
-  private submitIntentOnchain(record: IntentRecord): {
+  private async submitIntentOnchain(record: IntentRecord): Promise<{
     alreadyRegistered: boolean;
     relay?: OnchainRelayResult;
-  } {
+  }> {
     try {
       return {
         alreadyRegistered: false,
-        relay: this.onchain?.submitIntent(record),
+        relay: this.onchain?.submitIntentAsync
+          ? await this.onchain.submitIntentAsync(record)
+          : this.onchain?.submitIntent(record),
       };
     } catch (error) {
-      if (this.onchain?.isIntentRegistered?.(record.intentCommitment)) {
+      const alreadyRegistered = this.onchain?.isIntentRegisteredAsync
+        ? await this.onchain.isIntentRegisteredAsync(record.intentCommitment)
+        : this.onchain?.isIntentRegistered?.(record.intentCommitment);
+      if (alreadyRegistered) {
         return { alreadyRegistered: true };
       }
       throw error;

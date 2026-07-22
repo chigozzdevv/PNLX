@@ -156,7 +156,7 @@ export class BatchExecutorService {
         status: "running",
         updatedAt: Date.now(),
       });
-      const alreadySettledOnchain = this.isSettledOnchain(transcript.settlement);
+      const alreadySettledOnchain = await this.isSettledOnchain(transcript.settlement);
       const relay = alreadySettledOnchain
         ? undefined
         : await runPhase("batch-settlement", () => this.trySettleOnchain(transcript.settlement));
@@ -239,18 +239,28 @@ export class BatchExecutorService {
     }
   }
 
-  private isSettledOnchain(settlement: Parameters<NonNullable<OnchainRelay>["settleBatch"]>[0]): boolean {
+  private async isSettledOnchain(
+    settlement: Parameters<NonNullable<OnchainRelay>["settleBatch"]>[0],
+  ): Promise<boolean> {
     try {
+      if (this.onchain?.isBatchSettledAsync) {
+        return await this.onchain.isBatchSettledAsync(settlement.batchId, settlement.marketId);
+      }
       return Boolean(this.onchain?.isBatchSettled?.(settlement.batchId, settlement.marketId));
     } catch {
       return false;
     }
   }
 
-  private assertPositionRootSynchronized(): void {
-    if (!this.config.settlementsOnchainRequired || !this.onchain?.positionRoot) return;
+  private async assertPositionRootSynchronized(): Promise<void> {
+    if (
+      !this.config.settlementsOnchainRequired ||
+      (!this.onchain?.positionRootAsync && !this.onchain?.positionRoot)
+    ) return;
     const localRoot = this.executor.store.positionMembershipRoot();
-    const onchainRoot = this.onchain.positionRoot();
+    const onchainRoot = this.onchain.positionRootAsync
+      ? await this.onchain.positionRootAsync()
+      : this.onchain.positionRoot!();
     if (localRoot.toLowerCase() !== onchainRoot.toLowerCase()) {
       throw new Error(`position root out of sync: local ${localRoot}, on-chain ${onchainRoot}`);
     }

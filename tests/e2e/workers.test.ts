@@ -926,6 +926,9 @@ describe("support workers", () => {
       },
       {
         positionRoot() {
+          throw new Error("synchronous position root read should not run");
+        },
+        async positionRootAsync() {
           return hashFields("position-root", ["different-on-chain-root"]);
         },
       } as never,
@@ -2392,10 +2395,17 @@ describe("support workers", () => {
       },
     };
     const onchain = {
-      publishOraclePrice: (input: { price: bigint; timestamp: number }) => {
+      publishOraclePrice: () => {
+        throw new Error("synchronous oracle publish should not run");
+      },
+      publishOraclePriceAsync: async (input: { price: bigint; timestamp: number }) => {
         events.push(`publish:${input.price}:${input.timestamp}`);
         return { relays: [] };
       },
+      isMarketActive: () => {
+        throw new Error("synchronous market read should not run");
+      },
+      isMarketActiveAsync: async () => true,
     };
     const env = {
       oracleAssetAddress: "",

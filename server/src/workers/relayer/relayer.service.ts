@@ -186,6 +186,32 @@ export class RelayerService {
     };
   }
 
+  async readAsync(request: RelayRequest): Promise<ContractReadResult> {
+    if (this.config.mode !== "stellar-cli" || !this.usesDefaultCommandRunner) {
+      return this.read(request);
+    }
+    const payload = parseInvokePayload(request.payload);
+    const command = stellarInvokeCommand(this.config, { ...payload, send: "no" });
+    if (commandSendMode(command) !== "no") {
+      throw new Error("contract reads require --send no");
+    }
+    const output = await runCommandWithRetryAsync(command, this.commandTimeoutMs());
+    const payloadDigest = hashFields("relay-payload", [request.kind, request.payload]);
+    const commandOutputDigest = hashFields(
+      "relay-command-output",
+      [payloadDigest, output.status ?? "null", output.stdout, output.stderr],
+    );
+    if (output.status !== 0) {
+      throw new Error(`stellar contract read failed: ${formatStellarFailure(output)}`);
+    }
+    return {
+      command,
+      commandOutputDigest,
+      commandStatus: output.status,
+      output: commandOutput(output),
+    };
+  }
+
   prepareXdr(request: RelayRequest): PreparedXdr {
     if (this.config.mode !== "stellar-cli") {
       throw new Error("stellar-cli relayer mode is required to build wallet transaction xdr");

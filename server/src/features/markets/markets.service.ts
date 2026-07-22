@@ -146,12 +146,20 @@ export class MarketsService {
         )
       : undefined;
     const marketRepairRelay = this.onchain as
-      | Partial<Pick<OnchainRelayService, "isMarketActive" | "upsertMarket">>
+      | Partial<Pick<
+          OnchainRelayService,
+          "isMarketActive" | "isMarketActiveAsync" | "upsertMarket" | "upsertMarketAsync"
+        >>
       | undefined;
-    const shouldRepairMarket = this.onchainEnabled() &&
-      marketRepairRelay?.isMarketActive?.(market.marketId) === false;
-    const marketRelay = shouldRepairMarket
-      ? marketRepairRelay?.upsertMarket?.(market, marketRelayConfig(market.marketId, this.env))
+    const marketActive = this.onchainEnabled()
+      ? marketRepairRelay?.isMarketActiveAsync
+        ? await marketRepairRelay.isMarketActiveAsync(market.marketId)
+        : marketRepairRelay?.isMarketActive?.(market.marketId)
+      : undefined;
+    const marketRelay = marketActive === false
+      ? marketRepairRelay?.upsertMarketAsync
+        ? await marketRepairRelay.upsertMarketAsync(market, marketRelayConfig(market.marketId, this.env))
+        : marketRepairRelay?.upsertMarket?.(market, marketRelayConfig(market.marketId, this.env))
       : undefined;
     this.executor.store.updateMarket(market);
     return {

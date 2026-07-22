@@ -173,6 +173,24 @@ export class OnchainRelayService implements OnchainRelay {
     };
   }
 
+  async submitIntentAsync(record: IntentRecord): Promise<OnchainRelayResult> {
+    if (!this.config.enabled) return empty();
+    return {
+      relays: [
+        await this.invokeAsync("intent", "intent-registry", "submit", [
+          "--batch_id",
+          bytes32(batchKey(record.batchId)),
+          "--market_id",
+          marketKey(record.marketId),
+          "--intent_commitment",
+          bytes32(record.intentCommitment),
+          "--matching_payload_commitment",
+          bytes32(record.matchingPayloadCommitment),
+        ]),
+      ],
+    };
+  }
+
   cancelIntent(intentCommitment: Hex): OnchainRelayResult {
     if (!this.config.enabled) return empty();
     return {
@@ -189,6 +207,24 @@ export class OnchainRelayService implements OnchainRelay {
     if (!this.config.enabled) return false;
     const deployment = this.deployment();
     const result = this.relayer.read({
+      kind: "intent",
+      payload: {
+        args: [
+          "--intent_commitment",
+          bytes32(intentCommitment),
+        ],
+        contractId: contractId(deployment, "intent-registry"),
+        functionName: "has_intent",
+        send: "no",
+      },
+    });
+    return result.output.trim().toLowerCase().includes("true");
+  }
+
+  async isIntentRegisteredAsync(intentCommitment: Hex): Promise<boolean> {
+    if (!this.config.enabled) return false;
+    const deployment = this.deployment();
+    const result = await this.relayer.readAsync({
       kind: "intent",
       payload: {
         args: [
@@ -225,59 +261,43 @@ export class OnchainRelayService implements OnchainRelay {
     }
   }
 
+  async isMarketActiveAsync(marketId: string): Promise<boolean> {
+    if (!this.config.enabled) return false;
+    const deployment = this.deployment();
+    try {
+      const result = await this.relayer.readAsync({
+        kind: "market",
+        payload: {
+          args: [
+            "--market_id",
+            marketKey(marketId),
+          ],
+          contractId: contractId(deployment, "market"),
+          functionName: "is_active",
+          send: "no",
+        },
+      });
+      return result.output.trim().toLowerCase().includes("true");
+    } catch {
+      return false;
+    }
+  }
+
   upsertMarket(record: MarketConfig, config: OnchainMarketConfig): OnchainRelayResult {
     if (!this.config.enabled) return empty();
-    const deployment = this.deployment();
-    const oracleContract = config.oracleContractId || contractId(deployment, "price-oracle");
-    const isBeam = config.oracleKind === "beam";
-    const isStellar = config.oracleAssetType === "stellar";
-    const oracleAsset = isStellar ? config.oracleAssetAddress : config.oracleAssetSymbol;
-    if (!oracleAsset) throw new Error(`missing oracle asset for ${record.marketId}`);
-    if (isBeam && !config.oracleBeamFeeToken) {
-      throw new Error("missing beam fee token for market relay");
-    }
-
-    const functionName = isBeam
-      ? isStellar
-        ? "upsert_beam_stellar"
-        : "upsert_beam_other"
-      : isStellar
-        ? "upsert_stellar"
-        : "upsert_other";
-    const args = [
-      "--market_id",
-      marketKey(record.marketId),
-      "--oracle_contract",
-      oracleContract,
-      "--oracle_asset",
-      oracleAsset,
-    ];
-    if (isBeam) {
-      args.push("--beam_fee_token", config.oracleBeamFeeToken!);
-    } else {
-      args.push("--oracle_kind", config.oracleKind);
-    }
-    args.push(
-      "--oracle_max_age",
-      String(config.oracleMaxAge),
-      "--oracle_twap_records",
-      String(config.oracleTwapRecords),
-      "--price_decimals",
-      String(config.priceDecimals),
-      "--max_leverage",
-      record.maxLeverage.toString(),
-      "--initial_rate",
-      record.initialMarginRate.toString(),
-      "--maintenance_rate",
-      record.maintenanceMarginRate.toString(),
-      "--funding_index",
-      record.fundingIndex.toString(),
-      "--active",
-      "true",
-    );
+    const { args, functionName } = marketUpsertInvocation(this.deployment(), record, config);
 
     return {
       relays: [this.invoke("market", "market", functionName, args)],
+    };
+  }
+
+  async upsertMarketAsync(record: MarketConfig, config: OnchainMarketConfig): Promise<OnchainRelayResult> {
+    if (!this.config.enabled) return empty();
+    const { args, functionName } = marketUpsertInvocation(this.deployment(), record, config);
+
+    return {
+      relays: [await this.invokeAsync("market", "market", functionName, args)],
     };
   }
 
@@ -471,10 +491,44 @@ export class OnchainRelayService implements OnchainRelay {
     return result.output.trim().toLowerCase().includes("true");
   }
 
+  async isBatchSettledAsync(batchId: string, marketId: string): Promise<boolean> {
+    if (!this.config.enabled) return false;
+    const deployment = this.deployment();
+    const result = await this.relayer.readAsync({
+      kind: "batch-settlement",
+      payload: {
+        args: [
+          "--batch_id",
+          bytes32(batchKey(batchId)),
+          "--market_id",
+          marketKey(marketId),
+        ],
+        contractId: contractId(deployment, "batch-settlement"),
+        functionName: "is_settled",
+        send: "no",
+      },
+    });
+    return result.output.trim().toLowerCase().includes("true");
+  }
+
   positionRoot(): Hex {
     if (!this.config.enabled) throw new Error("position root requires on-chain relay");
     const deployment = this.deployment();
     const result = this.relayer.read({
+      kind: "batch-settlement",
+      payload: {
+        contractId: contractId(deployment, "position-state"),
+        functionName: "current_root",
+        send: "no",
+      },
+    });
+    return parseHex32(result.output, "position root");
+  }
+
+  async positionRootAsync(): Promise<Hex> {
+    if (!this.config.enabled) throw new Error("position root requires on-chain relay");
+    const deployment = this.deployment();
+    const result = await this.relayer.readAsync({
       kind: "batch-settlement",
       payload: {
         contractId: contractId(deployment, "position-state"),
@@ -950,6 +1004,61 @@ function contractId(deployment: DeploymentRegistry, name: string): string {
   const id = deployment.contracts[name];
   if (!id) throw new Error(`deployment missing contract: ${name}`);
   return id;
+}
+
+function marketUpsertInvocation(
+  deployment: DeploymentRegistry,
+  record: MarketConfig,
+  config: OnchainMarketConfig,
+): { args: string[]; functionName: string } {
+  const oracleContract = config.oracleContractId || contractId(deployment, "price-oracle");
+  const isBeam = config.oracleKind === "beam";
+  const isStellar = config.oracleAssetType === "stellar";
+  const oracleAsset = isStellar ? config.oracleAssetAddress : config.oracleAssetSymbol;
+  if (!oracleAsset) throw new Error(`missing oracle asset for ${record.marketId}`);
+  if (isBeam && !config.oracleBeamFeeToken) {
+    throw new Error("missing beam fee token for market relay");
+  }
+
+  const functionName = isBeam
+    ? isStellar
+      ? "upsert_beam_stellar"
+      : "upsert_beam_other"
+    : isStellar
+      ? "upsert_stellar"
+      : "upsert_other";
+  const args = [
+    "--market_id",
+    marketKey(record.marketId),
+    "--oracle_contract",
+    oracleContract,
+    "--oracle_asset",
+    oracleAsset,
+  ];
+  if (isBeam) {
+    args.push("--beam_fee_token", config.oracleBeamFeeToken!);
+  } else {
+    args.push("--oracle_kind", config.oracleKind);
+  }
+  args.push(
+    "--oracle_max_age",
+    String(config.oracleMaxAge),
+    "--oracle_twap_records",
+    String(config.oracleTwapRecords),
+    "--price_decimals",
+    String(config.priceDecimals),
+    "--max_leverage",
+    record.maxLeverage.toString(),
+    "--initial_rate",
+    record.initialMarginRate.toString(),
+    "--maintenance_rate",
+    record.maintenanceMarginRate.toString(),
+    "--funding_index",
+    record.fundingIndex.toString(),
+    "--active",
+    "true",
+  );
+  return { args, functionName };
 }
 
 function verifierId(deployment: DeploymentRegistry, name: string): string {
