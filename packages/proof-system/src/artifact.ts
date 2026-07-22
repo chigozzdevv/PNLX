@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter } from "node:path";
@@ -29,6 +29,19 @@ export interface ProofArtifactOptions {
   inputs?: ProverInput;
 }
 
+interface ProofArtifactPlan {
+  bbDir: string;
+  bytecodePath: string;
+  commands: Array<{ args: string[]; command: string }>;
+  dir: string;
+  env: NodeJS.ProcessEnv;
+  id: CircuitId;
+  proofPath: string;
+  publicInputsPath: string;
+  vkPath: string;
+  witnessPath: string;
+}
+
 function hashFile(path: string): Hex {
   const hash = createHash("sha256").update(readFileSync(path)).digest("hex");
   return `0x${hash}`;
@@ -40,6 +53,32 @@ function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEn
     const output = [result.error?.message, result.stdout, result.stderr].filter(Boolean).join("\n");
     throw new Error(`${command} ${args.join(" ")} failed\n${output}`);
   }
+}
+
+function runAsync(
+  command: string,
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd, env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (status) => {
+      if (status === 0) return resolve();
+      reject(new Error(`${command} ${args.join(" ")} failed\n${stdout}\n${stderr}`.trim()));
+    });
+  });
 }
 
 function artifactName(circuit: CircuitId, name?: string): string {
@@ -70,6 +109,30 @@ export function buildProofArtifact(
   id: CircuitId,
   options: ProofArtifactOptions = {},
 ): ProofArtifact {
+  const plan = prepareProofArtifact(root, id, options);
+  for (const command of plan.commands) {
+    run(command.command, command.args, plan.dir, plan.env);
+  }
+  return completeProofArtifact(plan);
+}
+
+export async function buildProofArtifactAsync(
+  root: string,
+  id: CircuitId,
+  options: ProofArtifactOptions = {},
+): Promise<ProofArtifact> {
+  const plan = prepareProofArtifact(root, id, options);
+  for (const command of plan.commands) {
+    await runAsync(command.command, command.args, plan.dir, plan.env);
+  }
+  return completeProofArtifact(plan);
+}
+
+function prepareProofArtifact(
+  root: string,
+  id: CircuitId,
+  options: ProofArtifactOptions,
+): ProofArtifactPlan {
   const circuit = loadCircuit(root, id);
   const dir = join(root, circuit.dir);
   const target = join(dir, "target");
@@ -107,62 +170,71 @@ export function buildProofArtifact(
   }
 
   rmSync(bbDir, { recursive: true, force: true });
-  run(
-    "nargo",
-    options.inputs ? ["execute", "-p", `target/provers/${name}`, name] : ["execute"],
-    dir,
-    proofEnv,
-  );
-  run("nargo", ["compile"], dir, proofEnv);
-  run(
-    "bb",
-    [
-      "prove",
-      "-s",
-      "ultra_honk",
-      "-b",
-      bytecodePath,
-      "-w",
-      witnessPath,
-      "-o",
-      bbDir,
-      "--write_vk",
-      "--oracle_hash",
-      "keccak",
-    ],
-    dir,
-    proofEnv,
-  );
-  run(
-    "bb",
-    [
-      "verify",
-      "-s",
-      "ultra_honk",
-      "-i",
-      publicInputsPath,
-      "-p",
-      proofPath,
-      "-k",
-      vkPath,
-      "--oracle_hash",
-      "keccak",
-    ],
-    dir,
-    proofEnv,
-  );
-
   return {
-    circuitId: id,
-    circuitKey: circuitKey(id),
-    bytecodeHash: hashFile(bytecodePath),
-    witnessHash: hashFile(witnessPath),
-    proofHash: hashFile(proofPath),
-    publicInputsHash: hashFile(publicInputsPath),
-    vkHash: hashFile(vkPath),
+    bbDir,
+    bytecodePath,
+    commands: [
+      {
+        args: options.inputs ? ["execute", "-p", `target/provers/${name}`, name] : ["execute"],
+        command: "nargo",
+      },
+      { args: ["compile"], command: "nargo" },
+      {
+        args: [
+          "prove",
+          "-s",
+          "ultra_honk",
+          "-b",
+          bytecodePath,
+          "-w",
+          witnessPath,
+          "-o",
+          bbDir,
+          "--write_vk",
+          "--oracle_hash",
+          "keccak",
+        ],
+        command: "bb",
+      },
+      {
+        args: [
+          "verify",
+          "-s",
+          "ultra_honk",
+          "-i",
+          publicInputsPath,
+          "-p",
+          proofPath,
+          "-k",
+          vkPath,
+          "--oracle_hash",
+          "keccak",
+        ],
+        command: "bb",
+      },
+    ],
+    dir,
+    env: proofEnv,
+    id,
     proofPath,
     publicInputsPath,
     vkPath,
+    witnessPath,
+  };
+}
+
+function completeProofArtifact(plan: ProofArtifactPlan): ProofArtifact {
+  return {
+    circuitId: plan.id,
+    circuitKey: circuitKey(plan.id),
+    bytecodeHash: hashFile(plan.bytecodePath),
+    witnessHash: hashFile(plan.witnessPath),
+    proofHash: hashFile(plan.proofPath),
+    publicInputsHash: hashFile(plan.publicInputsPath),
+    vkHash: hashFile(plan.vkPath),
+    proofPath: plan.proofPath,
+    publicInputsPath: plan.publicInputsPath,
+    vkPath: plan.vkPath,
   };
 }
 

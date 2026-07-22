@@ -193,7 +193,7 @@ export class MakerLiquidityService {
       side,
       size,
     };
-    const validity = this.prover.proveIntentValidity({
+    const validity = await this.prover.proveIntentValidityAsync({
       intent,
       assetDigest: input.note.assetDigest,
       blinding: input.note.blinding,

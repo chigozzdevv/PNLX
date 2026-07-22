@@ -40,6 +40,7 @@ export interface Prover {
   proveDepositNote(input: DepositNoteProofInput): DepositNoteRecord;
   proveFundingSettlement(input: FundingSettlementProofInput): FundingSettlementRecord;
   proveIntentValidity(input: IntentValidityProofInput): IntentValidityRecord;
+  proveIntentValidityAsync?(input: IntentValidityProofInput): Promise<IntentValidityRecord>;
   proveConditionalClose(input: ConditionalCloseProofInput): ConditionalOrderRecord;
   proveLiquidation(input: LiquidationProofInput): LiquidationRecord;
   provePositionClose(input: PositionCloseProofInput): PositionCloseRecord;

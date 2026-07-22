@@ -18,10 +18,12 @@ import { isLiquidatable, PRICE_SCALE, RATE_SCALE, settleClose } from "@pnlx/mark
 import {
   bindProof,
   buildProofArtifact,
+  buildProofArtifactAsync,
   circuitKey,
   loadCircuit,
   publicInputDigest,
   type ProofArtifact,
+  type ProofArtifactOptions,
   type CircuitId,
 } from "@pnlx/proof-system";
 import type {
@@ -320,138 +322,23 @@ export class ProverService implements Prover {
   }
 
   proveIntentValidity(input: IntentValidityProofInput): IntentValidityRecord {
-    if (input.intent.size <= 0n) throw new Error("intent size must be positive");
-    if (input.intent.margin <= 0n) throw new Error("intent margin must be positive");
-    if (input.intent.limitPrice <= 0n) throw new Error("intent limit price must be positive");
-    if (input.expiryBatch < input.currentBatch) throw new Error("intent expired");
-    if (input.marginRoot === "0x0") throw new Error("margin root is empty");
-    if (input.intent.noteNullifier === "0x0") throw new Error("note nullifier is empty");
-    if (input.noteAmount < input.intent.margin) throw new Error("intent margin exceeds note");
-    if (input.pathSiblings.length !== FIELD_MERKLE_DEPTH) {
-      throw new Error("invalid margin membership path");
-    }
-    if (input.pathIndices.length !== FIELD_MERKLE_DEPTH) {
-      throw new Error("invalid margin membership path");
-    }
+    const plan = intentValidityProofPlan(input);
+    const artifact = buildProofArtifact(this.root, "intent-validity", plan.artifactOptions);
+    return this.recordIntentValidity(plan, artifact);
+  }
 
-    const noteCommitment = circuitMarginCommitment({
-      amount: input.noteAmount,
-      assetDigest: input.assetDigest,
-      blinding: input.blinding,
-      ownerDigest: input.ownerDigest,
-      rhoDigest: input.rhoDigest,
-      spendSecretDigest: input.spendSecretDigest,
-    });
-    if (noteCommitment !== input.noteCommitment) {
-      throw new Error("margin note commitment mismatch");
-    }
-    const noteNullifier = circuitNullifier({
-      rhoDigest: input.rhoDigest,
-      spendSecretDigest: input.spendSecretDigest,
-    });
-    if (noteNullifier !== input.intent.noteNullifier) {
-      throw new Error("margin note nullifier mismatch");
-    }
-    const noteChange = input.noteAmount - input.intent.margin;
-    if (noteChange < 0n) throw new Error("intent margin exceeds note");
-    if (noteChange === 0n) {
-      if (input.noteChangeCommitment !== ZERO_HEX) {
-        throw new Error("zero margin change must use zero commitment");
-      }
-    } else {
-      if (input.changeRhoDigest === ZERO_HEX || input.changeBlinding === ZERO_HEX) {
-        throw new Error("margin change opening is required");
-      }
-      const expectedChangeCommitment = circuitMarginCommitment({
-        amount: noteChange,
-        assetDigest: input.assetDigest,
-        blinding: input.changeBlinding,
-        ownerDigest: input.ownerDigest,
-        rhoDigest: input.changeRhoDigest,
-        spendSecretDigest: ZERO_HEX,
-      });
-      if (expectedChangeCommitment !== input.noteChangeCommitment) {
-        console.error("DEBUG: expectedChangeCommitment Mismatch!", {
-          noteChange: noteChange.toString(),
-          assetDigest: input.assetDigest,
-          changeBlinding: input.changeBlinding,
-          ownerDigest: input.ownerDigest,
-          changeRhoDigest: input.changeRhoDigest,
-          expectedChangeCommitment,
-          providedChangeCommitment: input.noteChangeCommitment,
-        });
-        throw new Error("margin change commitment mismatch");
-      }
-    }
+  async proveIntentValidityAsync(input: IntentValidityProofInput): Promise<IntentValidityRecord> {
+    const plan = intentValidityProofPlan(input);
+    const artifact = await buildProofArtifactAsync(this.root, "intent-validity", plan.artifactOptions);
+    return this.recordIntentValidity(plan, artifact);
+  }
 
-    const binding = intentBindingFields(input.intent);
-    const intentCommitment = commitIntent(input.intent);
-    if (intentCommitment !== binding.intentCommitment) {
-      throw new Error("intent commitment binding mismatch");
-    }
-    const publicInputs = publicInputDigest("intent-validity", [
-      input.currentBatch,
-      binding.batchDigest,
-      binding.marketDigest,
-      binding.ownerCommitmentField,
-      intentCommitment,
-      input.marginRoot,
-      input.noteCommitment,
-      input.intent.noteNullifier,
-      input.noteChangeCommitment,
-    ]);
-    const artifact = buildProofArtifact(this.root, "intent-validity", {
-      name: artifactName("intent", [
-        input.intent.batchId,
-        input.intent.marketId,
-        intentCommitment,
-        input.marginRoot,
-      ]),
-      inputs: {
-        size: input.intent.size,
-        margin: input.intent.margin,
-        limit_price: input.intent.limitPrice,
-        is_long: input.intent.side === "long",
-        expiry_batch: input.expiryBatch,
-        note_amount: input.noteAmount,
-        asset_digest: field(input.assetDigest),
-        owner_digest: field(input.ownerDigest),
-        rho_digest: field(input.rhoDigest),
-        blinding: field(input.blinding),
-        spend_secret_digest: field(input.spendSecretDigest),
-        path_siblings: input.pathSiblings.map((sibling) => field(sibling)),
-        path_indices: input.pathIndices,
-        current_batch: input.currentBatch,
-        batch_digest: field(binding.batchDigest),
-        market_digest: field(binding.marketDigest),
-        owner_commitment_field: field(binding.ownerCommitmentField),
-        intent_commitment: field(intentCommitment),
-        margin_root: field(input.marginRoot),
-        note_commitment_public: field(input.noteCommitment),
-        note_nullifier: field(input.intent.noteNullifier),
-        note_change_commitment: field(input.noteChangeCommitment),
-        nonce_digest: field(binding.nonceDigest),
-        salt_digest: field(binding.saltDigest),
-        change_rho_digest: field(input.changeRhoDigest),
-        change_blinding: field(input.changeBlinding),
-        zero_commitment: 0n,
-      },
-    });
-
-    const proof = this.bindArtifact("intent-validity", publicInputs, artifact);
-    const record = {
-      batchDigest: binding.batchDigest,
-      currentBatch: input.currentBatch,
-      expiryBatch: input.expiryBatch,
-      intentCommitment,
-      marketDigest: binding.marketDigest,
-      noteChangeCommitment: input.noteChangeCommitment,
-      noteCommitment: input.noteCommitment,
-      marginRoot: input.marginRoot,
-      noteNullifier: input.intent.noteNullifier,
-      ownerCommitmentField: binding.ownerCommitmentField,
-      proof,
-    };
+  private recordIntentValidity(
+    plan: IntentValidityProofPlan,
+    artifact: ProofArtifact,
+  ): IntentValidityRecord {
+    const proof = this.bindArtifact("intent-validity", plan.publicInputs, artifact);
+    const record = { ...plan.record, proof };
     this.intentValidityRecords.set(proofKey(proof), record);
     return record;
   }
@@ -911,6 +798,138 @@ export class ProverService implements Prover {
     this.artifactRegistry.set(proof, artifact);
     return proof;
   }
+}
+
+interface IntentValidityProofPlan {
+  artifactOptions: ProofArtifactOptions;
+  publicInputs: Hex;
+  record: Omit<IntentValidityRecord, "proof">;
+}
+
+function intentValidityProofPlan(input: IntentValidityProofInput): IntentValidityProofPlan {
+  if (input.intent.size <= 0n) throw new Error("intent size must be positive");
+  if (input.intent.margin <= 0n) throw new Error("intent margin must be positive");
+  if (input.intent.limitPrice <= 0n) throw new Error("intent limit price must be positive");
+  if (input.expiryBatch < input.currentBatch) throw new Error("intent expired");
+  if (input.marginRoot === "0x0") throw new Error("margin root is empty");
+  if (input.intent.noteNullifier === "0x0") throw new Error("note nullifier is empty");
+  if (input.noteAmount < input.intent.margin) throw new Error("intent margin exceeds note");
+  if (input.pathSiblings.length !== FIELD_MERKLE_DEPTH) {
+    throw new Error("invalid margin membership path");
+  }
+  if (input.pathIndices.length !== FIELD_MERKLE_DEPTH) {
+    throw new Error("invalid margin membership path");
+  }
+
+  const noteCommitment = circuitMarginCommitment({
+    amount: input.noteAmount,
+    assetDigest: input.assetDigest,
+    blinding: input.blinding,
+    ownerDigest: input.ownerDigest,
+    rhoDigest: input.rhoDigest,
+    spendSecretDigest: input.spendSecretDigest,
+  });
+  if (noteCommitment !== input.noteCommitment) {
+    throw new Error("margin note commitment mismatch");
+  }
+  const noteNullifier = circuitNullifier({
+    rhoDigest: input.rhoDigest,
+    spendSecretDigest: input.spendSecretDigest,
+  });
+  if (noteNullifier !== input.intent.noteNullifier) {
+    throw new Error("margin note nullifier mismatch");
+  }
+  const noteChange = input.noteAmount - input.intent.margin;
+  if (noteChange < 0n) throw new Error("intent margin exceeds note");
+  if (noteChange === 0n) {
+    if (input.noteChangeCommitment !== ZERO_HEX) {
+      throw new Error("zero margin change must use zero commitment");
+    }
+  } else {
+    if (input.changeRhoDigest === ZERO_HEX || input.changeBlinding === ZERO_HEX) {
+      throw new Error("margin change opening is required");
+    }
+    const expectedChangeCommitment = circuitMarginCommitment({
+      amount: noteChange,
+      assetDigest: input.assetDigest,
+      blinding: input.changeBlinding,
+      ownerDigest: input.ownerDigest,
+      rhoDigest: input.changeRhoDigest,
+      spendSecretDigest: ZERO_HEX,
+    });
+    if (expectedChangeCommitment !== input.noteChangeCommitment) {
+      throw new Error("margin change commitment mismatch");
+    }
+  }
+
+  const binding = intentBindingFields(input.intent);
+  const intentCommitment = commitIntent(input.intent);
+  if (intentCommitment !== binding.intentCommitment) {
+    throw new Error("intent commitment binding mismatch");
+  }
+  const publicInputs = publicInputDigest("intent-validity", [
+    input.currentBatch,
+    binding.batchDigest,
+    binding.marketDigest,
+    binding.ownerCommitmentField,
+    intentCommitment,
+    input.marginRoot,
+    input.noteCommitment,
+    input.intent.noteNullifier,
+    input.noteChangeCommitment,
+  ]);
+  return {
+    artifactOptions: {
+      name: artifactName("intent", [
+        input.intent.batchId,
+        input.intent.marketId,
+        intentCommitment,
+        input.marginRoot,
+      ]),
+      inputs: {
+        size: input.intent.size,
+        margin: input.intent.margin,
+        limit_price: input.intent.limitPrice,
+        is_long: input.intent.side === "long",
+        expiry_batch: input.expiryBatch,
+        note_amount: input.noteAmount,
+        asset_digest: field(input.assetDigest),
+        owner_digest: field(input.ownerDigest),
+        rho_digest: field(input.rhoDigest),
+        blinding: field(input.blinding),
+        spend_secret_digest: field(input.spendSecretDigest),
+        path_siblings: input.pathSiblings.map((sibling) => field(sibling)),
+        path_indices: input.pathIndices,
+        current_batch: input.currentBatch,
+        batch_digest: field(binding.batchDigest),
+        market_digest: field(binding.marketDigest),
+        owner_commitment_field: field(binding.ownerCommitmentField),
+        intent_commitment: field(intentCommitment),
+        margin_root: field(input.marginRoot),
+        note_commitment_public: field(input.noteCommitment),
+        note_nullifier: field(input.intent.noteNullifier),
+        note_change_commitment: field(input.noteChangeCommitment),
+        nonce_digest: field(binding.nonceDigest),
+        salt_digest: field(binding.saltDigest),
+        change_rho_digest: field(input.changeRhoDigest),
+        change_blinding: field(input.changeBlinding),
+        zero_commitment: 0n,
+      },
+    },
+    publicInputs,
+    record: {
+      batchDigest: binding.batchDigest,
+      currentBatch: input.currentBatch,
+      expiryBatch: input.expiryBatch,
+      intentCommitment,
+      marketDigest: binding.marketDigest,
+      noteChangeCommitment: input.noteChangeCommitment,
+      noteCommitment: input.noteCommitment,
+      marginRoot: input.marginRoot,
+      noteNullifier: input.intent.noteNullifier,
+      ownerCommitmentField: binding.ownerCommitmentField,
+    },
+  };
 }
 
 function assertFileHash(path: string, expected: Hex, label: string): void {
