@@ -336,6 +336,59 @@ export class OnchainRelayService implements OnchainRelay {
     };
   }
 
+  async publishOraclePriceAsync(input: OraclePriceRelayInput): Promise<OnchainRelayResult> {
+    if (!this.config.enabled) return empty();
+    const deployment = this.deployment();
+    const oracleContract = input.oracleContractId || contractId(deployment, "price-oracle");
+    const oracleAsset = input.assetType === "stellar" ? input.assetAddress : input.assetSymbol;
+    if (!oracleAsset) throw new Error("missing oracle asset for price publish");
+
+    if (input.publishMode === "admin") {
+      return {
+        relays: [await this.invokePayloadAsync("oracle-price", {
+          contractId: oracleContract,
+          functionName: input.assetType === "stellar" ? "set_stellar_price" : "set_other_price",
+          args: [
+            "--admin",
+            deployment.sourceAddress,
+            "--asset",
+            oracleAsset,
+            "--price",
+            input.price.toString(),
+            "--timestamp",
+            String(input.timestamp),
+          ],
+        })],
+      };
+    }
+
+    if (input.publishers.length === 0) {
+      throw new Error("committee oracle publish requires publishers");
+    }
+
+    const relays = [];
+    for (const publisher of input.publishers) {
+      relays.push(await this.invokePayloadAsync("oracle-price", {
+        contractId: oracleContract,
+        functionName: input.assetType === "stellar" ? "submit_stellar_price" : "submit_other_price",
+        source: publisher.source,
+        args: [
+          "--publisher",
+          publisher.address,
+          "--asset",
+          oracleAsset,
+          "--round",
+          input.round,
+          "--price",
+          input.price.toString(),
+          "--timestamp",
+          String(input.timestamp),
+        ],
+      }));
+    }
+    return { relays };
+  }
+
   settleBatch(record: BatchSettlement): OnchainRelayResult {
     if (!this.config.enabled) return empty();
     return {

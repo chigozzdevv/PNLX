@@ -71,6 +71,7 @@ export interface ServerEnv {
   settlementsOnchainRequired: boolean;
   stellarDeployerAddress: string;
   stellarDeploymentFile: string;
+  stellarCommandTimeoutMs: number;
   stellarOnchainRelay: boolean;
   stellarRelayerMode: string;
   stellarNetwork: string;
@@ -179,6 +180,7 @@ export function loadEnv(): ServerEnv {
     settlementsOnchainRequired: booleanValue("SETTLEMENTS_ONCHAIN_REQUIRED", nodeEnv === "production"),
     stellarDeployerAddress: value("STELLAR_DEPLOYER_ADDRESS", ""),
     stellarDeploymentFile: value("STELLAR_DEPLOYMENT_FILE", "deployments/testnet.json"),
+    stellarCommandTimeoutMs: positiveNumberValue("STELLAR_COMMAND_TIMEOUT_MS", "45000"),
     stellarOnchainRelay: booleanValue("STELLAR_ONCHAIN_RELAY", stellarRelayerMode === "stellar-cli"),
     stellarRelayerMode,
     stellarNetwork: value("STELLAR_NETWORK", "testnet"),
@@ -240,6 +242,14 @@ function booleanValue(key: string, fallback: boolean): boolean {
   const raw = process.env[key];
   if (!raw) return fallback;
   return raw === "1" || raw.toLowerCase() === "true" || raw.toLowerCase() === "yes";
+}
+
+function positiveNumberValue(key: string, fallback: string): number {
+  const parsed = Number(value(key, fallback));
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${key} must be a positive number`);
+  }
+  return parsed;
 }
 
 function optionalBigInt(key: string): bigint | undefined {

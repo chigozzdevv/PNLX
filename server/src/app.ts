@@ -88,6 +88,7 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
   });
   const relayer = createRelayer({
     config: {
+      commandTimeoutMs: env.stellarCommandTimeoutMs,
       mode: env.stellarRelayerMode === "stellar-cli" ? "stellar-cli" : "local",
       network: env.stellarNetwork,
       networkPassphrase: env.stellarNetworkPassphrase,

@@ -14,6 +14,8 @@ import type {
 
 export class RelayerService {
   private readonly sent: RelayedTx[] = [];
+  private readonly runCommand: CommandRunner;
+  private readonly usesDefaultCommandRunner: boolean;
 
   constructor(
     private readonly config: StellarRelayerConfig = {
@@ -21,8 +23,12 @@ export class RelayerService {
       network: "testnet",
       source: "pnlx-testnet",
     },
-    private readonly runCommand: CommandRunner = defaultCommandRunner,
-  ) {}
+    runCommand?: CommandRunner,
+  ) {
+    this.usesDefaultCommandRunner = !runCommand;
+    this.runCommand = runCommand ?? ((command, args) =>
+      defaultCommandRunner(command, args, this.commandTimeoutMs()));
+  }
 
   relay(request: RelayRequest): RelayedTx {
     const payloadDigest = hashFields("relay-payload", [request.kind, request.payload]);
@@ -40,7 +46,7 @@ export class RelayerService {
     if (command && output?.status === 0 && sendsTransaction(command) && !txHash) {
       throw new Error("stellar relay did not return a transaction hash");
     }
-    if (command && output?.status === 0 && this.runCommand === defaultCommandRunner && sendsTransaction(command)) {
+    if (command && output?.status === 0 && this.usesDefaultCommandRunner && sendsTransaction(command)) {
       sleep(3_500);
     }
     const tx: RelayedTx = {
@@ -63,13 +69,13 @@ export class RelayerService {
   }
 
   async relayAsync(request: RelayRequest): Promise<RelayedTx> {
-    if (this.config.mode !== "stellar-cli" || this.runCommand !== defaultCommandRunner) {
+    if (this.config.mode !== "stellar-cli" || !this.usesDefaultCommandRunner) {
       return this.relay(request);
     }
     const payloadDigest = hashFields("relay-payload", [request.kind, request.payload]);
     const command = stellarInvokeCommand(this.config, request.payload);
     const invokePayload = parseInvokePayload(request.payload);
-    const output = await runCommandWithRetryAsync(command);
+    const output = await runCommandWithRetryAsync(command, this.commandTimeoutMs());
     const commandOutputDigest = hashFields(
       "relay-command-output",
       [payloadDigest, output.status ?? "null", output.stdout, output.stderr],
@@ -100,6 +106,10 @@ export class RelayerService {
     };
     this.sent.push(tx);
     return tx;
+  }
+
+  private commandTimeoutMs(): number {
+    return this.config.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
   }
 
   submitSignedXdr(input: SignedXdrRelayInput): RelayedTx {
@@ -331,11 +341,19 @@ function parseInvokePayload(payload: unknown): StellarInvokePayload {
   };
 }
 
-function defaultCommandRunner(command: string, args: string[]): CommandResult {
-  const result = spawnSync(command, args, { encoding: "utf8" });
+const DEFAULT_COMMAND_TIMEOUT_MS = 45_000;
+
+function defaultCommandRunner(
+  command: string,
+  args: string[],
+  timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS,
+): CommandResult {
+  const result = spawnSync(command, args, { encoding: "utf8", timeout: timeoutMs });
   return {
     status: result.status,
-    stderr: result.stderr,
+    stderr: result.error?.message
+      ? `${result.stderr}${result.stderr ? "\n" : ""}${result.error.message}`
+      : result.stderr,
     stdout: result.stdout,
   };
 }
@@ -349,20 +367,33 @@ function runCommandWithRetry(runCommand: CommandRunner, command: string[]): Comm
   return output;
 }
 
-async function runCommandWithRetryAsync(command: string[]): Promise<CommandResult> {
-  let output = await runCommandAsync(command);
+async function runCommandWithRetryAsync(
+  command: string[],
+  timeoutMs: number,
+): Promise<CommandResult> {
+  let output = await runCommandAsync(command, timeoutMs);
   for (let attempt = 1; attempt < 4 && isTransientStellarFailure(output); attempt += 1) {
     await delay(2_500 * attempt);
-    output = await runCommandAsync(command);
+    output = await runCommandAsync(command, timeoutMs);
   }
   return output;
 }
 
-function runCommandAsync(command: string[]): Promise<CommandResult> {
+function runCommandAsync(command: string[], timeoutMs: number): Promise<CommandResult> {
   return new Promise((resolve) => {
     const child = spawn(command[0], command.slice(1));
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    let forceKill: ReturnType<typeof setTimeout> | undefined;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      stderr += `${stderr ? "\n" : ""}stellar command timed out after ${timeoutMs}ms`;
+      child.kill("SIGTERM");
+      forceKill = setTimeout(() => child.kill("SIGKILL"), 1_000);
+      forceKill.unref?.();
+    }, timeoutMs);
+    timeout.unref?.();
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
@@ -375,7 +406,9 @@ function runCommandAsync(command: string[]): Promise<CommandResult> {
       stderr += `${stderr ? "\n" : ""}${error.message}`;
     });
     child.on("close", (status) => {
-      resolve({ status, stderr, stdout });
+      clearTimeout(timeout);
+      if (forceKill) clearTimeout(forceKill);
+      resolve({ status: timedOut ? null : status, stderr, stdout });
     });
   });
 }

@@ -64,6 +64,7 @@ export interface ContractReadResult {
 }
 
 export interface StellarRelayerConfig {
+  commandTimeoutMs?: number;
   mode: "local" | "stellar-cli";
   network: string;
   networkPassphrase?: string;
