@@ -186,6 +186,10 @@ export class MarketsService {
     return this.marketData.candles(input);
   }
 
+  async latestPrice(marketId: string) {
+    return this.marketData.latestPrice(marketId);
+  }
+
   priceStream(marketId: string, signal?: AbortSignal): Response {
     return this.marketData.stream(marketId, signal);
   }

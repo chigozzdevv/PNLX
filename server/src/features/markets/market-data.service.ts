@@ -9,8 +9,11 @@ import type {
 const CANDLE_CACHE_TTL_MS = 5_000;
 const CANDLE_FETCH_TIMEOUT_MS = 5_000;
 const CANDLE_CACHE_LIMIT = 300;
+const PROVIDER_FETCH_ATTEMPTS = 2;
+const PROVIDER_RETRY_DELAY_MS = 150;
+const PRICE_CACHE_TTL_MS = 750;
+const PRICE_FETCH_TIMEOUT_MS = 5_000;
 const CLIENT_HEARTBEAT_MS = 15_000;
-const STREAM_FLUSH_PADDING_BYTES = 4_096;
 const STREAM_IDLE_GRACE_MS = 30_000;
 const HERMES_RECONNECT_MIN_MS = 1_000;
 const HERMES_RECONNECT_MAX_MS = 15_000;
@@ -44,6 +47,8 @@ export class MarketDataService {
   private readonly candleInflight = new Map<string, Promise<CandleCacheEntry>>();
   private readonly clients = new Map<number, StreamClient>();
   private readonly latestPrices = new Map<string, MarketPriceUpdate>();
+  private readonly latestPriceFetchedAt = new Map<string, number>();
+  private readonly latestPriceInflight = new Map<string, Promise<MarketPriceUpdate>>();
   private readonly encoder = new TextEncoder();
   private nextClientId = 1;
   private hermesAbort?: AbortController;
@@ -83,9 +88,7 @@ export class MarketDataService {
         }, CLIENT_HEARTBEAT_MS);
         heartbeat.unref?.();
         this.clients.set(clientId, { controller, heartbeat, marketId });
-        controller.enqueue(this.encoder.encode(
-          `: ${" ".repeat(STREAM_FLUSH_PADDING_BYTES)}\n\nretry: 1500\n\n`,
-        ));
+        controller.enqueue(this.encoder.encode("retry: 1500\n\n"));
         const latest = this.latestPrices.get(marketId);
         if (latest) controller.enqueue(this.priceEvent(latest));
         this.ensureHermesStream();
@@ -105,6 +108,20 @@ export class MarketDataService {
         "x-accel-buffering": "no",
       },
     });
+  }
+
+  async latestPrice(marketId: string): Promise<MarketPriceUpdate> {
+    supportedAsset(marketId);
+    const cached = this.latestPrices.get(marketId);
+    const fetchedAt = this.latestPriceFetchedAt.get(marketId) ?? 0;
+    if (cached && fetchedAt + PRICE_CACHE_TTL_MS > Date.now()) return cached;
+
+    const active = this.latestPriceInflight.get(marketId);
+    if (active) return active;
+    const request = this.fetchLatestPrice(marketId)
+      .finally(() => this.latestPriceInflight.delete(marketId));
+    this.latestPriceInflight.set(marketId, request);
+    return request;
   }
 
   private async refreshCandles(
@@ -140,14 +157,13 @@ export class MarketDataService {
     url.searchParams.set("from", String(from));
     url.searchParams.set("to", String(to));
 
-    const response = await fetchWithTimeout(this.fetcher, url, {
+    const payload = await fetchJsonWithRetry(this.fetcher, url, {
       headers: {
         accept: "application/json",
         "user-agent": "pnlx-pyth-candles/0.2",
       },
-    }, CANDLE_FETCH_TIMEOUT_MS);
-    if (!response.ok) throw new Error(`candle provider failed with ${response.status}`);
-    const candles = parsePythTradingViewCandles(await response.json());
+    }, CANDLE_FETCH_TIMEOUT_MS, "candle provider");
+    const candles = parsePythTradingViewCandles(payload);
     const fetchedAt = Date.now();
     return {
       candles: candles.slice(-CANDLE_CACHE_LIMIT),
@@ -155,6 +171,26 @@ export class MarketDataService {
       fetchedAt,
       productId,
     };
+  }
+
+  private async fetchLatestPrice(marketId: string): Promise<MarketPriceUpdate> {
+    const feeds = feedMarkets(this.env);
+    const feedId = [...feeds].find(([, candidate]) => candidate === marketId)?.[0];
+    if (!feedId) throw new Error(`missing Pyth feed for ${marketId}`);
+    const url = new URL("/v2/updates/price/latest", this.env.pythHermesUrl);
+    url.searchParams.append("ids[]", feedId);
+    url.searchParams.set("parsed", "true");
+    const payload = await fetchJsonWithRetry(this.fetcher, url, {
+      headers: {
+        accept: "application/json",
+        ...(this.env.pythApiKey ? { authorization: `Bearer ${this.env.pythApiKey}` } : {}),
+      },
+    }, PRICE_FETCH_TIMEOUT_MS, "price provider");
+    const update = parseHermesPriceUpdates(JSON.stringify(payload), feeds)
+      .find((candidate) => candidate.marketId === marketId);
+    if (!update) throw new Error(`price provider returned no update for ${marketId}`);
+    this.cachePrice(update);
+    return update;
   }
 
   private ensureHermesStream(): void {
@@ -230,7 +266,7 @@ export class MarketDataService {
             .join("\n");
           if (!data) continue;
           for (const update of parseHermesPriceUpdates(data, feeds)) {
-            this.latestPrices.set(update.marketId, update);
+            this.cachePrice(update);
             this.broadcast(update);
           }
         }
@@ -239,6 +275,11 @@ export class MarketDataService {
       signal.removeEventListener("abort", abortConnection);
       connection.abort();
     }
+  }
+
+  private cachePrice(update: MarketPriceUpdate): void {
+    this.latestPrices.set(update.marketId, update);
+    this.latestPriceFetchedAt.set(update.marketId, Date.now());
   }
 
   private broadcast(update: MarketPriceUpdate): void {
@@ -405,28 +446,44 @@ function numberArray(value: unknown, label: string): number[] {
   });
 }
 
-async function fetchWithTimeout(
+async function fetchJsonWithRetry(
   fetcher: Fetcher,
   input: URL,
   init: RequestInit,
   timeoutMs: number,
-): Promise<Response> {
+  label: string,
+): Promise<unknown> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= PROVIDER_FETCH_ATTEMPTS; attempt += 1) {
+    try {
+      return await fetchJsonWithTimeout(fetcher, input, init, timeoutMs, label);
+    } catch (error) {
+      lastError = error;
+      if (attempt < PROVIDER_FETCH_ATTEMPTS) await delay(PROVIDER_RETRY_DELAY_MS);
+    }
+  }
+  throw lastError;
+}
+
+async function fetchJsonWithTimeout(
+  fetcher: Fetcher,
+  input: URL,
+  init: RequestInit,
+  timeoutMs: number,
+  label: string,
+): Promise<unknown> {
   const controller = new AbortController();
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => {
-      controller.abort();
-      reject(new Error(`candle provider timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    timeout.unref?.();
-  });
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  timeout.unref?.();
   try {
-    return await Promise.race([
-      fetcher(input, { ...init, signal: controller.signal }),
-      deadline,
-    ]);
+    const response = await fetcher(input, { ...init, signal: controller.signal });
+    if (!response.ok) throw new Error(`${label} failed with ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(`${label} timed out after ${timeoutMs}ms`);
+    throw error;
   } finally {
-    if (timeout) clearTimeout(timeout);
+    clearTimeout(timeout);
     controller.abort();
   }
 }
@@ -456,12 +513,12 @@ async function fetchStreamWithTimeout(
   }
 }
 
-function delay(ms: number, signal: AbortSignal): Promise<void> {
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
-    if (signal.aborted) return resolve();
+    if (signal?.aborted) return resolve();
     const timeout = setTimeout(resolve, ms);
     timeout.unref?.();
-    signal.addEventListener("abort", () => {
+    signal?.addEventListener("abort", () => {
       clearTimeout(timeout);
       resolve();
     }, { once: true });

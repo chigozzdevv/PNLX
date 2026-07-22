@@ -54,7 +54,7 @@ export function useMarketCandles(
 
     const activeMarketId = marketId;
     let active = true;
-    let stream: EventSource | undefined;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
 
     async function loadSnapshot() {
       try {
@@ -80,27 +80,22 @@ export function useMarketCandles(
       }
     }
 
-    function connectStream() {
-      if (!active || typeof EventSource === "undefined") return;
-      const url = `/api/pnlx/markets/prices/stream?marketId=${encodeURIComponent(activeMarketId)}`;
-      stream = new EventSource(url);
-      stream.onopen = () => {
-        if (!active) return;
-        setState((current) => ({ ...current, error: undefined }));
-      };
-      stream.addEventListener("price", (event) => {
-        const update = priceFromMessage(event.data, activeMarketId);
-        if (!update || !active) return;
+    async function pollPrice() {
+      if (!active) return;
+      try {
+        const update = await pnlxGet<MarketPriceUpdate>(
+          `/markets/prices/latest?marketId=${encodeURIComponent(activeMarketId)}`,
+        );
+        if (!active || !isMarketPriceUpdate(update, activeMarketId)) return;
         setState((current) => ({
           candles: upsertPrice(current.candles, update, interval, limit),
           error: undefined,
           live: true,
           loading: false,
           source: update.source,
-          updatedAt: Date.now(),
+          updatedAt: update.publishedAt,
         }));
-      });
-      stream.onerror = () => {
+      } catch {
         if (!active) return;
         setState((current) => ({
           ...current,
@@ -108,7 +103,9 @@ export function useMarketCandles(
           live: false,
           loading: false,
         }));
-      };
+      } finally {
+        if (active) pollTimer = setTimeout(() => void pollPrice(), 1_000);
+      }
     }
 
     setState({
@@ -117,30 +114,24 @@ export function useMarketCandles(
       loading: true,
     });
     void loadSnapshot();
-    connectStream();
+    void pollPrice();
 
     return () => {
       active = false;
-      stream?.close();
+      if (pollTimer) clearTimeout(pollTimer);
     };
   }, [interval, limit, marketId]);
 
   return state;
 }
 
-function priceFromMessage(
-  raw: string,
+function isMarketPriceUpdate(
+  update: MarketPriceUpdate,
   marketId: string,
-): MarketPriceUpdate | undefined {
-  try {
-    const update = JSON.parse(raw) as MarketPriceUpdate;
-    if (update.marketId !== marketId || update.source !== "pyth-hermes") return undefined;
-    if (!Number.isFinite(update.price) || update.price <= 0) return undefined;
-    if (!Number.isFinite(update.publishedAt) || update.publishedAt <= 0) return undefined;
-    return update;
-  } catch {
-    return undefined;
-  }
+): boolean {
+  if (update.marketId !== marketId || update.source !== "pyth-hermes") return false;
+  if (!Number.isFinite(update.price) || update.price <= 0) return false;
+  return Number.isFinite(update.publishedAt) && update.publishedAt > 0;
 }
 
 function upsertPrice(

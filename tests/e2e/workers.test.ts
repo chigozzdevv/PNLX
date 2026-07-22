@@ -105,6 +105,65 @@ describe("support workers", () => {
     expect(cached.candles.at(-1)?.close).toBe(0.20);
   });
 
+  test("retries an aborted cold Pyth candle request", async () => {
+    let requests = 0;
+    const fetcher = async () => {
+      requests += 1;
+      if (requests === 1) throw new DOMException("The operation was aborted.", "AbortError");
+      return new Response(JSON.stringify({
+        c: [0.19],
+        h: [0.195],
+        l: [0.185],
+        o: [0.188],
+        s: "ok",
+        t: [1_784_692_000],
+        v: [0],
+      }), { status: 200 });
+    };
+    const service = new MarketDataService(loadEnv(), fetcher as never);
+
+    const response = await service.candles({
+      interval: "15m",
+      limit: 160,
+      marketId: "xlm-usd-perp",
+    });
+
+    expect(requests).toBe(2);
+    expect(response.candles.at(-1)?.close).toBe(0.19);
+  });
+
+  test("coalesces and briefly caches latest Pyth prices", async () => {
+    let requests = 0;
+    const feedId = "b7a8eba68a997cd0210c2e1e4ee811ad2d174b3611c22d9ebf16f4cb7e9ba850";
+    const fetcher = async () => {
+      requests += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return new Response(JSON.stringify({
+        parsed: [{
+          id: feedId,
+          price: {
+            conf: "120",
+            expo: -8,
+            price: "19160237",
+            publish_time: 1_784_692_964,
+          },
+        }],
+      }), { status: 200 });
+    };
+    const service = new MarketDataService(loadEnv(), fetcher as never);
+
+    const [first, concurrent] = await Promise.all([
+      service.latestPrice("xlm-usd-perp"),
+      service.latestPrice("xlm-usd-perp"),
+    ]);
+    const cached = await service.latestPrice("xlm-usd-perp");
+
+    expect(requests).toBe(1);
+    expect(first.price).toBe(0.19160237);
+    expect(concurrent).toEqual(first);
+    expect(cached).toEqual(first);
+  });
+
   test("defaults production oracle authority to on-chain market pricing", () => {
     const previousNodeEnv = process.env.NODE_ENV;
     const previousRequired = process.env.ORACLE_ONCHAIN_REQUIRED;
