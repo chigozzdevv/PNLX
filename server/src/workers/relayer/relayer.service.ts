@@ -368,7 +368,7 @@ function parseInvokePayload(payload: unknown): StellarInvokePayload {
 }
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 45_000;
-const RELAYER_COMMAND_WORKER = new URL("./relayer-command.worker.ts", import.meta.url).pathname;
+const RELAYER_COMMAND_WORKER = new URL("./relayer-command.worker.mjs", import.meta.url).pathname;
 
 function defaultCommandRunner(
   command: string,
@@ -410,7 +410,7 @@ function runCommandAsync(command: string[], timeoutMs: number): Promise<CommandR
   let child: ReturnType<typeof Bun.spawn>;
   try {
     child = Bun.spawn([
-      process.execPath,
+      "node",
       RELAYER_COMMAND_WORKER,
       JSON.stringify(command),
       String(timeoutMs),

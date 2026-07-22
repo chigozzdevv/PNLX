@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import type { CommandResult } from "@/workers/relayer/relayer.model";
 
 const MAX_OUTPUT_LENGTH = 256_000;
 
@@ -9,8 +8,8 @@ const timeoutMs = parseTimeout(rawTimeout);
 const result = run(command, timeoutMs);
 process.stdout.write(JSON.stringify(result));
 
-function parseCommand(raw: string): string[] {
-  let value: unknown;
+function parseCommand(raw) {
+  let value;
   try {
     value = JSON.parse(raw);
   } catch {
@@ -25,7 +24,7 @@ function parseCommand(raw: string): string[] {
   return value;
 }
 
-function parseTimeout(raw: string): number {
+function parseTimeout(raw) {
   const timeoutMs = Number(raw);
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new Error("relay worker timeout must be positive");
@@ -33,7 +32,7 @@ function parseTimeout(raw: string): number {
   return timeoutMs;
 }
 
-function run(command: string[], timeoutMs: number): CommandResult {
+function run(command, timeoutMs) {
   const result = spawnSync(command[0], command.slice(1), {
     encoding: "utf8",
     timeout: timeoutMs,
@@ -46,7 +45,7 @@ function run(command: string[], timeoutMs: number): CommandResult {
   };
 }
 
-function boundedOutput(value: string): string {
+function boundedOutput(value) {
   if (value.length <= MAX_OUTPUT_LENGTH) return value;
   return `${value.slice(0, MAX_OUTPUT_LENGTH)}\n[output truncated]`;
 }
