@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { accessSync, constants, realpathSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { hashFields } from "@pnlx/crypto";
@@ -409,54 +409,28 @@ async function runCommandWithRetryAsync(
 }
 
 function runCommandAsync(command: string[], timeoutMs: number): Promise<CommandResult> {
-  let child: ReturnType<typeof Bun.spawn>;
-  try {
-    child = Bun.spawn([
+  return new Promise((resolve) => {
+    execFile(
       nodeRuntime(),
-      RELAYER_COMMAND_WORKER,
-      JSON.stringify(command),
-      String(timeoutMs),
-    ], {
-      stderr: "pipe",
-      stdin: "ignore",
-      stdout: "pipe",
-    });
-  } catch (error) {
-    return Promise.resolve({
-      status: null,
-      stderr: error instanceof Error ? error.message : String(error),
-      stdout: "",
-    });
-  }
-
-  let timedOut = false;
-  let forceKill: ReturnType<typeof setTimeout> | undefined;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    child.kill("SIGTERM");
-    forceKill = setTimeout(() => child.kill("SIGKILL"), 1_000);
-    forceKill.unref?.();
-  }, timeoutMs + 2_000);
-  timeout.unref?.();
-
-  return Promise.all([
-    new Response(child.stdout as ReadableStream<Uint8Array>).text(),
-    new Response(child.stderr as ReadableStream<Uint8Array>).text(),
-    child.exited,
-  ]).then(([stdout, rawStderr, status]) => {
-    clearTimeout(timeout);
-    if (forceKill) clearTimeout(forceKill);
-    if (timedOut) {
-      return {
-        status: null,
-        stderr: [rawStderr, `stellar command timed out after ${timeoutMs}ms`].filter(Boolean).join("\n"),
-        stdout: "",
-      };
-    }
-    if (status !== 0) {
-      return { status, stderr: rawStderr || stdout, stdout: "" };
-    }
-    return parseRelayWorkerResult(stdout);
+      [RELAYER_COMMAND_WORKER, JSON.stringify(command), String(timeoutMs)],
+      {
+        encoding: "utf8",
+        killSignal: "SIGTERM",
+        maxBuffer: 600_000,
+        timeout: timeoutMs + 2_000,
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          resolve({
+            status: typeof error.code === "number" ? error.code : null,
+            stderr: [stderr, error.message].filter(Boolean).join("\n"),
+            stdout: "",
+          });
+          return;
+        }
+        resolve(parseRelayWorkerResult(stdout));
+      },
+    );
   });
 }
 
