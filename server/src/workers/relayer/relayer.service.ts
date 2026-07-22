@@ -368,6 +368,7 @@ function parseInvokePayload(payload: unknown): StellarInvokePayload {
 }
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 45_000;
+const RELAYER_COMMAND_WORKER = new URL("./relayer-command.worker.ts", import.meta.url).pathname;
 
 function defaultCommandRunner(
   command: string,
@@ -408,7 +409,12 @@ async function runCommandWithRetryAsync(
 function runCommandAsync(command: string[], timeoutMs: number): Promise<CommandResult> {
   let child: ReturnType<typeof Bun.spawn>;
   try {
-    child = Bun.spawn(command, {
+    child = Bun.spawn([
+      process.execPath,
+      RELAYER_COMMAND_WORKER,
+      JSON.stringify(command),
+      String(timeoutMs),
+    ], {
       stderr: "pipe",
       stdin: "ignore",
       stdout: "pipe",
@@ -428,7 +434,7 @@ function runCommandAsync(command: string[], timeoutMs: number): Promise<CommandR
     child.kill("SIGTERM");
     forceKill = setTimeout(() => child.kill("SIGKILL"), 1_000);
     forceKill.unref?.();
-  }, timeoutMs);
+  }, timeoutMs + 2_000);
   timeout.unref?.();
 
   return Promise.all([
@@ -438,10 +444,40 @@ function runCommandAsync(command: string[], timeoutMs: number): Promise<CommandR
   ]).then(([stdout, rawStderr, status]) => {
     clearTimeout(timeout);
     if (forceKill) clearTimeout(forceKill);
-    const timeoutMessage = timedOut ? `stellar command timed out after ${timeoutMs}ms` : "";
-    const stderr = [rawStderr, timeoutMessage].filter(Boolean).join("\n");
-    return { status: timedOut ? null : status, stderr, stdout };
+    if (timedOut) {
+      return {
+        status: null,
+        stderr: [rawStderr, `stellar command timed out after ${timeoutMs}ms`].filter(Boolean).join("\n"),
+        stdout: "",
+      };
+    }
+    if (status !== 0) {
+      return { status, stderr: rawStderr || stdout, stdout: "" };
+    }
+    return parseRelayWorkerResult(stdout);
   });
+}
+
+function parseRelayWorkerResult(output: string): CommandResult {
+  try {
+    const parsed = JSON.parse(output) as Partial<CommandResult>;
+    if (
+      (typeof parsed.status !== "number" && parsed.status !== null) ||
+      typeof parsed.stderr !== "string" ||
+      typeof parsed.stdout !== "string"
+    ) throw new Error("invalid relay worker result");
+    return {
+      status: parsed.status,
+      stderr: parsed.stderr,
+      stdout: parsed.stdout,
+    };
+  } catch (error) {
+    return {
+      status: null,
+      stderr: error instanceof Error ? error.message : String(error),
+      stdout: "",
+    };
+  }
 }
 
 function delay(ms: number): Promise<void> {
