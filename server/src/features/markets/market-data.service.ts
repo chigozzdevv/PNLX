@@ -10,6 +10,7 @@ const CANDLE_CACHE_TTL_MS = 5_000;
 const CANDLE_FETCH_TIMEOUT_MS = 5_000;
 const CANDLE_CACHE_LIMIT = 300;
 const CLIENT_HEARTBEAT_MS = 15_000;
+const STREAM_FLUSH_PADDING_BYTES = 4_096;
 const STREAM_IDLE_GRACE_MS = 30_000;
 const HERMES_RECONNECT_MIN_MS = 1_000;
 const HERMES_RECONNECT_MAX_MS = 15_000;
@@ -82,7 +83,9 @@ export class MarketDataService {
         }, CLIENT_HEARTBEAT_MS);
         heartbeat.unref?.();
         this.clients.set(clientId, { controller, heartbeat, marketId });
-        controller.enqueue(this.encoder.encode("retry: 1500\n\n"));
+        controller.enqueue(this.encoder.encode(
+          `: ${" ".repeat(STREAM_FLUSH_PADDING_BYTES)}\n\nretry: 1500\n\n`,
+        ));
         const latest = this.latestPrices.get(marketId);
         if (latest) controller.enqueue(this.priceEvent(latest));
         this.ensureHermesStream();
