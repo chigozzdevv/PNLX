@@ -558,6 +558,49 @@ button:disabled {
   padding: 7px 9px;
 }
 
+.chart-ohlc {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.chart-ohlc strong {
+  color: var(--text-muted);
+  font-weight: 900;
+}
+
+.chart-feed-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.chart-feed-status i {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent-orange);
+}
+
+.chart-feed-status[data-live="true"] {
+  color: var(--text-muted);
+}
+
+.chart-feed-status[data-live="true"] i {
+  background: var(--accent-green);
+  box-shadow: 0 0 8px rgba(39, 214, 139, 0.48);
+}
+
 .chart-label {
   min-width: 54px;
   color: white;
@@ -3611,6 +3654,18 @@ button:disabled {
 
   .chart-toolbar {
     flex-wrap: wrap;
+  }
+
+  .chart-ohlc {
+    width: 100%;
+    order: 3;
+    overflow-x: auto;
+    padding-top: 2px;
+    scrollbar-width: none;
+  }
+
+  .chart-ohlc::-webkit-scrollbar {
+    display: none;
   }
 
   .toolbar-group.ml-auto {

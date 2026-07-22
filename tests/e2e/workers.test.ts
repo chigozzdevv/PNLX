@@ -22,6 +22,10 @@ import { loadEnv } from "@/config/env";
 import { BatchesService } from "@/features/batches/batches.service";
 import { IntentsService } from "@/features/intents/intents.service";
 import { MarketsService } from "@/features/markets/markets.service";
+import {
+  MarketDataService,
+  parseHermesPriceUpdates,
+} from "@/features/markets/market-data.service";
 import { NotesService } from "@/features/notes/notes.service";
 import { OrdersService } from "@/features/orders/orders.service";
 import {
@@ -46,6 +50,61 @@ import type { SettlementProofInput } from "@/workers/proof-coordinator/proof-coo
 import { createRelayer } from "@/workers/relayer/relayer.worker";
 
 describe("support workers", () => {
+  test("parses aligned Pyth price stream updates", () => {
+    const feedId = "b7a8eba68a997cd0210c2e1e4ee811ad2d174b3611c22d9ebf16f4cb7e9ba850";
+    const updates = parseHermesPriceUpdates(JSON.stringify({
+      parsed: [{
+        id: feedId,
+        price: {
+          conf: "120",
+          expo: -8,
+          price: "19160237",
+          publish_time: 1_784_692_964,
+        },
+      }],
+    }), new Map([[feedId, "xlm-usd-perp"]]));
+
+    expect(updates).toEqual([{
+      confidence: 0.0000012,
+      marketId: "xlm-usd-perp",
+      price: 0.19160237,
+      publishedAt: 1_784_692_964_000,
+      source: "pyth-hermes",
+    }]);
+  });
+
+  test("coalesces and caches Pyth candle snapshots", async () => {
+    let requests = 0;
+    const fetcher = async () => {
+      requests += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return new Response(JSON.stringify({
+        c: [0.19, 0.20],
+        h: [0.195, 0.205],
+        l: [0.185, 0.19],
+        o: [0.188, 0.19],
+        s: "ok",
+        t: [1_784_692_000, 1_784_692_900],
+        v: [0, 0],
+      }), { status: 200 });
+    };
+    const service = new MarketDataService(loadEnv(), fetcher as never);
+    const input = { interval: "15m" as const, limit: 160, marketId: "xlm-usd-perp" };
+
+    const [first, concurrent] = await Promise.all([
+      service.candles(input),
+      service.candles(input),
+    ]);
+    const cached = await service.candles(input);
+
+    expect(requests).toBe(1);
+    expect(first.source).toBe("pyth-benchmarks");
+    expect(first.cached).toBe(false);
+    expect(concurrent.candles).toEqual(first.candles);
+    expect(cached.cached).toBe(true);
+    expect(cached.candles.at(-1)?.close).toBe(0.20);
+  });
+
   test("defaults production oracle authority to on-chain market pricing", () => {
     const previousNodeEnv = process.env.NODE_ENV;
     const previousRequired = process.env.ORACLE_ONCHAIN_REQUIRED;

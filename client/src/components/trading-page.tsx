@@ -253,7 +253,12 @@ export function TradingPage() {
 
           <div className="chart-trades-grid">
             <section className="panel chart-panel">
-              <ChartToolbar interval={chartInterval} onIntervalChange={setChartInterval} />
+              <ChartToolbar
+                interval={chartInterval}
+                latest={candles.candles.at(-1)}
+                live={candles.live}
+                onIntervalChange={setChartInterval}
+              />
               {displaySelectedMarket ? (
                 <div className="chart-frame">
                   <PriceChart candles={candles.candles} market={displaySelectedMarket} />
@@ -408,7 +413,7 @@ function enrichMarketWithTicker(market: MarketDisplay, ticker?: TickerItem): Mar
     netRateShort: market.netRateShort ?? (feedFunding === null ? null : -feedFunding),
     openInterestLong: displayOpenInterest > 0 ? displayOpenInterest / 2 : market.openInterestLong,
     openInterestShort: displayOpenInterest > 0 ? displayOpenInterest / 2 : market.openInterestShort,
-    price: ticker.lastPrice ?? market.price,
+    price: market.price,
     volume24h: market.volume24h > 0 ? market.volume24h : (ticker.volume24h ?? market.volume24h),
   };
 }

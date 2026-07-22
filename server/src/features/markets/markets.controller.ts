@@ -3,6 +3,7 @@ import { json, readJson } from "@/shared/http/json";
 import type { MarketsService } from "@/features/markets/markets.service";
 import {
   parseMarketCandles,
+  parseMarketPriceStream,
   parseMarket,
   parseMarketUpdate,
   parseOracleMarket,
@@ -22,6 +23,10 @@ export class MarketsController {
 
   async candles(request: Request): Promise<Response> {
     return json(await this.markets.candles(parseMarketCandles(request)));
+  }
+
+  prices(request: Request): Response {
+    return this.markets.priceStream(parseMarketPriceStream(request), request.signal);
   }
 
   async create(request: Request): Promise<Response> {

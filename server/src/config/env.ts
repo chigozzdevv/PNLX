@@ -64,6 +64,7 @@ export interface ServerEnv {
   privateMatchingRequired: boolean;
   pythBtcUsdFeedId: string;
   pythFeedIds: Record<string, string>;
+  pythApiKey: string;
   pythHermesUrl: string;
   risc0DevMode: boolean;
   smokeMarketSymbols: string[];
@@ -173,6 +174,7 @@ export function loadEnv(): ServerEnv {
     privateMatchingRequired: booleanValue("PRIVATE_MATCHING_REQUIRED", nodeEnv === "production"),
     pythBtcUsdFeedId: pythFeedIds.BTC,
     pythFeedIds,
+    pythApiKey: value("PYTH_API_KEY", ""),
     pythHermesUrl: value("PYTH_HERMES_URL", "https://hermes.pyth.network"),
     risc0DevMode: booleanValue("RISC0_DEV_MODE", false),
     smokeMarketSymbols: listValue("PNLX_SMOKE_MARKETS", DEFAULT_SMOKE_MARKET_SYMBOLS),

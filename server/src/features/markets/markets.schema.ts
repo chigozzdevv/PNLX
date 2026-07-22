@@ -57,6 +57,12 @@ export function parseMarketCandles(request: Request): MarketCandlesInput {
   };
 }
 
+export function parseMarketPriceStream(request: Request): string {
+  const marketId = new URL(request.url).searchParams.get("marketId")?.trim();
+  if (!marketId) throw new Error("marketId is required");
+  return marketId;
+}
+
 function parseInterval(value: string): MarketCandleInterval {
   if (value === "1m" || value === "5m" || value === "15m" || value === "1h" || value === "1d") {
     return value;

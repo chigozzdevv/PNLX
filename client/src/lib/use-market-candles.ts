@@ -7,6 +7,7 @@ import type { ChartCandle } from "@/types/trading";
 export type CandleInterval = "1m" | "5m" | "15m" | "1h" | "1d";
 
 interface CandlesResponse {
+  cached?: boolean;
   candles: ChartCandle[];
   fetchedAt: number;
   interval: CandleInterval;
@@ -14,25 +15,25 @@ interface CandlesResponse {
   productId: string;
   realtime: boolean;
   source: string;
+  stale?: boolean;
 }
 
 interface MarketCandlesState {
   candles: ChartCandle[];
   error?: string;
+  live: boolean;
   loading: boolean;
   source?: string;
   updatedAt?: number;
 }
 
-const HYPERLIQUID_WS_URL = "wss://api.hyperliquid.xyz/ws";
-
-const MARKET_COINS: Record<string, string> = {
-  "btc-usd-perp": "BTC",
-  "eth-usd-perp": "ETH",
-  "sol-usd-perp": "SOL",
-  "xlm-usd-perp": "XLM",
-  "xrp-usd-perp": "XRP",
-};
+interface MarketPriceUpdate {
+  confidence: number;
+  marketId: string;
+  price: number;
+  publishedAt: number;
+  source: "pyth-hermes";
+}
 
 export function useMarketCandles(
   marketId: string | undefined,
@@ -41,20 +42,19 @@ export function useMarketCandles(
 ): MarketCandlesState {
   const [state, setState] = useState<MarketCandlesState>({
     candles: [],
+    live: false,
     loading: Boolean(marketId),
   });
 
   useEffect(() => {
     if (!marketId) {
-      setState({ candles: [], loading: false });
+      setState({ candles: [], live: false, loading: false });
       return;
     }
 
     const activeMarketId = marketId;
-    const coin = MARKET_COINS[activeMarketId];
     let active = true;
-    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-    let socket: WebSocket | undefined;
+    let stream: EventSource | undefined;
 
     async function loadSnapshot() {
       try {
@@ -62,12 +62,14 @@ export function useMarketCandles(
           `/markets/candles?marketId=${encodeURIComponent(activeMarketId)}&interval=${interval}&limit=${limit}`,
         );
         if (!active) return;
-        setState({
-          candles: mergeCandles([], response.candles, limit),
+        setState((current) => ({
+          ...current,
+          candles: mergeCandles(response.candles, current.candles, limit),
+          error: undefined,
           loading: false,
           source: response.source,
           updatedAt: response.fetchedAt,
-        });
+        }));
       } catch (error) {
         if (!active) return;
         setState((current) => ({
@@ -79,44 +81,39 @@ export function useMarketCandles(
     }
 
     function connectStream() {
-      if (!active || !coin || typeof WebSocket === "undefined") return;
-
-      const subscription = {
-        coin,
-        interval,
-        type: "candle",
+      if (!active || typeof EventSource === "undefined") return;
+      const url = `/api/pnlx/markets/prices/stream?marketId=${encodeURIComponent(activeMarketId)}`;
+      stream = new EventSource(url);
+      stream.onopen = () => {
+        if (!active) return;
+        setState((current) => ({ ...current, error: undefined }));
       };
-      socket = new WebSocket(HYPERLIQUID_WS_URL);
-      socket.onopen = () => {
-        socket?.send(JSON.stringify({ method: "subscribe", subscription }));
-      };
-      socket.onmessage = (event) => {
-        const candle = candleFromMessage(event.data, coin, interval);
-        if (!candle || !active) return;
+      stream.addEventListener("price", (event) => {
+        const update = priceFromMessage(event.data, activeMarketId);
+        if (!update || !active) return;
         setState((current) => ({
-          candles: upsertCandle(current.candles, candle, limit),
+          candles: upsertPrice(current.candles, update, interval, limit),
           error: undefined,
+          live: true,
           loading: false,
-          source: "hyperliquid-ws",
+          source: update.source,
           updatedAt: Date.now(),
         }));
-      };
-      socket.onerror = () => {
+      });
+      stream.onerror = () => {
         if (!active) return;
         setState((current) => ({
           ...current,
-          error: current.candles.length > 0 ? undefined : "Live candle stream unavailable",
+          error: current.candles.length > 0 ? undefined : "Live price stream reconnecting",
+          live: false,
           loading: false,
         }));
-      };
-      socket.onclose = () => {
-        if (!active) return;
-        reconnectTimer = setTimeout(connectStream, 1_500);
       };
     }
 
     setState({
       candles: [],
+      live: false,
       loading: true,
     });
     void loadSnapshot();
@@ -124,52 +121,64 @@ export function useMarketCandles(
 
     return () => {
       active = false;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({
-          method: "unsubscribe",
-          subscription: { coin, interval, type: "candle" },
-        }));
-      }
-      socket?.close();
+      stream?.close();
     };
   }, [interval, limit, marketId]);
 
   return state;
 }
 
-function candleFromMessage(
+function priceFromMessage(
   raw: string,
-  coin: string,
-  interval: CandleInterval,
-): ChartCandle | undefined {
+  marketId: string,
+): MarketPriceUpdate | undefined {
   try {
-    const message = JSON.parse(raw) as {
-      channel?: string;
-      data?: Record<string, unknown>;
-    };
-    if (message.channel !== "candle" || !message.data) return undefined;
-    if (message.data.s !== coin || message.data.i !== interval) return undefined;
-
-    return {
-      close: finiteNumber(message.data.c),
-      high: finiteNumber(message.data.h),
-      low: finiteNumber(message.data.l),
-      open: finiteNumber(message.data.o),
-      time: new Date(finiteNumber(message.data.t)).toISOString(),
-      volume: finiteNumber(message.data.v),
-    };
+    const update = JSON.parse(raw) as MarketPriceUpdate;
+    if (update.marketId !== marketId || update.source !== "pyth-hermes") return undefined;
+    if (!Number.isFinite(update.price) || update.price <= 0) return undefined;
+    if (!Number.isFinite(update.publishedAt) || update.publishedAt <= 0) return undefined;
+    return update;
   } catch {
     return undefined;
   }
 }
 
-function upsertCandle(
+function upsertPrice(
   candles: ChartCandle[],
-  next: ChartCandle,
+  update: MarketPriceUpdate,
+  interval: CandleInterval,
   limit: number,
 ): ChartCandle[] {
+  const bucket = Math.floor(update.publishedAt / intervalMilliseconds(interval)) * intervalMilliseconds(interval);
+  const time = new Date(bucket).toISOString();
+  const existing = candles.find((candle) => candle.time === time);
+  const previousClose = candles.at(-1)?.close ?? update.price;
+  const next: ChartCandle = existing
+    ? {
+        ...existing,
+        close: update.price,
+        high: Math.max(existing.high, update.price),
+        low: Math.min(existing.low, update.price),
+      }
+    : {
+        close: update.price,
+        high: update.price,
+        low: update.price,
+        open: previousClose,
+        time,
+        volume: 0,
+      };
   return mergeCandles(candles, [next], limit);
+}
+
+function intervalMilliseconds(interval: CandleInterval): number {
+  return {
+    "1d": 86_400_000,
+    "1h": 3_600_000,
+    "1m": 60_000,
+    "5m": 300_000,
+    "15m": 900_000,
+  }[interval];
 }
 
 function mergeCandles(

@@ -11,11 +11,10 @@ import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { OnchainMarketConfig, OraclePriceRelayInput } from "@/workers/onchain/onchain.model";
 import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
 import type { OracleService } from "@/workers/oracle/oracle.service";
+import { MarketDataService } from "@/features/markets/market-data.service";
 import type {
   CreateOracleMarketInput,
-  MarketCandle,
   MarketCandlesInput,
-  MarketCandleInterval,
   MarketTickerItem,
   RefreshOracleMarketInput,
   UpdateMarketInput,
@@ -38,12 +37,17 @@ export interface OracleMarketResult {
 }
 
 export class MarketsService {
+  private readonly marketData: MarketDataService;
+
   constructor(
     private readonly executor: ExecutorService,
     private readonly oracle: OracleService,
     private readonly env: ServerEnv,
     private readonly onchain?: OnchainRelayService,
-  ) {}
+    marketData?: MarketDataService,
+  ) {
+    this.marketData = marketData ?? new MarketDataService(env);
+  }
 
   create(input: MarketConfig, authenticated?: string): MarketConfig {
     assertProtocolAdmin(authenticated, this.env.protocolAdminAddresses, {
@@ -83,7 +87,8 @@ export class MarketsService {
     assertValidMarketConfig(market);
     this.assertNewMarket(market.marketId);
     const oracleRelay = this.onchainEnabled() && shouldPublishOracle(this.env)
-      ? this.onchain?.publishOraclePrice(
+      ? await publishOraclePrice(
+          this.onchain,
           oracleRelayConfig(market.marketId, this.env, price.price, price.publishTime),
         )
       : undefined;
@@ -135,7 +140,8 @@ export class MarketsService {
     };
     assertValidMarketConfig(market);
     const oracleRelay = this.onchainEnabled() && shouldPublishOracle(this.env)
-      ? this.onchain?.publishOraclePrice(
+      ? await publishOraclePrice(
+          this.onchain,
           oracleRelayConfig(market.marketId, this.env, price.price, price.publishTime),
         )
       : undefined;
@@ -169,12 +175,11 @@ export class MarketsService {
   }
 
   async candles(input: MarketCandlesInput) {
-    const asset = supportedAssetForMarket(input.marketId);
-    if (HYPERLIQUID_CANDLE_ASSETS.has(asset.symbol)) {
-      return hyperliquidCandles(input, asset.symbol);
-    }
+    return this.marketData.candles(input);
+  }
 
-    return pythBenchmarkCandles(input, asset.symbol);
+  priceStream(marketId: string, signal?: AbortSignal): Response {
+    return this.marketData.stream(marketId, signal);
   }
 
   private assertNewMarket(marketId: string): void {
@@ -259,7 +264,6 @@ function canonicalMarkets(markets: Iterable<MarketConfig>): MarketConfig[] {
   });
 }
 
-const HYPERLIQUID_CANDLE_ASSETS = new Set(["BTC", "ETH", "SOL", "XLM", "XRP"]);
 const HYPERLIQUID_TICKER_SYMBOLS = [
   "XLM",
   "BTC",
@@ -291,163 +295,6 @@ async function hyperliquidTicker(): Promise<MarketTickerItem[]> {
 
   const payload = await response.json();
   return parseHyperliquidTicker(payload);
-}
-
-async function hyperliquidCandles(input: MarketCandlesInput, coin: string) {
-  const granularity = intervalSeconds(input.interval);
-  const endTime = Date.now();
-  const startTime = endTime - granularity * input.limit * 1000;
-
-  const response = await fetch("https://api.hyperliquid.xyz/info", {
-    body: JSON.stringify({
-      req: {
-        coin,
-        endTime,
-        interval: input.interval,
-        startTime,
-      },
-      type: "candleSnapshot",
-    }),
-    headers: {
-      accept: "application/json",
-      "content-type": "application/json",
-      "user-agent": "pnlx-hyperliquid-candles/0.1",
-    },
-    method: "POST",
-  });
-  if (!response.ok) {
-    throw new Error(`candle provider failed with ${response.status}`);
-  }
-
-  const payload = await response.json();
-  const candles = parseHyperliquidCandles(payload).slice(-input.limit);
-
-  return {
-    candles,
-    fetchedAt: Date.now(),
-    interval: input.interval,
-    marketId: input.marketId,
-    productId: coin,
-    realtime: input.interval === "1m",
-    source: "hyperliquid",
-  };
-}
-
-async function pythBenchmarkCandles(input: MarketCandlesInput, symbol: string) {
-  const benchmarkSymbol = `Crypto.${symbol}/USD`;
-  const granularity = intervalSeconds(input.interval);
-  const to = Math.floor(Date.now() / 1000);
-  const from = to - granularity * input.limit;
-  const url = new URL("https://benchmarks.pyth.network/v1/shims/tradingview/history");
-  url.searchParams.set("symbol", benchmarkSymbol);
-  url.searchParams.set("resolution", pythResolution(input.interval));
-  url.searchParams.set("from", String(from));
-  url.searchParams.set("to", String(to));
-
-  const response = await fetch(url, {
-    headers: {
-      accept: "application/json",
-      "user-agent": "pnlx-pyth-candles/0.1",
-    },
-  });
-  if (!response.ok) {
-    throw new Error(`candle provider failed with ${response.status}`);
-  }
-
-  const payload = await response.json();
-  const candles = parsePythTradingViewCandles(payload).slice(-input.limit);
-
-  return {
-    candles,
-    fetchedAt: Date.now(),
-    interval: input.interval,
-    marketId: input.marketId,
-    productId: benchmarkSymbol,
-    realtime: input.interval === "1m",
-    source: "pyth-benchmarks",
-  };
-}
-
-function supportedAssetForMarket(marketId: string) {
-  const asset = Object.values(SUPPORTED_PERP_ASSETS).find((candidate) => candidate.marketId === marketId);
-  if (!asset) throw new Error(`unsupported candle market ${marketId}`);
-  return asset;
-}
-
-function intervalSeconds(interval: MarketCandleInterval): number {
-  const seconds: Record<MarketCandleInterval, number> = {
-    "1d": 86_400,
-    "1h": 3_600,
-    "1m": 60,
-    "5m": 300,
-    "15m": 900,
-  };
-  return seconds[interval];
-}
-
-function pythResolution(interval: MarketCandleInterval): string {
-  if (interval === "1d") return "D";
-  return String(intervalSeconds(interval) / 60);
-}
-
-function parsePythTradingViewCandles(payload: unknown): MarketCandle[] {
-  if (!payload || typeof payload !== "object") {
-    throw new Error("invalid candle provider response");
-  }
-  const response = payload as Record<string, unknown>;
-  if (response.s !== "ok") {
-    throw new Error(typeof response.errmsg === "string" ? response.errmsg : "candle provider returned no data");
-  }
-
-  const times = numberArray(response.t, "time");
-  const opens = numberArray(response.o, "open");
-  const highs = numberArray(response.h, "high");
-  const lows = numberArray(response.l, "low");
-  const closes = numberArray(response.c, "close");
-  const volumes = Array.isArray(response.v) ? numberArray(response.v, "volume") : [];
-  const count = Math.min(times.length, opens.length, highs.length, lows.length, closes.length);
-  if (count === 0) {
-    throw new Error("candle provider returned no candles");
-  }
-
-  const candles: MarketCandle[] = [];
-  for (let index = 0; index < count; index += 1) {
-    candles.push({
-      close: closes[index],
-      high: highs[index],
-      low: lows[index],
-      open: opens[index],
-      time: new Date(times[index] * 1000).toISOString(),
-      volume: volumes[index] ?? 0,
-    });
-  }
-  return candles;
-}
-
-function parseHyperliquidCandles(payload: unknown): MarketCandle[] {
-  if (!Array.isArray(payload)) {
-    throw new Error("invalid candle provider response");
-  }
-  if (payload.length === 0) {
-    throw new Error("candle provider returned no candles");
-  }
-
-  return payload
-    .map((item) => {
-      if (!item || typeof item !== "object") {
-        throw new Error("invalid candle provider row");
-      }
-      const row = item as Record<string, unknown>;
-      return {
-        close: finiteNumber(row.c, "close"),
-        high: finiteNumber(row.h, "high"),
-        low: finiteNumber(row.l, "low"),
-        open: finiteNumber(row.o, "open"),
-        time: new Date(finiteNumber(row.t, "time")).toISOString(),
-        volume: finiteNumber(row.v, "volume"),
-      };
-    })
-    .sort((left, right) => Date.parse(left.time) - Date.parse(right.time));
 }
 
 function parseHyperliquidTicker(payload: unknown): MarketTickerItem[] {
@@ -496,11 +343,6 @@ function optionalFiniteNumber(value: unknown): number | null {
   if (value === undefined || value === null || value === "") return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
-}
-
-function numberArray(value: unknown, label: string): number[] {
-  if (!Array.isArray(value)) throw new Error(`missing candle ${label}`);
-  return value.map((item) => finiteNumber(item, label));
 }
 
 function firstFiniteNumber(values: unknown[], label: string): number {
@@ -587,6 +429,16 @@ function publishMode(value: string): "admin" | "committee" {
 
 function shouldPublishOracle(env: ServerEnv): boolean {
   return env.oraclePriceSource !== "onchain-market";
+}
+
+async function publishOraclePrice(
+  onchain: OnchainRelayService | undefined,
+  input: OraclePriceRelayInput,
+) {
+  if (!onchain) return undefined;
+  return onchain.publishOraclePriceAsync
+    ? onchain.publishOraclePriceAsync(input)
+    : onchain.publishOraclePrice(input);
 }
 
 function oraclePublishers(env: ServerEnv): OraclePriceRelayInput["publishers"] {
