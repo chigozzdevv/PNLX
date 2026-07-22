@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { accessSync, constants, realpathSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { hashFields } from "@pnlx/crypto";
 import type {
   CommandResult,
@@ -410,7 +412,7 @@ function runCommandAsync(command: string[], timeoutMs: number): Promise<CommandR
   let child: ReturnType<typeof Bun.spawn>;
   try {
     child = Bun.spawn([
-      "node",
+      nodeRuntime(),
       RELAYER_COMMAND_WORKER,
       JSON.stringify(command),
       String(timeoutMs),
@@ -456,6 +458,28 @@ function runCommandAsync(command: string[], timeoutMs: number): Promise<CommandR
     }
     return parseRelayWorkerResult(stdout);
   });
+}
+
+let resolvedNodeRuntime: string | undefined;
+
+function nodeRuntime(): string {
+  if (resolvedNodeRuntime) return resolvedNodeRuntime;
+  const currentRuntime = realpathSync(process.execPath);
+  for (const directory of (process.env.PATH ?? "").split(delimiter)) {
+    if (!directory) continue;
+    const candidate = join(directory, "node");
+    try {
+      accessSync(candidate, constants.X_OK);
+      const resolved = realpathSync(candidate);
+      if (resolved !== currentRuntime) {
+        resolvedNodeRuntime = resolved;
+        return resolved;
+      }
+    } catch {
+      // Continue until a distinct executable Node.js runtime is found.
+    }
+  }
+  throw new Error("a standalone Node.js runtime is required for async Stellar relay");
 }
 
 function parseRelayWorkerResult(output: string): CommandResult {
