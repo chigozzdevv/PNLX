@@ -23,15 +23,33 @@ env:
 jobs:
   application:
     name: Server, packages and client
+    needs: circuits
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       CI: "true"
+      MONGODB_URI: mongodb://127.0.0.1:27017/pnlx_test
       NEXT_TELEMETRY_DISABLED: "1"
+      NODE_ENV: test
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      - name: Download verifier test proof
+        uses: actions/download-artifact@v8
+        with:
+          name: withdraw-verifier-proof
+          path: circuits/withdraw/target/bb
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: wasm32v1-none
+
+      - name: Install Stellar CLI
+        uses: stellar/stellar-cli@v27.0.0
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -62,6 +80,7 @@ jobs:
           bun --version
           nargo --version
           bb --version
+          stellar --version
 
       - name: Run package tests
         run: bun run test:packages
@@ -80,12 +99,19 @@ jobs:
 
   contracts:
     name: Rust and Soroban contracts
+    needs: circuits
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      - name: Download verifier test proof
+        uses: actions/download-artifact@v8
+        with:
+          name: withdraw-verifier-proof
+          path: circuits/withdraw/target/bb
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -116,7 +142,15 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install JavaScript dependencies
+        run: bun ci
 
       - name: Install Noir
         run: |
@@ -125,8 +159,34 @@ jobs:
           echo "$HOME/.nargo/bin" >> "$GITHUB_PATH"
           "$HOME/.nargo/bin/noirup" --version "$NOIR_VERSION"
 
-      - name: Verify Noir toolchain
-        run: nargo --version
+      - name: Install Barretenberg
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://raw.githubusercontent.com/AztecProtocol/aztec-packages/refs/heads/next/barretenberg/bbup/install | bash
+          echo "$HOME/.bb" >> "$GITHUB_PATH"
+          echo "$HOME/.bb/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.bb:$HOME/.bb/bin:$PATH"
+          bbup -v "$BB_VERSION"
+
+      - name: Verify circuit toolchains
+        run: |
+          bun --version
+          nargo --version
+          bb --version
 
       - name: Test every circuit
         run: bash scripts/ci/test-noir.sh
+
+      - name: Build verifier test proof
+        run: bun scripts/proof/build.ts withdraw
+
+      - name: Upload verifier test proof
+        uses: actions/upload-artifact@v7
+        with:
+          name: withdraw-verifier-proof
+          path: |
+            circuits/withdraw/target/bb/vk
+            circuits/withdraw/target/bb/proof
+            circuits/withdraw/target/bb/public_inputs
+          if-no-files-found: error
+          retention-days: 1
