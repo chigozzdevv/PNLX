@@ -31,6 +31,7 @@ jobs:
       MONGODB_URI: mongodb://127.0.0.1:27017/pnlx_test
       NEXT_TELEMETRY_DISABLED: "1"
       NODE_ENV: test
+      RUSTUP_TOOLCHAIN: 1.93.0
 
     steps:
       - name: Check out repository
