@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: 1.3.9
+  NOIR_VERSION: 1.0.0-beta.9
+  BB_VERSION: 0.87.0
+  RUST_VERSION: 1.93.0
+
+jobs:
+  application:
+    name: Server, packages and client
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install JavaScript dependencies
+        run: bun ci
+
+      - name: Install Noir
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://raw.githubusercontent.com/noir-lang/noirup/refs/heads/main/install | bash
+          echo "$HOME/.nargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.nargo/bin/noirup" --version "$NOIR_VERSION"
+
+      - name: Install Barretenberg
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://raw.githubusercontent.com/AztecProtocol/aztec-packages/refs/heads/next/barretenberg/bbup/install | bash
+          echo "$HOME/.bb" >> "$GITHUB_PATH"
+          echo "$HOME/.bb/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.bb:$HOME/.bb/bin:$PATH"
+          bbup -v "$BB_VERSION"
+
+      - name: Verify application toolchains
+        run: |
+          bun --version
+          nargo --version
+          bb --version
+
+      - name: Run package tests
+        run: bun run test:packages
+
+      - name: Run end-to-end tests
+        run: bun run test:e2e
+
+      - name: Run client tests
+        run: bun run test:client
+
+      - name: Check client types and lint
+        run: bun run client:check
+
+      - name: Build client
+        run: bun run client:build
+
+  contracts:
+    name: Rust and Soroban contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: wasm32v1-none
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts -> target
+
+      - name: Run contract tests
+        run: cargo test --manifest-path contracts/Cargo.toml --locked
+
+      - name: Build Soroban contracts
+        run: >-
+          cargo build
+          --manifest-path contracts/Cargo.toml
+          --locked
+          --release
+          --target wasm32v1-none
+
+  circuits:
+    name: Noir circuits
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Noir
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://raw.githubusercontent.com/noir-lang/noirup/refs/heads/main/install | bash
+          echo "$HOME/.nargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.nargo/bin/noirup" --version "$NOIR_VERSION"
+
+      - name: Verify Noir toolchain
+        run: nargo --version
+
+      - name: Test every circuit
+        run: bash scripts/ci/test-noir.sh

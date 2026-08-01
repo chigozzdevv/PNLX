@@ -1,0 +1,52 @@
+name: RISC Zero build
+
+on:
+  schedule:
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: risc0-build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUST_VERSION: 1.93.0
+
+jobs:
+  build:
+    name: Reproducible batch-match build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache RISC Zero build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: risc0/batch-match -> target
+
+      - name: Install Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Verify Docker
+        run: |
+          docker version
+          docker buildx version
+
+      - name: Build batch-match host and guest
+        run: >-
+          cargo build
+          --manifest-path risc0/batch-match/Cargo.toml
+          --workspace
+          --release
+          --locked

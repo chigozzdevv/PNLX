@@ -18,6 +18,7 @@
   "scripts": {
     "build:contracts": "stellar contract build --manifest-path contracts/Cargo.toml --out-dir contracts/target/stellar --locked --optimize=false",
     "build:risc0-verifier-stack": "cd vendor/stellar-risc0-verifier && stellar contract build --optimize",
+    "client:build": "bun run --filter @pnlx/client build",
     "client:dev": "bun run --filter @pnlx/client dev",
     "client:check": "bun run --filter @pnlx/client check",
     "collateral:setup-test-usdc": "bun scripts/collateral/setup-test-usdc.ts",
@@ -39,8 +40,9 @@
     "smoke:trade": "bun scripts/smoke/trade.ts",
     "state:migrate-mongo": "bun scripts/operations/migrate-protocol-state.ts",
     "test": "bun test",
+    "test:circuits": "bash scripts/ci/test-noir.sh",
+    "test:client": "bun test client/src",
     "test:e2e": "bun test tests/e2e",
-    "test:server": "bun test server",
     "test:packages": "bun test packages"
   },
   "devDependencies": {
