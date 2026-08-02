@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { circuitKey } from "@pnlx/proof-system";
 import {
   RISC0_BATCH_MATCH_CIRCUIT_KEY,
@@ -74,9 +74,11 @@ function interfaceNames(wasmPath: string): string[] {
 }
 
 describe("deployment manifest", () => {
-  test("binds contract artifacts to proof verifier registry", () => {
+  beforeAll(() => {
     ensureArtifacts();
+  }, 300_000);
 
+  test("binds contract artifacts to proof verifier registry", () => {
     const manifest = createDeployManifest();
     const contractNames = manifest.contracts.map((contract) => contract.name);
     const risc0StackNames = manifest.risc0VerifierStack.map((contract) => contract.name);
@@ -206,8 +208,6 @@ describe("deployment manifest", () => {
   }, 120_000);
 
   test("keeps governance exports out of proof-consuming contracts", () => {
-    ensureArtifacts();
-
     const manifest = createDeployManifest();
     const forbidden = ["admin", "paused", "set_paused", "set_verifier", "verifier"];
     const proofContracts = [
