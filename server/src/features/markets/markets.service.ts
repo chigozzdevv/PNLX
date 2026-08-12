@@ -12,9 +12,11 @@ import type { OnchainMarketConfig, OraclePriceRelayInput } from "@/workers/oncha
 import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
 import type { OracleService } from "@/workers/oracle/oracle.service";
 import { MarketDataService } from "@/features/markets/market-data.service";
+import { currentFundingPremium } from "@/workers/funding-engine/funding-engine.service";
 import type {
   CreateOracleMarketInput,
   MarketCandlesInput,
+  MarketSummary,
   MarketTickerItem,
   RefreshOracleMarketInput,
   UpdateMarketInput,
@@ -169,9 +171,29 @@ export class MarketsService {
     };
   }
 
-  async list(): Promise<MarketConfig[]> {
+  async list(): Promise<MarketSummary[]> {
     await this.ensureSupportedMarkets();
-    return canonicalMarkets(this.executor.store.markets.values());
+    const now = Date.now();
+    return canonicalMarkets(this.executor.store.markets.values()).map((market) => {
+      const funding = currentFundingPremium(
+        this.executor.store.fundingPremiumSamples.values(),
+        {
+          intervalMs: this.env.fundingIntervalMs,
+          minimumSamples: this.env.fundingMinimumSamples,
+          premiumMode: this.env.fundingPremiumMode,
+          premiumRate: this.env.fundingPremiumRate,
+          premiumRateCap: this.env.fundingPremiumRateCap,
+        },
+        market.marketId,
+        now,
+      );
+      return {
+        ...market,
+        fundingRate: funding.reason ? null : funding.rate,
+        openInterest: null,
+        volume: marketExecutedVolume(this.executor.store.settlements.values(), market.marketId),
+      };
+    });
   }
 
   async ticker() {
@@ -383,6 +405,16 @@ function assertValidMarketConfig(market: MarketConfig): void {
     throw new Error("maintenance margin rate exceeds initial margin rate");
   }
   if (market.fundingIndex < 0n) throw new Error("funding index cannot be negative");
+}
+
+function marketExecutedVolume(
+  settlements: Iterable<{ aggregateVolume: bigint; marketId: string }>,
+  marketId: string,
+): bigint {
+  const matchedFillVolume = [...settlements]
+    .filter((settlement) => settlement.marketId === marketId)
+    .reduce((sum, settlement) => sum + settlement.aggregateVolume, 0n);
+  return matchedFillVolume / 2n;
 }
 
 function feedIdForMarket(

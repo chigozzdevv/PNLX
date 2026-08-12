@@ -4,12 +4,35 @@ import { PRICE_SCALE } from "@pnlx/market-math";
 import type { MarketConfig, PrivateMatchIntent } from "@pnlx/protocol-types";
 import { expectedFundingPayment } from "@/shared/protocol/funding";
 import {
+  currentFundingPremium,
   fundingPremiumSample,
 } from "@/workers/funding-engine/funding-engine.service";
 import { createFundingEngine } from "@/workers/funding-engine/funding-engine.worker";
 import { createExecutor } from "@/workers/executor/executor.worker";
 
 describe("impact TWAP funding", () => {
+  test("exposes the current market premium without requiring a nonzero funding update", () => {
+    const market = marketConfig(19_775_000n, "xlm-usd-perp");
+    const result = currentFundingPremium(
+      [premiumSample(market, 1_000, 0n), premiumSample(market, 2_000, 0n)],
+      {
+        intervalMs: 3_600_000,
+        minimumSamples: 2,
+        premiumMode: "impact-twap",
+        premiumRate: 0n,
+        premiumRateCap: 5_000n,
+      },
+      market.marketId,
+      3_000,
+    );
+
+    expect(result).toEqual({
+      rate: 0n,
+      sampleCount: 2,
+      source: "impact-twap",
+    });
+  });
+
   test("derives and caps the premium from economically sized order-book depth", () => {
     const market = marketConfig(100n * PRICE_SCALE);
     const sample = fundingPremiumSample(

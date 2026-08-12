@@ -215,12 +215,9 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
     }) ?? [],
     ticker: markets.map((market) => ({
       change: market.change24h,
-      fundingRate: market.netRateLong,
       lastPrice: market.price,
       marketId: market.marketId,
-      openInterest: market.openInterestLong + market.openInterestShort,
       pair: market.pair,
-      volume24h: market.volume24h,
     })),
   };
 }
@@ -379,8 +376,11 @@ function marketDisplayFromServer(
 ): MarketDisplay {
   const baseAsset = baseAssetFromMarketId(market.marketId);
   const price = priceFromOracleString(market.oraclePrice);
-  const aggregateVolume = publicMarket ? baseAmount(publicMarket.aggregateVolume) : 0;
-  const grossOpenInterest = publicMarket ? baseAmount(publicMarket.grossOpenInterest) : 0;
+  const aggregateVolume = market.volume !== undefined
+    ? baseAmount(market.volume)
+    : publicMarket
+      ? baseAmount(publicMarket.aggregateVolume)
+      : 0;
   const pending = publicMarket?.pendingIntentCount ?? 0;
 
   return {
@@ -392,16 +392,18 @@ function marketDisplayFromServer(
     maintenanceMarginRate: rateFromMicroBps(market.maintenanceMarginRate),
     marketId: market.marketId,
     maxLeverage: Number(BigInt(market.maxLeverage)),
-    netRateLong: null,
-    netRateShort: null,
-    openInterestLong: grossOpenInterest / 2,
-    openInterestShort: grossOpenInterest / 2,
+    fundingRate: market.fundingRate === undefined || market.fundingRate === null
+      ? null
+      : rateFromMicroBps(market.fundingRate) * 100,
+    openInterest: market.openInterest === undefined || market.openInterest === null
+      ? null
+      : baseAmount(market.openInterest),
     oraclePrice: market.oraclePrice,
     pair: pairFromMarketId(market.marketId),
     price,
     quoteAsset: "USD",
     status: pending > 0 ? "settling" : "live",
-    volume24h: aggregateVolume,
+    volume: aggregateVolume,
   };
 }
 

@@ -122,11 +122,10 @@ describe("public and owner indexer", () => {
     expect(publicState.positionLifecycleCount).toBe(2);
     expect(publicState.markets).toEqual([
       {
-        aggregateVolume: "2",
+        aggregateVolume: "1",
         conditionalCloseCount: 1,
         conditionalOrderCount: 1,
         fundingIndex: "12",
-        grossOpenInterest: "2",
         initialMarginRate: "100000",
         liquidationCount: 0,
         maintenanceMarginRate: "50000",

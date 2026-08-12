@@ -5,7 +5,7 @@ export interface MarketPublicSnapshot {
   conditionalCloseCount: number;
   conditionalOrderCount: number;
   fundingIndex: string;
-  grossOpenInterest: string;
+  grossOpenInterest?: string;
   initialMarginRate: string;
   liquidationCount: number;
   maintenanceMarginRate: string;

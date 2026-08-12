@@ -21,19 +21,22 @@ export interface ServerProofMeta {
 }
 
 export interface ServerMarketConfig {
+  fundingRate?: string | null;
   marketId: string;
+  openInterest?: string | null;
   oraclePrice: string;
   maxLeverage: string;
   initialMarginRate: string;
   maintenanceMarginRate: string;
   fundingIndex: string;
+  volume?: string;
 }
 
 export interface ServerMarketPublicSnapshot extends ServerMarketConfig {
   aggregateVolume: string;
   conditionalCloseCount: number;
   conditionalOrderCount: number;
-  grossOpenInterest: string;
+  grossOpenInterest?: string;
   liquidationCount: number;
   pendingIntentCount: number;
   positionCloseCount: number;
@@ -175,11 +178,9 @@ export interface MarketDisplay {
   oraclePrice: string;
   price: number;
   change24h: number;
-  openInterestLong: number;
-  openInterestShort: number;
-  netRateLong: number | null;
-  netRateShort: number | null;
-  volume24h: number;
+  fundingRate: number | null;
+  openInterest: number | null;
+  volume: number;
   fundingIndex: string;
   maxLeverage: number;
   initialMarginRate: number;

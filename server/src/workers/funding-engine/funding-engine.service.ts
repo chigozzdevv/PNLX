@@ -181,40 +181,13 @@ export class FundingEngineService {
     sampleCount?: number;
     source: "fixed" | "impact-twap";
   } {
-    if (override !== undefined || (this.config.premiumMode ?? "fixed") === "fixed") {
-      return {
-        rate: clampSigned(
-          override ?? this.config.premiumRate,
-          this.config.premiumRateCap ?? DEFAULT_PREMIUM_RATE_CAP,
-        ),
-        source: "fixed",
-      };
-    }
-
-    const cutoff = appliedAt - this.config.intervalMs;
-    const samples = [...this.executor.store.fundingPremiumSamples.values()]
-      .filter((sample) => sample.marketId === marketId)
-      .filter((sample) => sample.sampledAt > cutoff && sample.sampledAt <= appliedAt)
-      .sort((left, right) => left.sampledAt - right.sampledAt);
-    const minimum = this.config.minimumSamples ?? DEFAULT_MINIMUM_SAMPLES;
-    if (samples.length < minimum) {
-      return {
-        rate: 0n,
-        reason: `insufficient premium samples: ${samples.length}/${minimum}`,
-        sampleCount: samples.length,
-        source: "impact-twap",
-      };
-    }
-    const average = samples.reduce((sum, sample) => sum + sample.premiumRate, 0n) /
-      BigInt(samples.length);
-    return {
-      rate: clampSigned(
-        average,
-        this.config.premiumRateCap ?? DEFAULT_PREMIUM_RATE_CAP,
-      ),
-      sampleCount: samples.length,
-      source: "impact-twap",
-    };
+    return currentFundingPremium(
+      this.executor.store.fundingPremiumSamples.values(),
+      this.config,
+      marketId,
+      appliedAt,
+      override,
+    );
   }
 
   private applyFunding(
@@ -312,6 +285,54 @@ export function fundingPremiumSample(
     premiumRate: clampSigned(positive - negative, config.premiumRateCap),
     sampledAt,
     source: "impact-orderbook",
+  };
+}
+
+export function currentFundingPremium(
+  records: Iterable<FundingPremiumSampleRecord>,
+  config: FundingEngineConfig,
+  marketId: string,
+  appliedAt: number,
+  override?: bigint,
+): {
+  rate: bigint;
+  reason?: string;
+  sampleCount?: number;
+  source: "fixed" | "impact-twap";
+} {
+  if (override !== undefined || (config.premiumMode ?? "fixed") === "fixed") {
+    return {
+      rate: clampSigned(
+        override ?? config.premiumRate,
+        config.premiumRateCap ?? DEFAULT_PREMIUM_RATE_CAP,
+      ),
+      source: "fixed",
+    };
+  }
+
+  const cutoff = appliedAt - config.intervalMs;
+  const samples = [...records]
+    .filter((sample) => sample.marketId === marketId)
+    .filter((sample) => sample.sampledAt > cutoff && sample.sampledAt <= appliedAt)
+    .sort((left, right) => left.sampledAt - right.sampledAt);
+  const minimum = config.minimumSamples ?? DEFAULT_MINIMUM_SAMPLES;
+  if (samples.length < minimum) {
+    return {
+      rate: 0n,
+      reason: `insufficient premium samples: ${samples.length}/${minimum}`,
+      sampleCount: samples.length,
+      source: "impact-twap",
+    };
+  }
+  const average = samples.reduce((sum, sample) => sum + sample.premiumRate, 0n) /
+    BigInt(samples.length);
+  return {
+    rate: clampSigned(
+      average,
+      config.premiumRateCap ?? DEFAULT_PREMIUM_RATE_CAP,
+    ),
+    sampleCount: samples.length,
+    source: "impact-twap",
   };
 }
 

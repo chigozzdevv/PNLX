@@ -3,6 +3,12 @@ import type { MarketConfig } from "@pnlx/protocol-types";
 export type CreateMarketInput = MarketConfig;
 export type UpdateMarketInput = MarketConfig;
 
+export interface MarketSummary extends MarketConfig {
+  fundingRate: bigint | null;
+  openInterest: bigint | null;
+  volume: bigint;
+}
+
 export interface CreateOracleMarketInput {
   feedId?: `0x${string}`;
   fundingIndex: bigint;

@@ -400,29 +400,10 @@ function orderDraftFromMarket(market: MarketDisplay): OrderDraft {
 
 function enrichMarketWithTicker(market: MarketDisplay, ticker?: TickerItem): MarketDisplay {
   if (!ticker) return market;
-  const protocolOpenInterest = market.openInterestLong + market.openInterestShort;
-  const feedOpenInterest = positiveNumber(ticker.openInterest);
-  const displayOpenInterest = protocolOpenInterest > 0 ? protocolOpenInterest : feedOpenInterest;
-  const feedFunding = finiteNumberOrNull(ticker.fundingRate);
 
   return {
     ...market,
     change24h: typeof ticker.change === "number" ? ticker.change : market.change24h,
-    netRateLong: market.netRateLong ?? feedFunding,
-    netRateShort: market.netRateShort ?? (feedFunding === null ? null : -feedFunding),
-    openInterestLong: displayOpenInterest > 0 ? displayOpenInterest / 2 : market.openInterestLong,
-    openInterestShort: displayOpenInterest > 0 ? displayOpenInterest / 2 : market.openInterestShort,
     price: market.price,
-    volume24h: market.volume24h > 0 ? market.volume24h : (ticker.volume24h ?? market.volume24h),
   };
-}
-
-function positiveNumber(value: unknown): number {
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? number : 0;
-}
-
-function finiteNumberOrNull(value: unknown): number | null {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
 }

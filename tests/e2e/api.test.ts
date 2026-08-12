@@ -487,6 +487,27 @@ describe("server api", () => {
     expect(result.ok).toBe(true);
   });
 
+  test("publishes protocol-owned terminal market metrics", async () => {
+    const runtime = createAppRuntime();
+    runtime.executor.addMarket({
+      fundingIndex: 0n,
+      initialMarginRate: 100_000n,
+      maintenanceMarginRate: 50_000n,
+      marketId: "xlm-usd-perp",
+      maxLeverage: 10n,
+      oraclePrice: 100n * PRICE_SCALE,
+    });
+    const response = await runtime.router.handle(new Request("http://pnlx.local/markets"));
+    expect(response.status).toBe(200);
+    const result = (await response.json()) as Record<string, unknown>;
+    const markets = result.markets as Array<Record<string, unknown>>;
+    expect(markets.find((market) => market.marketId === "xlm-usd-perp")).toMatchObject({
+      fundingRate: "0",
+      openInterest: null,
+      volume: "0",
+    });
+  });
+
   test("reports custody readiness and rejects unconfigured asset custody", async () => {
     const previousCustody = process.env.ASSET_CUSTODY_REQUIRED;
     const previousAsset = process.env.COLLATERAL_ASSET;

@@ -1,7 +1,7 @@
 import { ChevronDown } from "lucide-react";
 import Image from "next/image";
 import { useState } from "react";
-import { formatCompact, formatPct } from "@/lib/format";
+import { formatCompact, formatNumber, formatPct } from "@/lib/format";
 import type { MarketDisplay } from "@/types/trading";
 
 interface MarketHeaderProps {
@@ -20,28 +20,25 @@ const ASSET_LOGOS: Record<string, string> = {
 
 export function MarketHeader({ markets, selectedMarket, onSelectMarket }: MarketHeaderProps) {
   const [open, setOpen] = useState(false);
-  const totalOpenInterest = selectedMarket.openInterestLong + selectedMarket.openInterestShort;
-  const fundingRate =
-    selectedMarket.netRateLong === null || selectedMarket.netRateShort === null
-      ? "-- / --"
-      : `${formatPct(selectedMarket.netRateLong, 4)} / ${formatPct(selectedMarket.netRateShort, 4)}`;
+  const priceDigits = selectedMarket.price < 10 ? 4 : 1;
   const stats = [
     {
-      label: "Open Interest",
-      value: formatCompact(totalOpenInterest),
-    },
-    {
-      label: "Long / Short",
-      value: `${formatCompact(selectedMarket.openInterestLong)} / ${formatCompact(selectedMarket.openInterestShort)}`,
+      label: "Index Price",
+      value: `$${formatNumber(selectedMarket.price, priceDigits)}`,
     },
     {
       label: "Funding Rate",
-      value: fundingRate,
-      mixed: true,
+      value: selectedMarket.fundingRate === null ? "—" : formatPct(selectedMarket.fundingRate, 4),
     },
     {
-      label: "24h Volume",
-      value: formatCompact(selectedMarket.volume24h),
+      label: "Open Interest",
+      value: selectedMarket.openInterest === null
+        ? "—"
+        : `${formatCompact(selectedMarket.openInterest)} ${selectedMarket.baseAsset}`,
+    },
+    {
+      label: "Volume",
+      value: `${formatCompact(selectedMarket.volume)} ${selectedMarket.baseAsset}`,
     },
   ];
 
@@ -96,7 +93,7 @@ export function MarketHeader({ markets, selectedMarket, onSelectMarket }: Market
           {stats.map((stat) => (
             <div className="metric-item" key={stat.label}>
               <span>{stat.label}</span>
-              <strong className={stat.mixed ? "metric-mixed" : ""}>{stat.value}</strong>
+              <strong>{stat.value}</strong>
             </div>
           ))}
         </div>

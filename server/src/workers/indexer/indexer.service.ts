@@ -238,21 +238,16 @@ export class IndexerService {
         const settlements = [...this.store.settlements.values()].filter(
           (settlement) => settlement.marketId === market.marketId,
         );
-        const aggregateVolume = settlements.reduce(
+        const matchedFillVolume = settlements.reduce(
           (sum, settlement) => sum + settlement.aggregateVolume,
-          0n,
-        );
-        const grossOpenInterest = settlements.reduce(
-          (sum, settlement) => sum + settlement.openInterestDelta,
           0n,
         );
 
         return {
-          aggregateVolume: aggregateVolume.toString(),
+          aggregateVolume: (matchedFillVolume / 2n).toString(),
           conditionalCloseCount: countByMarket(this.store.conditionalCloses.values(), market.marketId),
           conditionalOrderCount: countByMarket(this.store.conditionalOrders.values(), market.marketId),
           fundingIndex: market.fundingIndex.toString(),
-          grossOpenInterest: grossOpenInterest.toString(),
           initialMarginRate: market.initialMarginRate.toString(),
           liquidationCount: countByMarket(this.store.liquidations.values(), market.marketId),
           maintenanceMarginRate: market.maintenanceMarginRate.toString(),
