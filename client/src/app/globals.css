@@ -238,105 +238,73 @@ button:disabled {
   gap: 10px;
 }
 
-.account-strip {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
-  gap: 8px;
-  min-width: 0;
-}
-
-.account-card {
-  display: grid;
-  min-width: 0;
-  min-height: 72px;
-  align-content: center;
-  gap: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.065);
-  border-radius: 6px;
-  background: rgba(21, 20, 18, 0.86);
-  padding: 12px;
-}
-
-.account-card svg {
-  color: var(--accent-green);
-}
-
-.account-card span {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-faint);
-  font-size: 12px;
-  font-weight: 850;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.account-card strong {
-  min-width: 0;
-  overflow: hidden;
-  color: white;
-  font-size: 18px;
-  font-weight: 950;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.account-card-address {
-  justify-content: start;
-}
-
 .portfolio-page {
   display: grid;
   grid-template-rows: auto auto minmax(280px, 1fr);
-  gap: 10px;
+  gap: 8px;
   min-height: calc(100vh - 132px);
   min-width: 0;
 }
 
-.portfolio-kpis {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+.portfolio-heading {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 4px;
 }
 
-.portfolio-kpi {
-  display: grid;
-  min-height: 76px;
-  align-content: center;
-  gap: 5px;
+.portfolio-heading h1 {
+  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 950;
+  letter-spacing: -0.02em;
+}
+
+.portfolio-withdraw-button {
+  min-width: 96px;
+}
+
+.portfolio-summary {
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
   border: 1px solid rgba(255, 255, 255, 0.065);
   border-radius: 6px;
-  background: rgba(21, 20, 18, 0.74);
-  padding: 14px;
+  background: rgba(21, 20, 18, 0.78);
+  scrollbar-width: none;
 }
 
-.portfolio-kpi span {
+.portfolio-summary::-webkit-scrollbar {
+  display: none;
+}
+
+.portfolio-stat {
+  display: grid;
+  min-width: 168px;
+  flex: 1 0 168px;
+  align-content: center;
+  gap: 5px;
+  padding: 13px 16px;
+}
+
+.portfolio-stat + .portfolio-stat {
+  border-left: 1px solid rgba(255, 255, 255, 0.065);
+}
+
+.portfolio-stat span {
   color: var(--text-faint);
-  font-size: 12px;
-  font-weight: 850;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
-.portfolio-kpi strong {
+.portfolio-stat strong {
   color: white;
-  font-size: 22px;
+  font-size: 19px;
   font-weight: 950;
-}
-
-.portfolio-kpi-with-action {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-}
-
-.portfolio-kpi-with-action span,
-.portfolio-kpi-with-action strong {
-  grid-column: 1;
-}
-
-.portfolio-kpi-action {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-  min-width: 104px;
-  padding: 0 14px;
 }
 
 .order-column {
@@ -1401,38 +1369,79 @@ button:disabled {
 
 .positions-head.trades-grid,
 .positions-row.trades-grid {
-  grid-template-columns: 70px minmax(130px, 1.15fr) 104px 96px 96px 102px 102px 82px 112px 78px;
-  min-width: 1150px;
+  grid-template-columns: minmax(150px, 1.2fr) 120px 116px 116px 116px 116px 88px;
+  min-width: 900px;
   column-gap: 16px;
 }
 
-.trades-grid > :nth-child(3) {
+.trades-grid > :nth-child(n + 2):not(:last-child) {
   justify-self: end;
-  white-space: nowrap;
-}
-
-.trades-grid > :nth-child(4) {
-  justify-self: start;
   white-space: nowrap;
 }
 
 .positions-head.orders-grid,
 .positions-row.orders-grid {
-  grid-template-columns: 70px 88px 94px 72px 112px 112px minmax(150px, 1fr) 76px 122px 154px;
-  min-width: 1120px;
+  grid-template-columns: minmax(110px, 1fr) 130px minmax(150px, 1.2fr) 150px 100px 170px;
+  min-width: 830px;
+  column-gap: 16px;
 }
 
 .positions-head.history-grid,
 .positions-row.history-grid {
-  grid-template-columns: 66px 108px 86px 84px 112px minmax(124px, 1fr) 140px 74px 100px 110px;
-  min-width: 1160px;
-  column-gap: 12px;
+  grid-template-columns: 150px minmax(120px, 1fr) 110px 100px 160px 190px;
+  min-width: 880px;
+  column-gap: 16px;
 }
 
 .positions-head > span,
 .positions-row > span,
 .positions-row > strong {
   min-width: 0;
+}
+
+.table-primary-cell {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.table-primary-cell strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-primary-cell small {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.position-side {
+  border-radius: 999px;
+  padding: 3px 6px;
+  font-size: 9px !important;
+  font-weight: 950 !important;
+  letter-spacing: 0.04em;
+}
+
+.position-side-long {
+  background: rgba(37, 214, 149, 0.1);
+  color: var(--accent-green) !important;
+}
+
+.position-side-short {
+  background: rgba(255, 91, 115, 0.1);
+  color: var(--accent-red) !important;
+}
+
+.position-side-private {
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .row-action-button {
@@ -1498,14 +1507,9 @@ button:disabled {
   display: grid;
   place-items: center;
   align-content: center;
-  gap: 10px;
   color: var(--text-muted);
   font-size: 14px;
   font-weight: 850;
-}
-
-.empty-positions svg {
-  color: var(--accent-green);
 }
 
 .bottom-ticker {
@@ -3573,10 +3577,6 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .account-strip {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .order-column {
     position: static;
     height: auto;
@@ -3670,12 +3670,20 @@ button:disabled {
     grid-template-columns: repeat(3, 1fr);
   }
 
-  .account-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .positions-tab {
+    padding-inline: 6px;
+    font-size: 12px;
+    white-space: nowrap;
   }
 
-  .portfolio-kpis {
-    grid-template-columns: 1fr;
+  .portfolio-heading {
+    padding-inline: 2px;
+  }
+
+  .portfolio-stat {
+    min-width: 144px;
+    flex-basis: 144px;
+    padding: 12px;
   }
 
   .mobile-trade-dock {
@@ -3805,12 +3813,7 @@ button:disabled {
     font-size: 11px;
   }
 
-  .account-strip {
-    grid-template-columns: 1fr;
-  }
-
-  .account-card strong,
-  .portfolio-kpi strong {
+  .portfolio-stat strong {
     font-size: 16px;
   }
 

@@ -6,16 +6,19 @@ import { BottomTicker } from "@/components/bottom-ticker";
 import { PortfolioPage } from "@/components/portfolio-page";
 import { formatUsd, shortAddress } from "@/lib/format";
 import { withdrawAvailableCollateral } from "@/lib/collateral-withdraw";
+import { cancelOrder } from "@/lib/order-cancel";
 import { closePosition } from "@/lib/position-close";
+import { reconcilePrivateMarginNotes } from "@/lib/private-margin-notes";
 import { PnlModal } from "@/components/pnl-modal";
 import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useTradingData } from "@/lib/use-trading-data";
 import { useWalletSession } from "@/lib/use-wallet-session";
-import type { PositionRow } from "@/types/trading";
+import type { PositionRow, ServerOwnerOrderSnapshot } from "@/types/trading";
 
 export function PortfolioRoute() {
   const wallet = useWalletSession();
   const [refreshKey, setRefreshKey] = useState(0);
+  const [cancellingOrderId, setCancellingOrderId] = useState<string | undefined>();
   const [closingPositionId, setClosingPositionId] = useState<string | undefined>();
   const [pnlModalData, setPnlModalData] = useState<{
     marketId: string;
@@ -85,6 +88,37 @@ export function PortfolioRoute() {
     }
   }, [marketById, wallet.session]);
 
+  const handleCancelOrder = useCallback(async (order: ServerOwnerOrderSnapshot) => {
+    if (!wallet.session) {
+      setPositionActionMessage({ tone: "error", text: "Connect a wallet first" });
+      return;
+    }
+
+    setCancellingOrderId(order.intentCommitment);
+    setPositionActionMessage(undefined);
+    try {
+      const cancelled = await cancelOrder({
+        intentCommitment: order.intentCommitment,
+        token: wallet.session.token,
+      });
+      reconcilePrivateMarginNotes({
+        orders: [{ intentCommitment: cancelled.intentCommitment, status: "cancelled" }],
+      });
+      setPositionActionMessage({
+        tone: "success",
+        text: `Cancelled ${shortAddress(cancelled.intentCommitment)}`,
+      });
+      setRefreshKey((value) => value + 1);
+    } catch (error) {
+      setPositionActionMessage({
+        tone: "error",
+        text: error instanceof Error ? error.message : "Order cancel failed",
+      });
+    } finally {
+      setCancellingOrderId(undefined);
+    }
+  }, [wallet.session]);
+
   const handleWithdrawCollateral = useCallback(async () => {
     if (!wallet.session) {
       setPositionActionMessage({ tone: "error", text: "Connect a wallet first" });
@@ -114,8 +148,10 @@ export function PortfolioRoute() {
     <AppShell account={trading.data.account} activeView="portfolio" wallet={wallet}>
       <PortfolioPage
         actionMessage={positionActionMessage}
+        cancellingOrderId={cancellingOrderId}
         closingPositionId={closingPositionId}
         loading={trading.loading}
+        onCancelOrder={handleCancelOrder}
         onClosePosition={handleClosePosition}
         onWithdrawCollateral={handleWithdrawCollateral}
         trading={trading.data}

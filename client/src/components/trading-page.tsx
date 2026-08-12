@@ -278,7 +278,6 @@ export function TradingPage() {
           <PositionsTable
             actionMessage={positionActionMessage}
             activity={trading.data.activity}
-            accountEventCount={trading.data.accountEventCount}
             activeView={tableView}
             cancellingOrderId={cancellingOrderId}
             closingPositionId={closingPositionId}

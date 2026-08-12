@@ -55,7 +55,7 @@ export function AppShell({ account, activeView, children, wallet }: AppShellProp
           </nav>
 
           <div className="wallet-area ml-auto">
-            {connected ? (
+            {connected && activeView === "trade" ? (
               <>
                 <div className="header-balance" aria-label="Available collateral">
                   <span>Available</span>
