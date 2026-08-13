@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { ChartToolbar } from "@/components/chart-toolbar";
 import { MarketHeader } from "@/components/market-header";
-import { MarketRail } from "@/components/market-rail";
 import { OrderTicket } from "@/components/order-ticket";
 import { PnlModal, type PnlModalProps } from "@/components/pnl-modal";
 import { PositionsTable, type PositionsTableView } from "@/components/positions-table";
@@ -72,12 +71,6 @@ export function TradingPage() {
     };
   }, [candles.candles, selectedMarket]);
   const displaySelectedMarket = liveSelectedMarket;
-  const marketRailMarkets = useMemo(
-    () => markets.map((market) =>
-      market.marketId === displaySelectedMarket?.marketId ? displaySelectedMarket : market
-    ),
-    [displaySelectedMarket, markets],
-  );
   const orderDraft = displaySelectedMarket ? orderDraftFromMarket(displaySelectedMarket) : undefined;
   const orders = useMemo(() => {
     const liveIds = new Set(trading.data.orders.map((order) => order.intentCommitment));
@@ -279,12 +272,6 @@ export function TradingPage() {
           </div>
 
         </section>
-
-        <MarketRail
-          markets={marketRailMarkets}
-          onSelectMarket={handleSelectMarket}
-          selectedMarketId={displaySelectedMarket?.marketId}
-        />
 
         <aside className="order-column">
           {displaySelectedMarket && orderDraft ? (

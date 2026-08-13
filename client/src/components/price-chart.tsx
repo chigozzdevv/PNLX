@@ -146,7 +146,7 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
       },
       layout: {
         attributionLogo: true,
-        background: { color: "#111313", type: ColorType.Solid },
+        background: { color: "#0c0c0b", type: ColorType.Solid },
         fontFamily: "var(--font-sans), Inter, sans-serif",
         textColor: "#918c83",
       },

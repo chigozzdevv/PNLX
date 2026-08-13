@@ -39,12 +39,21 @@ describe("AppShell portfolio navigation", () => {
       </AppShell>,
     );
 
+    expect(html).toContain("Collateral balances");
     expect(html).toContain("Available collateral");
     expect(html).toContain("Locked collateral");
+    expect(html).toContain("$75.00");
+    expect(html).toContain("$50.00");
     expect(html).toContain('class="wallet-network-label"');
-    expect(html).toContain(">Testnet</span>");
+    expect(html).toContain('class="wallet-network-dot"');
+    expect(html).toContain('class="wallet-network-text">Testnet</span>');
     expect(html).not.toContain("Testnet · ");
     expect(html).toContain("GBVC7N...Q3QJ");
+    expect(html).toContain(`aria-label="Wallet ${account.address}"`);
+    expect(html).toContain("Connected wallet");
+    expect(html).toContain("Disconnect");
+    expect(html).toContain('class="account-menu"');
+    expect(html).not.toContain("account-avatar");
     expect(html).not.toContain("account-button-connected");
   });
 
@@ -55,6 +64,7 @@ describe("AppShell portfolio navigation", () => {
       </AppShell>,
     );
 
+    expect(html).not.toContain("Collateral balances");
     expect(html).not.toContain("Available collateral");
     expect(html).not.toContain("Locked collateral");
     expect(html).toContain('class="wallet-network-label"');
@@ -72,6 +82,8 @@ describe("AppShell portfolio navigation", () => {
     );
 
     expect(html).toContain("Connect");
+    expect(html).toContain('aria-label="Connect wallet"');
+    expect(html).not.toContain("Collateral balances");
     expect(html).not.toContain('class="wallet-network-label"');
   });
 });

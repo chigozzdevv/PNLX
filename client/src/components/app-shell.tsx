@@ -1,6 +1,6 @@
 "use client";
 
-import { LogOut, UserRound, Wallet } from "lucide-react";
+import { ChevronDown, LogOut, Wallet } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -30,7 +30,7 @@ export function AppShell({ account, activeView, children, wallet }: AppShellProp
   return (
     <div className="min-h-screen bg-[var(--surface-page)] text-[var(--text-primary)]">
       <header className="sticky top-0 z-40 border-b border-white/7 bg-[rgba(12,12,11,0.9)] backdrop-blur-xl">
-        <div className="flex min-h-[72px] min-w-0 items-center gap-3 px-3 md:gap-4 md:px-5">
+        <div className="app-header-inner flex min-h-[72px] min-w-0 items-center gap-3 px-3 md:gap-4 md:px-5">
           <Link className="app-brand" href="/" aria-label="PNLX home">
             <Image
               alt="PNLX"
@@ -54,9 +54,9 @@ export function AppShell({ account, activeView, children, wallet }: AppShellProp
             ))}
           </nav>
 
-          <div className="wallet-area ml-auto">
+          <div className="header-controls ml-auto">
             {connected && activeView === "trade" ? (
-              <>
+              <div className="header-balances" aria-label="Collateral balances">
                 <div className="header-balance" aria-label="Available collateral">
                   <span>Available</span>
                   <strong>{formatUsd(account.availableShieldedUsdc ?? 0)}</strong>
@@ -73,28 +73,50 @@ export function AppShell({ account, activeView, children, wallet }: AppShellProp
                     <strong>{formatUsd(account.pendingShieldedUsdc)}</strong>
                   </div>
                 ) : null}
-              </>
+              </div>
             ) : null}
-            {connected ? (
-              <span className="wallet-network-label" aria-label="Network: Stellar Testnet">
-                Testnet
-              </span>
-            ) : null}
-            <button
-              className={`wallet-button account-button ${wallet.error ? "account-button-error" : ""}`}
-              disabled={connecting}
-              title={wallet.error}
-              type="button"
-              onClick={connected ? wallet.disconnect : wallet.connect}
-            >
-              <span className="account-avatar" aria-hidden="true">
-                {connected ? <UserRound size={16} /> : <Wallet size={16} />}
-              </span>
-              <span className="wallet-address">
-                {connecting ? "Connecting" : connected ? shortAddress(address) : "Connect"}
-              </span>
-              {connected ? <LogOut size={15} /> : null}
-            </button>
+            <div className="wallet-area">
+              {connected ? (
+                <span className="wallet-network-label" aria-label="Network: Stellar Testnet">
+                  <span className="wallet-network-dot" aria-hidden="true" />
+                  <span className="wallet-network-text">Testnet</span>
+                </span>
+              ) : null}
+              {connected ? (
+                <details className={`account-menu${wallet.error ? " account-button-error" : ""}`}>
+                  <summary
+                    aria-label={`Wallet ${address}`}
+                    className="wallet-button account-trigger"
+                    title={wallet.error ?? "Wallet menu"}
+                  >
+                    <span className="wallet-address">{shortAddress(address)}</span>
+                    <ChevronDown aria-hidden="true" className="account-chevron" size={14} />
+                  </summary>
+                  <div className="account-popover">
+                    <span>Connected wallet</span>
+                    <strong aria-label={`Full wallet address: ${address}`} title={address}>
+                      {shortAddress(address)}
+                    </strong>
+                    <button onClick={wallet.disconnect} type="button">
+                      <LogOut aria-hidden="true" size={14} />
+                      Disconnect
+                    </button>
+                  </div>
+                </details>
+              ) : (
+                <button
+                  aria-label="Connect wallet"
+                  className={`wallet-button account-button ${wallet.error ? "account-button-error" : ""}`}
+                  disabled={connecting}
+                  title={wallet.error}
+                  type="button"
+                  onClick={wallet.connect}
+                >
+                  <Wallet aria-hidden="true" size={15} />
+                  <span className="wallet-address">{connecting ? "Connecting" : "Connect"}</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </header>
