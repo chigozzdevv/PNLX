@@ -213,7 +213,7 @@ export function PortfolioRoute() {
         onOpenManageFunds={handleOpenManageFunds}
         trading={trading.data}
       />
-      <BottomTicker ticker={ticker.ticker} live={ticker.live} updatedAt={ticker.updatedAt} />
+      <BottomTicker ticker={ticker.ticker} updatedAt={ticker.updatedAt} />
       <PnlModal
         isOpen={Boolean(pnlModalData)}
         onClose={() => setPnlModalData(null)}

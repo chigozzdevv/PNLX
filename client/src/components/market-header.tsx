@@ -21,10 +21,9 @@ const ASSET_LOGOS: Record<string, string> = {
 export function MarketHeader({ markets, selectedMarket, onSelectMarket }: MarketHeaderProps) {
   const [open, setOpen] = useState(false);
   const priceDigits = selectedMarket.price < 10 ? 5 : 2;
-  const positiveChange = selectedMarket.change24h >= 0;
   const stats = [
     {
-      label: "PNLX Funding",
+      label: "Funding Rate",
       value: selectedMarket.fundingRate === null ? "—" : formatPct(selectedMarket.fundingRate, 4),
     },
     {
@@ -34,12 +33,8 @@ export function MarketHeader({ markets, selectedMarket, onSelectMarket }: Market
         : `${formatCompact(selectedMarket.openInterest)} ${selectedMarket.baseAsset}`,
     },
     {
-      label: "24h Ref. Volume",
-      value: selectedMarket.volume24h === undefined ? "—" : `$${formatCompact(selectedMarket.volume24h)}`,
-    },
-    {
-      label: "Max Leverage",
-      value: `${selectedMarket.maxLeverage}x`,
+      label: "Volume",
+      value: `${formatCompact(selectedMarket.volume)} ${selectedMarket.baseAsset}`,
     },
   ];
 
@@ -65,9 +60,6 @@ export function MarketHeader({ markets, selectedMarket, onSelectMarket }: Market
             </span>
             <ChevronDown size={17} />
           </button>
-          <span className={`market-status market-status-${selectedMarket.status}`}>
-            <i /> {selectedMarket.status === "settling" ? "Matching" : selectedMarket.status}
-          </span>
         </div>
 
         {open ? (
@@ -95,11 +87,8 @@ export function MarketHeader({ markets, selectedMarket, onSelectMarket }: Market
       </div>
 
       <div className="market-price-block">
-        <span>Oracle Price</span>
+        <span>Price</span>
         <strong>${formatNumber(selectedMarket.price, priceDigits)}</strong>
-        <em className={positiveChange ? "metric-positive" : "metric-negative"}>
-          {formatPct(selectedMarket.change24h, 2)} <small>24h ref.</small>
-        </em>
       </div>
 
       <div className="market-summary">

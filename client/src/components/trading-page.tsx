@@ -101,7 +101,7 @@ export function TradingPage() {
         !resolvedIds.has(order.intentCommitment) &&
         (optimisticOrderClock === 0 || optimisticOrderClock - order.createdAt < OPTIMISTIC_ORDER_TTL_MS)
       ),
-      ...liveOrders.filter((order) => isActiveOrderStatus(order.status)),
+      ...liveOrders,
     ];
   }, [
     optimisticCancelledOrders,
@@ -351,7 +351,7 @@ export function TradingPage() {
         </div>
       </main>
 
-      <BottomTicker ticker={ticker.ticker} live={ticker.live} updatedAt={ticker.updatedAt} />
+      <BottomTicker ticker={ticker.ticker} updatedAt={ticker.updatedAt} />
       <PnlModal
         isOpen={Boolean(pnlModalData)}
         onClose={() => setPnlModalData(null)}

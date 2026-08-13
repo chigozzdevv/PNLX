@@ -478,13 +478,13 @@ export function OrderTicket({
 
       <details className="ticket-advanced">
         <summary>
-          <span>Advanced options & order summary</span>
+          <span>Take Profit / Stop Loss</span>
           {tpSlEnabled ? <em>TP / SL on</em> : null}
         </summary>
         <div className="ticket-advanced-body">
           <div className="ticket-field conditional-field">
             <div className="field-label">
-              <span>Take Profit / Stop Loss</span>
+              <span>Enable</span>
               <button
                 aria-pressed={tpSlEnabled}
                 className={`toggle-switch ${tpSlEnabled ? "toggle-switch-active" : ""}`}
@@ -533,20 +533,6 @@ export function OrderTicket({
                   />
                 </div>
               </>
-            ) : null}
-          </div>
-
-          <div className="ticket-summary">
-            <SummaryRow label="Position Size" value={`${formatNumber(size, 6)} ${market.baseAsset}`} />
-            <SummaryRow label="Exposure" value={formatUsd(exposure, { maximumFractionDigits: 2 })} />
-            <SummaryRow label="Margin" value={formatUsd(margin, { maximumFractionDigits: 2 })} />
-            <SummaryRow label="Leverage" value={`${formatNumber(leverage, 2)}x`} />
-            <SummaryRow label="Est. Liquidation" value={formatNumber(liquidationPrice, market.price < 10 ? 5 : 2)} />
-            {orderType === "market" ? (
-              <SummaryRow
-                label={side === "long" ? "Maximum Fill Price" : "Minimum Fill Price"}
-                value={formatNumber(executionLimitPrice, market.price < 10 ? 5 : 2)}
-              />
             ) : null}
           </div>
         </div>
@@ -694,15 +680,6 @@ function ConditionInput({
           <strong>{previewValue}</strong>
         </div>
       </div>
-    </div>
-  );
-}
-
-function SummaryRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="summary-row">
-      <span>{label}</span>
-      <strong>{value}</strong>
     </div>
   );
 }

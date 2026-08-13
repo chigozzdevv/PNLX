@@ -160,7 +160,7 @@ export function useMarketCandles(
         if (!active || streamOpen) return;
         setState((current) => ({
           ...current,
-          error: current.candles.length > 0 ? undefined : "Live price stream reconnecting",
+          error: current.candles.length > 0 ? undefined : "Price unavailable",
           live: false,
           loading: false,
           transport: "offline",

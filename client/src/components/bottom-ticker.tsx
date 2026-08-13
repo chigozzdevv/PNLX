@@ -2,20 +2,15 @@ import { formatNumber, formatPct } from "@/lib/format";
 import type { TickerItem } from "@/types/trading";
 
 interface BottomTickerProps {
-  live?: boolean;
   ticker: TickerItem[];
   updatedAt?: number;
 }
 
-export function BottomTicker({ live = false, ticker, updatedAt }: BottomTickerProps) {
+export function BottomTicker({ ticker, updatedAt }: BottomTickerProps) {
   const title = updatedAt ? `Updated ${new Date(updatedAt).toLocaleTimeString()}` : undefined;
 
   return (
     <div className="bottom-ticker" title={title}>
-      <div className={`ticker-status ${live ? "ticker-status-live" : ""}`}>
-        <span />
-        <strong>{live ? "Live" : "Sync"}</strong>
-      </div>
       <div className="ticker-track">
         {ticker.map((item) => (
           <div className="ticker-item" key={item.pair}>
