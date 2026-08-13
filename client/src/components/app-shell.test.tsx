@@ -32,23 +32,28 @@ const connectedWallet: WalletSessionController = {
 };
 
 describe("AppShell portfolio navigation", () => {
-  test("keeps trade balances and separates Testnet from the connected account button", () => {
+  test("keeps the available balance compact and exposes the full collateral breakdown", () => {
     const html = renderToStaticMarkup(
       <AppShell account={account} activeView="trade" wallet={connectedWallet}>
         <div />
       </AppShell>,
     );
 
-    expect(html).toContain("Collateral balances");
-    expect(html).toContain("Available collateral");
-    expect(html).toContain("Locked collateral");
+    expect(html).toContain("Available collateral $75.00. Show collateral breakdown");
+    expect(html).toContain('class="balance-menu"');
+    expect(html).toContain('class="balance-trigger"');
+    expect(html).toContain('aria-label="Collateral breakdown"');
+    expect(html).toContain("In use");
+    expect(html).toContain("Pending");
     expect(html).toContain("$75.00");
     expect(html).toContain("$50.00");
+    expect(html).toContain("$0.00");
     expect(html).toContain('class="wallet-network-label"');
     expect(html).toContain('class="wallet-network-dot"');
     expect(html).toContain('class="wallet-network-text">Testnet</span>');
     expect(html).not.toContain("Testnet · ");
-    expect(html).toContain("GBVC7N...Q3QJ");
+    expect(html).toContain('class="wallet-address wallet-address-wide">GBVC7N...Q3QJ</span>');
+    expect(html).toContain('class="wallet-address wallet-address-compact">GBVC…Q3QJ</span>');
     expect(html).toContain(`aria-label="Wallet ${account.address}"`);
     expect(html).toContain("Connected wallet");
     expect(html).toContain("Disconnect");
@@ -64,9 +69,8 @@ describe("AppShell portfolio navigation", () => {
       </AppShell>,
     );
 
-    expect(html).not.toContain("Collateral balances");
-    expect(html).not.toContain("Available collateral");
-    expect(html).not.toContain("Locked collateral");
+    expect(html).not.toContain('class="balance-menu"');
+    expect(html).not.toContain("Show collateral breakdown");
     expect(html).toContain('class="wallet-network-label"');
   });
 
@@ -83,7 +87,7 @@ describe("AppShell portfolio navigation", () => {
 
     expect(html).toContain("Connect");
     expect(html).toContain('aria-label="Connect wallet"');
-    expect(html).not.toContain("Collateral balances");
+    expect(html).not.toContain('class="balance-menu"');
     expect(html).not.toContain('class="wallet-network-label"');
   });
 });

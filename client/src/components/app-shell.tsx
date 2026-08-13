@@ -26,6 +26,10 @@ export function AppShell({ account, activeView, children, wallet }: AppShellProp
   const address = wallet.session?.address ?? account.address;
   const connected = Boolean(wallet.session);
   const connecting = wallet.status === "connecting";
+  const availableCollateral = formatUsd(account.availableShieldedUsdc ?? 0);
+  const compactAddress = address.length <= 10
+    ? address
+    : `${address.slice(0, 4)}…${address.slice(-4)}`;
 
   return (
     <div className="min-h-screen bg-[var(--surface-page)] text-[var(--text-primary)]">
@@ -56,24 +60,33 @@ export function AppShell({ account, activeView, children, wallet }: AppShellProp
 
           <div className="header-controls ml-auto">
             {connected && activeView === "trade" ? (
-              <div className="header-balances" aria-label="Collateral balances">
-                <div className="header-balance" aria-label="Available collateral">
-                  <span>Available</span>
-                  <strong>{formatUsd(account.availableShieldedUsdc ?? 0)}</strong>
+              <details className="balance-menu">
+                <summary
+                  aria-label={`Available collateral ${availableCollateral}. Show collateral breakdown`}
+                  className="balance-trigger"
+                >
+                  <span className="balance-trigger-label">Available</span>
+                  <strong>{availableCollateral}</strong>
+                  <ChevronDown aria-hidden="true" className="balance-chevron" size={13} />
+                </summary>
+                <div className="balance-popover">
+                  <span className="balance-popover-heading">Collateral</span>
+                  <dl aria-label="Collateral breakdown">
+                    <div>
+                      <dt>Available</dt>
+                      <dd>{availableCollateral}</dd>
+                    </div>
+                    <div>
+                      <dt>In use</dt>
+                      <dd>{formatUsd(account.lockedMargin)}</dd>
+                    </div>
+                    <div>
+                      <dt>Pending</dt>
+                      <dd>{formatUsd(account.pendingShieldedUsdc)}</dd>
+                    </div>
+                  </dl>
                 </div>
-                {account.lockedMargin > 0 ? (
-                  <div className="header-balance" aria-label="Locked collateral">
-                    <span>Locked</span>
-                    <strong>{formatUsd(account.lockedMargin)}</strong>
-                  </div>
-                ) : null}
-                {account.pendingShieldedUsdc > 0 ? (
-                  <div className="header-balance" aria-label="Pending collateral">
-                    <span>Pending</span>
-                    <strong>{formatUsd(account.pendingShieldedUsdc)}</strong>
-                  </div>
-                ) : null}
-              </div>
+              </details>
             ) : null}
             <div className="wallet-area">
               {connected ? (
@@ -89,7 +102,8 @@ export function AppShell({ account, activeView, children, wallet }: AppShellProp
                     className="wallet-button account-trigger"
                     title={wallet.error ?? "Wallet menu"}
                   >
-                    <span className="wallet-address">{shortAddress(address)}</span>
+                    <span className="wallet-address wallet-address-wide">{shortAddress(address)}</span>
+                    <span className="wallet-address wallet-address-compact">{compactAddress}</span>
                     <ChevronDown aria-hidden="true" className="account-chevron" size={14} />
                   </summary>
                   <div className="account-popover">

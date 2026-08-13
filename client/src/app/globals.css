@@ -168,38 +168,113 @@ button:disabled {
   gap: 7px;
 }
 
-.header-balances {
-  display: flex;
+.balance-menu {
+  position: relative;
   min-width: 0;
-  align-items: center;
 }
 
-.header-balance {
+.balance-trigger {
   display: inline-flex;
   min-width: 0;
+  min-height: 36px;
   align-items: baseline;
   gap: 5px;
-  padding-inline: 11px;
+  padding: 0 2px;
+  color: var(--text-primary);
+  cursor: pointer;
+  list-style: none;
   white-space: nowrap;
 }
 
-.header-balance:first-child {
-  padding-left: 0;
+.balance-trigger::-webkit-details-marker {
+  display: none;
 }
 
-.header-balance + .header-balance {
-  border-left: 1px solid rgba(255, 255, 255, 0.085);
+.balance-trigger:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid rgba(255, 165, 83, 0.58);
+  outline-offset: 3px;
 }
 
-.header-balance span {
+.balance-trigger-label {
   color: var(--text-faint);
   font-size: 10px;
   font-weight: 650;
 }
 
-.header-balance strong {
+.balance-trigger strong {
   color: var(--text-primary);
   font-size: 13px;
+  font-weight: 750;
+}
+
+.balance-trigger:hover .balance-trigger-label,
+.balance-trigger:hover .balance-chevron {
+  color: var(--text-muted);
+}
+
+.balance-chevron {
+  align-self: center;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  transition: transform 140ms ease;
+}
+
+.balance-menu[open] .balance-chevron {
+  transform: rotate(180deg);
+}
+
+.balance-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  z-index: 50;
+  width: min(220px, calc(100vw - 24px));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-panel);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.34);
+  padding: 11px;
+  transform: translateX(-50%);
+}
+
+.balance-popover-heading {
+  display: block;
+  padding-bottom: 8px;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.balance-popover dl {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.balance-popover dl > div {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.balance-popover dt,
+.balance-popover dd {
+  margin: 0;
+  font-size: 12px;
+}
+
+.balance-popover dt {
+  color: var(--text-muted);
+  font-weight: 650;
+}
+
+.balance-popover dd {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
   font-weight: 750;
 }
 
@@ -296,16 +371,15 @@ button:disabled {
   white-space: nowrap;
 }
 
+.wallet-address-compact {
+  display: none;
+}
+
 .wallet-network-label {
   display: inline-flex;
-  height: 24px;
   flex: 0 0 auto;
   align-items: center;
   gap: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.075);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.02);
-  padding: 0 8px;
   color: var(--text-muted);
   font-size: 10px;
   font-weight: 650;
@@ -3814,55 +3888,84 @@ button:disabled {
 
 @media (max-width: 640px) {
   .app-header-inner {
-    display: grid;
-    min-height: 74px;
-    grid-template-columns: auto minmax(0, 1fr);
+    position: relative;
+    min-height: 60px;
     align-items: center;
-    row-gap: 7px;
-    padding-block: 9px;
+    gap: 8px;
+    padding-block: 8px;
   }
 
   .header-controls {
-    display: contents;
+    position: static;
+    flex: 1 1 auto;
+    gap: 8px;
   }
 
   .wallet-area {
-    grid-column: 2;
-    grid-row: 1;
-    justify-self: end;
+    gap: 6px;
   }
 
-  .header-balances {
-    width: 100%;
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-content: flex-end;
+  .balance-menu {
+    position: static;
   }
 
-  .header-balance {
-    display: inline-flex;
-    gap: 4px;
-    padding-inline: 9px;
+  .balance-trigger-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
-  .header-balance span {
-    font-size: 10px;
+  .balance-popover {
+    top: calc(100% + 6px);
+    right: 12px;
+    left: 12px;
+    width: auto;
+    transform: none;
   }
 
-  .header-balance strong {
-    font-size: 11px;
+  .wallet-address-wide {
+    display: none;
+  }
+
+  .wallet-address-compact {
+    display: inline;
   }
 }
 
 @media (max-width: 430px) {
+  .app-brand {
+    width: 78px;
+    min-width: 64px;
+  }
+
+  .header-controls {
+    gap: 6px;
+  }
+
+  .balance-trigger,
   .wallet-button {
+    min-height: 34px;
     gap: 6px;
     padding: 0 8px;
   }
 
+  .balance-trigger strong,
+  .wallet-button {
+    font-size: 12px;
+  }
+
+  .wallet-network-label {
+    gap: 4px;
+    font-size: 9px;
+  }
+
   .account-trigger,
   .account-button {
-    max-width: 128px;
+    max-width: 108px;
   }
 
   .portfolio-stat strong {
@@ -3889,18 +3992,31 @@ button:disabled {
 }
 
 @media (max-width: 360px) {
-  .wallet-network-label {
-    width: 24px;
-    justify-content: center;
-    padding: 0;
+  .app-header-inner {
+    gap: 5px;
+    padding-inline: 8px;
   }
 
-  .wallet-network-text {
-    display: none;
+  .header-controls,
+  .wallet-area {
+    gap: 4px;
   }
 
   .app-brand {
-    width: 88px;
+    width: 68px;
+    min-width: 58px;
+  }
+
+  .balance-trigger,
+  .wallet-button {
+    gap: 4px;
+    padding-inline: 5px;
+    font-size: 11px;
+  }
+
+  .account-trigger,
+  .account-button {
+    max-width: 92px;
   }
 }
 
@@ -5502,7 +5618,7 @@ button:disabled {
 
 .chart-drawing-toolbar {
   position: absolute;
-  top: 50%;
+  top: var(--chart-drawing-center-y, 50%);
   left: 10px;
   z-index: 3;
   display: flex;
@@ -5557,7 +5673,7 @@ button:disabled {
 
 .chart-drawing-instruction {
   position: absolute;
-  top: 50%;
+  top: var(--chart-drawing-center-y, 50%);
   left: 52px;
   z-index: 3;
   border-radius: 5px;
@@ -5571,6 +5687,124 @@ button:disabled {
   transform: translateY(-50%);
 }
 
+.chart-drawing-context {
+  position: absolute;
+  top: var(--chart-drawing-center-y, 50%);
+  left: 51px;
+  z-index: 4;
+  pointer-events: auto;
+  transform: translateY(-50%);
+}
+
+.chart-drawing-context-actions {
+  display: flex;
+  gap: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  border-radius: 7px;
+  background: rgba(23, 22, 19, 0.94);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.2);
+  padding: 3px;
+  backdrop-filter: blur(8px);
+}
+
+.chart-drawing-context-actions button,
+.chart-drawing-appearance button {
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--text-faint);
+}
+
+.chart-drawing-context-actions button {
+  width: 29px;
+  height: 29px;
+}
+
+.chart-drawing-context-actions button:hover:not(:disabled),
+.chart-drawing-context-actions button[aria-expanded="true"],
+.chart-drawing-context-actions button[aria-pressed="true"],
+.chart-drawing-appearance button:hover,
+.chart-drawing-appearance button[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.chart-drawing-context-actions button:focus-visible,
+.chart-drawing-appearance button:focus-visible {
+  outline: 2px solid rgba(255, 165, 83, 0.58);
+  outline-offset: 1px;
+}
+
+.chart-drawing-context-actions button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.chart-drawing-appearance {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 6px);
+  display: grid;
+  width: 224px;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  background: rgba(23, 22, 19, 0.98);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.34);
+  padding: 9px;
+  transform: translateY(-50%);
+}
+
+.chart-drawing-appearance-row {
+  display: grid;
+  grid-template-columns: 57px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+}
+
+.chart-drawing-appearance-row > span {
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.chart-drawing-appearance-row > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.chart-drawing-appearance button {
+  width: 28px;
+  height: 25px;
+}
+
+.chart-drawing-color-choice > span {
+  width: 12px;
+  height: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: var(--chart-drawing-swatch);
+}
+
+.chart-drawing-color-choice[aria-pressed="true"] > span {
+  box-shadow: 0 0 0 2px rgba(23, 22, 19, 1), 0 0 0 3px rgba(255, 255, 255, 0.5);
+}
+
+.chart-drawing-line-choice > span {
+  width: 20px;
+  border-top-color: currentColor;
+  border-top-style: solid;
+}
+
+.chart-drawing-line-choice svg line {
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.5;
+}
+
 @media (max-width: 520px) {
   .chart-drawing-toolbar {
     left: 6px;
@@ -5582,18 +5816,26 @@ button:disabled {
   }
 
   .chart-drawing-instruction {
-    top: 50%;
+    top: var(--chart-drawing-center-y, 50%);
     right: 8px;
     left: 43px;
     width: fit-content;
     max-width: calc(100% - 51px);
   }
+
+  .chart-drawing-context {
+    left: 43px;
+  }
+
+  .chart-drawing-appearance {
+    width: 204px;
+    max-width: calc(100vw - 150px);
+  }
 }
 
 .chart-drawing-overlay {
+  inset: 0 auto auto 0;
   z-index: 2;
-  width: 100%;
-  height: 100%;
   overflow: hidden;
   pointer-events: none;
 }
@@ -5606,20 +5848,8 @@ button:disabled {
 
 .chart-drawing-line {
   fill: none;
-  stroke: rgba(255, 184, 112, 0.84);
   stroke-linecap: round;
-  stroke-width: 1.35;
   vector-effect: non-scaling-stroke;
-}
-
-.chart-drawing-horizontal {
-  stroke: rgba(198, 189, 178, 0.66);
-  stroke-dasharray: 5 4;
-}
-
-.chart-drawing-measure {
-  stroke: rgba(105, 179, 255, 0.86);
-  stroke-dasharray: 4 3;
 }
 
 .chart-drawing-preview {
@@ -5635,13 +5865,6 @@ button:disabled {
 
 .chart-drawing-selected .chart-drawing-line {
   filter: drop-shadow(0 0 4px rgba(255, 165, 83, 0.36));
-  stroke-width: 1.8;
-}
-
-.chart-drawing-handle {
-  fill: var(--surface-page);
-  stroke: var(--accent-orange);
-  stroke-width: 1.5;
 }
 
 .chart-drawing-price-label {
@@ -5655,11 +5878,9 @@ button:disabled {
 
 .chart-measure-label rect {
   fill: rgba(23, 22, 19, 0.92);
-  stroke: rgba(105, 179, 255, 0.28);
 }
 
 .chart-measure-label text {
-  fill: #a9cdf3;
   font-family: var(--font-sans), Inter, sans-serif;
   font-size: 9px;
   font-variant-numeric: tabular-nums;

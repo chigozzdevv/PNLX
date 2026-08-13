@@ -104,7 +104,7 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.defaultPrevented || event.key !== "Escape") return;
       containerRef.current?.closest(".chart-panel")?.classList.remove("chart-panel-expanded");
     };
     document.addEventListener("keydown", handleEscape);
@@ -217,7 +217,6 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
     resizeObserver.observe(container);
     chartRef.current = chart;
     seriesRef.current = series;
-    setDrawingSurface({ chart, series: candleSeries });
     const initialCandles = candlesRef.current.filter(isValidCandle);
     series.candles.setData(initialCandles.map(toCandlestickData));
     syncVolumeSeries(chart, series, initialCandles);
@@ -227,6 +226,7 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
       initialRangeSetRef.current = true;
       previousFirstTimeRef.current = Date.parse(initialCandles[0].time);
     }
+    setDrawingSurface({ chart, series: candleSeries });
 
       cleanupChart = () => {
         resizeObserver.disconnect();
@@ -297,7 +297,7 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
       {drawingSurface ? (
         <ChartTools
           chart={drawingSurface.chart}
-          dataRevision={drawingDataRevision}
+          dataRevision={`${drawingDataRevision}:${indicatorKey}`}
           scope={drawingScope}
           series={drawingSurface.series}
         />

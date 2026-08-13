@@ -250,7 +250,7 @@ export function TradingPage() {
                 <div className="chart-frame">
                   <PriceChart
                     candles={candles.candles}
-                    drawingScope={`${displaySelectedMarket.marketId}:${chartInterval}`}
+                    drawingScope={displaySelectedMarket.marketId}
                     indicators={chartIndicators}
                     key={`${displaySelectedMarket.marketId}:${chartInterval}`}
                     market={displaySelectedMarket}
