@@ -1,247 +1,432 @@
+"use client";
+
+import {
+  CandlestickSeries,
+  ColorType,
+  CrosshairMode,
+  HistogramSeries,
+  LineSeries,
+  createChart,
+  type CandlestickData,
+  type HistogramData,
+  type IChartApi,
+  type ISeriesApi,
+  type LineData,
+  type MouseEventParams,
+  type Time,
+  type UTCTimestamp,
+} from "lightweight-charts";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import {
+  bollingerBands,
+  ema,
+  macd,
+  rsi,
+  sma,
+  vwap,
+  type ChartIndicatorId,
+  type IndicatorPoint,
+} from "@/lib/chart-indicators";
 import { formatNumber } from "@/lib/format";
 import type { ChartCandle, MarketDisplay } from "@/types/trading";
 
 interface PriceChartProps {
   candles: ChartCandle[];
+  indicators: ChartIndicatorId[];
   market: MarketDisplay;
+  onLoadOlder: () => Promise<void>;
 }
 
-const WIDTH = 980;
-const HEIGHT = 456;
-const PRICE_AXIS_WIDTH = 154;
-const PRICE_MARKER_WIDTH = 124;
-const PLOT_RIGHT = WIDTH - PRICE_AXIS_WIDTH;
-const PRICE_MARKER_X = PLOT_RIGHT + (PRICE_AXIS_WIDTH - PRICE_MARKER_WIDTH) / 2;
-const PADDING = { top: 28, right: WIDTH - PLOT_RIGHT, bottom: 34, left: 18 };
-const DEFAULT_VISIBLE_CANDLES = 90;
+export interface PriceChartHandle {
+  reset: () => void;
+  toggleFullscreen: () => void;
+}
 
-export function PriceChart({ candles, market }: PriceChartProps) {
-  const visibleCandles = candles.slice(-DEFAULT_VISIBLE_CANDLES).map(normalizeCandle);
-  const hasCandles = visibleCandles.length > 0;
-  const highs = hasCandles ? visibleCandles.map((candle) => candle.high) : [market.price * 1.01];
-  const lows = hasCandles ? visibleCandles.map((candle) => candle.low) : [market.price * 0.99];
-  const rawMin = Math.min(...lows);
-  const rawMax = Math.max(...highs);
-  const referencePrice = Math.max(Math.abs(market.price), Math.abs(rawMin), Math.abs(rawMax), Number.EPSILON);
-  const minimumRange = referencePrice * 0.006;
-  const paddedRange = Math.max((rawMax - rawMin) * 1.18, minimumRange);
-  const midpoint = (rawMin + rawMax) / 2;
-  const min = midpoint - paddedRange / 2;
-  const max = midpoint + paddedRange / 2;
-  const range = max - min;
-  const innerWidth = WIDTH - PADDING.left - PADDING.right;
-  const innerHeight = HEIGHT - PADDING.top - PADDING.bottom;
-  const candleStep = innerWidth / Math.max(visibleCandles.length - 1, 1);
-  const candleWidth = Math.max(3, Math.min(7, candleStep * 0.48));
-  const currentY = clamp(
-    yFor(market.price, min, range, innerHeight),
-    PADDING.top,
-    HEIGHT - PADDING.bottom,
-  );
-  const maxVolume = Math.max(...visibleCandles.map((candle) => candle.volume), 1);
-  const footerTime = new Intl.DateTimeFormat("en-US", {
-    hour: "2-digit",
-    hour12: false,
-    minute: "2-digit",
-    second: "2-digit",
-    timeZone: "UTC",
-  }).format(new Date());
-  const priceTicks = Array.from({ length: 6 }).map((_, index) => {
-    const y = PADDING.top + (innerHeight / 5) * index;
-    const price = max - (range / 5) * index;
+interface ChartSeries {
+  bollingerLower?: ISeriesApi<"Line">;
+  bollingerMiddle?: ISeriesApi<"Line">;
+  bollingerUpper?: ISeriesApi<"Line">;
+  candles: ISeriesApi<"Candlestick">;
+  ema?: ISeriesApi<"Line">;
+  macd?: ISeriesApi<"Line">;
+  macdHistogram?: ISeriesApi<"Histogram">;
+  macdSignal?: ISeriesApi<"Line">;
+  rsi?: ISeriesApi<"Line">;
+  sma?: ISeriesApi<"Line">;
+  volume: ISeriesApi<"Histogram">;
+  vwap?: ISeriesApi<"Line">;
+}
 
-    return { price, y };
-  });
+const CHART_HEIGHT = 560;
+const LOAD_MORE_THRESHOLD = 40;
+
+export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function PriceChart(
+  { candles, indicators, market, onLoadOlder },
+  ref,
+) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ChartSeries | null>(null);
+  const loadOlderRef = useRef(onLoadOlder);
+  const candlesRef = useRef(candles);
+  const indicatorsRef = useRef(indicators);
+  const initialRangeSetRef = useRef(false);
+  const previousFirstTimeRef = useRef<number | undefined>(undefined);
+  const historyRequestPendingRef = useRef(false);
+  const [crosshairCandle, setCrosshairCandle] = useState<ChartCandle>();
+  const indicatorKey = [...indicators].sort().join(",");
+
+  loadOlderRef.current = onLoadOlder;
+  candlesRef.current = candles;
+  indicatorsRef.current = indicators;
+
+  useImperativeHandle(ref, () => ({
+    reset: () => chartRef.current?.timeScale().fitContent(),
+    toggleFullscreen: () => {
+      const panel = containerRef.current?.closest(".chart-panel") as HTMLElement | null;
+      if (!panel) return;
+      panel.classList.toggle("chart-panel-expanded");
+    },
+  }), []);
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      containerRef.current?.closest(".chart-panel")?.classList.remove("chart-panel-expanded");
+    };
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
+  }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    let cleanupChart = () => undefined;
+    const setupFrame = requestAnimationFrame(() => {
+      initialRangeSetRef.current = false;
+      previousFirstTimeRef.current = undefined;
+      historyRequestPendingRef.current = false;
+
+    const chart = createChart(container, {
+      height: container.clientHeight || CHART_HEIGHT,
+      width: container.clientWidth,
+      crosshair: {
+        horzLine: { color: "rgba(200, 208, 226, 0.42)", labelBackgroundColor: "#333b4f" },
+        mode: CrosshairMode.Normal,
+        vertLine: { color: "rgba(200, 208, 226, 0.34)", labelBackgroundColor: "#333b4f" },
+      },
+      grid: {
+        horzLines: { color: "rgba(255, 255, 255, 0.055)" },
+        vertLines: { color: "rgba(255, 255, 255, 0.045)" },
+      },
+      handleScale: {
+        axisDoubleClickReset: true,
+        axisPressedMouseMove: true,
+        mouseWheel: true,
+        pinch: true,
+      },
+      handleScroll: {
+        horzTouchDrag: true,
+        mouseWheel: true,
+        pressedMouseMove: true,
+        vertTouchDrag: true,
+      },
+      layout: {
+        attributionLogo: true,
+        background: { color: "#101319", type: ColorType.Solid },
+        fontFamily: "var(--font-sans), Inter, sans-serif",
+        textColor: "#8992a8",
+      },
+      localization: {
+        priceFormatter: (price: number) => formatNumber(price, price < 10 ? 5 : 2),
+      },
+      rightPriceScale: {
+        borderColor: "rgba(255, 255, 255, 0.09)",
+        minimumWidth: 76,
+        scaleMargins: { bottom: 0.08, top: 0.08 },
+      },
+      timeScale: {
+        barSpacing: 8,
+        borderColor: "rgba(255, 255, 255, 0.09)",
+        minBarSpacing: 1.5,
+        rightOffset: 8,
+        secondsVisible: false,
+        shiftVisibleRangeOnNewBar: true,
+        timeVisible: true,
+      },
+    });
+
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      borderDownColor: "#f15367",
+      borderUpColor: "#28d58f",
+      downColor: "#f15367",
+      priceLineColor: "#f15367",
+      priceLineStyle: 2,
+      upColor: "#28d58f",
+      wickDownColor: "#f15367",
+      wickUpColor: "#28d58f",
+    }, 0);
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      priceFormat: { type: "volume" },
+      priceLineVisible: false,
+    }, 1);
+    const series: ChartSeries = { candles: candleSeries, volume: volumeSeries };
+
+    const handleCrosshair = (param: MouseEventParams<Time>) => {
+      const value = param.seriesData.get(candleSeries) as CandlestickData<Time> | undefined;
+      if (!value || value.open === undefined) {
+        setCrosshairCandle(undefined);
+        return;
+      }
+      setCrosshairCandle({
+        close: value.close,
+        high: value.high,
+        low: value.low,
+        open: value.open,
+        time: timeToIso(value.time),
+        volume: 0,
+      });
+    };
+    const handleVisibleRange = () => {
+      const range = chart.timeScale().getVisibleLogicalRange();
+      if (!range || historyRequestPendingRef.current) return;
+      const info = candleSeries.barsInLogicalRange(range);
+      if (!info || info.barsBefore >= LOAD_MORE_THRESHOLD) return;
+      historyRequestPendingRef.current = true;
+      void loadOlderRef.current().finally(() => {
+        historyRequestPendingRef.current = false;
+      });
+    };
+    chart.subscribeCrosshairMove(handleCrosshair);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(handleVisibleRange);
+    const resizeObserver = new ResizeObserver(([entry]) => {
+      if (!entry || !container.isConnected) return;
+      const width = Math.max(Math.floor(entry.contentRect.width), 1);
+      const height = Math.max(Math.floor(entry.contentRect.height), 240);
+      chart.resize(width, height);
+    });
+    resizeObserver.observe(container);
+    chartRef.current = chart;
+    seriesRef.current = series;
+    const initialCandles = candlesRef.current.filter(isValidCandle);
+    series.candles.setData(initialCandles.map(toCandlestickData));
+    series.volume.setData(initialCandles.map(toVolumeData));
+    configureIndicators(chart, series, indicatorsRef.current, initialCandles);
+    if (initialCandles.length > 0) {
+      chart.timeScale().fitContent();
+      chart.timeScale().scrollToPosition(8, false);
+      initialRangeSetRef.current = true;
+      previousFirstTimeRef.current = Date.parse(initialCandles[0].time);
+    }
+
+      cleanupChart = () => {
+        resizeObserver.disconnect();
+        chart.unsubscribeCrosshairMove(handleCrosshair);
+        chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleVisibleRange);
+        chart.remove();
+        chartRef.current = null;
+        seriesRef.current = null;
+      };
+    });
+
+    return () => {
+      cancelAnimationFrame(setupFrame);
+      cleanupChart();
+    };
+  }, []);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    const series = seriesRef.current;
+    if (!chart || !series) return;
+    configureIndicators(chart, series, indicatorsRef.current, candlesRef.current.filter(isValidCandle));
+  }, [indicatorKey]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    const series = seriesRef.current;
+    if (!chart || !series) return;
+    const cleanCandles = candles.filter(isValidCandle);
+    const firstTime = cleanCandles[0] ? Date.parse(cleanCandles[0].time) : undefined;
+    const previousVisibleRange = chart.timeScale().getVisibleRange();
+    const logicalRange = chart.timeScale().getVisibleLogicalRange();
+    const rangeInfo = logicalRange ? series.candles.barsInLogicalRange(logicalRange) : null;
+    const wasFollowingLatest = !rangeInfo || rangeInfo.barsAfter < 3;
+    const prependedHistory = firstTime !== undefined && previousFirstTimeRef.current !== undefined && firstTime < previousFirstTimeRef.current;
+
+    series.candles.setData(cleanCandles.map(toCandlestickData));
+    series.volume.setData(cleanCandles.map(toVolumeData));
+    setIndicatorData(series, cleanCandles);
+
+    if (!initialRangeSetRef.current && cleanCandles.length > 0) {
+      chart.timeScale().fitContent();
+      chart.timeScale().scrollToPosition(8, false);
+      initialRangeSetRef.current = true;
+    } else if (prependedHistory && previousVisibleRange) {
+      chart.timeScale().setVisibleRange(previousVisibleRange);
+    } else if (wasFollowingLatest) {
+      chart.timeScale().scrollToRealTime();
+    }
+    previousFirstTimeRef.current = firstTime;
+  }, [candles]);
+
+  const legendCandle = crosshairCandle ?? candles.at(-1);
 
   return (
-    <div className="chart-canvas">
-      <svg
-        className="chart-svg h-full w-full"
-        preserveAspectRatio="none"
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      >
-        <defs>
-          <linearGradient id="chart-fill" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="rgba(39, 214, 139, 0.14)" />
-            <stop offset="100%" stopColor="rgba(39, 214, 139, 0)" />
-          </linearGradient>
-        </defs>
-
-        <rect height={HEIGHT} width={WIDTH} fill="transparent" />
-        {priceTicks.map(({ y }, index) => {
-          return (
-            <g key={`h-${index}`}>
-              <line x1={PADDING.left} x2={PLOT_RIGHT} y1={y} y2={y} className="chart-grid-line" />
-            </g>
-          );
-        })}
-
-        {Array.from({ length: 7 }).map((_, index) => {
-          const x = PADDING.left + (innerWidth / 6) * index;
-          return (
-            <line
-              className="chart-grid-line chart-grid-line-soft"
-              key={`v-${index}`}
-              x1={x}
-              x2={x}
-              y1={PADDING.top}
-              y2={HEIGHT - PADDING.bottom}
-            />
-          );
-        })}
-
-        {visibleCandles.map((candle, index) => {
-          const x = PADDING.left + index * candleStep;
-          const volumeHeight = Math.max(2, (candle.volume / maxVolume) * 30);
-          const isUp = candle.close >= candle.open;
-
-          return (
-            <rect
-              fill={isUp ? "rgba(39, 214, 139, 0.18)" : "rgba(239, 69, 96, 0.18)"}
-              height={volumeHeight}
-              key={`v-${candle.time}`}
-              rx="1"
-              width={Math.max(1.8, candleWidth)}
-              x={x - candleWidth / 2}
-              y={HEIGHT - PADDING.bottom - volumeHeight}
-            />
-          );
-        })}
-
-        {hasCandles ? (
-          <path
-            d={`M ${PADDING.left} ${HEIGHT - PADDING.bottom} L ${visibleCandles
-              .map((candle, index) =>
-                `${PADDING.left + index * candleStep} ${yFor(candle.close, min, range, innerHeight)}`,
-              )
-              .join(" L ")} L ${PADDING.left + (visibleCandles.length - 1) * candleStep} ${HEIGHT - PADDING.bottom} Z`}
-            fill="url(#chart-fill)"
-          />
-        ) : null}
-
-        <g>
-          {visibleCandles.map((candle, index) => {
-            const x = PADDING.left + index * candleStep;
-            const openY = yFor(candle.open, min, range, innerHeight);
-            const closeY = yFor(candle.close, min, range, innerHeight);
-            const highY = yFor(candle.high, min, range, innerHeight);
-            const lowY = yFor(candle.low, min, range, innerHeight);
-            const isUp = candle.close >= candle.open;
-            const rawBodyY = Math.min(openY, closeY);
-            const rawBodyHeight = Math.abs(closeY - openY);
-            const bodyHeight = Math.max(rawBodyHeight, 3.2);
-            const bodyMidpointY = (openY + closeY) / 2;
-            const bodyY = rawBodyHeight < bodyHeight ? bodyMidpointY - bodyHeight / 2 : rawBodyY;
-            const isFlatBody = rawBodyHeight < 1.4;
-            const hasVisibleWick = Math.abs(lowY - highY) >= 1;
-
-            return (
-              <g key={candle.time}>
-                {hasVisibleWick ? (
-                  <line
-                    x1={x}
-                    x2={x}
-                    y1={highY}
-                    y2={lowY}
-                    stroke={isUp ? "var(--accent-green)" : "var(--accent-red)"}
-                    strokeLinecap="round"
-                    strokeWidth="1.25"
-                  />
-                ) : null}
-                {isFlatBody ? (
-                  <line
-                    x1={x - candleWidth * 0.68}
-                    x2={x + candleWidth * 0.68}
-                    y1={bodyMidpointY}
-                    y2={bodyMidpointY}
-                    stroke={isUp ? "var(--accent-green)" : "var(--accent-red)"}
-                    strokeLinecap="square"
-                    strokeWidth="2.2"
-                  />
-                ) : (
-                  <rect
-                    fill={isUp ? "var(--accent-green)" : "var(--accent-red)"}
-                    height={bodyHeight}
-                    rx="1.5"
-                    width={candleWidth}
-                    x={x - candleWidth / 2}
-                    y={bodyY}
-                  />
-                )}
-              </g>
-            );
-          })}
-        </g>
-
-        <line
-          className="chart-live-price-line"
-          x1={PADDING.left}
-          x2={PRICE_MARKER_X}
-          y1={currentY}
-          y2={currentY}
-          stroke="var(--accent-red)"
-          strokeDasharray="2 5"
-          strokeWidth="1.2"
-        />
-
-        <text x={PADDING.left + 12} y={PADDING.top + 28} className="chart-title">
-          {market.pair} - PNLX
-        </text>
-
-        {priceTicks.map(({ price, y }) => (
-          <text
-            className="chart-axis-value-svg"
-            dominantBaseline="middle"
-            key={price}
-            textAnchor="middle"
-            x={PRICE_MARKER_X + PRICE_MARKER_WIDTH / 2}
-            y={y}
-          >
-            {formatNumber(price, price < 10 ? 4 : 1)}
-          </text>
-        ))}
-
-        <g>
-          <rect
-            className="chart-price-marker-rect"
-            height="30"
-            rx="4"
-            width={PRICE_MARKER_WIDTH}
-            x={PRICE_MARKER_X}
-            y={currentY - 15}
-          />
-          <text
-            className="chart-price-marker-text"
-            dominantBaseline="middle"
-            textAnchor="middle"
-            x={PRICE_MARKER_X + PRICE_MARKER_WIDTH / 2}
-            y={currentY}
-          >
-            {formatNumber(market.price, market.price < 10 ? 4 : 1)}
-          </text>
-        </g>
-      </svg>
-
-      <div className="chart-footer">
-        <span>{footerTime} UTC</span>
-      </div>
+    <div className="chart-canvas professional-chart" ref={containerRef}>
+      {legendCandle ? (
+        <div className="professional-chart-legend" aria-live="polite">
+          <strong>{market.pair}</strong>
+          <span>O <b>{chartPrice(legendCandle.open)}</b></span>
+          <span>H <b>{chartPrice(legendCandle.high)}</b></span>
+          <span>L <b>{chartPrice(legendCandle.low)}</b></span>
+          <span>C <b>{chartPrice(legendCandle.close)}</b></span>
+          <span>Vol <b>{legendCandle.volume > 0 ? formatNumber(legendCandle.volume, 2) : "—"}</b></span>
+        </div>
+      ) : null}
     </div>
   );
+});
+
+function configureIndicators(
+  chart: IChartApi,
+  series: ChartSeries,
+  indicators: ChartIndicatorId[],
+  candles: ChartCandle[],
+): void {
+  removeOptionalSeries(chart, series);
+  if (indicators.includes("sma")) {
+    series.sma = chart.addSeries(LineSeries, lineOptions("#a985ff", "SMA 20"), 0);
+  }
+  if (indicators.includes("ema")) {
+    series.ema = chart.addSeries(LineSeries, lineOptions("#ffad5c", "EMA 20"), 0);
+  }
+  if (indicators.includes("bollinger")) {
+    series.bollingerUpper = chart.addSeries(LineSeries, lineOptions("rgba(115, 157, 255, 0.82)", "BB upper", 1), 0);
+    series.bollingerMiddle = chart.addSeries(LineSeries, lineOptions("rgba(115, 157, 255, 0.44)", "BB middle", 1), 0);
+    series.bollingerLower = chart.addSeries(LineSeries, lineOptions("rgba(115, 157, 255, 0.82)", "BB lower", 1), 0);
+  }
+  if (indicators.includes("vwap")) {
+    series.vwap = chart.addSeries(LineSeries, lineOptions("#4dc5ee", "VWAP"), 0);
+  }
+
+  let indicatorPane = 2;
+  if (indicators.includes("rsi")) {
+    series.rsi = chart.addSeries(LineSeries, lineOptions("#c993ff", "RSI 14", 2), indicatorPane);
+    series.rsi.createPriceLine({ axisLabelVisible: true, color: "rgba(241, 83, 103, 0.35)", lineWidth: 1, price: 70, title: "70" });
+    series.rsi.createPriceLine({ axisLabelVisible: true, color: "rgba(40, 213, 143, 0.35)", lineWidth: 1, price: 30, title: "30" });
+    indicatorPane += 1;
+  }
+  if (indicators.includes("macd")) {
+    series.macd = chart.addSeries(LineSeries, lineOptions("#65a7ff", "MACD", 2), indicatorPane);
+    series.macdSignal = chart.addSeries(LineSeries, lineOptions("#ffad5c", "Signal", 2), indicatorPane);
+    series.macdHistogram = chart.addSeries(HistogramSeries, {
+      priceLineVisible: false,
+      title: "Histogram",
+    }, indicatorPane);
+  }
+  setIndicatorData(series, candles);
 }
 
-function normalizeCandle(candle: ChartCandle): ChartCandle {
-  const open = candle.open;
-  const close = candle.close;
-  const high = Math.max(candle.high, open, close);
-  const low = Math.min(candle.low, open, close);
-
-  return { ...candle, high, low };
+function removeOptionalSeries(chart: IChartApi, series: ChartSeries): void {
+  if (series.sma) chart.removeSeries(series.sma);
+  if (series.ema) chart.removeSeries(series.ema);
+  if (series.bollingerUpper) chart.removeSeries(series.bollingerUpper);
+  if (series.bollingerMiddle) chart.removeSeries(series.bollingerMiddle);
+  if (series.bollingerLower) chart.removeSeries(series.bollingerLower);
+  if (series.vwap) chart.removeSeries(series.vwap);
+  if (series.rsi) chart.removeSeries(series.rsi);
+  if (series.macd) chart.removeSeries(series.macd);
+  if (series.macdSignal) chart.removeSeries(series.macdSignal);
+  if (series.macdHistogram) chart.removeSeries(series.macdHistogram);
+  series.sma = undefined;
+  series.ema = undefined;
+  series.bollingerUpper = undefined;
+  series.bollingerMiddle = undefined;
+  series.bollingerLower = undefined;
+  series.vwap = undefined;
+  series.rsi = undefined;
+  series.macd = undefined;
+  series.macdSignal = undefined;
+  series.macdHistogram = undefined;
 }
 
-function yFor(price: number, min: number, range: number, innerHeight: number): number {
-  return PADDING.top + ((min + range - price) / range) * innerHeight;
+function setIndicatorData(series: ChartSeries, candles: ChartCandle[]): void {
+  series.sma?.setData(toLineData(sma(candles)));
+  series.ema?.setData(toLineData(ema(candles)));
+  if (series.bollingerUpper || series.bollingerMiddle || series.bollingerLower) {
+    const bands = bollingerBands(candles);
+    series.bollingerUpper?.setData(toLineData(bands.upper));
+    series.bollingerMiddle?.setData(toLineData(bands.middle));
+    series.bollingerLower?.setData(toLineData(bands.lower));
+  }
+  series.vwap?.setData(toLineData(vwap(candles)));
+  series.rsi?.setData(toLineData(rsi(candles)));
+  if (series.macd || series.macdSignal || series.macdHistogram) {
+    const result = macd(candles);
+    series.macd?.setData(toLineData(result.macd));
+    series.macdSignal?.setData(toLineData(result.signal));
+    series.macdHistogram?.setData(result.histogram.map((point): HistogramData<Time> => ({
+      color: point.value >= 0 ? "rgba(40, 213, 143, 0.62)" : "rgba(241, 83, 103, 0.62)",
+      time: toTime(point.time),
+      value: point.value,
+    })));
+  }
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
+function lineOptions(color: string, title: string, lineWidth: 1 | 2 = 2) {
+  return {
+    color,
+    crosshairMarkerVisible: false,
+    lastValueVisible: false,
+    lineWidth,
+    priceLineVisible: false,
+    title,
+  } as const;
+}
+
+function toCandlestickData(candle: ChartCandle): CandlestickData<Time> {
+  return {
+    close: candle.close,
+    high: candle.high,
+    low: candle.low,
+    open: candle.open,
+    time: toTime(candle.time),
+  };
+}
+
+function toVolumeData(candle: ChartCandle): HistogramData<Time> {
+  return {
+    color: candle.close >= candle.open ? "rgba(40, 213, 143, 0.34)" : "rgba(241, 83, 103, 0.34)",
+    time: toTime(candle.time),
+    value: candle.volume,
+  };
+}
+
+function toLineData(points: IndicatorPoint[]): LineData<Time>[] {
+  return points.map((point) => ({ time: toTime(point.time), value: point.value }));
+}
+
+function toTime(value: string): UTCTimestamp {
+  return Math.floor(Date.parse(value) / 1_000) as UTCTimestamp;
+}
+
+function timeToIso(value: Time): string {
+  if (typeof value === "number") return new Date(value * 1_000).toISOString();
+  if (typeof value === "string") return new Date(value).toISOString();
+  return new Date(Date.UTC(value.year, value.month - 1, value.day)).toISOString();
+}
+
+function isValidCandle(candle: ChartCandle): boolean {
+  return Number.isFinite(Date.parse(candle.time)) && [
+    candle.close,
+    candle.high,
+    candle.low,
+    candle.open,
+    candle.volume,
+  ].every(Number.isFinite);
+}
+
+function chartPrice(value: number): string {
+  return formatNumber(value, value < 10 ? 5 : 2);
 }

@@ -186,6 +186,7 @@ export interface MarketDisplay {
   initialMarginRate: number;
   maintenanceMarginRate: number;
   status: "live" | "settling" | "paused";
+  volume24h?: number;
 }
 
 export interface ChartCandle {
@@ -208,8 +209,10 @@ export interface OrderDraft {
 }
 
 export interface PositionRow {
+  batchId: string;
   marketId: string;
   id: string;
+  openedAt: number;
   time: string;
   market: string;
   side?: Side;
@@ -233,6 +236,7 @@ export interface PositionRow {
   proofSystem?: ServerProofMeta["proofSystem"];
   settlementDigest?: Hex;
   settlementTxHash?: Hex;
+  sourceIntentCommitment: Hex;
   privateState?: {
     entryPrice: string;
     fundingIndex: string;

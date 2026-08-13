@@ -126,7 +126,7 @@ function PositionsView({
         <span>Size</span>
         <span>Entry</span>
         <span>Mark</span>
-        <span>PnL</span>
+        <span>Unrealized PnL</span>
         <span>Margin</span>
         <span>Action</span>
       </div>

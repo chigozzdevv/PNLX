@@ -461,93 +461,120 @@ export function OrderTicket({
         </div>
       </div>
 
-      <div className="ticket-field">
-        <div className="field-label">
-          <span>Position Size</span>
+      <div className="ticket-order-preview" aria-label="Estimated order values">
+        <div>
+          <span>Position size</span>
+          <strong>{formatNumber(size, 6)} {market.baseAsset}</strong>
         </div>
-        <div className="field-control">
-          <strong className="field-value">{formatNumber(size, 6)}</strong>
-          <span className="asset-pill">{market.baseAsset}</span>
+        <div>
+          <span>Exposure</span>
+          <strong>{formatUsd(exposure, { maximumFractionDigits: 2 })}</strong>
+        </div>
+        <div>
+          <span>Est. liquidation</span>
+          <strong>{formatNumber(liquidationPrice, market.price < 10 ? 5 : 2)}</strong>
         </div>
       </div>
 
-      <div className="ticket-field conditional-field">
-        <div className="field-label">
-          <span>TP / SL</span>
-          <button
-            aria-pressed={tpSlEnabled}
-            className={`toggle-switch ${tpSlEnabled ? "toggle-switch-active" : ""}`}
-            type="button"
-            onClick={() => setTpSlEnabled((enabled) => !enabled)}
-          >
-            <span />
-          </button>
-        </div>
-        {tpSlEnabled ? (
-          <>
-            <div className="condition-mode-control" aria-label="TP SL input mode">
+      <details className="ticket-advanced">
+        <summary>
+          <span>Advanced options & order summary</span>
+          {tpSlEnabled ? <em>TP / SL on</em> : null}
+        </summary>
+        <div className="ticket-advanced-body">
+          <div className="ticket-field conditional-field">
+            <div className="field-label">
+              <span>Take Profit / Stop Loss</span>
               <button
-                className={`condition-mode-button ${
-                  conditionMode === "percent" ? "condition-mode-button-active" : ""
-                }`}
+                aria-pressed={tpSlEnabled}
+                className={`toggle-switch ${tpSlEnabled ? "toggle-switch-active" : ""}`}
                 type="button"
-                onClick={() => setConditionMode("percent")}
+                onClick={() => setTpSlEnabled((enabled) => !enabled)}
               >
-                %
-              </button>
-              <button
-                className={`condition-mode-button ${conditionMode === "price" ? "condition-mode-button-active" : ""}`}
-                type="button"
-                onClick={() => setConditionMode("price")}
-              >
-                Price
+                <span />
               </button>
             </div>
-            <div className="condition-grid">
-              <ConditionInput
-                label="TP"
-                mode={conditionMode}
-                pnl={takeProfitPnl}
-                percent={takeProfitPercent}
-                price={takeProfitPrice}
-                onPercentChange={updateTakeProfitPercent}
-                onPriceChange={setTakeProfitPrice}
-              />
-              <ConditionInput
-                label="SL"
-                mode={conditionMode}
-                pnl={stopLossPnl}
-                percent={stopLossPercent}
-                price={stopLossPrice}
-                onPercentChange={updateStopLossPercent}
-                onPriceChange={setStopLossPrice}
-              />
-            </div>
-          </>
-        ) : null}
-      </div>
+            {tpSlEnabled ? (
+              <>
+                <div className="condition-mode-control" aria-label="TP SL input mode">
+                  <button
+                    className={`condition-mode-button ${conditionMode === "percent" ? "condition-mode-button-active" : ""}`}
+                    type="button"
+                    onClick={() => setConditionMode("percent")}
+                  >
+                    %
+                  </button>
+                  <button
+                    className={`condition-mode-button ${conditionMode === "price" ? "condition-mode-button-active" : ""}`}
+                    type="button"
+                    onClick={() => setConditionMode("price")}
+                  >
+                    Price
+                  </button>
+                </div>
+                <div className="condition-grid">
+                  <ConditionInput
+                    label="TP"
+                    mode={conditionMode}
+                    pnl={takeProfitPnl}
+                    percent={takeProfitPercent}
+                    price={takeProfitPrice}
+                    onPercentChange={updateTakeProfitPercent}
+                    onPriceChange={setTakeProfitPrice}
+                  />
+                  <ConditionInput
+                    label="SL"
+                    mode={conditionMode}
+                    pnl={stopLossPnl}
+                    percent={stopLossPercent}
+                    price={stopLossPrice}
+                    onPercentChange={updateStopLossPercent}
+                    onPriceChange={setStopLossPrice}
+                  />
+                </div>
+              </>
+            ) : null}
+          </div>
 
-      <motion.button
-        className="primary-trade-button"
-        data-side={side}
-        disabled={primaryDisabled}
-        type="button"
-        onClick={primaryAction}
-        whileHover={{ y: -1 }}
-        whileTap={{ scale: 0.99 }}
-      >
-        {!connected
-          ? "Connect Wallet"
-            : primaryBusy
-              ? depositing
-                ? "Depositing"
-                : "Submitting"
-            : !hasEnoughCollateral
-              ? "Top up first"
-              : side === "long"
-                ? "Submit Long"
-                : "Submit Short"}
-      </motion.button>
+          <div className="ticket-summary">
+            <SummaryRow label="Position Size" value={`${formatNumber(size, 6)} ${market.baseAsset}`} />
+            <SummaryRow label="Exposure" value={formatUsd(exposure, { maximumFractionDigits: 2 })} />
+            <SummaryRow label="Margin" value={formatUsd(margin, { maximumFractionDigits: 2 })} />
+            <SummaryRow label="Leverage" value={`${formatNumber(leverage, 2)}x`} />
+            <SummaryRow label="Est. Liquidation" value={formatNumber(liquidationPrice, market.price < 10 ? 5 : 2)} />
+            {orderType === "market" ? (
+              <SummaryRow
+                label={side === "long" ? "Maximum Fill Price" : "Minimum Fill Price"}
+                value={formatNumber(executionLimitPrice, market.price < 10 ? 5 : 2)}
+              />
+            ) : null}
+          </div>
+        </div>
+      </details>
+
+      <div className="ticket-primary-area">
+        <motion.button
+          className="primary-trade-button"
+          data-side={side}
+          disabled={primaryDisabled}
+          type="button"
+          onClick={primaryAction}
+          whileHover={{ y: -1 }}
+          whileTap={{ scale: 0.99 }}
+        >
+          {!connected
+            ? "Connect Wallet"
+              : primaryBusy
+                ? depositing
+                  ? "Depositing"
+                  : "Submitting"
+              : !hasEnoughCollateral
+                ? "Top up first"
+                : side === "long"
+                  ? `Submit Long ${market.baseAsset}`
+                  : `Submit Short ${market.baseAsset}`}
+        </motion.button>
+      </div>
 
       <TradeProgress depositing={depositing} stage={submitStage} />
 
@@ -558,19 +585,6 @@ export function OrderTicket({
       ) : null}
       {submitSuccess ? <p className="ticket-message ticket-message-success">{submitSuccess}</p> : null}
 
-      <div className="ticket-summary">
-        <SummaryRow label="Position Size" value={`${formatNumber(size, 6)} ${market.baseAsset}`} />
-        <SummaryRow label="Exposure" value={formatUsd(exposure, { maximumFractionDigits: 2 })} />
-        <SummaryRow label="Margin" value={formatUsd(margin, { maximumFractionDigits: 2 })} />
-        <SummaryRow label="Leverage" value={`${formatNumber(leverage, 2)}x`} />
-        <SummaryRow label="Liquidation Price" value={formatNumber(liquidationPrice, market.price < 10 ? 4 : 1)} />
-        {orderType === "market" ? (
-          <SummaryRow
-            label={side === "long" ? "Max Fill" : "Min Fill"}
-            value={formatNumber(executionLimitPrice, market.price < 10 ? 4 : 1)}
-          />
-        ) : null}
-      </div>
         </>
       )}
     </section>

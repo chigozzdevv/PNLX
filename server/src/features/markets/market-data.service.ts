@@ -9,6 +9,7 @@ import type {
 const CANDLE_CACHE_TTL_MS = 5_000;
 const CANDLE_FETCH_TIMEOUT_MS = 5_000;
 const CANDLE_CACHE_LIMIT = 300;
+const CANDLE_CACHE_MAX_ENTRIES = 64;
 const PROVIDER_FETCH_ATTEMPTS = 2;
 const PROVIDER_RETRY_DELAY_MS = 150;
 const PRICE_CACHE_TTL_MS = 750;
@@ -25,7 +26,10 @@ interface CandleCacheEntry {
   candles: MarketCandle[];
   expiresAt: number;
   fetchedAt: number;
+  from: number;
+  hasMore: boolean;
   productId: string;
+  to: number;
 }
 
 interface StreamClient {
@@ -62,18 +66,18 @@ export class MarketDataService {
 
   async candles(input: MarketCandlesInput) {
     const asset = supportedAsset(input.marketId);
-    const key = `${input.marketId}:${input.interval}`;
+    const key = candleCacheKey(input);
     const cached = this.candleCache.get(key);
     const now = Date.now();
 
     if (cached) {
       if (cached.expiresAt <= now) {
-        void this.refreshCandles(input.marketId, input.interval, asset.symbol).catch(() => undefined);
+        void this.refreshCandles(input, asset.symbol).catch(() => undefined);
       }
       return candleResponse(input, cached, true, cached.expiresAt <= now);
     }
 
-    const fresh = await this.refreshCandles(input.marketId, input.interval, asset.symbol);
+    const fresh = await this.refreshCandles(input, asset.symbol);
     return candleResponse(input, fresh, false, false);
   }
 
@@ -125,17 +129,16 @@ export class MarketDataService {
   }
 
   private async refreshCandles(
-    marketId: string,
-    interval: MarketCandleInterval,
+    input: MarketCandlesInput,
     symbol: string,
   ): Promise<CandleCacheEntry> {
-    const key = `${marketId}:${interval}`;
+    const key = candleCacheKey(input);
     const active = this.candleInflight.get(key);
     if (active) return active;
 
-    const request = this.fetchPythCandles(interval, symbol)
+    const request = this.fetchPythCandles(input, symbol)
       .then((entry) => {
-        this.candleCache.set(key, entry);
+        setBoundedCache(this.candleCache, key, entry);
         return entry;
       })
       .finally(() => this.candleInflight.delete(key));
@@ -144,16 +147,17 @@ export class MarketDataService {
   }
 
   private async fetchPythCandles(
-    interval: MarketCandleInterval,
+    input: MarketCandlesInput,
     symbol: string,
   ): Promise<CandleCacheEntry> {
-    const granularity = intervalSeconds(interval);
-    const to = Math.floor(Date.now() / 1000);
-    const from = to - granularity * CANDLE_CACHE_LIMIT;
+    const granularity = intervalSeconds(input.interval);
+    const to = input.to ?? Math.floor(Date.now() / 1000);
+    const requestedFrom = input.from ?? to - granularity * CANDLE_CACHE_LIMIT;
+    const from = Math.max(requestedFrom, to - granularity * CANDLE_CACHE_LIMIT);
     const productId = `Crypto.${symbol}/USD`;
     const url = new URL("https://benchmarks.pyth.network/v1/shims/tradingview/history");
     url.searchParams.set("symbol", productId);
-    url.searchParams.set("resolution", pythResolution(interval));
+    url.searchParams.set("resolution", pythResolution(input.interval));
     url.searchParams.set("from", String(from));
     url.searchParams.set("to", String(to));
 
@@ -164,12 +168,16 @@ export class MarketDataService {
       },
     }, CANDLE_FETCH_TIMEOUT_MS, "candle provider");
     const candles = parsePythTradingViewCandles(payload);
+    const limitedCandles = candles.slice(-input.limit);
     const fetchedAt = Date.now();
     return {
-      candles: candles.slice(-CANDLE_CACHE_LIMIT),
+      candles: limitedCandles,
       expiresAt: fetchedAt + CANDLE_CACHE_TTL_MS,
       fetchedAt,
+      from,
+      hasMore: candles.length >= input.limit,
       productId,
+      to,
     };
   }
 
@@ -333,12 +341,15 @@ function candleResponse(
     cached,
     candles: entry.candles.slice(-input.limit),
     fetchedAt: entry.fetchedAt,
+    from: entry.from,
+    hasMore: entry.hasMore,
     interval: input.interval,
     marketId: input.marketId,
     productId: entry.productId,
     realtime: true,
     source: "pyth-benchmarks",
     stale,
+    to: entry.to,
   };
 }
 
@@ -379,6 +390,7 @@ export function parsePythTradingViewCandles(payload: unknown): MarketCandle[] {
     throw new Error("invalid candle provider response");
   }
   const response = payload as Record<string, unknown>;
+  if (response.s === "no_data") return [];
   if (response.s !== "ok") {
     throw new Error(typeof response.errmsg === "string" ? response.errmsg : "candle provider returned no data");
   }
@@ -389,7 +401,7 @@ export function parsePythTradingViewCandles(payload: unknown): MarketCandle[] {
   const closes = numberArray(response.c, "close");
   const volumes = Array.isArray(response.v) ? numberArray(response.v, "volume") : [];
   const count = Math.min(times.length, opens.length, highs.length, lows.length, closes.length);
-  if (count === 0) throw new Error("candle provider returned no candles");
+  if (count === 0) return [];
 
   const candles: MarketCandle[] = [];
   for (let index = 0; index < count; index += 1) {
@@ -403,6 +415,23 @@ export function parsePythTradingViewCandles(payload: unknown): MarketCandle[] {
     });
   }
   return candles;
+}
+
+function candleCacheKey(input: MarketCandlesInput): string {
+  if (input.from === undefined && input.to === undefined) {
+    return `${input.marketId}:${input.interval}:latest:${input.limit}`;
+  }
+  return `${input.marketId}:${input.interval}:${input.from ?? "auto"}:${input.to ?? "now"}:${input.limit}`;
+}
+
+function setBoundedCache<K, V>(cache: Map<K, V>, key: K, value: V): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > CANDLE_CACHE_MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value as K | undefined;
+    if (oldestKey === undefined) break;
+    cache.delete(oldestKey);
+  }
 }
 
 function feedMarkets(env: ServerEnv): Map<string, string> {

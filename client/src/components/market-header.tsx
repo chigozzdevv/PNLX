@@ -6,8 +6,8 @@ import type { MarketDisplay } from "@/types/trading";
 
 interface MarketHeaderProps {
   markets: MarketDisplay[];
-  selectedMarket: MarketDisplay;
   onSelectMarket: (marketId: string) => void;
+  selectedMarket: MarketDisplay;
 }
 
 const ASSET_LOGOS: Record<string, string> = {
@@ -20,14 +20,11 @@ const ASSET_LOGOS: Record<string, string> = {
 
 export function MarketHeader({ markets, selectedMarket, onSelectMarket }: MarketHeaderProps) {
   const [open, setOpen] = useState(false);
-  const priceDigits = selectedMarket.price < 10 ? 4 : 1;
+  const priceDigits = selectedMarket.price < 10 ? 5 : 2;
+  const positiveChange = selectedMarket.change24h >= 0;
   const stats = [
     {
-      label: "Index Price",
-      value: `$${formatNumber(selectedMarket.price, priceDigits)}`,
-    },
-    {
-      label: "Funding Rate",
+      label: "PNLX Funding",
       value: selectedMarket.fundingRate === null ? "—" : formatPct(selectedMarket.fundingRate, 4),
     },
     {
@@ -37,41 +34,47 @@ export function MarketHeader({ markets, selectedMarket, onSelectMarket }: Market
         : `${formatCompact(selectedMarket.openInterest)} ${selectedMarket.baseAsset}`,
     },
     {
-      label: "Volume",
-      value: `${formatCompact(selectedMarket.volume)} ${selectedMarket.baseAsset}`,
+      label: "24h Ref. Volume",
+      value: selectedMarket.volume24h === undefined ? "—" : `$${formatCompact(selectedMarket.volume24h)}`,
+    },
+    {
+      label: "Max Leverage",
+      value: `${selectedMarket.maxLeverage}x`,
     },
   ];
 
   return (
     <section className="market-header">
       <div
-        className="market-card"
+        className="market-identity"
         onBlur={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-            setOpen(false);
-          }
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
         }}
       >
-        <AssetLogo asset={selectedMarket.baseAsset} />
-        <div className="min-w-0">
+        <div className="market-card">
+          <AssetLogo asset={selectedMarket.baseAsset} />
           <button
             aria-expanded={open}
             className="market-select-button"
             type="button"
             onClick={() => setOpen((value) => !value)}
           >
-            <span className="truncate text-lg font-semibold text-white">{selectedMarket.pair}</span>
-            <ChevronDown size={18} className="text-[var(--text-muted)]" />
+            <span>
+              <strong>{selectedMarket.pair}</strong>
+              <small>Perpetual</small>
+            </span>
+            <ChevronDown size={17} />
           </button>
+          <span className={`market-status market-status-${selectedMarket.status}`}>
+            <i /> {selectedMarket.status === "settling" ? "Matching" : selectedMarket.status}
+          </span>
         </div>
 
         {open ? (
           <div className="market-dropdown">
             {markets.map((market) => (
               <button
-                className={`market-dropdown-item ${
-                  market.marketId === selectedMarket.marketId ? "market-dropdown-item-active" : ""
-                }`}
+                className={`market-dropdown-item ${market.marketId === selectedMarket.marketId ? "market-dropdown-item-active" : ""}`}
                 key={market.marketId}
                 type="button"
                 onClick={() => {
@@ -80,12 +83,23 @@ export function MarketHeader({ markets, selectedMarket, onSelectMarket }: Market
                 }}
               >
                 <AssetLogo asset={market.baseAsset} small />
-                <strong>{market.pair}</strong>
+                <span>
+                  <strong>{market.pair}</strong>
+                  <small>{market.assetName}</small>
+                </span>
                 <em>{market.maxLeverage}x</em>
               </button>
             ))}
           </div>
         ) : null}
+      </div>
+
+      <div className="market-price-block">
+        <span>Oracle Price</span>
+        <strong>${formatNumber(selectedMarket.price, priceDigits)}</strong>
+        <em className={positiveChange ? "metric-positive" : "metric-negative"}>
+          {formatPct(selectedMarket.change24h, 2)} <small>24h ref.</small>
+        </em>
       </div>
 
       <div className="market-summary">
@@ -104,8 +118,7 @@ export function MarketHeader({ markets, selectedMarket, onSelectMarket }: Market
 
 function AssetLogo({ asset, small = false }: { asset: string; small?: boolean }) {
   const src = ASSET_LOGOS[asset];
-  const size = small ? 22 : 28;
-
+  const size = small ? 22 : 30;
   return (
     <span className={`asset-logo ${small ? "asset-logo-small" : ""}`}>
       {src ? (

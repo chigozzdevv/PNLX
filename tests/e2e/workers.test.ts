@@ -25,7 +25,9 @@ import { MarketsService } from "@/features/markets/markets.service";
 import {
   MarketDataService,
   parseHermesPriceUpdates,
+  parsePythTradingViewCandles,
 } from "@/features/markets/market-data.service";
+import { parseMarketCandles } from "@/features/markets/markets.schema";
 import { NotesService } from "@/features/notes/notes.service";
 import { OrdersService } from "@/features/orders/orders.service";
 import {
@@ -103,6 +105,47 @@ describe("support workers", () => {
     expect(concurrent.candles).toEqual(first.candles);
     expect(cached.cached).toBe(true);
     expect(cached.candles.at(-1)?.close).toBe(0.20);
+  });
+
+  test("parses bounded candle history windows", () => {
+    const input = parseMarketCandles(new Request(
+      "https://pnlx.test/markets/candles?marketId=xlm-usd-perp&interval=15m&limit=500&from=1784692000&to=1784692900",
+    ));
+
+    expect(input).toEqual({
+      from: 1_784_692_000,
+      interval: "15m",
+      limit: 300,
+      marketId: "xlm-usd-perp",
+      to: 1_784_692_900,
+    });
+    expect(() => parseMarketCandles(new Request(
+      "https://pnlx.test/markets/candles?marketId=xlm-usd-perp&from=20&to=10",
+    ))).toThrow("candle from must be earlier than to");
+  });
+
+  test("forwards candle history windows and handles exhausted history", async () => {
+    let requestedUrl = "";
+    const fetcher = async (input: URL | RequestInfo) => {
+      requestedUrl = String(input);
+      return new Response(JSON.stringify({ s: "no_data" }), { status: 200 });
+    };
+    const service = new MarketDataService(loadEnv(), fetcher as never);
+
+    const response = await service.candles({
+      from: 1_784_692_000,
+      interval: "15m",
+      limit: 160,
+      marketId: "xlm-usd-perp",
+      to: 1_784_692_900,
+    });
+    const providerUrl = new URL(requestedUrl);
+
+    expect(providerUrl.searchParams.get("from")).toBe("1784692000");
+    expect(providerUrl.searchParams.get("to")).toBe("1784692900");
+    expect(response.candles).toEqual([]);
+    expect(response.hasMore).toBe(false);
+    expect(parsePythTradingViewCandles({ s: "no_data" })).toEqual([]);
   });
 
   test("retries an aborted cold Pyth candle request", async () => {

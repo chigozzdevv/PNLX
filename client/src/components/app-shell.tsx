@@ -88,7 +88,16 @@ export function AppShell({ account, activeView, children, wallet }: AppShellProp
                 {connected ? <UserRound size={16} /> : <Wallet size={16} />}
               </span>
               <span className="wallet-address">
-                {connecting ? "Connecting" : connected ? shortAddress(address) : "Connect"}
+                {connecting ? (
+                  "Connecting"
+                ) : connected ? (
+                  <>
+                    <span className="wallet-network-prefix">Testnet · </span>
+                    {shortAddress(address)}
+                  </>
+                ) : (
+                  "Connect"
+                )}
               </span>
               {connected ? <LogOut size={15} /> : null}
             </button>

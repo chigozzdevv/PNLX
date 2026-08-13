@@ -50,10 +50,18 @@ export function parseMarketCandles(request: Request): MarketCandlesInput {
   const marketId = params.get("marketId")?.trim();
   if (!marketId) throw new Error("marketId is required");
 
+  const from = parseOptionalTimestamp(params.get("from"), "from");
+  const to = parseOptionalTimestamp(params.get("to"), "to");
+  if (from !== undefined && to !== undefined && from >= to) {
+    throw new Error("candle from must be earlier than to");
+  }
+
   return {
+    from,
     interval: parseInterval(params.get("interval") ?? "1m"),
     limit: parseLimit(params.get("limit") ?? "120"),
     marketId,
+    to,
   };
 }
 
@@ -74,6 +82,15 @@ function parseLimit(value: string): number {
   const limit = Number(value);
   if (!Number.isInteger(limit) || limit < 1) throw new Error("invalid candle limit");
   return Math.min(limit, 300);
+}
+
+function parseOptionalTimestamp(value: string | null, field: string): number | undefined {
+  if (value === null) return undefined;
+  const timestamp = Number(value);
+  if (!Number.isInteger(timestamp) || timestamp <= 0) {
+    throw new Error(`invalid candle ${field}`);
+  }
+  return timestamp;
 }
 
 function requiredValue(value: string | number | undefined, field: string): string | number {

@@ -1,14 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { BottomTicker } from "@/components/bottom-ticker";
 import { ChartToolbar } from "@/components/chart-toolbar";
 import { MarketHeader } from "@/components/market-header";
 import { OrderTicket } from "@/components/order-ticket";
-import { PnlModal } from "@/components/pnl-modal";
+import { PnlModal, type PnlModalProps } from "@/components/pnl-modal";
 import { PositionsTable, type PositionsTableView } from "@/components/positions-table";
-import { PriceChart } from "@/components/price-chart";
+import { PriceChart, type PriceChartHandle } from "@/components/price-chart";
+import type { ChartIndicatorId } from "@/lib/chart-indicators";
 import { shortAddress } from "@/lib/format";
 import { cancelOrder } from "@/lib/order-cancel";
 import { closePosition } from "@/lib/position-close";
@@ -37,16 +38,9 @@ export function TradingPage() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [tableView, setTableView] = useState<PositionsTableView>("positions");
   const [closingPositionId, setClosingPositionId] = useState<string | undefined>();
-  const [pnlModalData, setPnlModalData] = useState<{
-    marketId: string;
-    side: "long" | "short";
-    size: number;
-    entryPrice: number;
-    closePrice: number;
-    pnl: number;
-    collateral: number;
-    txHash?: string;
-  } | null>(null);
+  const [pnlModalData, setPnlModalData] = useState<
+    Omit<PnlModalProps, "isOpen" | "onClose"> | null
+  >(null);
   const [cancellingOrderId, setCancellingOrderId] = useState<string | undefined>();
   const [positionActionMessage, setPositionActionMessage] = useState<
     { tone: "error" | "success"; text: string } | undefined
@@ -60,6 +54,8 @@ export function TradingPage() {
   const ticker = useMarketTicker(trading.data.ticker);
   const [selectedMarketId, setSelectedMarketId] = useState(readStoredMarketId);
   const [chartInterval, setChartInterval] = useState<CandleInterval>("15m");
+  const [chartIndicators, setChartIndicators] = useState<ChartIndicatorId[]>([]);
+  const priceChartRef = useRef<PriceChartHandle>(null);
   const markets = trading.data.markets;
   const activeMarketId = markets.some((market) => market.marketId === selectedMarketId)
     ? selectedMarketId
@@ -144,19 +140,14 @@ export function TradingPage() {
       const closePrice = Number(record.markPrice) / 100_000_000;
       const size = position.size ?? 0;
       const side = position.side ?? "long";
-      const collateral = position.collateral ?? 0;
-      const delta = side === "long" ? (closePrice - entryPrice) : (entryPrice - closePrice);
-      const pnl = size * delta;
-      const payout = Math.max(0, collateral + pnl);
 
       setPnlModalData({
+        closePrice,
+        entryPrice,
+        ...record.settlement,
         marketId: position.marketId,
         side,
         size,
-        entryPrice,
-        closePrice,
-        pnl,
-        collateral: payout,
         txHash: record.txHash,
       });
 
@@ -254,13 +245,28 @@ export function TradingPage() {
           <div className="chart-trades-grid">
             <section className="panel chart-panel">
               <ChartToolbar
+                indicators={chartIndicators}
                 interval={chartInterval}
-                latest={candles.candles.at(-1)}
+                loadingMore={candles.loadingMore}
+                onFullscreen={() => priceChartRef.current?.toggleFullscreen()}
+                onIndicatorToggle={(indicator) => {
+                  setChartIndicators((current) => current.includes(indicator)
+                    ? current.filter((item) => item !== indicator)
+                    : [...current, indicator]);
+                }}
                 onIntervalChange={setChartInterval}
+                onReset={() => priceChartRef.current?.reset()}
+                transport={candles.transport}
               />
               {displaySelectedMarket ? (
                 <div className="chart-frame">
-                  <PriceChart candles={candles.candles} market={displaySelectedMarket} />
+                  <PriceChart
+                    candles={candles.candles}
+                    indicators={chartIndicators}
+                    market={displaySelectedMarket}
+                    onLoadOlder={candles.loadOlder}
+                    ref={priceChartRef}
+                  />
                   {candles.loading || candles.error ? (
                     <div className="chart-data-status">
                       {candles.loading ? "Loading live candles" : candles.error}
@@ -275,19 +281,6 @@ export function TradingPage() {
             </section>
           </div>
 
-          <PositionsTable
-            actionMessage={positionActionMessage}
-            activity={trading.data.activity}
-            activeView={tableView}
-            cancellingOrderId={cancellingOrderId}
-            closingPositionId={closingPositionId}
-            loading={trading.loading}
-            onCancelOrder={handleCancelOrder}
-            onClosePosition={handleClosePosition}
-            onViewChange={setTableView}
-            orders={orders}
-            positions={trading.data.positions}
-          />
         </section>
 
         <aside className="order-column">
@@ -340,6 +333,22 @@ export function TradingPage() {
             />
           ) : null}
         </aside>
+
+        <div className="positions-workspace">
+          <PositionsTable
+            actionMessage={positionActionMessage}
+            activity={trading.data.activity}
+            activeView={tableView}
+            cancellingOrderId={cancellingOrderId}
+            closingPositionId={closingPositionId}
+            loading={trading.loading}
+            onCancelOrder={handleCancelOrder}
+            onClosePosition={handleClosePosition}
+            onViewChange={setTableView}
+            orders={orders}
+            positions={trading.data.positions}
+          />
+        </div>
       </main>
 
       <BottomTicker ticker={ticker.ticker} live={ticker.live} updatedAt={ticker.updatedAt} />
@@ -404,5 +413,6 @@ function enrichMarketWithTicker(market: MarketDisplay, ticker?: TickerItem): Mar
     ...market,
     change24h: typeof ticker.change === "number" ? ticker.change : market.change24h,
     price: market.price,
+    volume24h: ticker.volume24h,
   };
 }

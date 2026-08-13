@@ -173,6 +173,7 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
         : undefined;
 
       return {
+        batchId: position.batchId,
         boundlessRequestId: position.boundlessRequestId,
         closePrice: null,
         collateral: collateral || undefined,
@@ -183,6 +184,7 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
         market: pairFromMarketId(position.marketId),
         marketPrice,
         netValue: collateral ? collateral + (unrealizedPnl ?? 0) : undefined,
+        openedAt: position.openedAt,
         journalDigest: position.journalDigest,
         lifecycleKind: position.lifecycleKind,
         lifecycleProofDigest: position.lifecycleProofDigest,
@@ -208,6 +210,7 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
         size: size || undefined,
         settlementDigest: position.settlementDigest,
         settlementTxHash: position.settlementTxHash,
+        sourceIntentCommitment: position.sourceIntentCommitment,
         status: position.status,
         time: formatTime(position.openedAt),
         unrealizedPnl,

@@ -26,9 +26,11 @@ export interface RefreshOracleMarketInput {
 export type MarketCandleInterval = "1m" | "5m" | "15m" | "1h" | "1d";
 
 export interface MarketCandlesInput {
+  from?: number;
   interval: MarketCandleInterval;
   limit: number;
   marketId: string;
+  to?: number;
 }
 
 export interface MarketCandle {

@@ -1,4 +1,7 @@
 import {
+  protocolUsdcToDisplay,
+} from "@/lib/asset-units";
+import {
   defaultClientProofProvider,
   registerProofBundle,
   type ClientProofProvider,
@@ -74,7 +77,17 @@ export interface ClosePositionInput {
   session: WalletSession;
 }
 
-export async function closePosition(input: ClosePositionInput): Promise<PositionCloseRecord> {
+export interface ClosePositionResult extends PositionCloseRecord {
+  settlement: {
+    fee: number;
+    fundingPayment: number;
+    grossPricePnl: number;
+    initialMargin: number;
+    returnedMargin: number;
+  };
+}
+
+export async function closePosition(input: ClosePositionInput): Promise<ClosePositionResult> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -87,7 +100,7 @@ export async function closePosition(input: ClosePositionInput): Promise<Position
   throw lastError instanceof Error ? lastError : new Error("Position close failed");
 }
 
-async function closePositionAttempt(input: ClosePositionInput): Promise<PositionCloseRecord> {
+async function closePositionAttempt(input: ClosePositionInput): Promise<ClosePositionResult> {
   if (input.position.status !== "open") throw new Error("Position is not open");
   if (!input.position.privateState) {
     throw new Error("Private position data is unavailable in this browser");
@@ -235,7 +248,16 @@ async function closePositionAttempt(input: ClosePositionInput): Promise<Position
       walletAddress: input.session.address,
     });
   }
-  return positionClose;
+  return {
+    ...positionClose,
+    settlement: {
+      fee: protocolUsdcToDisplay(fee),
+      fundingPayment: protocolUsdcToDisplay(fundingPayment),
+      grossPricePnl: protocolUsdcToDisplay(closeSettlement.realizedPnl),
+      initialMargin: protocolUsdcToDisplay(BigInt(privateState.margin)),
+      returnedMargin: protocolUsdcToDisplay(closeSettlement.newMargin),
+    },
+  };
 }
 
 function normalizePositionCloseRecord(

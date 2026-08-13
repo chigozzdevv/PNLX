@@ -1,21 +1,43 @@
-import type { CandleInterval } from "@/lib/use-market-candles";
-import { formatNumber } from "@/lib/format";
-import type { ChartCandle } from "@/types/trading";
+"use client";
+
+import { Activity, Check, Maximize2, RotateCcw } from "lucide-react";
+import type { ChartIndicatorId } from "@/lib/chart-indicators";
+import type { CandleInterval, CandleTransport } from "@/lib/use-market-candles";
 
 interface ChartToolbarProps {
+  indicators: ChartIndicatorId[];
   interval: CandleInterval;
-  latest?: ChartCandle;
+  loadingMore: boolean;
+  onFullscreen: () => void;
+  onIndicatorToggle: (indicator: ChartIndicatorId) => void;
   onIntervalChange: (interval: CandleInterval) => void;
+  onReset: () => void;
+  transport: CandleTransport;
 }
 
 const intervals: CandleInterval[] = ["1m", "5m", "15m", "1h", "1d"];
+const availableIndicators: Array<{ id: ChartIndicatorId; label: string; pane: string }> = [
+  { id: "sma", label: "SMA 20", pane: "Price" },
+  { id: "ema", label: "EMA 20", pane: "Price" },
+  { id: "bollinger", label: "Bollinger Bands", pane: "Price" },
+  { id: "vwap", label: "VWAP", pane: "Price" },
+  { id: "rsi", label: "RSI 14", pane: "New pane" },
+  { id: "macd", label: "MACD 12 26 9", pane: "New pane" },
+];
 
-export function ChartToolbar({ interval, latest, onIntervalChange }: ChartToolbarProps) {
+export function ChartToolbar({
+  indicators,
+  interval,
+  loadingMore,
+  onFullscreen,
+  onIndicatorToggle,
+  onIntervalChange,
+  onReset,
+  transport,
+}: ChartToolbarProps) {
   return (
     <div className="chart-toolbar">
-      <span className="chart-label">Price</span>
-
-      <div className="toolbar-group">
+      <div className="toolbar-group" aria-label="Chart interval">
         {intervals.map((item) => (
           <button
             className={`time-chip ${item === interval ? "time-chip-active" : ""}`}
@@ -28,19 +50,56 @@ export function ChartToolbar({ interval, latest, onIntervalChange }: ChartToolba
         ))}
       </div>
 
-      {latest ? (
-        <div className="chart-ohlc" aria-label="Current candle values">
-          <span>O <strong>{candlePrice(latest.open)}</strong></span>
-          <span>H <strong>{candlePrice(latest.high)}</strong></span>
-          <span>L <strong>{candlePrice(latest.low)}</strong></span>
-          <span>C <strong>{candlePrice(latest.close)}</strong></span>
-          <span>Vol <strong>{latest.volume > 0 ? formatNumber(latest.volume, 2) : "—"}</strong></span>
-        </div>
-      ) : null}
+      <div className="chart-toolbar-actions">
+        <details className="indicator-menu">
+          <summary className={indicators.length > 0 ? "chart-tool-active" : ""}>
+            <Activity size={15} />
+            Indicators
+            {indicators.length > 0 ? <em>{indicators.length}</em> : null}
+          </summary>
+          <div className="indicator-popover">
+            <div className="indicator-popover-heading">
+              <strong>Indicators</strong>
+              <span>Volume is always visible</span>
+            </div>
+            {availableIndicators.map((indicator) => {
+              const active = indicators.includes(indicator.id);
+              return (
+                <button
+                  aria-pressed={active}
+                  key={indicator.id}
+                  type="button"
+                  onClick={() => onIndicatorToggle(indicator.id)}
+                >
+                  <span className={`indicator-check ${active ? "indicator-check-active" : ""}`}>
+                    {active ? <Check size={12} /> : null}
+                  </span>
+                  <strong>{indicator.label}</strong>
+                  <em>{indicator.pane}</em>
+                </button>
+              );
+            })}
+          </div>
+        </details>
+
+        <span className={`chart-stream-status chart-stream-${transport}`}>
+          <i />
+          {loadingMore ? "Loading history" : transportLabel(transport)}
+        </span>
+        <button aria-label="Reset chart view" className="chart-icon-button" title="Reset chart view" type="button" onClick={onReset}>
+          <RotateCcw size={15} />
+        </button>
+        <button aria-label="Open chart fullscreen" className="chart-icon-button" title="Fullscreen" type="button" onClick={onFullscreen}>
+          <Maximize2 size={15} />
+        </button>
+      </div>
     </div>
   );
 }
 
-function candlePrice(value: number): string {
-  return formatNumber(value, value < 10 ? 4 : 2);
+function transportLabel(transport: CandleTransport): string {
+  if (transport === "stream") return "Live";
+  if (transport === "fallback") return "Reconnecting";
+  if (transport === "connecting") return "Connecting";
+  return "Offline";
 }
