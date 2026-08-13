@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
-import { BottomTicker } from "@/components/bottom-ticker";
 import { ChartToolbar } from "@/components/chart-toolbar";
 import { MarketHeader } from "@/components/market-header";
+import { MarketRail } from "@/components/market-rail";
 import { OrderTicket } from "@/components/order-ticket";
 import { PnlModal, type PnlModalProps } from "@/components/pnl-modal";
 import { PositionsTable, type PositionsTableView } from "@/components/positions-table";
@@ -16,7 +16,6 @@ import { closePosition } from "@/lib/position-close";
 import { reconcilePrivateMarginNotes } from "@/lib/private-margin-notes";
 import { depositPrivateMargin, submitTradeIntent } from "@/lib/trade-submit";
 import { useMarketCandles, type CandleInterval } from "@/lib/use-market-candles";
-import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useTradingData } from "@/lib/use-trading-data";
 import { useWalletSession } from "@/lib/use-wallet-session";
 import type { OrderTicketSubmitInput } from "@/components/order-ticket";
@@ -26,7 +25,6 @@ import type {
   PositionRow,
   ServerOwnerActivitySnapshot,
   ServerOwnerOrderSnapshot,
-  TickerItem,
 } from "@/types/trading";
 
 const SELECTED_MARKET_STORAGE_KEY = "pnlx:selected-market-id:v2";
@@ -51,7 +49,6 @@ export function TradingPage() {
   const [pendingOrders, setPendingOrders] = useState<ServerOwnerOrderSnapshot[]>([]);
   const [optimisticOrderClock, setOptimisticOrderClock] = useState(0);
   const trading = useTradingData(wallet.session, refreshKey);
-  const ticker = useMarketTicker(trading.data.ticker);
   const [selectedMarketId, setSelectedMarketId] = useState(readStoredMarketId);
   const [chartInterval, setChartInterval] = useState<CandleInterval>("15m");
   const [chartIndicators, setChartIndicators] = useState<ChartIndicatorId[]>([]);
@@ -74,14 +71,13 @@ export function TradingPage() {
       price: latestClose,
     };
   }, [candles.candles, selectedMarket]);
-  const tickerByMarketId = useMemo(
-    () => new Map(ticker.ticker.flatMap((item) => (item.marketId ? [[item.marketId, item]] : []))),
-    [ticker.ticker],
+  const displaySelectedMarket = liveSelectedMarket;
+  const marketRailMarkets = useMemo(
+    () => markets.map((market) =>
+      market.marketId === displaySelectedMarket?.marketId ? displaySelectedMarket : market
+    ),
+    [displaySelectedMarket, markets],
   );
-  const displaySelectedMarket = useMemo(() => {
-    if (!liveSelectedMarket) return undefined;
-    return enrichMarketWithTicker(liveSelectedMarket, tickerByMarketId.get(liveSelectedMarket.marketId));
-  }, [liveSelectedMarket, tickerByMarketId]);
   const orderDraft = displaySelectedMarket ? orderDraftFromMarket(displaySelectedMarket) : undefined;
   const orders = useMemo(() => {
     const liveIds = new Set(trading.data.orders.map((order) => order.intentCommitment));
@@ -261,6 +257,7 @@ export function TradingPage() {
                 <div className="chart-frame">
                   <PriceChart
                     candles={candles.candles}
+                    drawingScope={`${displaySelectedMarket.marketId}:${chartInterval}`}
                     indicators={chartIndicators}
                     key={`${displaySelectedMarket.marketId}:${chartInterval}`}
                     market={displaySelectedMarket}
@@ -282,6 +279,12 @@ export function TradingPage() {
           </div>
 
         </section>
+
+        <MarketRail
+          markets={marketRailMarkets}
+          onSelectMarket={handleSelectMarket}
+          selectedMarketId={displaySelectedMarket?.marketId}
+        />
 
         <aside className="order-column">
           {displaySelectedMarket && orderDraft ? (
@@ -351,7 +354,6 @@ export function TradingPage() {
         </div>
       </main>
 
-      <BottomTicker ticker={ticker.ticker} updatedAt={ticker.updatedAt} />
       <PnlModal
         isOpen={Boolean(pnlModalData)}
         onClose={() => setPnlModalData(null)}
@@ -403,16 +405,5 @@ function orderDraftFromMarket(market: MarketDisplay): OrderDraft {
     side: "long",
     stopLossPrice: null,
     takeProfitPrice: null,
-  };
-}
-
-function enrichMarketWithTicker(market: MarketDisplay, ticker?: TickerItem): MarketDisplay {
-  if (!ticker) return market;
-
-  return {
-    ...market,
-    change24h: typeof ticker.change === "number" ? ticker.change : market.change24h,
-    price: market.price,
-    volume24h: ticker.volume24h,
   };
 }

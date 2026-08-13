@@ -32,7 +32,7 @@ const connectedWallet: WalletSessionController = {
 };
 
 describe("AppShell portfolio navigation", () => {
-  test("keeps trade balances and prefixes the connected address with Testnet", () => {
+  test("keeps trade balances and separates Testnet from the connected account button", () => {
     const html = renderToStaticMarkup(
       <AppShell account={account} activeView="trade" wallet={connectedWallet}>
         <div />
@@ -41,8 +41,11 @@ describe("AppShell portfolio navigation", () => {
 
     expect(html).toContain("Available collateral");
     expect(html).toContain("Locked collateral");
-    expect(html).toContain("Testnet · ");
+    expect(html).toContain('class="wallet-network-label"');
+    expect(html).toContain(">Testnet</span>");
+    expect(html).not.toContain("Testnet · ");
     expect(html).toContain("GBVC7N...Q3QJ");
+    expect(html).not.toContain("account-button-connected");
   });
 
   test("does not duplicate trade balances on the portfolio route", () => {
@@ -54,7 +57,7 @@ describe("AppShell portfolio navigation", () => {
 
     expect(html).not.toContain("Available collateral");
     expect(html).not.toContain("Locked collateral");
-    expect(html).toContain("Testnet · ");
+    expect(html).toContain('class="wallet-network-label"');
   });
 
   test("shows Connect without a network prefix when disconnected", () => {
@@ -69,6 +72,6 @@ describe("AppShell portfolio navigation", () => {
     );
 
     expect(html).toContain("Connect");
-    expect(html).not.toContain("Testnet · ");
+    expect(html).not.toContain('class="wallet-network-label"');
   });
 });

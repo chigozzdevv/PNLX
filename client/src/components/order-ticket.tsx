@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { ArrowLeft, CircleDollarSign } from "lucide-react";
+import { ArrowLeft, CircleDollarSign, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { formatNumber, formatUsd, shortAddress } from "@/lib/format";
 import type { SubmitTradeIntentResult, TradeSubmitStage } from "@/lib/trade-submit";
@@ -411,11 +411,13 @@ export function OrderTicket({
             Available {formatUsd(availableCollateralValue, { maximumFractionDigits: 2 })}
           </span>
           <button
+            className="add-funds-action"
             disabled={!connected || !onDeposit || depositing || submitting}
             type="button"
             onClick={() => setTicketMode("deposit")}
           >
-            Add funds
+            <Plus aria-hidden="true" size={12} strokeWidth={2.25} />
+            <span>Add funds</span>
           </button>
         </div>
       </div>

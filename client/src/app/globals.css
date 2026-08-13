@@ -197,10 +197,6 @@ button:disabled {
   opacity: 0.75;
 }
 
-.account-button-connected {
-  border-color: rgba(36, 211, 143, 0.38);
-}
-
 .account-button-error {
   border-color: rgba(255, 79, 120, 0.5);
 }
@@ -213,7 +209,7 @@ button:disabled {
   place-items: center;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.07);
-  color: var(--accent-green);
+  color: var(--text-muted);
 }
 
 .wallet-address {
@@ -221,6 +217,14 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.wallet-network-label {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
 }
 
 .trade-grid {
@@ -3756,12 +3760,133 @@ button:disabled {
   }
 }
 
-/* Portfolio: flat account overview and private activity ledger */
-.wallet-network-prefix {
-  color: var(--text-faint);
-  font-weight: 650;
+/* Configured-market rail: fast PNLX market switching without exposing private intents. */
+.market-rail {
+  display: none;
+  min-width: 0;
+  overflow: hidden;
+  background: #111313;
 }
 
+.market-rail-title {
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  padding: 0 13px;
+}
+
+.market-rail-title strong {
+  color: #f1efec;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.market-rail-title span {
+  display: grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.market-rail-head,
+.market-rail-row {
+  display: grid;
+  grid-template-columns: minmax(76px, 1fr) minmax(58px, 0.78fr) minmax(52px, 0.62fr);
+  align-items: center;
+  gap: 8px;
+  padding-inline: 12px;
+}
+
+.market-rail-head {
+  min-height: 32px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.market-rail-head span:not(:first-child) {
+  text-align: right;
+}
+
+.market-rail-list {
+  overflow-y: auto;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+
+.market-rail-row {
+  position: relative;
+  width: 100%;
+  min-height: 58px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: transparent;
+  text-align: left;
+}
+
+.market-rail-row:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.market-rail-row-active {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.market-rail-row-active::before {
+  position: absolute;
+  top: 11px;
+  bottom: 11px;
+  left: 0;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent-orange);
+  content: "";
+}
+
+.market-rail-pair,
+.market-rail-volume {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.market-rail-pair strong,
+.market-rail-price {
+  overflow: hidden;
+  color: #f1efec;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-rail-pair small,
+.market-rail-volume,
+.market-rail-volume small {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-rail-price,
+.market-rail-volume {
+  justify-items: end;
+  text-align: right;
+}
+
+/* Portfolio: flat account overview and private activity ledger */
 .portfolio-page {
   display: block;
   width: min(1440px, 100%);
@@ -5334,10 +5459,181 @@ button:disabled {
 }
 
 .professional-chart {
+  position: relative;
   width: 100%;
   height: 560px;
   min-height: 560px;
   background: #111313;
+}
+
+.professional-chart-surface {
+  position: absolute;
+  inset: 0;
+}
+
+.chart-drawing-root,
+.chart-drawing-overlay {
+  position: absolute;
+  inset: 0;
+}
+
+.chart-drawing-root {
+  z-index: 5;
+  pointer-events: none;
+}
+
+.chart-drawing-toolbar {
+  position: absolute;
+  top: 35px;
+  left: 10px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  border-radius: 7px;
+  background: rgba(17, 19, 19, 0.9);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+  padding: 3px;
+  pointer-events: auto;
+  backdrop-filter: blur(8px);
+}
+
+.chart-drawing-toolbar button {
+  display: grid;
+  width: 29px;
+  height: 29px;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--text-faint);
+}
+
+.chart-drawing-toolbar button:hover,
+.chart-drawing-toolbar .chart-drawing-tool-active {
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text-primary);
+}
+
+.chart-drawing-toolbar .chart-drawing-tool-active {
+  box-shadow: inset 0 -1px var(--accent-orange);
+}
+
+.chart-drawing-toolbar button:focus-visible {
+  outline: 2px solid rgba(255, 165, 83, 0.58);
+  outline-offset: 1px;
+}
+
+.chart-drawing-toolbar button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.chart-drawing-divider {
+  width: 1px;
+  height: 17px;
+  margin: 0 2px;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.chart-drawing-instruction {
+  position: absolute;
+  top: 39px;
+  left: 181px;
+  z-index: 3;
+  border-radius: 5px;
+  background: rgba(17, 19, 19, 0.86);
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 750;
+  line-height: 1;
+  padding: 7px 8px;
+  pointer-events: none;
+}
+
+@media (max-width: 520px) {
+  .chart-drawing-instruction {
+    top: 74px;
+    right: 10px;
+    left: 10px;
+    width: fit-content;
+    max-width: calc(100% - 20px);
+  }
+}
+
+.chart-drawing-overlay {
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.chart-drawing-overlay-active {
+  cursor: crosshair;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.chart-drawing-line {
+  fill: none;
+  stroke: rgba(255, 184, 112, 0.84);
+  stroke-linecap: round;
+  stroke-width: 1.35;
+  vector-effect: non-scaling-stroke;
+}
+
+.chart-drawing-horizontal {
+  stroke: rgba(198, 189, 178, 0.66);
+  stroke-dasharray: 5 4;
+}
+
+.chart-drawing-measure {
+  stroke: rgba(105, 179, 255, 0.86);
+  stroke-dasharray: 4 3;
+}
+
+.chart-drawing-preview {
+  opacity: 0.62;
+}
+
+.chart-drawing-hit-area {
+  stroke: transparent;
+  stroke-width: 12;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.chart-drawing-selected .chart-drawing-line {
+  filter: drop-shadow(0 0 4px rgba(255, 165, 83, 0.36));
+  stroke-width: 1.8;
+}
+
+.chart-drawing-handle {
+  fill: #111313;
+  stroke: var(--accent-orange);
+  stroke-width: 1.5;
+}
+
+.chart-drawing-price-label {
+  fill: var(--text-muted);
+  font-family: var(--font-sans), Inter, sans-serif;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 850;
+  text-anchor: end;
+}
+
+.chart-measure-label rect {
+  fill: rgba(17, 19, 19, 0.92);
+  stroke: rgba(105, 179, 255, 0.28);
+}
+
+.chart-measure-label text {
+  fill: #a9cdf3;
+  font-family: var(--font-sans), Inter, sans-serif;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 850;
 }
 
 .professional-chart-legend {
@@ -5488,6 +5784,12 @@ button:disabled {
   color: var(--text-muted);
   font-size: 10px;
   font-weight: 850;
+}
+
+.field-meta-row .add-funds-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
 
 .field-meta-row button:hover:not(:disabled) {
@@ -6049,5 +6351,22 @@ button:disabled {
     max-width: none;
     padding: 9px 0;
     white-space: normal;
+  }
+}
+
+@media (min-width: 1321px) {
+  .trade-grid {
+    grid-template-areas:
+      "main markets order"
+      "positions positions order";
+    grid-template-columns: minmax(0, 1fr) 248px clamp(350px, 23vw, 400px);
+  }
+
+  .market-rail {
+    grid-area: markets;
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    align-self: stretch;
+    border-left: 1px solid rgba(255, 255, 255, 0.07);
   }
 }

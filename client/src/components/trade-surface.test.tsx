@@ -67,6 +67,10 @@ describe("Trade surface", () => {
     expect(html).not.toContain(">Enable<");
     expect(html).not.toContain("toggle-switch");
     expect(html).not.toContain("Advanced options &amp; order summary");
+    expect(html).toContain('class="add-funds-action"');
+    expect(html).toContain("lucide-plus");
+    expect(html.indexOf("Margin")).toBeLessThan(html.indexOf("Leverage"));
+    expect(html.indexOf("Leverage")).toBeLessThan(html.indexOf("Take Profit / Stop Loss"));
   });
 
   test("renders the ticker without a Live or Sync prefix", () => {

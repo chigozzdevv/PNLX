@@ -75,10 +75,13 @@ export function AppShell({ account, activeView, children, wallet }: AppShellProp
                 ) : null}
               </>
             ) : null}
+            {connected ? (
+              <span className="wallet-network-label" aria-label="Network: Stellar Testnet">
+                Testnet
+              </span>
+            ) : null}
             <button
-              className={`wallet-button account-button ${connected ? "account-button-connected" : ""} ${
-                wallet.error ? "account-button-error" : ""
-              }`}
+              className={`wallet-button account-button ${wallet.error ? "account-button-error" : ""}`}
               disabled={connecting}
               title={wallet.error}
               type="button"
@@ -88,16 +91,7 @@ export function AppShell({ account, activeView, children, wallet }: AppShellProp
                 {connected ? <UserRound size={16} /> : <Wallet size={16} />}
               </span>
               <span className="wallet-address">
-                {connecting ? (
-                  "Connecting"
-                ) : connected ? (
-                  <>
-                    <span className="wallet-network-prefix">Testnet · </span>
-                    {shortAddress(address)}
-                  </>
-                ) : (
-                  "Connect"
-                )}
+                {connecting ? "Connecting" : connected ? shortAddress(address) : "Connect"}
               </span>
               {connected ? <LogOut size={15} /> : null}
             </button>

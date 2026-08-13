@@ -27,11 +27,13 @@ import {
   type ChartIndicatorId,
   type IndicatorPoint,
 } from "@/lib/chart-indicators";
+import { ChartTools } from "@/components/chart-tools";
 import { formatNumber } from "@/lib/format";
 import type { ChartCandle, MarketDisplay } from "@/types/trading";
 
 interface PriceChartProps {
   candles: ChartCandle[];
+  drawingScope: string;
   indicators: ChartIndicatorId[];
   market: MarketDisplay;
   onLoadOlder: () => Promise<void>;
@@ -62,7 +64,7 @@ const LOAD_MORE_THRESHOLD = 40;
 const RIGHT_OFFSET_BARS = 8;
 
 export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function PriceChart(
-  { candles, indicators, market, onLoadOlder },
+  { candles, drawingScope, indicators, market, onLoadOlder },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -75,6 +77,10 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
   const previousFirstTimeRef = useRef<number | undefined>(undefined);
   const historyRequestPendingRef = useRef(false);
   const [crosshairCandle, setCrosshairCandle] = useState<ChartCandle>();
+  const [drawingSurface, setDrawingSurface] = useState<{
+    chart: IChartApi;
+    series: ISeriesApi<"Candlestick">;
+  }>();
   const indicatorKey = [...indicators].sort().join(",");
 
   loadOlderRef.current = onLoadOlder;
@@ -209,6 +215,7 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
     resizeObserver.observe(container);
     chartRef.current = chart;
     seriesRef.current = series;
+    setDrawingSurface({ chart, series: candleSeries });
     const initialCandles = candlesRef.current.filter(isValidCandle);
     series.candles.setData(initialCandles.map(toCandlestickData));
     configureIndicators(chart, series, indicatorsRef.current, initialCandles);
@@ -268,9 +275,12 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
   }, [candles]);
 
   const legendCandle = crosshairCandle ?? candles.at(-1);
+  const latestCandle = candles.at(-1);
+  const drawingDataRevision = `${candles.length}:${latestCandle?.time ?? ""}:${latestCandle?.high ?? ""}:${latestCandle?.low ?? ""}`;
 
   return (
-    <div className="chart-canvas professional-chart" ref={containerRef}>
+    <div className="chart-canvas professional-chart">
+      <div className="professional-chart-surface" ref={containerRef} />
       {legendCandle ? (
         <div className="professional-chart-legend" aria-live="polite">
           <strong>{market.pair}</strong>
@@ -279,6 +289,14 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
           <span>L <b>{chartPrice(legendCandle.low)}</b></span>
           <span>C <b>{chartPrice(legendCandle.close)}</b></span>
         </div>
+      ) : null}
+      {drawingSurface ? (
+        <ChartTools
+          chart={drawingSurface.chart}
+          dataRevision={drawingDataRevision}
+          scope={drawingScope}
+          series={drawingSurface.series}
+        />
       ) : null}
     </div>
   );
