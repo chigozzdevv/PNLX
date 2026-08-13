@@ -4,11 +4,13 @@ import { useCallback, useMemo, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { BottomTicker } from "@/components/bottom-ticker";
 import { PortfolioPage } from "@/components/portfolio-page";
+import { WithdrawalModal, type WithdrawableNote } from "@/components/withdrawal-modal";
+import { protocolUsdcToDisplay } from "@/lib/asset-units";
 import { formatUsd, shortAddress } from "@/lib/format";
-import { withdrawAvailableCollateral } from "@/lib/collateral-withdraw";
+import { withdrawPrivateMarginNote } from "@/lib/collateral-withdraw";
 import { cancelOrder } from "@/lib/order-cancel";
 import { closePosition } from "@/lib/position-close";
-import { reconcilePrivateMarginNotes } from "@/lib/private-margin-notes";
+import { privateMarginNotes, reconcilePrivateMarginNotes } from "@/lib/private-margin-notes";
 import { PnlModal } from "@/components/pnl-modal";
 import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useTradingData } from "@/lib/use-trading-data";
@@ -20,6 +22,8 @@ export function PortfolioRoute() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [cancellingOrderId, setCancellingOrderId] = useState<string | undefined>();
   const [closingPositionId, setClosingPositionId] = useState<string | undefined>();
+  const [withdrawalOpen, setWithdrawalOpen] = useState(false);
+  const [selectedWithdrawalNote, setSelectedWithdrawalNote] = useState<`0x${string}` | undefined>();
   const [pnlModalData, setPnlModalData] = useState<{
     marketId: string;
     side: "long" | "short";
@@ -35,6 +39,19 @@ export function PortfolioRoute() {
     { tone: "error" | "success"; text: string } | undefined
   >();
   const trading = useTradingData(wallet.session, refreshKey);
+  const withdrawableNotes: WithdrawableNote[] = wallet.session
+    ? privateMarginNotes(wallet.session.ownerCommitment)
+      .filter((note) => note.status === "available")
+      .sort((left, right) => {
+        const leftAmount = BigInt(left.amount);
+        const rightAmount = BigInt(right.amount);
+        return leftAmount === rightAmount ? left.createdAt - right.createdAt : leftAmount > rightAmount ? -1 : 1;
+      })
+      .map((note) => ({
+        amount: protocolUsdcToDisplay(note.amount),
+        commitment: note.commitment,
+      }))
+    : [];
   const ticker = useMarketTicker(trading.data.ticker);
   const marketById = useMemo(
     () => new Map(trading.data.markets.map((market) => [market.marketId, market])),
@@ -119,7 +136,17 @@ export function PortfolioRoute() {
     }
   }, [wallet.session]);
 
-  const handleWithdrawCollateral = useCallback(async () => {
+  const handleOpenWithdrawal = () => {
+    const first = withdrawableNotes[0];
+    if (!first) {
+      setPositionActionMessage({ tone: "error", text: "No available private note to withdraw" });
+      return;
+    }
+    setSelectedWithdrawalNote(first.commitment);
+    setWithdrawalOpen(true);
+  };
+
+  const handleWithdrawCollateral = useCallback(async (noteCommitment: `0x${string}`) => {
     if (!wallet.session) {
       setPositionActionMessage({ tone: "error", text: "Connect a wallet first" });
       return;
@@ -128,17 +155,22 @@ export function PortfolioRoute() {
     setWithdrawingCollateral(true);
     setPositionActionMessage(undefined);
     try {
-      const result = await withdrawAvailableCollateral(wallet.session);
+      const result = await withdrawPrivateMarginNote(wallet.session, noteCommitment);
       setPositionActionMessage({
         tone: "success",
-        text: `Withdrew ${formatUsd(result.amount)} to wallet`,
+        text: `Withdrew ${formatUsd(result.amount)} from private note`,
       });
+      setWithdrawalOpen(false);
+      setSelectedWithdrawalNote(undefined);
       setRefreshKey((value) => value + 1);
     } catch (error) {
       setPositionActionMessage({
         tone: "error",
         text: error instanceof Error ? error.message : "Withdrawal failed",
       });
+      setWithdrawalOpen(false);
+      setSelectedWithdrawalNote(undefined);
+      setRefreshKey((value) => value + 1);
     } finally {
       setWithdrawingCollateral(false);
     }
@@ -153,7 +185,7 @@ export function PortfolioRoute() {
         loading={trading.loading}
         onCancelOrder={handleCancelOrder}
         onClosePosition={handleClosePosition}
-        onWithdrawCollateral={handleWithdrawCollateral}
+        onOpenWithdrawal={handleOpenWithdrawal}
         trading={trading.data}
         withdrawingCollateral={withdrawingCollateral}
       />
@@ -162,6 +194,17 @@ export function PortfolioRoute() {
         isOpen={Boolean(pnlModalData)}
         onClose={() => setPnlModalData(null)}
         {...pnlModalData!}
+      />
+      <WithdrawalModal
+        isOpen={withdrawalOpen}
+        notes={withdrawableNotes}
+        onClose={() => {
+          if (!withdrawingCollateral) setWithdrawalOpen(false);
+        }}
+        onConfirm={handleWithdrawCollateral}
+        onSelect={setSelectedWithdrawalNote}
+        selectedCommitment={selectedWithdrawalNote}
+        withdrawing={withdrawingCollateral}
       />
     </AppShell>
   );

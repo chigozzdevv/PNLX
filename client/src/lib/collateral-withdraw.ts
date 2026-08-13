@@ -63,16 +63,17 @@ interface AddressDigestResponse {
   digest: Hex;
 }
 
-export interface WithdrawAvailableCollateralResult {
+export interface WithdrawPrivateMarginNoteResult {
   amount: number;
   commitment: Hex;
   withdrawal: WithdrawAssetResponse["withdrawal"];
 }
 
-export async function withdrawAvailableCollateral(
+export async function withdrawPrivateMarginNote(
   session: WalletSession,
+  noteCommitment: Hex,
   proofProvider: ClientProofProvider | undefined = defaultClientProofProvider(),
-): Promise<WithdrawAvailableCollateralResult> {
+): Promise<WithdrawPrivateMarginNoteResult> {
   if (!proofProvider) {
     throw new Error("Client proof provider is not configured");
   }
@@ -85,6 +86,7 @@ export async function withdrawAvailableCollateral(
 
   const note = selectWithdrawablePrivateMarginNote({
     assetDigest: tokenDigest,
+    commitment: noteCommitment,
     ownerCommitment: session.ownerCommitment,
   });
   const membership = await marginMembership(note.commitment, session.token);

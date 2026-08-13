@@ -10,6 +10,7 @@ import {
   privateSpendableBalance,
   reconcilePrivateMarginNotes,
   savePrivateMarginNote,
+  selectWithdrawablePrivateMarginNote,
   setPrivateMarginNoteRuntimeScope,
   type StoredPrivateMarginNote,
 } from "@/lib/private-margin-notes";
@@ -55,6 +56,37 @@ describe("private margin note allocation", () => {
 
   test("keeps new deposits consolidated instead of splitting around the current ticket", () => {
     expect(splitDepositAmounts(1_000n, 250)).toEqual([1_000n]);
+  });
+
+  test("withdraws the private note selected by its commitment", () => {
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        dispatchEvent: () => true,
+        localStorage: new MemoryStorage(),
+        sessionStorage: new MemoryStorage(),
+      },
+    });
+
+    try {
+      setPrivateMarginNoteRuntimeScope("test:selected-withdrawal");
+      const smaller = savePrivateMarginNote(note("small", 30n));
+      savePrivateMarginNote(note("large", 90n));
+
+      expect(selectWithdrawablePrivateMarginNote({
+        assetDigest: ASSET,
+        commitment: smaller.commitment,
+        ownerCommitment: OWNER,
+      }).commitment).toBe(smaller.commitment);
+    } finally {
+      setPrivateMarginNoteRuntimeScope(undefined);
+      if (previousWindow) {
+        Object.defineProperty(globalThis, "window", previousWindow);
+      } else {
+        Reflect.deleteProperty(globalThis, "window");
+      }
+    }
   });
 
   test("releases filled-order change instead of double-counting locked margin", () => {

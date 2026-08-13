@@ -215,16 +215,18 @@ export function planPrivateMarginNoteAllocations(input: {
 
 export function selectWithdrawablePrivateMarginNote(input: {
   assetDigest?: Hex;
+  commitment?: Hex;
   ownerCommitment: Hex;
 }): StoredPrivateMarginNote {
   const candidates = privateMarginNotes(input.ownerCommitment)
     .filter((note) => note.status === "available")
     .filter((note) => !input.assetDigest || note.assetDigest === input.assetDigest)
+    .filter((note) => !input.commitment || note.commitment === input.commitment)
     .sort((left, right) => compareBigInt(BigInt(right.amount), BigInt(left.amount)));
   const note = candidates[0];
   if (note) return note;
 
-  throw new Error("No available collateral to withdraw");
+  throw new Error(input.commitment ? "Selected private note is unavailable" : "No available collateral to withdraw");
 }
 
 export function lockPrivateMarginNote(commitment: Hex, intentCommitment: Hex): void {

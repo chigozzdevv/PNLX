@@ -240,30 +240,10 @@ button:disabled {
 
 .portfolio-page {
   display: grid;
-  grid-template-rows: auto auto minmax(280px, 1fr);
+  grid-template-rows: auto minmax(280px, 1fr);
   gap: 8px;
   min-height: calc(100vh - 132px);
   min-width: 0;
-}
-
-.portfolio-heading {
-  display: flex;
-  min-height: 46px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 2px 4px;
-}
-
-.portfolio-heading h1 {
-  color: var(--text-primary);
-  font-size: 20px;
-  font-weight: 950;
-  letter-spacing: -0.02em;
-}
-
-.portfolio-withdraw-button {
-  min-width: 96px;
 }
 
 .portfolio-summary {
@@ -305,6 +285,39 @@ button:disabled {
   color: white;
   font-size: 19px;
   font-weight: 950;
+}
+
+.portfolio-stat-with-action {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.portfolio-stat-value {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.portfolio-balance-action {
+  min-height: 30px;
+  border: 1px solid rgba(37, 214, 149, 0.22);
+  border-radius: 7px;
+  background: rgba(37, 214, 149, 0.075);
+  padding: 0 10px;
+  color: var(--accent-green);
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.portfolio-balance-action:hover:not(:disabled) {
+  border-color: rgba(37, 214, 149, 0.4);
+  background: rgba(37, 214, 149, 0.12);
+}
+
+.portfolio-balance-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
 }
 
 .order-column {
@@ -3676,10 +3689,6 @@ button:disabled {
     white-space: nowrap;
   }
 
-  .portfolio-heading {
-    padding-inline: 2px;
-  }
-
   .portfolio-stat {
     min-width: 144px;
     flex-basis: 144px;
@@ -4115,6 +4124,87 @@ button:disabled {
 
 .pnl-modal-btn-done:active {
   transform: scale(0.98);
+}
+
+.withdrawal-modal {
+  max-width: 400px;
+  gap: 16px;
+}
+
+.withdrawal-note-list {
+  display: grid;
+  max-height: 280px;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.withdrawal-note {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 10px 12px;
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.withdrawal-note > span {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.withdrawal-note strong {
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.withdrawal-note small {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.withdrawal-note-selected {
+  border-color: rgba(37, 214, 149, 0.42);
+  background: rgba(37, 214, 149, 0.075);
+}
+
+.withdrawal-modal-actions {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 8px;
+}
+
+.withdrawal-cancel-button,
+.withdrawal-confirm-button {
+  min-height: 42px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.withdrawal-cancel-button {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-muted);
+}
+
+.withdrawal-confirm-button {
+  background: var(--accent-orange);
+  color: white;
+}
+
+.withdrawal-cancel-button:disabled,
+.withdrawal-confirm-button:disabled,
+.withdrawal-note:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 /* Animations */

@@ -9,7 +9,7 @@ interface PortfolioPageProps {
   loading?: boolean;
   onCancelOrder?: (order: ServerOwnerOrderSnapshot) => Promise<void> | void;
   onClosePosition?: (position: PositionRow) => Promise<void> | void;
-  onWithdrawCollateral?: () => Promise<void> | void;
+  onOpenWithdrawal?: () => void;
   trading: TradingLiveData;
   withdrawingCollateral?: boolean;
 }
@@ -21,7 +21,7 @@ export function PortfolioPage({
   loading = false,
   onCancelOrder,
   onClosePosition,
-  onWithdrawCollateral,
+  onOpenWithdrawal,
   trading,
   withdrawingCollateral = false,
 }: PortfolioPageProps) {
@@ -31,26 +31,24 @@ export function PortfolioPage({
 
   return (
     <main className="portfolio-page">
-      <header className="portfolio-heading">
-        <h1>Portfolio</h1>
-        <button
-          className="secondary-ticket-button portfolio-withdraw-button"
-          disabled={!onWithdrawCollateral || withdrawingCollateral || availableCollateral <= 0}
-          type="button"
-          onClick={() => onWithdrawCollateral?.()}
-        >
-          {withdrawingCollateral ? "Withdrawing" : "Withdraw"}
-        </button>
-      </header>
-
       <section aria-label="Account summary" className="portfolio-summary">
         <div className="portfolio-stat">
           <span>Account Value</span>
           <strong>{formatUsd(accountValue)}</strong>
         </div>
-        <div className="portfolio-stat">
-          <span>Available</span>
-          <strong>{formatUsd(availableCollateral)}</strong>
+        <div className="portfolio-stat portfolio-stat-with-action">
+          <div className="portfolio-stat-value">
+            <span>Available</span>
+            <strong>{formatUsd(availableCollateral)}</strong>
+          </div>
+          <button
+            className="portfolio-balance-action"
+            disabled={!onOpenWithdrawal || withdrawingCollateral || availableCollateral <= 0}
+            type="button"
+            onClick={onOpenWithdrawal}
+          >
+            {withdrawingCollateral ? "Withdrawing" : "Withdraw"}
+          </button>
         </div>
         <div className="portfolio-stat">
           <span>Margin in Use</span>
