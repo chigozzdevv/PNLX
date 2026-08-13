@@ -19,6 +19,7 @@ import {
   setPrivateMarginNoteRuntimeScope,
 } from "@/lib/private-margin-notes";
 import { priceFromOracleString, rateFromMicroBps } from "@/lib/format";
+import { walletMatchedVolumeUsd } from "@/lib/wallet-volume";
 import type {
   AccountSnapshot,
   Hex,
@@ -137,11 +138,18 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
   const publicMarkets = new Map(
     (activePortfolio?.publicState.markets ?? []).map((market) => [market.marketId, market]),
   );
+  const privateOpeningPayloads = await decryptRecoverablePrivateOpenings(session, activePortfolio);
   const privateOpenings = new Map(
-    (await decryptRecoverablePrivateOpenings(session, activePortfolio)).map(
+    privateOpeningPayloads.map(
       (payload) => [payload.opening.positionCommitment, payload.opening],
     ),
   );
+  const tradedVolume = session && activePortfolio
+    ? walletMatchedVolumeUsd(
+        privateOpeningPayloads.map((payload) => payload.opening),
+        activePortfolio.positions.map((position) => position.positionCommitment),
+      )
+    : null;
   const positionLockedMargin = activePortfolio?.positions.reduce((total, position) => {
     if (position.status !== "open") return total;
     const opening = privateOpenings.get(position.positionCommitment);
@@ -157,7 +165,14 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
   const marketPrices = new Map(markets.map((market) => [market.marketId, market.price]));
 
   return {
-    account: accountFromServer(session, activePortfolio, lockedMargin, spendablePrivateMargin, pendingPrivateMargin),
+    account: accountFromServer(
+      session,
+      activePortfolio,
+      lockedMargin,
+      spendablePrivateMargin,
+      pendingPrivateMargin,
+      tradedVolume,
+    ),
     accountEventCount: activePortfolio?.accountEvents.length ?? 0,
     activity: activePortfolio?.activities ?? [],
     markets,
@@ -325,6 +340,7 @@ function accountFromServer(
   lockedMargin = 0,
   spendablePrivateMargin = 0,
   pendingPrivateMargin = 0,
+  tradedVolume: number | null = null,
 ): AccountSnapshot {
   const privateTotal = lockedMargin + spendablePrivateMargin + pendingPrivateMargin;
   return {
@@ -338,6 +354,7 @@ function accountFromServer(
     pendingShieldedUsdc: pendingPrivateMargin,
     privacyMode: "shielded",
     shieldedUsdc: privateTotal,
+    tradedVolume,
   };
 }
 

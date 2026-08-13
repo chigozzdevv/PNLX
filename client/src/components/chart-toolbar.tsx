@@ -2,7 +2,7 @@
 
 import { Activity, Check, Maximize2, RotateCcw } from "lucide-react";
 import type { ChartIndicatorId } from "@/lib/chart-indicators";
-import type { CandleInterval, CandleTransport } from "@/lib/use-market-candles";
+import type { CandleInterval } from "@/lib/use-market-candles";
 
 interface ChartToolbarProps {
   indicators: ChartIndicatorId[];
@@ -12,7 +12,6 @@ interface ChartToolbarProps {
   onIndicatorToggle: (indicator: ChartIndicatorId) => void;
   onIntervalChange: (interval: CandleInterval) => void;
   onReset: () => void;
-  transport: CandleTransport;
 }
 
 const intervals: CandleInterval[] = ["1m", "5m", "15m", "1h", "1d"];
@@ -33,7 +32,6 @@ export function ChartToolbar({
   onIndicatorToggle,
   onIntervalChange,
   onReset,
-  transport,
 }: ChartToolbarProps) {
   return (
     <div className="chart-toolbar">
@@ -60,7 +58,6 @@ export function ChartToolbar({
           <div className="indicator-popover">
             <div className="indicator-popover-heading">
               <strong>Indicators</strong>
-              <span>Volume is always visible</span>
             </div>
             {availableIndicators.map((indicator) => {
               const active = indicators.includes(indicator.id);
@@ -82,10 +79,7 @@ export function ChartToolbar({
           </div>
         </details>
 
-        <span className={`chart-stream-status chart-stream-${transport}`}>
-          <i />
-          {loadingMore ? "Loading history" : transportLabel(transport)}
-        </span>
+        {loadingMore ? <span className="chart-stream-status">Loading history</span> : null}
         <button aria-label="Reset chart view" className="chart-icon-button" title="Reset chart view" type="button" onClick={onReset}>
           <RotateCcw size={15} />
         </button>
@@ -95,11 +89,4 @@ export function ChartToolbar({
       </div>
     </div>
   );
-}
-
-function transportLabel(transport: CandleTransport): string {
-  if (transport === "stream") return "Live";
-  if (transport === "fallback") return "Reconnecting";
-  if (transport === "connecting") return "Connecting";
-  return "Offline";
 }

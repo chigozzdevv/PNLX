@@ -15,6 +15,7 @@ const account: AccountSnapshot = {
   pendingShieldedUsdc: 0,
   privacyMode: "shielded",
   shieldedUsdc: 125,
+  tradedVolume: 250,
 };
 
 const connectedWallet: WalletSessionController = {

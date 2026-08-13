@@ -5040,45 +5040,100 @@ button:disabled {
   text-decoration: underline;
 }
 
-/* Trading workspace: professional chart and order hierarchy */
+/* Trading workspace: flat, continuous terminal hierarchy */
 .trade-grid {
   grid-template-areas:
     "main order"
     "positions order";
   grid-template-columns: minmax(0, 1fr) clamp(350px, 23vw, 410px);
-  gap: 10px;
+  gap: 0;
+  border-block: 1px solid rgba(255, 255, 255, 0.07);
+  background: #111313;
+  font-variant-numeric: tabular-nums;
 }
 
 .main-column {
   grid-area: main;
+  gap: 0;
 }
 
 .order-column {
   grid-area: order;
+  border-left: 1px solid rgba(255, 255, 255, 0.07);
+  background: #111313;
 }
 
 .positions-workspace {
   grid-area: positions;
   min-width: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  background: #111313;
+}
+
+.positions-workspace .positions-panel {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.positions-workspace .positions-topbar {
+  min-height: 49px;
+  padding: 0 12px;
+}
+
+.positions-workspace .positions-tabs {
+  gap: 26px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.positions-workspace .positions-tab {
+  position: relative;
+  min-height: 48px;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.positions-workspace .positions-tab-active {
+  background: transparent;
+  color: #f1efec;
+}
+
+.positions-workspace .positions-tab-active::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.72);
+  content: "";
 }
 
 .market-header {
   grid-template-columns: minmax(238px, 0.9fr) minmax(172px, 0.62fr) minmax(0, 2fr);
-  gap: 8px;
+  gap: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: #111313;
 }
 
 .market-identity {
   position: relative;
   min-width: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.07);
 }
 
 .market-card,
 .market-price-block,
 .market-summary {
   height: 68px;
-  border: 1px solid rgba(255, 255, 255, 0.075);
-  border-radius: 8px;
-  background: #15171d;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .market-card {
@@ -5156,6 +5211,7 @@ button:disabled {
   align-content: center;
   gap: 2px 8px;
   min-width: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.07);
   padding: 8px 13px;
 }
 
@@ -5202,7 +5258,7 @@ button:disabled {
 .market-dropdown {
   width: min(320px, calc(100vw - 24px));
   border-radius: 9px;
-  background: #171a20;
+  background: rgba(17, 19, 19, 0.98);
 }
 
 .market-dropdown-item > span {
@@ -5216,8 +5272,9 @@ button:disabled {
 
 .chart-panel {
   grid-template-rows: auto minmax(560px, 1fr);
-  border-color: rgba(255, 255, 255, 0.075);
-  background: #101319;
+  border: 0;
+  border-radius: 0;
+  background: #111313;
 }
 
 .chart-toolbar {
@@ -5226,7 +5283,7 @@ button:disabled {
   min-height: 48px;
   justify-content: space-between;
   gap: 12px;
-  background: #15181e;
+  background: #111313;
   padding: 6px 10px;
 }
 
@@ -5239,21 +5296,32 @@ button:disabled {
 }
 
 .time-chip {
+  position: relative;
   min-width: 34px;
-  border: 1px solid transparent;
-  border-radius: 6px;
+  border: 0;
+  border-radius: 0;
   padding: 6px 8px;
   font-size: 12px;
 }
 
 .time-chip:hover {
-  background: rgba(255, 255, 255, 0.045);
+  background: transparent;
+  color: #f1efec;
 }
 
 .time-chip-active {
-  border-color: rgba(255, 165, 83, 0.26);
-  background: rgba(255, 165, 83, 0.1);
-  color: var(--accent-orange);
+  background: transparent;
+  color: #f1efec;
+}
+
+.time-chip-active::after {
+  position: absolute;
+  right: 8px;
+  bottom: 0;
+  left: 8px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.72);
+  content: "";
 }
 
 .indicator-menu {
@@ -5318,7 +5386,7 @@ button:disabled {
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 9px;
-  background: rgba(22, 25, 32, 0.98);
+  background: rgba(17, 19, 19, 0.98);
   box-shadow: 0 20px 44px rgba(0, 0, 0, 0.42);
   padding: 7px;
 }
@@ -5406,7 +5474,7 @@ button:disabled {
   width: 100%;
   height: 560px;
   min-height: 560px;
-  background: #101319;
+  background: #111313;
 }
 
 .professional-chart-legend {
@@ -5446,7 +5514,7 @@ button:disabled {
   grid-template-rows: auto minmax(0, 1fr);
   border: 0;
   border-radius: 0;
-  background: #101319;
+  background: #111313;
 }
 
 .chart-panel:fullscreen .chart-frame,
@@ -5460,16 +5528,16 @@ button:disabled {
 .chart-data-status {
   bottom: 34px;
   border-radius: 999px;
-  background: rgba(16, 19, 25, 0.88);
+  background: rgba(17, 19, 19, 0.9);
   font-size: 10px;
   padding: 7px 10px;
 }
 
 .order-ticket {
   gap: 11px;
-  border-color: rgba(255, 255, 255, 0.075);
-  border-radius: 8px;
-  background: #15171d;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   padding: 13px;
   scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
 }
@@ -5484,21 +5552,71 @@ button:disabled {
 
 .side-button {
   min-height: 44px;
-  border-radius: 7px;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+}
+
+.side-button-long.side-button-active {
+  border-color: transparent;
+  border-bottom-color: rgba(39, 214, 139, 0.72);
+  background: transparent;
+}
+
+.side-button-short.side-button-active {
+  border-color: transparent;
+  border-bottom-color: rgba(239, 69, 96, 0.72);
+  background: transparent;
+}
+
+.execution-selector > div {
+  gap: 22px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.execution-selector button {
+  position: relative;
+  border-radius: 0;
+  background: transparent;
+  font-weight: 650;
+}
+
+.execution-selector button.text-white::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.72);
+  content: "";
 }
 
 .ticket-field {
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.026);
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 0;
+  background: transparent;
+  padding: 10px 1px 12px;
+}
+
+.order-ticket .leverage-button-active {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.075);
+  color: #f1efec;
 }
 
 .ticket-order-preview {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.075);
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.022);
+  border-block: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 0;
+  background: transparent;
 }
 
 .ticket-order-preview > div {
@@ -5532,9 +5650,10 @@ button:disabled {
 }
 
 .ticket-advanced {
-  border: 1px solid rgba(255, 255, 255, 0.075);
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.018);
+  border: 0;
+  border-block: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 0;
+  background: transparent;
 }
 
 .ticket-advanced > summary {
@@ -5594,7 +5713,7 @@ button:disabled {
   bottom: -13px;
   z-index: 4;
   margin: 0 -2px;
-  background: linear-gradient(180deg, rgba(21, 23, 29, 0), #15171d 25%);
+  background: linear-gradient(180deg, rgba(17, 19, 19, 0), #111313 25%);
   padding: 9px 2px 13px;
 }
 
@@ -5649,6 +5768,8 @@ button:disabled {
   .order-column {
     position: static;
     height: auto;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+    border-left: 0;
   }
 
   .order-ticket {
@@ -5668,6 +5789,7 @@ button:disabled {
   .market-summary {
     grid-column: 1 / -1;
     height: auto;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
   }
 
   .metric-strip {
@@ -5702,6 +5824,16 @@ button:disabled {
   .market-price-block,
   .market-summary {
     grid-column: 1;
+  }
+
+  .market-identity,
+  .market-price-block {
+    border-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .market-summary {
+    border-top: 0;
   }
 
   .market-card,

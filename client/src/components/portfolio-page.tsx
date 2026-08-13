@@ -86,7 +86,13 @@ export function PortfolioPage({
             label="Margin in use"
             value={portfolioUsd(trading.account.lockedMargin)}
           />
-          <SupportingValue hidden={balancesHidden} label="Traded volume" value="—" />
+          {trading.account.tradedVolume !== null ? (
+            <SupportingValue
+              hidden={balancesHidden}
+              label="Traded volume"
+              value={portfolioUsd(trading.account.tradedVolume)}
+            />
+          ) : null}
         </div>
       </section>
 

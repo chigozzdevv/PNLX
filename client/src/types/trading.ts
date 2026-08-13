@@ -167,6 +167,7 @@ export interface AccountSnapshot {
   pendingShieldedUsdc: number;
   privacyMode: "shielded";
   shieldedUsdc: number | null;
+  tradedVolume: number | null;
 }
 
 export interface MarketDisplay {

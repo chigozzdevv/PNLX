@@ -53,12 +53,13 @@ interface ChartSeries {
   macdSignal?: ISeriesApi<"Line">;
   rsi?: ISeriesApi<"Line">;
   sma?: ISeriesApi<"Line">;
-  volume: ISeriesApi<"Histogram">;
   vwap?: ISeriesApi<"Line">;
 }
 
 const CHART_HEIGHT = 560;
+const DEFAULT_VISIBLE_CANDLES = 96;
 const LOAD_MORE_THRESHOLD = 40;
+const RIGHT_OFFSET_BARS = 8;
 
 export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function PriceChart(
   { candles, indicators, market, onLoadOlder },
@@ -81,7 +82,11 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
   indicatorsRef.current = indicators;
 
   useImperativeHandle(ref, () => ({
-    reset: () => chartRef.current?.timeScale().fitContent(),
+    reset: () => {
+      const chart = chartRef.current;
+      if (!chart) return;
+      showLatestWindow(chart, candlesRef.current.filter(isValidCandle).length);
+    },
     toggleFullscreen: () => {
       const panel = containerRef.current?.closest(".chart-panel") as HTMLElement | null;
       if (!panel) return;
@@ -111,13 +116,13 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
       height: container.clientHeight || CHART_HEIGHT,
       width: container.clientWidth,
       crosshair: {
-        horzLine: { color: "rgba(200, 208, 226, 0.42)", labelBackgroundColor: "#333b4f" },
+        horzLine: { color: "rgba(211, 205, 194, 0.34)", labelBackgroundColor: "#3a3833" },
         mode: CrosshairMode.Normal,
-        vertLine: { color: "rgba(200, 208, 226, 0.34)", labelBackgroundColor: "#333b4f" },
+        vertLine: { color: "rgba(211, 205, 194, 0.28)", labelBackgroundColor: "#3a3833" },
       },
       grid: {
-        horzLines: { color: "rgba(255, 255, 255, 0.055)" },
-        vertLines: { color: "rgba(255, 255, 255, 0.045)" },
+        horzLines: { color: "rgba(235, 230, 220, 0.05)" },
+        vertLines: { color: "rgba(235, 230, 220, 0.04)" },
       },
       handleScale: {
         axisDoubleClickReset: true,
@@ -133,21 +138,21 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
       },
       layout: {
         attributionLogo: true,
-        background: { color: "#101319", type: ColorType.Solid },
+        background: { color: "#111313", type: ColorType.Solid },
         fontFamily: "var(--font-sans), Inter, sans-serif",
-        textColor: "#8992a8",
+        textColor: "#918c83",
       },
       localization: {
         priceFormatter: (price: number) => formatNumber(price, price < 10 ? 5 : 2),
       },
       rightPriceScale: {
-        borderColor: "rgba(255, 255, 255, 0.09)",
+        borderColor: "rgba(235, 230, 220, 0.08)",
         minimumWidth: 76,
         scaleMargins: { bottom: 0.08, top: 0.08 },
       },
       timeScale: {
         barSpacing: 8,
-        borderColor: "rgba(255, 255, 255, 0.09)",
+        borderColor: "rgba(235, 230, 220, 0.08)",
         minBarSpacing: 1.5,
         rightOffset: 8,
         secondsVisible: false,
@@ -166,11 +171,7 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
       wickDownColor: "#f15367",
       wickUpColor: "#28d58f",
     }, 0);
-    const volumeSeries = chart.addSeries(HistogramSeries, {
-      priceFormat: { type: "volume" },
-      priceLineVisible: false,
-    }, 1);
-    const series: ChartSeries = { candles: candleSeries, volume: volumeSeries };
+    const series: ChartSeries = { candles: candleSeries };
 
     const handleCrosshair = (param: MouseEventParams<Time>) => {
       const value = param.seriesData.get(candleSeries) as CandlestickData<Time> | undefined;
@@ -210,11 +211,9 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
     seriesRef.current = series;
     const initialCandles = candlesRef.current.filter(isValidCandle);
     series.candles.setData(initialCandles.map(toCandlestickData));
-    series.volume.setData(initialCandles.map(toVolumeData));
     configureIndicators(chart, series, indicatorsRef.current, initialCandles);
     if (initialCandles.length > 0) {
-      chart.timeScale().fitContent();
-      chart.timeScale().scrollToPosition(8, false);
+      showLatestWindow(chart, initialCandles.length);
       initialRangeSetRef.current = true;
       previousFirstTimeRef.current = Date.parse(initialCandles[0].time);
     }
@@ -255,12 +254,10 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
     const prependedHistory = firstTime !== undefined && previousFirstTimeRef.current !== undefined && firstTime < previousFirstTimeRef.current;
 
     series.candles.setData(cleanCandles.map(toCandlestickData));
-    series.volume.setData(cleanCandles.map(toVolumeData));
     setIndicatorData(series, cleanCandles);
 
     if (!initialRangeSetRef.current && cleanCandles.length > 0) {
-      chart.timeScale().fitContent();
-      chart.timeScale().scrollToPosition(8, false);
+      showLatestWindow(chart, cleanCandles.length);
       initialRangeSetRef.current = true;
     } else if (prependedHistory && previousVisibleRange) {
       chart.timeScale().setVisibleRange(previousVisibleRange);
@@ -281,7 +278,6 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
           <span>H <b>{chartPrice(legendCandle.high)}</b></span>
           <span>L <b>{chartPrice(legendCandle.low)}</b></span>
           <span>C <b>{chartPrice(legendCandle.close)}</b></span>
-          <span>Vol <b>{legendCandle.volume > 0 ? formatNumber(legendCandle.volume, 2) : "—"}</b></span>
         </div>
       ) : null}
     </div>
@@ -395,14 +391,6 @@ function toCandlestickData(candle: ChartCandle): CandlestickData<Time> {
   };
 }
 
-function toVolumeData(candle: ChartCandle): HistogramData<Time> {
-  return {
-    color: candle.close >= candle.open ? "rgba(40, 213, 143, 0.34)" : "rgba(241, 83, 103, 0.34)",
-    time: toTime(candle.time),
-    value: candle.volume,
-  };
-}
-
 function toLineData(points: IndicatorPoint[]): LineData<Time>[] {
   return points.map((point) => ({ time: toTime(point.time), value: point.value }));
 }
@@ -429,4 +417,13 @@ function isValidCandle(candle: ChartCandle): boolean {
 
 function chartPrice(value: number): string {
   return formatNumber(value, value < 10 ? 5 : 2);
+}
+
+function showLatestWindow(chart: IChartApi, candleCount: number): void {
+  if (candleCount <= 0) return;
+  const lastIndex = candleCount - 1;
+  chart.timeScale().setVisibleLogicalRange({
+    from: Math.max(0, candleCount - DEFAULT_VISIBLE_CANDLES),
+    to: lastIndex + RIGHT_OFFSET_BARS,
+  });
 }

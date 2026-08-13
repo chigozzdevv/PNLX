@@ -256,13 +256,13 @@ export function TradingPage() {
                 }}
                 onIntervalChange={setChartInterval}
                 onReset={() => priceChartRef.current?.reset()}
-                transport={candles.transport}
               />
               {displaySelectedMarket ? (
                 <div className="chart-frame">
                   <PriceChart
                     candles={candles.candles}
                     indicators={chartIndicators}
+                    key={`${displaySelectedMarket.marketId}:${chartInterval}`}
                     market={displaySelectedMarket}
                     onLoadOlder={candles.loadOlder}
                     ref={priceChartRef}
