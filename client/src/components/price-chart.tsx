@@ -28,6 +28,7 @@ import {
   type IndicatorPoint,
 } from "@/lib/chart-indicators";
 import { ChartTools } from "@/components/chart-tools";
+import { chartVolumeData } from "@/lib/chart-volume";
 import { formatNumber } from "@/lib/format";
 import type { ChartCandle, MarketDisplay } from "@/types/trading";
 
@@ -55,6 +56,7 @@ interface ChartSeries {
   macdSignal?: ISeriesApi<"Line">;
   rsi?: ISeriesApi<"Line">;
   sma?: ISeriesApi<"Line">;
+  volume?: ISeriesApi<"Histogram">;
   vwap?: ISeriesApi<"Line">;
 }
 
@@ -218,6 +220,7 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
     setDrawingSurface({ chart, series: candleSeries });
     const initialCandles = candlesRef.current.filter(isValidCandle);
     series.candles.setData(initialCandles.map(toCandlestickData));
+    syncVolumeSeries(chart, series, initialCandles);
     configureIndicators(chart, series, indicatorsRef.current, initialCandles);
     if (initialCandles.length > 0) {
       showLatestWindow(chart, initialCandles.length);
@@ -261,6 +264,7 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
     const prependedHistory = firstTime !== undefined && previousFirstTimeRef.current !== undefined && firstTime < previousFirstTimeRef.current;
 
     series.candles.setData(cleanCandles.map(toCandlestickData));
+    syncVolumeSeries(chart, series, cleanCandles);
     setIndicatorData(series, cleanCandles);
 
     if (!initialRangeSetRef.current && cleanCandles.length > 0) {
@@ -301,6 +305,50 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
     </div>
   );
 });
+
+function syncVolumeSeries(
+  chart: IChartApi,
+  series: ChartSeries,
+  candles: ChartCandle[],
+): void {
+  const volumeData = chartVolumeData(candles);
+  if (volumeData.length === 0) {
+    if (series.volume) {
+      chart.removeSeries(series.volume);
+      series.volume = undefined;
+    }
+    series.candles.priceScale().applyOptions({
+      scaleMargins: { bottom: 0.08, top: 0.08 },
+    });
+    return;
+  }
+
+  if (!series.volume) {
+    series.volume = chart.addSeries(HistogramSeries, {
+      base: 0,
+      color: "rgba(40, 213, 143, 0.48)",
+      lastValueVisible: false,
+      priceFormat: { type: "volume" },
+      priceLineVisible: false,
+      priceScaleId: "volume",
+      title: "Volume",
+    }, 0);
+    series.volume.priceScale().applyOptions({
+      borderVisible: false,
+      scaleMargins: { bottom: 0.02, top: 0.78 },
+      visible: false,
+    });
+  }
+
+  series.candles.priceScale().applyOptions({
+    scaleMargins: { bottom: 0.25, top: 0.08 },
+  });
+  series.volume.setData(volumeData.map((point): HistogramData<Time> => ({
+    color: point.color,
+    time: toTime(point.time),
+    value: point.value,
+  })));
+}
 
 function configureIndicators(
   chart: IChartApi,

@@ -24,7 +24,12 @@ import type {
   ResidualOrderRecord,
   WithdrawalRecord,
 } from "@pnlx/protocol-types";
-import { ProtocolStore, retainedBatchExecutionRuns } from "@/shared/state/store";
+import {
+  backfillMarketSettlementVolumes,
+  ProtocolStore,
+  retainedBatchExecutionRuns,
+  type MarketSettlementVolumeRecord,
+} from "@/shared/state/store";
 
 const ZERO_HEX = "0x0" as Hex;
 
@@ -41,6 +46,7 @@ interface ProtocolStoreSnapshot {
   liquidations: [Hex, LiquidationRecord][];
   marginCommitments: Hex[];
   markets: [string, MarketConfig][];
+  marketSettlementVolumes?: [Hex, MarketSettlementVolumeRecord][];
   orderLifecycle: [Hex, OrderLifecycleRecord][];
   pendingAssetDeposits: [Hex, PendingAssetDepositRecord][];
   positionCloses: [Hex, PositionCloseRecord][];
@@ -218,6 +224,7 @@ export class FileProtocolStore extends ProtocolStore {
     this.positionLifecycle.clear();
     this.markets.clear();
     this.settlements.clear();
+    this.marketSettlementVolumes.clear();
     this.liquidations.clear();
     this.conditionalOrders.clear();
     this.conditionalCloses.clear();
@@ -258,6 +265,9 @@ export class FileProtocolStore extends ProtocolStore {
     for (const [key, value] of snapshot.orderLifecycle ?? []) this.orderLifecycle.set(key, value);
     for (const [key, value] of snapshot.positionLifecycle ?? []) this.positionLifecycle.set(key, value);
     for (const [key, value] of snapshot.markets) this.markets.set(key, value);
+    for (const [key, value] of snapshot.marketSettlementVolumes ?? []) {
+      this.marketSettlementVolumes.set(key, value);
+    }
     for (const [key, value] of snapshot.settlements) {
       this.settlements.set(key, {
         ...value,
@@ -279,6 +289,7 @@ export class FileProtocolStore extends ProtocolStore {
     for (const [key, value] of retainedBatchExecutionRuns(snapshot.batchExecutionRuns ?? [])) {
       this.batchExecutionRuns.set(key, value);
     }
+    backfillMarketSettlementVolumes(this);
     for (const [key, value] of snapshot.withdrawals) this.withdrawals.set(key, value);
     for (const value of snapshot.proofs) this.proofs.add(value);
   }
@@ -297,6 +308,7 @@ export class FileProtocolStore extends ProtocolStore {
       liquidations: [...this.liquidations.entries()],
       marginCommitments: [...this.marginCommitments],
       markets: [...this.markets.entries()],
+      marketSettlementVolumes: [...this.marketSettlementVolumes.entries()],
       orderLifecycle: [...this.orderLifecycle.entries()],
       pendingAssetDeposits: [...this.pendingAssetDeposits.entries()],
       positionCloses: [...this.positionCloses.entries()],

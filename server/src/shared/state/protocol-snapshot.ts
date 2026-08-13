@@ -23,8 +23,10 @@ import type {
   WithdrawalRecord,
 } from "@pnlx/protocol-types";
 import {
+  backfillMarketSettlementVolumes,
   retainedBatchExecutionRuns,
   retainedFundingPremiumSamples,
+  type MarketSettlementVolumeRecord,
   type ProtocolStore,
 } from "@/shared/state/store";
 
@@ -44,6 +46,7 @@ export interface ProtocolStoreSnapshot {
   liquidations: [Hex, LiquidationRecord][];
   marginCommitments: Hex[];
   markets: [string, MarketConfig][];
+  marketSettlementVolumes: [Hex, MarketSettlementVolumeRecord][];
   orderLifecycle: [Hex, OrderLifecycleRecord][];
   pendingAssetDeposits: [Hex, PendingAssetDepositRecord][];
   positionCloses: [Hex, PositionCloseRecord][];
@@ -72,6 +75,7 @@ export function snapshotProtocolStore(store: ProtocolStore): ProtocolStoreSnapsh
     liquidations: [...store.liquidations.entries()],
     marginCommitments: [...store.marginCommitments],
     markets: [...store.markets.entries()],
+    marketSettlementVolumes: [...store.marketSettlementVolumes.entries()],
     orderLifecycle: [...store.orderLifecycle.entries()],
     pendingAssetDeposits: [...store.pendingAssetDeposits.entries()],
     positionCloses: [...store.positionCloses.entries()],
@@ -96,6 +100,7 @@ export function applyProtocolStoreSnapshot(store: ProtocolStore, snapshot: Parti
   store.positionLifecycle.clear();
   store.markets.clear();
   store.settlements.clear();
+  store.marketSettlementVolumes.clear();
   store.liquidations.clear();
   store.conditionalOrders.clear();
   store.conditionalCloses.clear();
@@ -137,6 +142,9 @@ export function applyProtocolStoreSnapshot(store: ProtocolStore, snapshot: Parti
   for (const [key, value] of snapshot.orderLifecycle ?? []) store.orderLifecycle.set(key, value);
   for (const [key, value] of snapshot.positionLifecycle ?? []) store.positionLifecycle.set(key, value);
   for (const [key, value] of snapshot.markets ?? []) store.markets.set(key, value);
+  for (const [key, value] of snapshot.marketSettlementVolumes ?? []) {
+    store.marketSettlementVolumes.set(key, value);
+  }
   for (const [key, value] of snapshot.settlements ?? []) {
     store.settlements.set(key, {
       ...value,
@@ -161,6 +169,7 @@ export function applyProtocolStoreSnapshot(store: ProtocolStore, snapshot: Parti
   for (const [key, value] of retainedBatchExecutionRuns(snapshot.batchExecutionRuns ?? [])) {
     store.batchExecutionRuns.set(key, value);
   }
+  backfillMarketSettlementVolumes(store);
   for (const [key, value] of snapshot.withdrawals ?? []) store.withdrawals.set(key, value);
   for (const value of snapshot.proofs ?? []) store.proofs.add(value);
 }

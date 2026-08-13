@@ -35,6 +35,13 @@ import { assertPrivateMatchIntent } from "@/workers/batch-matcher/private-intent
 export const BATCH_EXECUTION_RUN_RETENTION = 1_000;
 export const FUNDING_PREMIUM_SAMPLE_RETENTION = 120;
 
+export interface MarketSettlementVolumeRecord {
+  marketId: string;
+  matchedVolume: bigint;
+  settledAt: number;
+  settlementDigest: Hex;
+}
+
 export class ProtocolStore {
   readonly marginCommitments = new Set<Hex>();
   readonly positionCommitments = new Set<Hex>();
@@ -45,6 +52,7 @@ export class ProtocolStore {
   readonly positionLifecycle = new Map<Hex, PositionLifecycleRecord>();
   readonly markets = new Map<string, MarketConfig>();
   readonly settlements = new Map<string, BatchSettlement>();
+  readonly marketSettlementVolumes = new Map<Hex, MarketSettlementVolumeRecord>();
   readonly liquidations = new Map<Hex, LiquidationRecord>();
   readonly conditionalOrders = new Map<Hex, ConditionalOrderCommitment>();
   readonly conditionalCloses = new Map<Hex, ConditionalOrderRecord>();
@@ -344,6 +352,12 @@ export class ProtocolStore {
       this.addAccountEvent(event);
     }
     this.settlements.set(key, settlement);
+    this.marketSettlementVolumes.set(settlement.settlementDigest, {
+      marketId: settlement.marketId,
+      matchedVolume: settlement.aggregateVolume / 2n,
+      settledAt: Date.now(),
+      settlementDigest: settlement.settlementDigest,
+    });
   }
 
   addResidualOrder(record: ResidualOrderRecord, privateMatchIntent?: PrivateMatchIntent): void {
@@ -602,6 +616,29 @@ export function retainedBatchExecutionRuns(
   entries: [Hex, BatchExecutionRunRecord][],
 ): [Hex, BatchExecutionRunRecord][] {
   return entries.slice(-BATCH_EXECUTION_RUN_RETENTION);
+}
+
+export function backfillMarketSettlementVolumes(store: Pick<
+  ProtocolStore,
+  "batchExecutionRuns" | "marketSettlementVolumes"
+>): void {
+  for (const run of store.batchExecutionRuns.values()) {
+    if (
+      run.status !== "settled" ||
+      run.aggregateVolume === undefined ||
+      run.completedAt === undefined ||
+      !run.settlementDigest ||
+      store.marketSettlementVolumes.has(run.settlementDigest)
+    ) {
+      continue;
+    }
+    store.marketSettlementVolumes.set(run.settlementDigest, {
+      marketId: run.marketId,
+      matchedVolume: run.aggregateVolume / 2n,
+      settledAt: run.completedAt,
+      settlementDigest: run.settlementDigest,
+    });
+  }
 }
 
 export function retainedFundingPremiumSamples(

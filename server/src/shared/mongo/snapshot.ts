@@ -25,6 +25,7 @@ export const NORMALIZED_SNAPSHOT_FIELDS = [
   ["liquidations", "liquidations"],
   ["marginCommitments", "margin_commitments"],
   ["markets", "markets"],
+  ["marketSettlementVolumes", "market_volumes"],
   ["orderLifecycle", "orders"],
   ["pendingAssetDeposits", "pending_deposits"],
   ["positionCloses", "position_closes"],
@@ -223,6 +224,7 @@ export async function readNormalizedSnapshot(
   const snapshot = normalizedSnapshotFromRecords(entries, {
     ...checkpoint.counts,
     fundingPremiumSamples: checkpoint.counts.fundingPremiumSamples ?? 0,
+    marketSettlementVolumes: checkpoint.counts.marketSettlementVolumes ?? 0,
   });
   const actualRoot = normalizedSnapshotPositionRoot(snapshot);
   if (actualRoot.toLowerCase() !== checkpoint.positionRoot.toLowerCase()) {

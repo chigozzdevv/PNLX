@@ -193,6 +193,7 @@ export function ChartTools({ chart, dataRevision, scope, series }: ChartToolsPro
       <div
         aria-describedby={`chart-drawing-help-${scope.replace(/[^a-z0-9_-]/gi, "-")}`}
         aria-label="Chart drawing tools"
+        aria-orientation="vertical"
         className="chart-drawing-toolbar"
         role="toolbar"
       >

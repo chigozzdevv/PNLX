@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   chooseLatestTick,
   mergeCandles,
+  mergeSnapshotCandles,
   upsertPrice,
   type MarketPriceUpdate,
 } from "@/lib/use-market-candles";
@@ -37,5 +38,14 @@ describe("market candle stream helpers", () => {
     const latest = tick(11, 1_000);
     expect(chooseLatestTick(older, latest)).toBe(latest);
     expect(mergeCandles([first], [{ ...first, close: 12 }])[0].close).toBe(12);
+  });
+
+  test("refreshes settlement volume without replacing the latest streamed price", () => {
+    const snapshot = [{ ...first, close: 10, volume: 12.5 }];
+    const current = [{ ...first, close: 12, high: 12, volume: 0 }];
+
+    expect(mergeSnapshotCandles(snapshot, current)).toEqual([
+      expect.objectContaining({ close: 12, high: 12, volume: 12.5 }),
+    ]);
   });
 });

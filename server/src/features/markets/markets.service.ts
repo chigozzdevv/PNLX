@@ -12,6 +12,7 @@ import type { OnchainMarketConfig, OraclePriceRelayInput } from "@/workers/oncha
 import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
 import type { OracleService } from "@/workers/oracle/oracle.service";
 import { MarketDataService } from "@/features/markets/market-data.service";
+import { applySettlementVolumes } from "@/features/markets/market-volume";
 import { currentFundingPremium } from "@/workers/funding-engine/funding-engine.service";
 import type {
   CreateOracleMarketInput,
@@ -205,7 +206,16 @@ export class MarketsService {
   }
 
   async candles(input: MarketCandlesInput) {
-    return this.marketData.candles(input);
+    const response = await this.marketData.candles(input);
+    return {
+      ...response,
+      candles: applySettlementVolumes(
+        response.candles,
+        input,
+        this.executor.store.marketSettlementVolumes.values(),
+      ),
+      volumeSource: "pnlx-settlements",
+    };
   }
 
   async latestPrice(marketId: string) {

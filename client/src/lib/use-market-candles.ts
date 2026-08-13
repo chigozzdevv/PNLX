@@ -45,6 +45,7 @@ export interface MarketPriceUpdate {
 
 const MAX_RETAINED_CANDLES = 5_000;
 const FALLBACK_POLL_MS = 5_000;
+const SNAPSHOT_REFRESH_MS = 10_000;
 const TICK_COALESCE_MS = 80;
 
 export function useMarketCandles(
@@ -84,6 +85,7 @@ export function useMarketCandles(
     let coalesceTimer: ReturnType<typeof setTimeout> | undefined;
     let eventSource: EventSource | undefined;
     let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+    let snapshotRequestActive = false;
     let pendingUpdate: MarketPriceUpdate | undefined;
     let lastAcceptedSignature = "";
     let streamOpen = false;
@@ -115,6 +117,8 @@ export function useMarketCandles(
     }
 
     async function loadSnapshot() {
+      if (snapshotRequestActive) return;
+      snapshotRequestActive = true;
       try {
         const response = await pnlxGet<CandlesResponse>(
           `/markets/candles?marketId=${encodeURIComponent(activeMarketId)}&interval=${interval}&limit=${limit}`,
@@ -122,7 +126,11 @@ export function useMarketCandles(
         if (!active) return;
         setState((current) => ({
           ...current,
-          candles: mergeCandles(response.candles, current.candles, MAX_RETAINED_CANDLES),
+          candles: mergeSnapshotCandles(
+            response.candles,
+            current.candles,
+            MAX_RETAINED_CANDLES,
+          ),
           error: undefined,
           hasMore: response.hasMore ?? response.candles.length >= limit,
           loading: false,
@@ -136,6 +144,8 @@ export function useMarketCandles(
           error: error instanceof Error ? error.message : "Unable to load candles",
           loading: false,
         }));
+      } finally {
+        snapshotRequestActive = false;
       }
     }
 
@@ -179,6 +189,10 @@ export function useMarketCandles(
       transport: "connecting",
     });
     void loadSnapshot();
+    const snapshotRefreshTimer = setInterval(
+      () => void loadSnapshot(),
+      SNAPSHOT_REFRESH_MS,
+    );
 
     if (typeof EventSource === "undefined") {
       scheduleFallback();
@@ -219,6 +233,7 @@ export function useMarketCandles(
       eventSource?.close();
       if (coalesceTimer) clearTimeout(coalesceTimer);
       if (fallbackTimer) clearTimeout(fallbackTimer);
+      clearInterval(snapshotRefreshTimer);
     };
   }, [interval, limit, marketId]);
 
@@ -327,6 +342,19 @@ export function mergeCandles(
   return [...byTime.values()]
     .sort((left, right) => Date.parse(left.time) - Date.parse(right.time))
     .slice(-limit);
+}
+
+export function mergeSnapshotCandles(
+  snapshot: ChartCandle[],
+  current: ChartCandle[],
+  limit = MAX_RETAINED_CANDLES,
+): ChartCandle[] {
+  const snapshotVolume = new Map(snapshot.map((candle) => [candle.time, candle.volume]));
+  const liveCandles = current.map((candle) => ({
+    ...candle,
+    volume: snapshotVolume.get(candle.time) ?? candle.volume,
+  }));
+  return mergeCandles(snapshot, liveCandles, limit);
 }
 
 function normalizeCandle(candle: ChartCandle): ChartCandle {
