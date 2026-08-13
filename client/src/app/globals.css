@@ -177,8 +177,9 @@ button:disabled {
   display: inline-flex;
   min-width: 0;
   min-height: 36px;
-  align-items: baseline;
-  gap: 5px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
   padding: 0 2px;
   color: var(--text-primary);
   cursor: pointer;
@@ -196,19 +197,14 @@ button:disabled {
   outline-offset: 3px;
 }
 
-.balance-trigger-label {
-  color: var(--text-faint);
-  font-size: 10px;
-  font-weight: 650;
-}
-
 .balance-trigger strong {
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 750;
+  line-height: 1;
+  white-space: nowrap;
 }
 
-.balance-trigger:hover .balance-trigger-label,
 .balance-trigger:hover .balance-chevron {
   color: var(--text-muted);
 }
@@ -3907,16 +3903,6 @@ button:disabled {
 
   .balance-menu {
     position: static;
-  }
-
-  .balance-trigger-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    clip-path: inset(50%);
-    white-space: nowrap;
   }
 
   .balance-popover {

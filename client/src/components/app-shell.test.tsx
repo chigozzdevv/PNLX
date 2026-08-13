@@ -32,7 +32,7 @@ const connectedWallet: WalletSessionController = {
 };
 
 describe("AppShell portfolio navigation", () => {
-  test("keeps the available balance compact and exposes the full collateral breakdown", () => {
+  test("shows only the available amount in the trigger and exposes the full collateral breakdown", () => {
     const html = renderToStaticMarkup(
       <AppShell account={account} activeView="trade" wallet={connectedWallet}>
         <div />
@@ -42,6 +42,8 @@ describe("AppShell portfolio navigation", () => {
     expect(html).toContain("Available collateral $75.00. Show collateral breakdown");
     expect(html).toContain('class="balance-menu"');
     expect(html).toContain('class="balance-trigger"');
+    expect(html).toContain('class="balance-trigger"><strong>$75.00</strong>');
+    expect(html).not.toContain('class="balance-trigger-label"');
     expect(html).toContain('aria-label="Collateral breakdown"');
     expect(html).toContain("In use");
     expect(html).toContain("Pending");

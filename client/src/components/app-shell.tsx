@@ -65,7 +65,6 @@ export function AppShell({ account, activeView, children, wallet }: AppShellProp
                   aria-label={`Available collateral ${availableCollateral}. Show collateral breakdown`}
                   className="balance-trigger"
                 >
-                  <span className="balance-trigger-label">Available</span>
                   <strong>{availableCollateral}</strong>
                   <ChevronDown aria-hidden="true" className="balance-chevron" size={13} />
                 </summary>
