@@ -832,31 +832,6 @@ button:disabled {
   color: var(--accent-orange);
 }
 
-.field-balance-group {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 7px;
-}
-
-.field-topup-button {
-  display: grid;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid rgba(39, 214, 139, 0.28);
-  border-radius: 999px;
-  background: rgba(39, 214, 139, 0.11);
-  color: var(--accent-green);
-}
-
-.field-topup-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.42;
-}
-
 .privacy-note {
   display: inline-flex;
   align-items: center;
@@ -957,41 +932,6 @@ button:disabled {
 
 .conditional-field {
   gap: 9px;
-}
-
-.toggle-switch {
-  position: relative;
-  width: 38px;
-  height: 22px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  transition:
-    border-color 160ms ease,
-    background 160ms ease;
-}
-
-.toggle-switch span {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 14px;
-  height: 14px;
-  border-radius: 999px;
-  background: var(--text-faint);
-  transition:
-    background 160ms ease,
-    transform 160ms ease;
-}
-
-.toggle-switch-active {
-  border-color: rgba(39, 214, 139, 0.32);
-  background: rgba(39, 214, 139, 0.16);
-}
-
-.toggle-switch-active span {
-  background: var(--accent-green);
-  transform: translateX(16px);
 }
 
 .condition-mode-control {
@@ -5110,14 +5050,9 @@ button:disabled {
 
 .market-select-button {
   flex: 1 1 auto;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 8px;
   color: var(--text-muted);
-}
-
-.market-select-button > span {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
 }
 
 .market-select-button strong {
@@ -5532,6 +5467,42 @@ button:disabled {
   padding: 10px 1px 12px;
 }
 
+.field-asset {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.field-meta-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.field-meta-row button {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.field-meta-row button:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.field-meta-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.field-meta-row .field-balance-warning {
+  color: var(--accent-orange);
+}
+
 .order-ticket .leverage-button-active {
   border-color: rgba(255, 255, 255, 0.28);
   background: rgba(255, 255, 255, 0.075);
@@ -5540,22 +5511,22 @@ button:disabled {
 
 .ticket-order-preview {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  overflow: hidden;
   border-block: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 0;
   background: transparent;
 }
 
 .ticket-order-preview > div {
-  display: grid;
+  display: flex;
   min-width: 0;
-  gap: 4px;
-  padding: 9px 8px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 1px;
 }
 
 .ticket-order-preview > div + div {
-  border-left: 1px solid rgba(255, 255, 255, 0.065);
+  border-top: 1px solid rgba(255, 255, 255, 0.055);
 }
 
 .ticket-order-preview span {
@@ -5568,12 +5539,10 @@ button:disabled {
 }
 
 .ticket-order-preview strong {
-  overflow: hidden;
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   font-weight: 900;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -5610,17 +5579,6 @@ button:disabled {
 
 .ticket-advanced[open] > summary::after {
   content: "−";
-}
-
-.ticket-advanced > summary em {
-  margin-left: auto;
-  border-radius: 999px;
-  background: rgba(39, 214, 139, 0.1);
-  padding: 3px 6px;
-  color: var(--accent-green);
-  font-size: 8px;
-  font-style: normal;
-  text-transform: uppercase;
 }
 
 .ticket-advanced-body {
@@ -5794,19 +5752,6 @@ button:disabled {
     overflow: hidden;
   }
 
-  .ticket-order-preview {
-    grid-template-columns: 1fr;
-  }
-
-  .ticket-order-preview > div {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-  }
-
-  .ticket-order-preview > div + div {
-    border-top: 1px solid rgba(255, 255, 255, 0.065);
-    border-left: 0;
-  }
 }
 
 /* Trade records: compact actions with network evidence available on demand. */

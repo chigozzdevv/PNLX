@@ -54,10 +54,7 @@ export function MarketHeader({ markets, selectedMarket, onSelectMarket }: Market
             type="button"
             onClick={() => setOpen((value) => !value)}
           >
-            <span>
-              <strong>{selectedMarket.pair}</strong>
-              <small>Perpetual</small>
-            </span>
+            <strong>{selectedMarket.pair}</strong>
             <ChevronDown size={17} />
           </button>
         </div>

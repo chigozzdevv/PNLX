@@ -46,6 +46,7 @@ describe("Trade surface", () => {
     expect(html).toContain("Open Interest");
     expect(html).toContain("Volume");
     expect(html).toContain("2.19K XLM");
+    expect(html).not.toContain("Perpetual");
     expect(html).not.toContain("Oracle Price");
     expect(html).not.toContain("24h Ref");
     expect(html).not.toContain("Max Leverage");
@@ -60,6 +61,11 @@ describe("Trade surface", () => {
     expect(html.match(/Exposure/g)).toHaveLength(1);
     expect(html.match(/Est\. liquidation/g)).toHaveLength(1);
     expect(html).toContain("Take Profit / Stop Loss");
+    expect(html).toContain("621.89 XLM");
+    expect(html).not.toContain("621.890547 XLM");
+    expect(html.indexOf("Take Profit / Stop Loss")).toBeLessThan(html.indexOf("Position size"));
+    expect(html).not.toContain(">Enable<");
+    expect(html).not.toContain("toggle-switch");
     expect(html).not.toContain("Advanced options &amp; order summary");
   });
 
