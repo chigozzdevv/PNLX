@@ -291,7 +291,7 @@ function blockedMessage(run: BatchExecutionRunRecord): string {
     return "Blocked: matcher failed";
   }
   if (run.phase === "proving") {
-    return "Blocked: proof generation failed";
+    return "Settlement delayed.";
   }
   if (run.phase === "batch-settlement") {
     return "Blocked: batch settlement relay failed";

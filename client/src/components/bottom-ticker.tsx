@@ -7,12 +7,17 @@ interface BottomTickerProps {
 }
 
 export function BottomTicker({ ticker, updatedAt }: BottomTickerProps) {
-  const title = updatedAt ? `Updated ${new Date(updatedAt).toLocaleTimeString()}` : undefined;
+  const visibleTicker = ticker.filter((item) => (
+    typeof item.lastPrice === "number" && Number.isFinite(item.lastPrice)
+  ));
+  const title = updatedAt
+    ? `Reference market prices · Updated ${new Date(updatedAt).toLocaleTimeString()}`
+    : "Reference market prices";
 
   return (
-    <div className="bottom-ticker" title={title}>
-      <div className="ticker-track">
-        {ticker.map((item) => (
+    <div aria-label="Reference market prices" className="bottom-ticker" role="region" title={title}>
+      <div aria-label="Scroll for more reference markets" className="ticker-track" tabIndex={0}>
+        {visibleTicker.map((item) => (
           <div className="ticker-item" key={item.pair}>
             <span>{item.pair}</span>
             {typeof item.lastPrice === "number" ? <em>{formatTickerPrice(item.lastPrice)}</em> : null}

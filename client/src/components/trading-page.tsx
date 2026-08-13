@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { BottomTicker } from "@/components/bottom-ticker";
 import { ChartToolbar } from "@/components/chart-toolbar";
 import { MarketHeader } from "@/components/market-header";
 import { OrderTicket } from "@/components/order-ticket";
@@ -15,6 +16,7 @@ import { closePosition } from "@/lib/position-close";
 import { reconcilePrivateMarginNotes } from "@/lib/private-margin-notes";
 import { depositPrivateMargin, submitTradeIntent } from "@/lib/trade-submit";
 import { useMarketCandles, type CandleInterval } from "@/lib/use-market-candles";
+import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useTradingData } from "@/lib/use-trading-data";
 import { useWalletSession } from "@/lib/use-wallet-session";
 import type { OrderTicketSubmitInput } from "@/components/order-ticket";
@@ -48,6 +50,7 @@ export function TradingPage() {
   const [pendingOrders, setPendingOrders] = useState<ServerOwnerOrderSnapshot[]>([]);
   const [optimisticOrderClock, setOptimisticOrderClock] = useState(0);
   const trading = useTradingData(wallet.session, refreshKey);
+  const ticker = useMarketTicker(trading.data.ticker);
   const [selectedMarketId, setSelectedMarketId] = useState(readStoredMarketId);
   const [chartInterval, setChartInterval] = useState<CandleInterval>("15m");
   const [chartIndicators, setChartIndicators] = useState<ChartIndicatorId[]>([]);
@@ -341,6 +344,7 @@ export function TradingPage() {
         </div>
       </main>
 
+      <BottomTicker ticker={ticker.ticker} updatedAt={ticker.updatedAt} />
       <PnlModal
         isOpen={Boolean(pnlModalData)}
         onClose={() => setPnlModalData(null)}
