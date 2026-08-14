@@ -19,7 +19,11 @@ use url::Url;
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_BATCH_MATCH_CYCLES: u64 = 10_000_000;
 const DEFAULT_LOCK_COLLATERAL_ZKC_WEI: &str = "20000000000000000000";
-const DEFAULT_MAX_PRICE_USD_MICRO: u64 = 100_000;
+const DEFAULT_MIN_PRICE_USD_MICRO: u64 = 20_000;
+const DEFAULT_MAX_PRICE_USD_MICRO: u64 = 150_000;
+const DEFAULT_RAMP_UP_PERIOD_SECONDS: u32 = 300;
+const DEFAULT_LOCK_TIMEOUT_SECONDS: u32 = 1_800;
+const DEFAULT_TIMEOUT_SECONDS: u32 = 3_600;
 const GROTH16_SEAL_BYTES: usize = 260;
 
 #[derive(Parser, Debug)]
@@ -152,7 +156,7 @@ async fn run(args: Args) -> Result<()> {
             .with_image_id(image_id_digest())
             .with_cycles(cycles)
             .with_journal(journal)
-            .with_offer(default_offer())
+            .with_offer(default_offer()?)
             .with_groth16_proof();
 
         let (request_id, expires_at) = client.submit(proof_request).await?;
@@ -292,30 +296,68 @@ fn write_request_metadata(output_dir: &PathBuf, request_id: U256, expires_at: u6
     .context("write Boundless request metadata")
 }
 
-fn default_offer() -> OfferParams {
-    OfferParams::builder()
-        .max_price(Amount::new(
-            env_u256("BOUNDLESS_MAX_PRICE_USD_MICRO", DEFAULT_MAX_PRICE_USD_MICRO),
-            Asset::USD,
-        ))
-        .lock_collateral(Amount::new(
-            env_u256(
-                "BOUNDLESS_LOCK_COLLATERAL_ZKC_WEI",
-                DEFAULT_LOCK_COLLATERAL_ZKC_WEI,
-            ),
-            Asset::ZKC,
-        ))
-        .ramp_up_period(85)
-        .lock_timeout(625)
-        .timeout(1500)
-        .into()
+fn default_offer() -> Result<OfferParams> {
+    let min_price = env_u256("BOUNDLESS_MIN_PRICE_USD_MICRO", DEFAULT_MIN_PRICE_USD_MICRO)?;
+    let max_price = env_u256("BOUNDLESS_MAX_PRICE_USD_MICRO", DEFAULT_MAX_PRICE_USD_MICRO)?;
+    let lock_collateral = env_u256(
+        "BOUNDLESS_LOCK_COLLATERAL_ZKC_WEI",
+        DEFAULT_LOCK_COLLATERAL_ZKC_WEI,
+    )?;
+    let ramp_up_period = env_u32(
+        "BOUNDLESS_RAMP_UP_PERIOD_SECONDS",
+        DEFAULT_RAMP_UP_PERIOD_SECONDS,
+    )?;
+    let lock_timeout = env_u32(
+        "BOUNDLESS_LOCK_TIMEOUT_SECONDS",
+        DEFAULT_LOCK_TIMEOUT_SECONDS,
+    )?;
+    let timeout = env_u32("BOUNDLESS_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)?;
+
+    validate_offer(min_price, max_price, ramp_up_period, lock_timeout, timeout)?;
+
+    Ok(OfferParams::builder()
+        .min_price(Amount::new(min_price, Asset::USD))
+        .max_price(Amount::new(max_price, Asset::USD))
+        .lock_collateral(Amount::new(lock_collateral, Asset::ZKC))
+        .ramp_up_period(ramp_up_period)
+        .lock_timeout(lock_timeout)
+        .timeout(timeout)
+        .into())
 }
 
-fn env_u256(name: &str, default: impl ToString) -> U256 {
-    env::var(name)
-        .ok()
-        .and_then(|raw| parse_u256(&raw).ok())
-        .unwrap_or_else(|| parse_u256(&default.to_string()).expect("valid default U256"))
+fn validate_offer(
+    min_price: U256,
+    max_price: U256,
+    ramp_up_period: u32,
+    lock_timeout: u32,
+    timeout: u32,
+) -> Result<()> {
+    if min_price > max_price {
+        anyhow::bail!("Boundless minimum price cannot exceed maximum price");
+    }
+    if ramp_up_period >= lock_timeout {
+        anyhow::bail!("Boundless ramp-up period must be shorter than lock timeout");
+    }
+    if lock_timeout >= timeout {
+        anyhow::bail!("Boundless lock timeout must be shorter than request timeout");
+    }
+    Ok(())
+}
+
+fn env_u256(name: &str, default: impl ToString) -> Result<U256> {
+    match env::var(name) {
+        Ok(raw) => parse_u256(&raw).with_context(|| format!("parse {name}")),
+        Err(env::VarError::NotPresent) => parse_u256(&default.to_string()),
+        Err(error) => Err(error).with_context(|| format!("read {name}")),
+    }
+}
+
+fn env_u32(name: &str, default: u32) -> Result<u32> {
+    match env::var(name) {
+        Ok(raw) => raw.trim().parse().with_context(|| format!("parse {name}")),
+        Err(env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(error).with_context(|| format!("read {name}")),
+    }
 }
 
 fn parse_u256(raw: &str) -> Result<U256> {
@@ -346,4 +388,32 @@ fn image_id_bytes() -> [u8; 32] {
         out[index * 4..index * 4 + 4].copy_from_slice(&word.to_le_bytes());
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_production_offer_ordering() {
+        assert!(validate_offer(
+            U256::from(DEFAULT_MIN_PRICE_USD_MICRO),
+            U256::from(DEFAULT_MAX_PRICE_USD_MICRO),
+            DEFAULT_RAMP_UP_PERIOD_SECONDS,
+            DEFAULT_LOCK_TIMEOUT_SECONDS,
+            DEFAULT_TIMEOUT_SECONDS,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_price_range() {
+        assert!(validate_offer(U256::from(2), U256::from(1), 300, 1_800, 3_600).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_deadline_ordering() {
+        assert!(validate_offer(U256::ZERO, U256::from(1), 1_800, 1_800, 3_600).is_err());
+        assert!(validate_offer(U256::ZERO, U256::from(1), 300, 3_600, 3_600).is_err());
+    }
 }
