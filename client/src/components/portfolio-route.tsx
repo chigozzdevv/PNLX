@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import { ActionToast } from "@/components/action-toast";
 import { AppShell } from "@/components/app-shell";
 import { BottomTicker } from "@/components/bottom-ticker";
 import { ManageFundsModal, type ManageFundsBalance } from "@/components/manage-funds-modal";
 import { PortfolioPage } from "@/components/portfolio-page";
 import { PositionCloseDialog } from "@/components/position-close-dialog";
 import { protocolUsdcToDisplay } from "@/lib/asset-units";
-import { formatUsd, shortAddress } from "@/lib/format";
+import { formatUsd } from "@/lib/format";
 import { withdrawPrivateMarginNote } from "@/lib/collateral-withdraw";
 import { cancelOrder } from "@/lib/order-cancel";
 import { closePosition } from "@/lib/position-close";
@@ -86,7 +87,7 @@ export function PortfolioRoute() {
         txHash: record.txHash,
       });
 
-      setPositionActionMessage({ tone: "success", text: `Closed ${shortAddress(record.positionCommitment)}` });
+      setPositionActionMessage({ tone: "success", text: "Position closed" });
       setPendingClosePosition(null);
       setRefreshKey((value) => value + 1);
     } catch (error) {
@@ -118,7 +119,7 @@ export function PortfolioRoute() {
       });
       setPositionActionMessage({
         tone: "success",
-        text: `Cancelled ${shortAddress(cancelled.intentCommitment)}`,
+        text: "Order cancelled",
       });
       setRefreshKey((value) => value + 1);
     } catch (error) {
@@ -203,7 +204,7 @@ export function PortfolioRoute() {
   return (
     <AppShell account={trading.data.account} activeView="portfolio" wallet={wallet}>
       <PortfolioPage
-        actionMessage={positionActionMessage}
+        actionMessage={positionActionMessage?.tone === "error" ? positionActionMessage : undefined}
         cancellingOrderId={cancellingOrderId}
         closingPositionId={closingPositionId}
         connected={Boolean(wallet.session)}
@@ -224,7 +225,7 @@ export function PortfolioRoute() {
         available={trading.data.account.availableShieldedUsdc ?? 0}
         depositing={depositingCollateral}
         isOpen={manageFundsOpen}
-        message={positionActionMessage}
+        message={positionActionMessage?.tone === "error" ? positionActionMessage : undefined}
         notes={withdrawableNotes}
         onClose={() => {
           if (!depositingCollateral && !withdrawingCollateral) setManageFundsOpen(false);
@@ -242,6 +243,12 @@ export function PortfolioRoute() {
         }}
         onConfirm={handleClosePosition}
         position={pendingClosePosition}
+      />
+      <ActionToast
+        message={positionActionMessage?.tone === "success" ? positionActionMessage.text : undefined}
+        onDismiss={() => {
+          setPositionActionMessage((current) => current?.tone === "success" ? undefined : current);
+        }}
       />
     </AppShell>
   );

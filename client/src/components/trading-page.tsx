@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActionToast } from "@/components/action-toast";
 import { AppShell } from "@/components/app-shell";
 import { BottomTicker } from "@/components/bottom-ticker";
 import { ChartToolbar } from "@/components/chart-toolbar";
@@ -10,7 +11,6 @@ import { PnlModal, type PnlModalProps } from "@/components/pnl-modal";
 import { PositionsTable, type PositionsTableView } from "@/components/positions-table";
 import { PriceChart, type PriceChartHandle } from "@/components/price-chart";
 import type { ChartIndicatorId } from "@/lib/chart-indicators";
-import { shortAddress } from "@/lib/format";
 import { cancelOrder } from "@/lib/order-cancel";
 import { closePosition } from "@/lib/position-close";
 import { reconcilePrivateMarginNotes } from "@/lib/private-margin-notes";
@@ -145,7 +145,7 @@ export function TradingPage() {
 
       setPositionActionMessage({
         tone: "success",
-        text: `Closed ${shortAddress(record.positionCommitment)}`,
+        text: "Position closed",
       });
       setTableView("positions");
       setRefreshKey((value) => value + 1);
@@ -188,7 +188,7 @@ export function TradingPage() {
       });
       setPositionActionMessage({
         tone: "success",
-        text: `Cancelled ${shortAddress(cancelled.intentCommitment)}`,
+        text: "Order cancelled",
       });
       setTableView("orders");
       setRefreshKey((value) => value + 1);
@@ -329,7 +329,7 @@ export function TradingPage() {
 
         <div className="positions-workspace">
           <PositionsTable
-            actionMessage={positionActionMessage}
+            actionMessage={positionActionMessage?.tone === "error" ? positionActionMessage : undefined}
             activity={trading.data.activity}
             activeView={tableView}
             cancellingOrderId={cancellingOrderId}
@@ -349,6 +349,12 @@ export function TradingPage() {
         isOpen={Boolean(pnlModalData)}
         onClose={() => setPnlModalData(null)}
         {...pnlModalData!}
+      />
+      <ActionToast
+        message={positionActionMessage?.tone === "success" ? positionActionMessage.text : undefined}
+        onDismiss={() => {
+          setPositionActionMessage((current) => current?.tone === "success" ? undefined : current);
+        }}
       />
     </AppShell>
   );

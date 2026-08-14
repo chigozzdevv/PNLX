@@ -3,7 +3,8 @@
 import { motion } from "framer-motion";
 import { ArrowLeft, CircleDollarSign, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { formatNumber, formatUsd, shortAddress } from "@/lib/format";
+import { ActionToast } from "@/components/action-toast";
+import { formatNumber, formatUsd } from "@/lib/format";
 import type { SubmitTradeIntentResult, TradeSubmitStage } from "@/lib/trade-submit";
 import type { MarketDisplay, OrderDraft, Side } from "@/types/trading";
 import type { WalletSession } from "@/lib/wallet-auth";
@@ -101,12 +102,6 @@ export function OrderTicket({
   }, [margin, market.marketId]);
 
   useEffect(() => {
-    if (!submitSuccess || submitting || depositing) return;
-    const timer = window.setTimeout(() => setSubmitSuccess(undefined), 3_500);
-    return () => window.clearTimeout(timer);
-  }, [depositing, submitSuccess, submitting]);
-
-  useEffect(() => {
     if (!submitError || submitting || depositing) return;
     const timer = window.setTimeout(() => setSubmitError(undefined), 5_000);
     return () => window.clearTimeout(timer);
@@ -174,7 +169,7 @@ export function OrderTicket({
     setSubmitStage("hashing");
     setSubmitting(true);
     try {
-      const result = await onSubmit({
+      await onSubmit({
         collateralAsset: order.collateralAsset,
         leverage,
         limitPrice: executionLimitPrice,
@@ -187,11 +182,7 @@ export function OrderTicket({
         takeProfitPrice: tpSlEnabled ? takeProfitPrice : null,
       });
       setSubmitStage(undefined);
-      setSubmitSuccess(
-        result.intents.length > 1
-          ? `Submitted ${result.intents.length} private order fragments`
-          : `Submitted ${shortAddress(result.intent.intentCommitment)}`,
-      );
+      setSubmitSuccess("Order submitted");
     } catch (error) {
       setSubmitStage(undefined);
       setSubmitError(error instanceof Error ? error.message : "Trade submission failed");
@@ -314,7 +305,6 @@ export function OrderTicket({
               {submitError}
             </p>
           ) : null}
-          {submitSuccess ? <p className="ticket-message ticket-message-success">{submitSuccess}</p> : null}
         </>
       ) : (
         <>
@@ -552,10 +542,9 @@ export function OrderTicket({
           {submitError}
         </p>
       ) : null}
-      {submitSuccess ? <p className="ticket-message ticket-message-success">{submitSuccess}</p> : null}
-
         </>
       )}
+      <ActionToast message={submitSuccess} onDismiss={() => setSubmitSuccess(undefined)} />
     </section>
   );
 }

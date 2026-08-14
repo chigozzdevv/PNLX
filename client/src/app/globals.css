@@ -1384,15 +1384,51 @@ button:disabled {
   color: var(--accent-red);
 }
 
-.ticket-message-success {
-  border-color: rgba(39, 214, 139, 0.24);
-  color: var(--accent-green);
-}
-
 .ticket-message-status {
   min-height: 38px;
   border-color: rgba(255, 255, 255, 0.08);
   color: var(--text-muted);
+}
+
+.action-toast {
+  position: fixed;
+  right: 18px;
+  bottom: 52px;
+  z-index: 10000;
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #121312;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3);
+  padding: 0 14px 0 11px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  animation: action-toast-enter 160ms ease-out both;
+}
+
+.action-toast-icon {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(121, 184, 159, 0.12);
+  color: #79b89f;
+}
+
+@keyframes action-toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .ticket-summary {
@@ -1443,10 +1479,6 @@ button:disabled {
 
 .positions-action-message-error {
   color: var(--accent-red);
-}
-
-.positions-action-message-success {
-  color: var(--accent-green);
 }
 
 .positions-table {
@@ -3906,6 +3938,13 @@ button:disabled {
 }
 
 @media (max-width: 640px) {
+  .action-toast {
+    right: 12px;
+    bottom: 48px;
+    left: 12px;
+    justify-content: center;
+  }
+
   .app-header-inner {
     position: relative;
     min-height: 60px;
@@ -4208,10 +4247,6 @@ button:disabled {
 
 .portfolio-action-message-error {
   color: #dc7882;
-}
-
-.portfolio-action-message-success {
-  color: #79b89f;
 }
 
 .portfolio-ledger {
