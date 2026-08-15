@@ -72,6 +72,12 @@ export class MakerLiquidityService {
       notes = unlocked.notes;
       await saveMakerNotes(notes);
     }
+    const reaped = this.reapOrphanedMakerIntents(notes);
+    if (reaped.changed) {
+      notes = reaped.notes;
+      await saveMakerNotes(notes);
+      await this.flushStore();
+    }
     this.indexMakerMarginCommitments(notes);
     if (this.ensureMakerAccountKeys(notes)) {
       await this.flushStore();
@@ -251,6 +257,32 @@ export class MakerLiquidityService {
       }
       throw error;
     }
+  }
+
+  private reapOrphanedMakerIntents(notes: StoredMakerNote[]): { changed: boolean; notes: StoredMakerNote[] } {
+    let changed = false;
+    const next = notes.map((note) => {
+      if (note.status !== "locked" || !note.lockedByIntentCommitment || !note.sourceIntentCommitment) {
+        return note;
+      }
+      if (this.executor.store.orderLifecycle.get(note.sourceIntentCommitment)?.status === "open") {
+        return note;
+      }
+      const makerOrder = this.executor.store.orderLifecycle.get(note.lockedByIntentCommitment);
+      if (makerOrder?.status === "filled") return note;
+      if (makerOrder && makerOrder.status !== "cancelled") {
+        this.executor.store.cancelOrder(note.lockedByIntentCommitment);
+      }
+      changed = true;
+      return {
+        ...note,
+        lockedByIntentCommitment: undefined,
+        sourceIntentCommitment: undefined,
+        status: "available" as const,
+        updatedAt: Date.now(),
+      };
+    });
+    return { changed, notes: next };
   }
 
   private indexMakerMarginCommitments(notes: StoredMakerNote[]): void {
