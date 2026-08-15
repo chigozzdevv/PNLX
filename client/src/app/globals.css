@@ -1972,6 +1972,7 @@ button:disabled {
   margin-top: 0;
   background: linear-gradient(90deg, #b87966 0%, #efb9a5 44%, #f8efe9 100%);
   background-clip: text;
+  -webkit-background-clip: text;
   color: transparent;
   font-size: clamp(54px, 5vw, 72px);
   font-weight: 430;
@@ -1984,6 +1985,10 @@ button:disabled {
 
 .landing-hero-rotator {
   display: inline-block;
+  background: linear-gradient(90deg, #b87966 0%, #efb9a5 44%, #f8efe9 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
   animation: landing-hero-word-in 220ms ease-out both;
 }
 
