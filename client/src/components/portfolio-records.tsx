@@ -174,7 +174,7 @@ function PositionsLedger({
         <span>Entry → mark</span>
         <span>Margin</span>
         <span>PnL</span>
-        <span />
+        <span className="portfolio-ledger-actions-head">Actions</span>
       </div>
 
       {positions.map((position) => {
@@ -292,7 +292,7 @@ function OrdersLedger({
         <span>Status</span>
         <span>Submitted</span>
         <span>Updated</span>
-        <span />
+        <span className="portfolio-ledger-actions-head">Actions</span>
       </div>
 
       {orders.map((order) => {
@@ -404,7 +404,7 @@ function ActivityLedger({
             <span>Activity</span>
             <span>Status</span>
             <span>Time</span>
-            <span />
+            <span className="portfolio-ledger-actions-head">Actions</span>
           </div>
           {activity.map((item) => {
             const key = `activity:${item.kind}:${item.id}`;
