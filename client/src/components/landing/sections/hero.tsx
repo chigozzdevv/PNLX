@@ -6,7 +6,7 @@ export function LandingHero() {
     <section className="landing-hero">
       <div className="landing-hero-content">
         <h1>
-          <span className="landing-hero-line">Trade perpetuals with</span>
+          <span className="landing-hero-line">Trade perps with</span>
           <span className="landing-hero-line">
             fully private <HeroRotator />.
           </span>
