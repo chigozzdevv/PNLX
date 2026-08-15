@@ -4277,10 +4277,6 @@ button:disabled {
   font-weight: 700;
 }
 
-.portfolio-ledger-actions-head {
-  text-align: right;
-}
-
 .portfolio-ledger-row {
   min-height: 76px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.065);

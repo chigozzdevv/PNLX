@@ -215,7 +215,7 @@ function PositionsView({
         <span>Entry → mark</span>
         <span>Margin</span>
         <span>PnL</span>
-        <span />
+        <span>Actions</span>
       </div>
       {positions.map((position) => {
         const key = `position:${position.id}`;
@@ -333,7 +333,7 @@ function OrdersView({
         <span>Market</span>
         <span>Status</span>
         <span>Submitted</span>
-        <span />
+        <span>Actions</span>
       </div>
       {orders.map((order) => {
         const key = `order:${order.intentCommitment}`;
@@ -425,7 +425,7 @@ function ActivityView({
         <span>Activity</span>
         <span>Status</span>
         <span>Time</span>
-        <span />
+        <span>Actions</span>
       </div>
       {activity.map((item) => {
         const key = `activity:${item.kind}:${item.id}`;
