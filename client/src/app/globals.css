@@ -1970,10 +1970,6 @@ button:disabled {
 .landing-hero h1 {
   max-width: 1080px;
   margin-top: 0;
-  background: linear-gradient(90deg, #b87966 0%, #efb9a5 44%, #f8efe9 100%);
-  background-clip: text;
-  -webkit-background-clip: text;
-  color: transparent;
   font-size: clamp(54px, 5vw, 72px);
   font-weight: 430;
   line-height: 1.08;
@@ -1981,30 +1977,35 @@ button:disabled {
 
 .landing-hero-line {
   display: block;
-}
-
-.landing-hero-rotator {
-  display: inline-block;
   background: linear-gradient(90deg, #b87966 0%, #efb9a5 44%, #f8efe9 100%);
   background-clip: text;
   -webkit-background-clip: text;
   color: transparent;
-  animation: landing-hero-word-in 220ms ease-out both;
 }
 
-@keyframes landing-hero-word-in {
-  from {
+.landing-hero-rotator {
+  display: inline-block;
+  color: #ff6b22;
+}
+
+.landing-hero-caret {
+  display: inline-block;
+  width: 3px;
+  height: 0.82em;
+  margin-left: 5px;
+  background: #ff6b22;
+  vertical-align: -0.04em;
+  animation: landing-hero-caret-blink 1.1s steps(1) infinite;
+}
+
+@keyframes landing-hero-caret-blink {
+  50% {
     opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .landing-hero-rotator {
+  .landing-hero-caret {
     animation: none;
   }
 }
@@ -2019,7 +2020,7 @@ button:disabled {
 }
 
 .landing-hero-actions {
-  justify-content: center;
+  justify-content: flex-start;
   margin-top: 42px;
 }
 
