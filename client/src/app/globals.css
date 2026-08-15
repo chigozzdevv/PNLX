@@ -1985,7 +1985,7 @@ button:disabled {
 
 .landing-hero-rotator {
   display: inline-block;
-  color: #ff6b22;
+  color: rgba(255, 107, 34, 0.72);
 }
 
 .landing-hero-caret {
@@ -1993,7 +1993,7 @@ button:disabled {
   width: 3px;
   height: 0.82em;
   margin-left: 5px;
-  background: #ff6b22;
+  background: rgba(255, 107, 34, 0.72);
   vertical-align: -0.04em;
   animation: landing-hero-caret-blink 1.1s steps(1) infinite;
 }
