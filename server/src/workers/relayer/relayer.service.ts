@@ -391,7 +391,8 @@ function runCommandWithRetry(runCommand: CommandRunner, command: string[]): Comm
   let output = runCommand(command[0], command.slice(1));
   for (let attempt = 1; attempt < 4 && isTransientStellarFailure(output); attempt += 1) {
     sleep(2_500 * attempt);
-    output = runCommand(command[0], command.slice(1));
+    const retried = withFreshOracleRound(command);
+    output = runCommand(retried[0], retried.slice(1));
   }
   return output;
 }
@@ -403,9 +404,17 @@ async function runCommandWithRetryAsync(
   let output = await runCommandAsync(command, timeoutMs);
   for (let attempt = 1; attempt < 4 && isTransientStellarFailure(output); attempt += 1) {
     await delay(2_500 * attempt);
-    output = await runCommandAsync(command, timeoutMs);
+    output = await runCommandAsync(withFreshOracleRound(command), timeoutMs);
   }
   return output;
+}
+
+function withFreshOracleRound(command: string[]): string[] {
+  const roundIndex = command.indexOf("--round");
+  if (roundIndex < 0 || roundIndex + 1 >= command.length) return command;
+  const next = command.slice();
+  next[roundIndex + 1] = String(Date.now());
+  return next;
 }
 
 function runCommandAsync(command: string[], timeoutMs: number): Promise<CommandResult> {
@@ -507,7 +516,8 @@ function isTransientStellarFailure(output: CommandResult): boolean {
     text.includes("tx_bad_seq") ||
     text.includes("try_again_later") ||
     text.includes("timeout") ||
-    text.includes("rate limit");
+    text.includes("rate limit") ||
+    text.includes("request rejected");
 }
 
 function sleep(ms: number): void {
