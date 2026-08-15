@@ -1869,9 +1869,8 @@ button:disabled {
   min-height: 100vh;
   overflow-x: clip;
   background:
-    linear-gradient(180deg, rgba(255, 91, 29, 0.075), transparent 560px),
-    radial-gradient(ellipse 62% 46% at 50% -8%, rgba(255, 184, 143, 0.13), transparent 44rem),
-    radial-gradient(ellipse 55% 38% at 50% 108%, rgba(255, 91, 29, 0.05), transparent 40rem),
+    linear-gradient(180deg, rgba(255, 91, 29, 0.018), transparent 500px),
+    radial-gradient(ellipse at 50% -12%, rgba(255, 184, 143, 0.026), transparent 42rem),
     #050201;
 }
 
@@ -1957,15 +1956,6 @@ button:disabled {
   text-align: center;
 }
 
-.landing-hero::before {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  background: radial-gradient(ellipse 58% 44% at 50% 34%, rgba(255, 91, 29, 0.09), transparent 70%);
-  content: "";
-  pointer-events: none;
-}
-
 .landing-hero::after {
   display: none;
 }
@@ -1984,7 +1974,7 @@ button:disabled {
   background-clip: text;
   color: transparent;
   font-size: clamp(54px, 5vw, 72px);
-  font-weight: 640;
+  font-weight: 430;
   line-height: 1.08;
 }
 
@@ -1993,7 +1983,7 @@ button:disabled {
   margin-top: 28px;
   color: rgba(231, 213, 205, 0.66);
   font-size: 20px;
-  font-weight: 520;
+  font-weight: 430;
   line-height: 1.5;
 }
 
@@ -3434,31 +3424,6 @@ button:disabled {
   font-weight: 500;
   line-height: 1.4;
   text-align: right;
-}
-
-@keyframes page-enter {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.landing-shell,
-.trade-grid,
-.portfolio-page {
-  animation: page-enter 380ms ease-out both;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .landing-shell,
-  .trade-grid,
-  .portfolio-page {
-    animation: none;
-  }
 }
 
 @media (max-width: 980px) {
