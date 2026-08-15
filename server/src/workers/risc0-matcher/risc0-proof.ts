@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { hashFields } from "@pnlx/crypto";
 import type { ProofArtifact } from "@pnlx/proof-system";
@@ -281,17 +281,10 @@ function runBoundlessProver(root: string, inputPath: string, proofDir: string): 
   return new Promise((resolve) => {
     const metadataPath = join(proofDir, "proof.json");
     const request = resumableBoundlessRequest(join(proofDir, "request.json"));
+    const target = boundlessProverCommand(root, inputPath, proofDir);
     const child = spawn(
-      "cargo",
-      [
-        "run",
-        "--release",
-        "--manifest-path",
-        join(root, "risc0/batch-match/host/Cargo.toml"),
-        "--",
-        inputPath,
-        proofDir,
-      ],
+      target.command,
+      target.args,
       {
         cwd: root,
         env: {
@@ -364,6 +357,53 @@ function runBoundlessProver(root: string, inputPath: string, proofDir: string): 
       });
     });
   });
+}
+
+function boundlessProverCommand(
+  root: string,
+  inputPath: string,
+  proofDir: string,
+): { command: string; args: string[] } {
+  const binary = join(root, "risc0/batch-match/target/release/pnlx-risc0-batch-match-prover");
+  if (process.env.PNLX_RISC0_FORCE_CARGO_RUN !== "1" && prebuiltProverIsFresh(root, binary)) {
+    return { args: [inputPath, proofDir], command: binary };
+  }
+  return {
+    args: [
+      "run",
+      "--release",
+      "--manifest-path",
+      join(root, "risc0/batch-match/host/Cargo.toml"),
+      "--",
+      inputPath,
+      proofDir,
+    ],
+    command: "cargo",
+  };
+}
+
+function prebuiltProverIsFresh(root: string, binary: string): boolean {
+  if (!existsSync(binary)) return false;
+  const builtAt = statSync(binary).mtimeMs;
+  const watched = [
+    join(root, "risc0/batch-match/Cargo.lock"),
+    join(root, "risc0/batch-match/host/Cargo.toml"),
+    join(root, "risc0/batch-match/host/src"),
+    join(root, "risc0/batch-match/methods/Cargo.toml"),
+    join(root, "risc0/batch-match/methods/src"),
+  ];
+  for (const path of watched) {
+    if (!existsSync(path)) continue;
+    const stat = statSync(path);
+    if (stat.isDirectory()) {
+      for (const entry of readdirSync(path)) {
+        if (statSync(join(path, entry)).mtimeMs > builtAt) return false;
+      }
+      continue;
+    }
+    if (stat.mtimeMs > builtAt) return false;
+  }
+  return true;
 }
 
 function resumableBoundlessRequest(
