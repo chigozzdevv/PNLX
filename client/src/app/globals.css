@@ -1950,10 +1950,10 @@ button:disabled {
 
 .landing-hero {
   display: grid;
-  justify-items: center;
+  justify-items: start;
   min-height: calc(100vh - 82px);
   padding: 126px 24px 0;
-  text-align: center;
+  text-align: left;
 }
 
 .landing-hero::after {
@@ -1963,7 +1963,7 @@ button:disabled {
 .landing-hero-content {
   z-index: 3;
   display: grid;
-  justify-items: center;
+  justify-items: start;
   width: min(1080px, 100%);
 }
 
@@ -1976,6 +1976,32 @@ button:disabled {
   font-size: clamp(54px, 5vw, 72px);
   font-weight: 430;
   line-height: 1.08;
+}
+
+.landing-hero-line {
+  display: block;
+}
+
+.landing-hero-rotator {
+  display: inline-block;
+  animation: landing-hero-word-in 220ms ease-out both;
+}
+
+@keyframes landing-hero-word-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-hero-rotator {
+    animation: none;
+  }
 }
 
 .landing-hero-copy {
