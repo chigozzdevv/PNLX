@@ -18,22 +18,22 @@ export function LandingPrivacySection() {
           Verifiable settlement.
         </h2>
 
-        <div className="landing-privacy-list">
+        <ul className="landing-privacy-list">
           {landingFeatureRows.map((feature, index) => {
             const Icon = featureIcons[index] ?? Shield;
 
             return (
-              <article className="landing-privacy-row" key={feature.title}>
+              <li className="landing-privacy-row" key={feature.title}>
                 <span>
                   <Icon size={22} />
                 </span>
                 <p>
                   <strong>{feature.title}</strong> {feature.body}
                 </p>
-              </article>
+              </li>
             );
           })}
-        </div>
+        </ul>
       </div>
 
       <div className="landing-phone-stage" aria-hidden="true">
@@ -68,9 +68,9 @@ export function LandingPrivacySection() {
             ))}
           </div>
 
-          <button className="landing-phone-submit" type="button">
+          <div className="landing-phone-submit">
             <span>Submit Long</span>
-          </button>
+          </div>
         </div>
       </div>
     </section>

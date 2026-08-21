@@ -34,11 +34,11 @@ export function LandingVerifiabilitySection() {
           proofs, and Soroban settlement make every accepted state transition checkable.
         </p>
 
-        <div className="landing-verifiable-list" aria-label="PNLX trust layer">
+        <ul className="landing-verifiable-list" aria-label="PNLX trust layer">
           {trustLayerItems.map((item) => (
-            <span key={item}>{item}</span>
+            <li key={item}>{item}</li>
           ))}
-        </div>
+        </ul>
       </div>
     </section>
   );

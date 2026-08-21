@@ -10,16 +10,18 @@ import { LandingVerifiabilitySection } from "@/components/landing/sections/verif
 
 export function LandingPage() {
   return (
-    <main className="landing-shell">
+    <div className="landing-shell">
       <LandingHeader />
-      <LandingHero />
-      <LandingPrivacySection />
-      <LandingInfrastructureSection />
-      <LandingTradingExperienceSection />
-      <LandingVerifiabilitySection />
-      <LandingQuestionsSection />
-      <LandingCtaSection />
+      <main>
+        <LandingHero />
+        <LandingPrivacySection />
+        <LandingInfrastructureSection />
+        <LandingTradingExperienceSection />
+        <LandingVerifiabilitySection />
+        <LandingQuestionsSection />
+        <LandingCtaSection />
+      </main>
       <LandingFooter />
-    </main>
+    </div>
   );
 }

@@ -1600,6 +1600,9 @@ button:disabled {
 .landing-privacy-list {
   display: grid;
   gap: 34px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .landing-privacy-row {
@@ -1822,18 +1825,9 @@ button:disabled {
   max-width: 780px;
 }
 
-.landing-section-copy p {
-  margin: 0;
-  color: rgba(255, 255, 255, 0.46);
-  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
-  font-size: clamp(13px, 1.25vw, 18px);
-  font-weight: 620;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.landing-section-copy h2 {
+.landing-section-copy h2,
+.landing-trading-copy h2,
+.landing-questions-heading h2 {
   margin: 0;
   color: #ffd5c2;
   font-size: clamp(38px, 4.25vw, 60px);
@@ -1842,7 +1836,8 @@ button:disabled {
   line-height: 1.08;
 }
 
-.landing-section-copy span {
+.landing-section-copy > p {
+  margin: 0;
   color: rgba(251, 231, 222, 0.82);
   font-size: clamp(17px, 1.65vw, 23px);
   font-weight: 430;
@@ -2084,15 +2079,6 @@ button:disabled {
   max-width: 720px;
 }
 
-.landing-trading-copy h2 {
-  margin: 0;
-  color: #ffd5c2;
-  font-size: clamp(38px, 4.25vw, 60px);
-  font-weight: 430;
-  letter-spacing: 0;
-  line-height: 1.08;
-}
-
 .landing-trading-copy span {
   max-width: 640px;
   color: rgba(251, 231, 222, 0.78);
@@ -2186,19 +2172,21 @@ button:disabled {
 .landing-verifiable-list {
   display: grid;
   gap: 12px;
-  margin-top: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
   color: rgba(251, 231, 222, 0.68);
   font-size: clamp(15px, 1.12vw, 18px);
   font-weight: 560;
   line-height: 1.36;
 }
 
-.landing-verifiable-list span {
+.landing-verifiable-list li {
   position: relative;
   padding-left: 18px;
 }
 
-.landing-verifiable-list span::before {
+.landing-verifiable-list li::before {
   position: absolute;
   top: 0.68em;
   left: 0;
@@ -2325,15 +2313,6 @@ button:disabled {
   display: grid;
   gap: 22px;
   max-width: 620px;
-}
-
-.landing-questions-heading h2 {
-  margin: 0;
-  color: #ffd5c2;
-  font-size: clamp(38px, 4.25vw, 60px);
-  font-weight: 430;
-  letter-spacing: 0;
-  line-height: 1.08;
 }
 
 .landing-questions-heading p {
@@ -2510,11 +2489,26 @@ button:disabled {
 .landing-footer p {
   justify-self: end;
   margin: 0;
-  color: rgba(251, 231, 222, 0.42);
+  color: rgba(251, 231, 222, 0.52);
   font-size: 13px;
   font-weight: 500;
   line-height: 1.4;
   text-align: right;
+}
+
+.landing-brand:focus-visible,
+.landing-center-nav a:focus-visible,
+.landing-launch-button:focus-visible,
+.landing-questions-list summary:focus-visible,
+.landing-cta-button:focus-visible,
+.landing-footer-brand:focus-visible,
+.landing-footer-links a:focus-visible {
+  outline: 2px solid rgba(255, 156, 114, 0.82);
+  outline-offset: 3px;
+}
+
+.landing-questions-list summary:focus-visible {
+  outline-offset: -2px;
 }
 
 @media (max-width: 980px) {
@@ -2544,6 +2538,7 @@ button:disabled {
     min-height: 280px;
     grid-template-columns: 250px 100px 90px;
     gap: 0;
+    order: 2;
     transform: none;
     width: min(440px, 100%);
   }
@@ -2554,6 +2549,7 @@ button:disabled {
 
   .landing-infrastructure-section .landing-section-copy {
     justify-self: start;
+    order: 1;
   }
 }
 
@@ -2589,7 +2585,7 @@ button:disabled {
   }
 
   .landing-privacy-row p,
-  .landing-section-copy span {
+  .landing-section-copy > p {
     font-size: 16px;
   }
 
@@ -2675,7 +2671,8 @@ button:disabled {
     opacity: 0.4;
   }
 
-  .landing-questions-section {
+  .landing-questions-section,
+  .landing-cta-section {
     padding: 68px 18px;
   }
 
@@ -2689,10 +2686,6 @@ button:disabled {
 
   .landing-questions-list p {
     margin-right: 0;
-  }
-
-  .landing-cta-section {
-    padding: 68px 18px;
   }
 
   .landing-cta-button {

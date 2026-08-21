@@ -29,7 +29,7 @@ export function LandingInfrastructureSection() {
 
       <div className="landing-section-copy">
         <h2>Another Trading Platform?</h2>
-        <span>Perp DEXs already work. The problem is what they expose.</span>
+        <p>Perp DEXs already work. The problem is what they expose.</p>
         <ul className="landing-problem-list">
           <li>Positions reveal size, side, leverage, and margin pressure.</li>
           <li>Large trades can signal strategy before execution.</li>
