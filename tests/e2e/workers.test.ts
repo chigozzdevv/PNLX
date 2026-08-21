@@ -380,6 +380,39 @@ describe("support workers", () => {
     expect(executor.store.orderLifecycle.get(record.intentCommitment)?.status).toBe("open");
   });
 
+  test("cancels settlement-created residuals without relaying an unknown registry intent", () => {
+    const executor = createExecutor();
+    const residual = {
+      batchId: "settled-batch",
+      createdAt: Date.now(),
+      intentCommitment: hashFields("intent", ["residual-cancel"]),
+      marketId: "xlm-usd-perp",
+      matchingPayloadCommitment: hashFields("matching-payload", ["residual-cancel"]),
+      noteNullifier: hashFields("nullifier", ["residual-cancel"]),
+      ownerCommitment: hashFields("owner", ["residual-cancel"]),
+      sourceIntentCommitment: hashFields("intent", ["residual-source"]),
+      updatedAt: Date.now(),
+    };
+    executor.store.addResidualOrder(residual);
+    let relayed = false;
+    const onchain = {
+      enabled: true,
+      cancelIntent() {
+        relayed = true;
+        throw new Error("residual is not registered in IntentRegistry");
+      },
+    };
+    const orders = new OrdersService(
+      executor,
+      {} as never,
+      onchain as never,
+      { intentRegistryOnchainRequired: true },
+    );
+
+    expect(orders.cancel({ intentCommitment: residual.intentCommitment }).order.status).toBe("cancelled");
+    expect(relayed).toBe(false);
+  });
+
   test("persists protocol state across executor restarts", () => {
     const dir = mkdtempSync(join(tmpdir(), "pnlx-store-"));
     const storePath = join(dir, "protocol-store.json");

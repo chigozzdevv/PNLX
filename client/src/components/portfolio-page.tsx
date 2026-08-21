@@ -4,7 +4,8 @@ import { Eye, EyeOff } from "lucide-react";
 import { useState } from "react";
 import { PortfolioRecords } from "@/components/portfolio-records";
 import { formatUsd } from "@/lib/format";
-import type { PositionRow, ServerOwnerOrderSnapshot, TradingLiveData } from "@/types/trading";
+import type { OwnerOrderGroup } from "@/lib/order-groups";
+import type { PositionRow, TradingLiveData } from "@/types/trading";
 
 interface PortfolioPageProps {
   actionMessage?: { tone: "error" | "success"; text: string };
@@ -12,7 +13,7 @@ interface PortfolioPageProps {
   closingPositionId?: string;
   connected?: boolean;
   loading?: boolean;
-  onCancelOrder?: (order: ServerOwnerOrderSnapshot) => Promise<void> | void;
+  onCancelOrder?: (order: OwnerOrderGroup) => Promise<void> | void;
   onClosePosition?: (position: PositionRow) => Promise<void> | void;
   onOpenManageFunds?: () => void;
   trading: TradingLiveData;

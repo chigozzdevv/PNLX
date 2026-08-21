@@ -15,7 +15,7 @@ import {
   type StoredPrivateMarginNote,
 } from "@/lib/private-margin-notes";
 import {
-  allocateProtocolSizes,
+  protocolOrderSize,
   splitDepositAmounts,
 } from "@/lib/trade-submit";
 
@@ -48,10 +48,19 @@ describe("private margin note allocation", () => {
       ["50", 50n],
       ["40", 40n],
     ]);
-    expect(allocateProtocolSizes(900n, 90n, allocations.map((allocation) => allocation.amount))).toEqual([
-      500n,
-      400n,
+    expect(allocations.map((allocation) => protocolOrderSize(allocation.amount, 10, 1))).toEqual([
+      180n,
+      80n,
     ]);
+  });
+
+  test("keeps a rounding reserve in every private balance input", () => {
+    const size = protocolOrderSize(10_000_000n, 10, 0.16);
+    const price = 16_000_000n;
+    const notional = (size * price) / 100_000_000n;
+
+    expect(notional).toBeLessThanOrEqual((10_000_000n - 32n) * 10n);
+    expect(size).toBeGreaterThan(0n);
   });
 
   test("keeps new deposits consolidated instead of splitting around the current ticket", () => {

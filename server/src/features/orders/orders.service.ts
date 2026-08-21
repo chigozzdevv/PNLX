@@ -29,8 +29,9 @@ export class OrdersService {
   cancel(input: CancelOrderInput, authenticated?: string): CancelOrderResult {
     const order = this.executor.store.assertOrderCancellable(input.intentCommitment);
     assertOrderOwner(order, authenticated);
-    const relay = this.onchain?.cancelIntent(input.intentCommitment);
-    this.intents.assertSubmittedIntentRelay(relay, "cancel");
+    const residual = this.executor.store.residualOrders.has(input.intentCommitment);
+    const relay = residual ? undefined : this.onchain?.cancelIntent(input.intentCommitment);
+    if (!residual) this.intents.assertSubmittedIntentRelay(relay, "cancel");
     return {
       order: this.executor.store.cancelOrder(input.intentCommitment, relayTxHash(relay, "cancel")),
     };

@@ -11,7 +11,8 @@ import { PnlModal, type PnlModalProps } from "@/components/pnl-modal";
 import { PositionsTable, type PositionsTableView } from "@/components/positions-table";
 import { PriceChart, type PriceChartHandle } from "@/components/price-chart";
 import type { ChartIndicatorId } from "@/lib/chart-indicators";
-import { cancelOrder } from "@/lib/order-cancel";
+import { cancelOrderGroup } from "@/lib/order-cancel";
+import type { OwnerOrderGroup } from "@/lib/order-groups";
 import { closePosition } from "@/lib/position-close";
 import { reconcilePrivateMarginNotes } from "@/lib/private-margin-notes";
 import { depositPrivateMargin, submitTradeIntent } from "@/lib/trade-submit";
@@ -159,33 +160,37 @@ export function TradingPage() {
     }
   }, [marketById, wallet.session]);
 
-  const handleCancelOrder = useCallback(async (order: ServerOwnerOrderSnapshot) => {
+  const handleCancelOrder = useCallback(async (order: OwnerOrderGroup) => {
     if (!wallet.session) {
       setPositionActionMessage({ tone: "error", text: "Connect a wallet first" });
       return;
     }
 
-    setCancellingOrderId(order.intentCommitment);
+    setCancellingOrderId(order.id);
     setPositionActionMessage(undefined);
     try {
-      const cancelled = await cancelOrder({
-        intentCommitment: order.intentCommitment,
+      const result = await cancelOrderGroup({
+        group: order,
         token: wallet.session.token,
       });
+      const cancelledIds = new Set(result.cancelled.map((item) => item.intentCommitment));
       setPendingOrders((current) =>
-        current.filter((item) => item.intentCommitment !== order.intentCommitment),
+        current.filter((item) => !cancelledIds.has(item.intentCommitment)),
       );
       setOptimisticCancelledOrders((current) => {
         const next = new Map(current);
-        next.set(cancelled.intentCommitment, Date.now());
+        for (const cancelled of result.cancelled) {
+          next.set(cancelled.intentCommitment, Date.now());
+        }
         return next;
       });
       reconcilePrivateMarginNotes({
-        orders: [{
+        orders: result.cancelled.map((cancelled) => ({
           intentCommitment: cancelled.intentCommitment,
           status: "cancelled",
-        }],
+        })),
       });
+      if (result.error) throw result.error;
       setPositionActionMessage({
         tone: "success",
         text: "Order cancelled",
@@ -302,21 +307,23 @@ export function TradingPage() {
                 const submittedAt = Date.now();
                 setOptimisticOrderClock(submittedAt);
                 setPendingOrders((current) => [
-                  {
-                    batchId: result.intent.batchId,
+                  ...result.intents.map((intent) => ({
+                    batchId: intent.batchId,
                     createdAt: submittedAt,
-                    intentCommitment: result.intent.intentCommitment,
+                    intentCommitment: intent.intentCommitment,
                     isResidual: false,
                     matching: {
                       message: "Queued for matching",
-                      state: "queued",
+                      state: "queued" as const,
                     },
-                    marketId: result.intent.marketId,
-                    matchingPayloadCommitment: result.intent.matchingPayloadCommitment,
-                    status: "open",
+                    marketId: intent.marketId,
+                    matchingPayloadCommitment: intent.matchingPayloadCommitment,
+                    status: "open" as const,
                     updatedAt: submittedAt,
-                  },
-                  ...current.filter((order) => order.intentCommitment !== result.intent.intentCommitment),
+                  })),
+                  ...current.filter((order) =>
+                    !result.intents.some((intent) => intent.intentCommitment === order.intentCommitment)
+                  ),
                 ]);
                 setTableView("orders");
                 setRefreshKey((value) => value + 1);

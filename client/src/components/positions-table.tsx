@@ -3,6 +3,11 @@
 import { ChevronDown, Copy, ExternalLink } from "lucide-react";
 import { Fragment, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { formatNumber, formatUsd, shortAddress } from "@/lib/format";
+import {
+  groupOwnerOrders,
+  isActiveOrderGroup,
+  type OwnerOrderGroup,
+} from "@/lib/order-groups";
 import type {
   Hex,
   PositionRow,
@@ -18,7 +23,7 @@ interface PositionsTableProps {
   cancellingOrderId?: string;
   actionMessage?: { tone: "error" | "success"; text: string };
   onClosePosition?: (position: PositionRow) => Promise<void> | void;
-  onCancelOrder?: (order: ServerOwnerOrderSnapshot) => Promise<void> | void;
+  onCancelOrder?: (order: OwnerOrderGroup) => Promise<void> | void;
   onViewChange?: (view: PositionsTableView) => void;
   orders?: ServerOwnerOrderSnapshot[];
   positions: PositionRow[];
@@ -45,7 +50,10 @@ export function PositionsTable({
   const [expandedRow, setExpandedRow] = useState<string>();
   const view = activeView ?? internalView;
   const openPositions = positions.filter((position) => position.status === "open");
-  const openOrders = orders.filter(isOpenOrder);
+  const openOrderGroups = useMemo(
+    () => groupOwnerOrders(orders).filter(isActiveOrderGroup),
+    [orders],
+  );
   const visibleActivity = useMemo(
     () => [...activity.filter((item) => item.kind !== "account-event")]
       .sort((left, right) => activityTimestamp(right) - activityTimestamp(left)),
@@ -91,7 +99,7 @@ export function PositionsTable({
           />
           <TradeRecordTab
             active={view === "orders"}
-            count={openOrders.length}
+            count={openOrderGroups.length}
             label="Orders"
             onClick={() => selectView("orders")}
             onKeyDown={(event) => handleTabKeyDown(event, "orders")}
@@ -140,7 +148,7 @@ export function PositionsTable({
             loading={loading}
             onCancelOrder={onCancelOrder}
             onToggleDetails={toggleDetails}
-            orders={openOrders}
+            orders={openOrderGroups}
           />
         ) : (
           <ActivityView
@@ -321,9 +329,9 @@ function OrdersView({
   cancellingOrderId?: string;
   expandedRow?: string;
   loading: boolean;
-  onCancelOrder?: (order: ServerOwnerOrderSnapshot) => Promise<void> | void;
+  onCancelOrder?: (order: OwnerOrderGroup) => Promise<void> | void;
   onToggleDetails: (key: string) => void;
-  orders: ServerOwnerOrderSnapshot[];
+  orders: OwnerOrderGroup[];
 }) {
   if (orders.length === 0) return <EmptyRecords loading={loading} text="No open orders" />;
 
@@ -336,10 +344,10 @@ function OrdersView({
         <span>Actions</span>
       </div>
       {orders.map((order) => {
-        const key = `order:${order.intentCommitment}`;
+        const key = `order:${order.id}`;
         const expanded = expandedRow === key;
         return (
-          <Fragment key={order.intentCommitment}>
+          <Fragment key={order.id}>
             <div className="trade-records-row trade-order-grid">
               <div className="trade-records-primary">
                 <strong>{pairFromMarketId(order.marketId)}</strong>
@@ -356,14 +364,14 @@ function OrdersView({
               <div className="trade-records-actions">
                 <button
                   className="trade-records-secondary-action"
-                  disabled={!onCancelOrder || cancellingOrderId === order.intentCommitment}
+                  disabled={!onCancelOrder || cancellingOrderId === order.id}
                   type="button"
                   onClick={() => onCancelOrder?.(order)}
                 >
-                  {cancellingOrderId === order.intentCommitment ? "Cancelling" : "Cancel"}
+                  {cancellingOrderId === order.id ? "Cancelling" : "Cancel"}
                 </button>
                 <DetailsButton
-                  controlsId={`trade-order-details-${order.intentCommitment}`}
+                  controlsId={`trade-order-details-${order.id}`}
                   expanded={expanded}
                   onClick={() => onToggleDetails(key)}
                 />
@@ -377,20 +385,27 @@ function OrdersView({
   );
 }
 
-function OrderDetails({ order }: { order: ServerOwnerOrderSnapshot }) {
+function OrderDetails({ order }: { order: OwnerOrderGroup }) {
   return (
-    <div className="trade-records-details" id={`trade-order-details-${order.intentCommitment}`}>
+    <div className="trade-records-details" id={`trade-order-details-${order.id}`}>
       <div className="trade-records-details-heading">
         <strong>Order details</strong>
         <span>{statusLabel(order.status)}</span>
       </div>
-      {order.submissionTxHash ? (
-        <DetailItem label="Submission transaction"><TransactionLink hash={order.submissionTxHash} /></DetailItem>
+      {order.orders.length > 1 ? (
+        <DetailItem label="Private balance inputs"><strong>{order.orders.length}</strong></DetailItem>
       ) : null}
-      {order.cancellationTxHash ? (
-        <DetailItem label="Cancellation transaction"><TransactionLink hash={order.cancellationTxHash} /></DetailItem>
-      ) : null}
-      <DetailItem label="Order batch"><strong>{order.batchId}</strong></DetailItem>
+      {order.orders.map((fragment, index) => fragment.submissionTxHash ? (
+        <DetailItem key={`submission:${fragment.intentCommitment}`} label={order.orders.length > 1 ? `Submission ${index + 1}` : "Submission transaction"}>
+          <TransactionLink hash={fragment.submissionTxHash} />
+        </DetailItem>
+      ) : null)}
+      {order.orders.map((fragment, index) => fragment.cancellationTxHash ? (
+        <DetailItem key={`cancellation:${fragment.intentCommitment}`} label={order.orders.length > 1 ? `Cancellation ${index + 1}` : "Cancellation transaction"}>
+          <TransactionLink hash={fragment.cancellationTxHash} />
+        </DetailItem>
+      ) : null)}
+      <DetailItem label="Order ID"><strong>{order.id}</strong></DetailItem>
       {order.matching.batchId ? (
         <DetailItem label="Latest matching batch"><strong>{order.matching.batchId}</strong></DetailItem>
       ) : null}
@@ -399,7 +414,11 @@ function OrderDetails({ order }: { order: ServerOwnerOrderSnapshot }) {
         <DetailItem label="Matching run"><CopyValue value={order.matching.runId} /></DetailItem>
       ) : null}
       <DetailItem label="Residual order"><strong>{order.isResidual ? "Yes" : "No"}</strong></DetailItem>
-      <DetailItem label="Intent ID"><CopyValue value={order.intentCommitment} /></DetailItem>
+      {order.orders.map((fragment, index) => (
+        <DetailItem key={`intent:${fragment.intentCommitment}`} label={order.orders.length > 1 ? `Intent ${index + 1}` : "Intent ID"}>
+          <CopyValue value={fragment.intentCommitment} />
+        </DetailItem>
+      ))}
     </div>
   );
 }
@@ -630,10 +649,6 @@ function sourceOrderForPosition(
     current = parent;
   }
   return current;
-}
-
-function isOpenOrder(order: ServerOwnerOrderSnapshot): boolean {
-  return order.status === "open" || order.status === "partially-filled";
 }
 
 function activityTimestamp(item: ServerOwnerActivitySnapshot): number {

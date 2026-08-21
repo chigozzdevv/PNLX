@@ -588,7 +588,7 @@ function progressLabel(stage: TradeSubmitStage, depositing: boolean): string {
     case "proving":
       return "Generating validity proof";
     case "matching":
-      return "Submitting private intent";
+      return "Submitting private order";
     default:
       return "Submitting private order";
   }

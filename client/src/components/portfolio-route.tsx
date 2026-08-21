@@ -10,7 +10,8 @@ import { PositionCloseDialog } from "@/components/position-close-dialog";
 import { protocolUsdcToDisplay } from "@/lib/asset-units";
 import { formatUsd } from "@/lib/format";
 import { withdrawPrivateMarginNote } from "@/lib/collateral-withdraw";
-import { cancelOrder } from "@/lib/order-cancel";
+import { cancelOrderGroup } from "@/lib/order-cancel";
+import type { OwnerOrderGroup } from "@/lib/order-groups";
 import { closePosition } from "@/lib/position-close";
 import { privateMarginNotes, reconcilePrivateMarginNotes } from "@/lib/private-margin-notes";
 import { PnlModal, type PnlModalProps } from "@/components/pnl-modal";
@@ -18,7 +19,7 @@ import { depositPrivateMargin } from "@/lib/trade-submit";
 import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useTradingData } from "@/lib/use-trading-data";
 import { useWalletSession } from "@/lib/use-wallet-session";
-import type { PositionRow, ServerOwnerOrderSnapshot } from "@/types/trading";
+import type { PositionRow } from "@/types/trading";
 
 export function PortfolioRoute() {
   const wallet = useWalletSession();
@@ -101,22 +102,26 @@ export function PortfolioRoute() {
     }
   }, [marketById, wallet.session]);
 
-  const handleCancelOrder = useCallback(async (order: ServerOwnerOrderSnapshot) => {
+  const handleCancelOrder = useCallback(async (order: OwnerOrderGroup) => {
     if (!wallet.session) {
       setPositionActionMessage({ tone: "error", text: "Connect a wallet first" });
       return;
     }
 
-    setCancellingOrderId(order.intentCommitment);
+    setCancellingOrderId(order.id);
     setPositionActionMessage(undefined);
     try {
-      const cancelled = await cancelOrder({
-        intentCommitment: order.intentCommitment,
+      const result = await cancelOrderGroup({
+        group: order,
         token: wallet.session.token,
       });
       reconcilePrivateMarginNotes({
-        orders: [{ intentCommitment: cancelled.intentCommitment, status: "cancelled" }],
+        orders: result.cancelled.map((cancelled) => ({
+          intentCommitment: cancelled.intentCommitment,
+          status: "cancelled",
+        })),
       });
+      if (result.error) throw result.error;
       setPositionActionMessage({
         tone: "success",
         text: "Order cancelled",

@@ -29,6 +29,7 @@ import type { ServerProofMeta } from "@/types/trading";
 
 const PRICE_SCALE = 100_000_000n;
 const LEVERAGE_SCALE = 1_000_000n;
+const PRIVATE_ORDER_MARGIN_ROUNDING_RESERVE = 32n;
 const ZERO_HEX = "0x0" as Hex;
 
 export type TradeSubmitStage = "hashing" | "shielding" | "signing" | "proving" | "matching" | "done";
@@ -126,7 +127,7 @@ export async function submitTradeIntent(input: SubmitTradeIntentInput): Promise<
   const limitPrice = toPrice(input.limitPrice);
   const sizingPrice = input.sizingPrice ?? input.limitPrice;
   const entryPrice = toPrice(sizingPrice);
-  const protocolSize = protocolSizeFromTicket(margin, input.leverage, sizingPrice);
+  const protocolSize = protocolOrderSize(margin, input.leverage, sizingPrice);
   if (protocolSize < 1n) {
     throw new Error("Increase private margin; this market currently requires at least 1 base contract");
   }
@@ -289,11 +290,13 @@ async function submitCustodySharedTradeIntent(
       );
     }
   }
-  const sizes = allocateProtocolSizes(
-    input.protocolSize,
-    input.marginProtocol,
-    allocations.map((allocation) => allocation.amount),
+  const sizes = allocations.map((allocation) =>
+    protocolOrderSize(allocation.amount, input.leverage, input.sizingPrice ?? input.limitPrice),
   );
+  if (sizes.some((size) => size < 1n)) {
+    throw new Error("A private balance input is too small for this order");
+  }
+  const submittedSize = sizes.reduce((sum, size) => sum + size, 0n);
   const groupId = `ui-${Date.now()}-${input.market.marketId}`;
   const submitted: ServerIntentRecord[] = [];
 
@@ -325,7 +328,7 @@ async function submitCustodySharedTradeIntent(
   return {
     intent: first,
     intents: submitted,
-    protocolSize: input.protocolSize,
+    protocolSize: submittedSize,
   };
 }
 
@@ -561,32 +564,6 @@ async function cancelSubmittedIntentFragments(
   return uncancelled;
 }
 
-export function allocateProtocolSizes(
-  totalSize: bigint,
-  totalMargin: bigint,
-  margins: bigint[],
-): bigint[] {
-  if (totalSize <= 0n || totalMargin <= 0n || margins.length === 0) {
-    throw new Error("Invalid fragmented private order allocation");
-  }
-  if (margins.some((margin) => margin <= 0n)) {
-    throw new Error("Private order fragments must have positive margin");
-  }
-  if (margins.reduce((sum, margin) => sum + margin, 0n) !== totalMargin) {
-    throw new Error("Private order fragment margin mismatch");
-  }
-
-  let assigned = 0n;
-  return margins.map((margin, index) => {
-    const size = index === margins.length - 1
-      ? totalSize - assigned
-      : (totalSize * margin) / totalMargin;
-    if (size <= 0n) throw new Error("A private balance fragment is too small for this order");
-    assigned += size;
-    return size;
-  });
-}
-
 function intentRecordFromResponse(response: ProveAndSubmitIntentResponse | IntentSubmitResponse): ServerIntentRecord {
   const candidate = response && typeof response === "object" && "intent" in response
     ? response.intent
@@ -699,11 +676,15 @@ async function freshMarginMembership(commitment: Hex, token?: string): Promise<M
   }
 }
 
-function protocolSizeFromTicket(margin: bigint, leverage: number, price: number): bigint {
+export function protocolOrderSize(margin: bigint, leverage: number, price: number): bigint {
   if (margin <= 0n || leverage <= 0 || price <= 0) return 0n;
+  const effectiveMargin = margin > PRIVATE_ORDER_MARGIN_ROUNDING_RESERVE
+    ? margin - PRIVATE_ORDER_MARGIN_ROUNDING_RESERVE
+    : 0n;
+  if (effectiveMargin === 0n) return 0n;
   const priceProtocol = toPrice(price);
   const leverageProtocol = BigInt(Math.round(leverage * Number(LEVERAGE_SCALE)));
-  const notional = (margin * leverageProtocol) / LEVERAGE_SCALE;
+  const notional = (effectiveMargin * leverageProtocol) / LEVERAGE_SCALE;
   const size = (notional * PRICE_SCALE) / priceProtocol;
   return size > 0n ? size : 0n;
 }
