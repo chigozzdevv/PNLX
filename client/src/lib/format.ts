@@ -1,3 +1,5 @@
+import { USDC_SCALE } from "@/lib/asset-units";
+
 export function formatUsd(value: number, options: Intl.NumberFormatOptions = {}): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -5,6 +7,30 @@ export function formatUsd(value: number, options: Intl.NumberFormatOptions = {})
     maximumFractionDigits: value >= 1000 ? 0 : 2,
     ...options,
   }).format(value);
+}
+
+export function formatUsdc(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 7,
+    minimumFractionDigits: 2,
+  }).format(roundToUsdcPrecision(value));
+}
+
+export function formatSignedSettlementUsd(value: number): string {
+  const rounded = roundToUsdcPrecision(value);
+  if (rounded === 0) {
+    return formatUsd(0, { maximumFractionDigits: 7, minimumFractionDigits: 2 });
+  }
+  return `${rounded > 0 ? "+" : "−"}${formatUsd(Math.abs(rounded), {
+    maximumFractionDigits: 7,
+    minimumFractionDigits: 2,
+  })}`;
+}
+
+export function settlementAmountSign(value: number): -1 | 0 | 1 {
+  const rounded = roundToUsdcPrecision(value);
+  if (rounded === 0) return 0;
+  return rounded > 0 ? 1 : -1;
 }
 
 export function formatCompact(value: number): string {
@@ -37,4 +63,8 @@ export function priceFromOracleString(value: string): number {
 
 export function rateFromMicroBps(value: string): number {
   return Number(BigInt(value)) / 1_000_000;
+}
+
+function roundToUsdcPrecision(value: number): number {
+  return Math.round(value * USDC_SCALE) / USDC_SCALE;
 }

@@ -82,7 +82,6 @@ export interface ClosePositionResult extends PositionCloseRecord {
     fee: number;
     fundingPayment: number;
     grossPricePnl: number;
-    initialMargin: number;
     returnedMargin: number;
   };
 }
@@ -254,7 +253,6 @@ async function closePositionAttempt(input: ClosePositionInput): Promise<ClosePos
       fee: protocolUsdcToDisplay(fee),
       fundingPayment: protocolUsdcToDisplay(fundingPayment),
       grossPricePnl: protocolUsdcToDisplay(closeSettlement.realizedPnl),
-      initialMargin: protocolUsdcToDisplay(BigInt(privateState.margin)),
       returnedMargin: protocolUsdcToDisplay(closeSettlement.newMargin),
     },
   };
