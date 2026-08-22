@@ -29,6 +29,7 @@ import {
 } from "@/lib/chart-indicators";
 import { ChartTools } from "@/components/chart-tools";
 import { chartVolumeData } from "@/lib/chart-volume";
+import { latestLogicalRange } from "@/lib/chart-range";
 import { formatNumber } from "@/lib/format";
 import type { ChartCandle, MarketDisplay } from "@/types/trading";
 
@@ -61,9 +62,7 @@ interface ChartSeries {
 }
 
 const CHART_HEIGHT = 560;
-const DEFAULT_VISIBLE_CANDLES = 96;
 const LOAD_MORE_THRESHOLD = 40;
-const RIGHT_OFFSET_BARS = 8;
 
 export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function PriceChart(
   { candles, drawingScope, indicators, market, onLoadOlder },
@@ -270,6 +269,8 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
     if (!initialRangeSetRef.current && cleanCandles.length > 0) {
       showLatestWindow(chart, cleanCandles.length);
       initialRangeSetRef.current = true;
+    } else if (prependedHistory && wasFollowingLatest) {
+      showLatestWindow(chart, cleanCandles.length);
     } else if (prependedHistory && previousVisibleRange) {
       chart.timeScale().setVisibleRange(previousVisibleRange);
     } else if (wasFollowingLatest) {
@@ -486,10 +487,6 @@ function chartPrice(value: number): string {
 }
 
 function showLatestWindow(chart: IChartApi, candleCount: number): void {
-  if (candleCount <= 0) return;
-  const lastIndex = candleCount - 1;
-  chart.timeScale().setVisibleLogicalRange({
-    from: Math.max(0, candleCount - DEFAULT_VISIBLE_CANDLES),
-    to: lastIndex + RIGHT_OFFSET_BARS,
-  });
+  const range = latestLogicalRange(candleCount);
+  if (range) chart.timeScale().setVisibleLogicalRange(range);
 }

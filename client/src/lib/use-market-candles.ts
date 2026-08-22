@@ -43,6 +43,12 @@ export interface MarketPriceUpdate {
   source: "pyth-hermes";
 }
 
+export interface SnapshotMergeOptions {
+  interval?: CandleInterval;
+  livePublishedAt?: number;
+  stale?: boolean;
+}
+
 const MAX_RETAINED_CANDLES = 5_000;
 const FALLBACK_POLL_MS = 5_000;
 const SNAPSHOT_REFRESH_MS = 10_000;
@@ -85,16 +91,25 @@ export function useMarketCandles(
     let coalesceTimer: ReturnType<typeof setTimeout> | undefined;
     let eventSource: EventSource | undefined;
     let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+    let initialSnapshotSettled = false;
+    let lastAppliedTickAt = 0;
+    let snapshotTickFloor = 0;
     let snapshotRequestActive = false;
+    let snapshotUpdates: MarketPriceUpdate[] = [];
     let pendingUpdate: MarketPriceUpdate | undefined;
     let lastAcceptedSignature = "";
     let streamOpen = false;
 
     function flushPendingUpdate() {
       coalesceTimer = undefined;
+      if (!initialSnapshotSettled) return;
       const update = pendingUpdate;
       pendingUpdate = undefined;
-      if (!active || !update) return;
+      if (
+        !active ||
+        !isTickFlushable(update, initialSnapshotSettled, Math.max(lastAppliedTickAt, snapshotTickFloor))
+      ) return;
+      lastAppliedTickAt = update.publishedAt;
       setState((current) => ({
         ...current,
         candles: upsertPrice(current.candles, update, interval, MAX_RETAINED_CANDLES),
@@ -111,7 +126,19 @@ export function useMarketCandles(
       const signature = `${update.publishedAt}:${update.price}:${update.confidence}`;
       if (signature === lastAcceptedSignature) return;
       lastAcceptedSignature = signature;
-      pendingUpdate = chooseLatestTick(pendingUpdate, update);
+      if (snapshotRequestActive) {
+        snapshotUpdates = bufferMonotonicTick(
+          snapshotUpdates,
+          update,
+          Math.max(lastAppliedTickAt, snapshotTickFloor),
+        );
+      }
+      pendingUpdate = chooseLatestTick(
+        pendingUpdate,
+        update,
+        Math.max(lastAppliedTickAt, snapshotTickFloor),
+      );
+      if (!pendingUpdate) return;
       if (coalesceTimer) clearTimeout(coalesceTimer);
       coalesceTimer = setTimeout(flushPendingUpdate, TICK_COALESCE_MS);
     }
@@ -119,24 +146,52 @@ export function useMarketCandles(
     async function loadSnapshot() {
       if (snapshotRequestActive) return;
       snapshotRequestActive = true;
+      snapshotUpdates = pendingUpdate
+        ? bufferMonotonicTick(
+            [],
+            pendingUpdate,
+            Math.max(lastAppliedTickAt, snapshotTickFloor),
+          )
+        : [];
       try {
         const response = await pnlxGet<CandlesResponse>(
           `/markets/candles?marketId=${encodeURIComponent(activeMarketId)}&interval=${interval}&limit=${limit}`,
         );
         if (!active) return;
+        const fetchedAt = positiveTimestamp(response.fetchedAt);
+        const snapshotFloor = latestValidCandleTimestamp(response.candles);
+        const replayUpdates = snapshotUpdates.filter(
+          (update) => update.publishedAt >= snapshotFloor,
+        );
+        const livePublishedAtBeforeReplay = lastAppliedTickAt;
+        const replayedAt = replayUpdates.at(-1)?.publishedAt ?? 0;
+        snapshotUpdates = [];
         setState((current) => ({
           ...current,
-          candles: mergeSnapshotCandles(
-            response.candles,
-            current.candles,
+          candles: replayPriceUpdates(
+            mergeSnapshotCandles(
+              response.candles,
+              current.candles,
+              MAX_RETAINED_CANDLES,
+              {
+                interval,
+                livePublishedAt: livePublishedAtBeforeReplay,
+                stale: response.stale,
+              },
+            ),
+            replayUpdates,
+            interval,
             MAX_RETAINED_CANDLES,
           ),
           error: undefined,
           hasMore: response.hasMore ?? response.candles.length >= limit,
           loading: false,
-          source: response.source,
-          updatedAt: Math.max(current.updatedAt ?? 0, response.fetchedAt),
+          source: replayUpdates.at(-1)?.source ?? response.source,
+          updatedAt: Math.max(current.updatedAt ?? 0, fetchedAt, replayedAt),
         }));
+        lastAppliedTickAt = Math.max(lastAppliedTickAt, replayedAt);
+        snapshotTickFloor = Math.max(snapshotTickFloor, snapshotFloor);
+        if (!initialSnapshotSettled) pendingUpdate = undefined;
       } catch (error) {
         if (!active) return;
         setState((current) => ({
@@ -146,6 +201,13 @@ export function useMarketCandles(
         }));
       } finally {
         snapshotRequestActive = false;
+        snapshotUpdates = [];
+        if (active && !initialSnapshotSettled) {
+          initialSnapshotSettled = true;
+          if (pendingUpdate && !coalesceTimer) {
+            coalesceTimer = setTimeout(flushPendingUpdate, 0);
+          }
+        }
       }
     }
 
@@ -286,11 +348,51 @@ function isMarketPriceUpdate(update: MarketPriceUpdate, marketId: string): boole
 export function chooseLatestTick(
   current: MarketPriceUpdate | undefined,
   candidate: MarketPriceUpdate,
-): MarketPriceUpdate {
+  timestampFloor = 0,
+): MarketPriceUpdate | undefined {
+  if (candidate.publishedAt < timestampFloor) return current;
   if (!current) return candidate;
   if (candidate.publishedAt > current.publishedAt) return candidate;
   if (candidate.publishedAt === current.publishedAt) return candidate;
   return current;
+}
+
+export function isTickFlushable(
+  update: MarketPriceUpdate | undefined,
+  snapshotSettled: boolean,
+  timestampFloor = 0,
+): update is MarketPriceUpdate {
+  return Boolean(
+    snapshotSettled &&
+    update &&
+    Number.isFinite(update.publishedAt) &&
+    update.publishedAt >= timestampFloor,
+  );
+}
+
+export function bufferMonotonicTick(
+  updates: MarketPriceUpdate[],
+  candidate: MarketPriceUpdate,
+  timestampFloor = 0,
+): MarketPriceUpdate[] {
+  const latestTimestamp = updates.at(-1)?.publishedAt ?? timestampFloor;
+  if (
+    !Number.isFinite(candidate.publishedAt) ||
+    candidate.publishedAt < Math.max(timestampFloor, latestTimestamp)
+  ) return updates;
+  return [...updates, candidate];
+}
+
+export function replayPriceUpdates(
+  candles: ChartCandle[],
+  updates: MarketPriceUpdate[],
+  interval: CandleInterval,
+  limit = MAX_RETAINED_CANDLES,
+): ChartCandle[] {
+  return updates.reduce(
+    (current, update) => upsertPrice(current, update, interval, limit),
+    candles,
+  );
 }
 
 export function upsertPrice(
@@ -299,11 +401,24 @@ export function upsertPrice(
   interval: CandleInterval,
   limit = MAX_RETAINED_CANDLES,
 ): ChartCandle[] {
+  const validCandles = mergeCandles([], candles, limit);
+  if (!Number.isFinite(update.price) || update.price <= 0) return validCandles;
+  if (!Number.isFinite(update.publishedAt) || update.publishedAt <= 0) return validCandles;
   const intervalMs = intervalMilliseconds(interval);
   const bucket = Math.floor(update.publishedAt / intervalMs) * intervalMs;
   const time = new Date(bucket).toISOString();
-  const existing = candles.find((candle) => candle.time === time);
-  const previousClose = candles.at(-1)?.close ?? update.price;
+  const existing = validCandles.find((candle) => candle.time === time);
+  let previous: ChartCandle | undefined;
+  for (let index = validCandles.length - 1; index >= 0; index -= 1) {
+    if (Date.parse(validCandles[index].time) < bucket) {
+      previous = validCandles[index];
+      break;
+    }
+  }
+  const adjacentPrevious = previous && Date.parse(previous.time) + intervalMs === bucket
+    ? previous
+    : undefined;
+  const open = adjacentPrevious?.close ?? update.price;
   const next: ChartCandle = existing
     ? {
         ...existing,
@@ -313,13 +428,13 @@ export function upsertPrice(
       }
     : {
         close: update.price,
-        high: update.price,
-        low: update.price,
-        open: previousClose,
+        high: Math.max(open, update.price),
+        low: Math.min(open, update.price),
+        open,
         time,
         volume: 0,
       };
-  return mergeCandles(candles, [next], limit);
+  return mergeCandles(validCandles, [next], limit);
 }
 
 export function intervalMilliseconds(interval: CandleInterval): number {
@@ -337,8 +452,15 @@ export function mergeCandles(
   updates: ChartCandle[],
   limit = MAX_RETAINED_CANDLES,
 ): ChartCandle[] {
-  const byTime = new Map(base.map((candle) => [candle.time, normalizeCandle(candle)]));
-  for (const candle of updates) byTime.set(candle.time, normalizeCandle(candle));
+  const byTime = new Map<string, ChartCandle>();
+  for (const candle of base) {
+    const normalized = normalizeCandle(candle);
+    if (normalized) byTime.set(normalized.time, normalized);
+  }
+  for (const candle of updates) {
+    const normalized = normalizeCandle(candle);
+    if (normalized) byTime.set(normalized.time, normalized);
+  }
   return [...byTime.values()]
     .sort((left, right) => Date.parse(left.time) - Date.parse(right.time))
     .slice(-limit);
@@ -348,26 +470,85 @@ export function mergeSnapshotCandles(
   snapshot: ChartCandle[],
   current: ChartCandle[],
   limit = MAX_RETAINED_CANDLES,
+  options: SnapshotMergeOptions = {},
 ): ChartCandle[] {
-  const snapshotVolume = new Map(snapshot.map((candle) => [candle.time, candle.volume]));
-  const liveCandles = current.map((candle) => ({
-    ...candle,
-    volume: snapshotVolume.get(candle.time) ?? candle.volume,
-  }));
-  return mergeCandles(snapshot, liveCandles, limit);
+  const validSnapshot = mergeCandles([], snapshot, MAX_RETAINED_CANDLES);
+  const validCurrent = mergeCandles([], current, MAX_RETAINED_CANDLES);
+  if (validSnapshot.length === 0) return validCurrent.slice(-limit);
+
+  const snapshotByTime = new Map(validSnapshot.map((candle) => [candle.time, candle]));
+  if (options.stale) {
+    const liveCandles = validCurrent.map((candle) => ({
+      ...candle,
+      volume: snapshotByTime.get(candle.time)?.volume ?? candle.volume,
+    }));
+    return mergeCandles(validSnapshot, liveCandles, limit);
+  }
+
+  const firstSnapshotAt = Date.parse(validSnapshot[0].time);
+  const lastSnapshotAt = Date.parse(validSnapshot.at(-1)!.time);
+  const livePublishedAt = positiveTimestamp(options.livePublishedAt);
+  const liveBucket = options.interval && livePublishedAt > 0
+    ? Math.floor(livePublishedAt / intervalMilliseconds(options.interval)) *
+      intervalMilliseconds(options.interval)
+    : 0;
+  const merged = new Map(snapshotByTime);
+
+  for (const candle of validCurrent) {
+    const candleAt = Date.parse(candle.time);
+    if (candleAt < firstSnapshotAt) {
+      merged.set(candle.time, candle);
+      continue;
+    }
+    if (candleAt > lastSnapshotAt && candleAt === liveBucket) {
+      merged.set(candle.time, candle);
+    }
+  }
+
+  return [...merged.values()]
+    .sort((left, right) => Date.parse(left.time) - Date.parse(right.time))
+    .slice(-limit);
 }
 
-function normalizeCandle(candle: ChartCandle): ChartCandle {
+function normalizeCandle(candle: ChartCandle): ChartCandle | undefined {
+  const time = Date.parse(candle.time);
   const open = finiteNumber(candle.open);
   const close = finiteNumber(candle.close);
-  const high = Math.max(finiteNumber(candle.high), open, close);
-  const low = Math.min(finiteNumber(candle.low), open, close);
-  const volume = Math.max(0, finiteNumber(candle.volume));
-  return { ...candle, close, high, low, open, volume };
+  const high = finiteNumber(candle.high);
+  const low = finiteNumber(candle.low);
+  const volume = finiteNumber(candle.volume);
+  if (
+    !Number.isFinite(time) ||
+    open === undefined ||
+    close === undefined ||
+    high === undefined ||
+    low === undefined ||
+    volume === undefined ||
+    open <= 0 ||
+    close <= 0 ||
+    high <= 0 ||
+    low <= 0 ||
+    volume < 0 ||
+    high < low ||
+    high < open ||
+    high < close ||
+    low > open ||
+    low > close
+  ) return undefined;
+  return { ...candle, close, high, low, open, time: new Date(time).toISOString(), volume };
 }
 
-function finiteNumber(value: unknown): number {
+function finiteNumber(value: unknown): number | undefined {
   const number = Number(value);
-  if (!Number.isFinite(number)) throw new Error("invalid candle number");
-  return number;
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function positiveTimestamp(value: unknown): number {
+  const timestamp = Number(value);
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
+}
+
+function latestValidCandleTimestamp(candles: ChartCandle[]): number {
+  const validCandles = mergeCandles([], candles, MAX_RETAINED_CANDLES);
+  return validCandles.length > 0 ? Date.parse(validCandles.at(-1)!.time) : 0;
 }

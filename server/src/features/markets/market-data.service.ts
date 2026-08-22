@@ -62,19 +62,23 @@ export class MarketDataService {
   constructor(
     private readonly env: ServerEnv,
     private readonly fetcher: Fetcher = globalThis.fetch,
+    private readonly now: () => number = Date.now,
   ) {}
 
   async candles(input: MarketCandlesInput) {
     const asset = supportedAsset(input.marketId);
     const key = candleCacheKey(input);
     const cached = this.candleCache.get(key);
-    const now = Date.now();
+    const now = this.now();
 
     if (cached) {
-      if (cached.expiresAt <= now) {
-        void this.refreshCandles(input, asset.symbol).catch(() => undefined);
+      if (cached.expiresAt > now) return candleResponse(input, cached, true, false);
+      try {
+        const fresh = await this.refreshCandles(input, asset.symbol);
+        return candleResponse(input, fresh, false, false);
+      } catch {
+        return candleResponse(input, cached, true, true);
       }
-      return candleResponse(input, cached, true, cached.expiresAt <= now);
     }
 
     const fresh = await this.refreshCandles(input, asset.symbol);
@@ -88,7 +92,7 @@ export class MarketDataService {
       start: (controller) => {
         clientId = this.nextClientId++;
         const heartbeat = setInterval(() => {
-          this.enqueue(clientId, `: heartbeat ${Date.now()}\n\n`);
+          this.enqueue(clientId, `: heartbeat ${this.now()}\n\n`);
         }, CLIENT_HEARTBEAT_MS);
         heartbeat.unref?.();
         this.clients.set(clientId, { controller, heartbeat, marketId });
@@ -118,7 +122,7 @@ export class MarketDataService {
     supportedAsset(marketId);
     const cached = this.latestPrices.get(marketId);
     const fetchedAt = this.latestPriceFetchedAt.get(marketId) ?? 0;
-    if (cached && fetchedAt + PRICE_CACHE_TTL_MS > Date.now()) return cached;
+    if (cached && fetchedAt + PRICE_CACHE_TTL_MS > this.now()) return cached;
 
     const active = this.latestPriceInflight.get(marketId);
     if (active) return active;
@@ -151,7 +155,7 @@ export class MarketDataService {
     symbol: string,
   ): Promise<CandleCacheEntry> {
     const granularity = intervalSeconds(input.interval);
-    const to = input.to ?? Math.floor(Date.now() / 1000);
+    const to = input.to ?? Math.floor(this.now() / 1000);
     const requestedFrom = input.from ?? to - granularity * CANDLE_CACHE_LIMIT;
     const from = Math.max(requestedFrom, to - granularity * CANDLE_CACHE_LIMIT);
     const productId = `Crypto.${symbol}/USD`;
@@ -169,7 +173,7 @@ export class MarketDataService {
     }, CANDLE_FETCH_TIMEOUT_MS, "candle provider");
     const candles = parsePythTradingViewCandles(payload);
     const limitedCandles = candles.slice(-input.limit);
-    const fetchedAt = Date.now();
+    const fetchedAt = this.now();
     return {
       candles: limitedCandles,
       expiresAt: fetchedAt + CANDLE_CACHE_TTL_MS,
@@ -197,8 +201,9 @@ export class MarketDataService {
     const update = parseHermesPriceUpdates(JSON.stringify(payload), feeds)
       .find((candidate) => candidate.marketId === marketId);
     if (!update) throw new Error(`price provider returned no update for ${marketId}`);
-    this.cachePrice(update);
-    return update;
+    if (this.cachePrice(update)) return update;
+    this.latestPriceFetchedAt.set(marketId, this.now());
+    return this.latestPrices.get(marketId) ?? update;
   }
 
   private ensureHermesStream(): void {
@@ -274,7 +279,7 @@ export class MarketDataService {
             .join("\n");
           if (!data) continue;
           for (const update of parseHermesPriceUpdates(data, feeds)) {
-            this.cachePrice(update);
+            if (!this.cachePrice(update)) continue;
             this.broadcast(update);
           }
         }
@@ -285,9 +290,12 @@ export class MarketDataService {
     }
   }
 
-  private cachePrice(update: MarketPriceUpdate): void {
+  private cachePrice(update: MarketPriceUpdate): boolean {
+    const current = this.latestPrices.get(update.marketId);
+    if (current && current.publishedAt > update.publishedAt) return false;
     this.latestPrices.set(update.marketId, update);
-    this.latestPriceFetchedAt.set(update.marketId, Date.now());
+    this.latestPriceFetchedAt.set(update.marketId, this.now());
+    return true;
   }
 
   private broadcast(update: MarketPriceUpdate): void {
@@ -367,13 +375,24 @@ export function parseHermesPriceUpdates(
     const priceRecord = record.price;
     if (!marketId || !priceRecord || typeof priceRecord !== "object") return [];
     const price = priceRecord as Record<string, unknown>;
-    const scaledPrice = Number(price.price) * (10 ** Number(price.expo));
-    const scaledConfidence = Number(price.conf) * (10 ** Number(price.expo));
-    const publishedAt = Number(price.publish_time) * 1_000;
+    const rawPrice = strictNumber(price.price);
+    const rawConfidence = strictNumber(price.conf);
+    const exponent = strictNumber(price.expo);
+    const publishedSeconds = strictNumber(price.publish_time);
+    if (
+      rawPrice === undefined || rawPrice <= 0 ||
+      rawConfidence === undefined || rawConfidence < 0 ||
+      exponent === undefined || !Number.isInteger(exponent) ||
+      publishedSeconds === undefined || publishedSeconds <= 0 ||
+      !Number.isSafeInteger(publishedSeconds)
+    ) return [];
+    const scaledPrice = rawPrice * (10 ** exponent);
+    const scaledConfidence = rawConfidence * (10 ** exponent);
+    const publishedAt = publishedSeconds * 1_000;
     if (
       !Number.isFinite(scaledPrice) || scaledPrice <= 0 ||
       !Number.isFinite(scaledConfidence) || scaledConfidence < 0 ||
-      !Number.isFinite(publishedAt) || publishedAt <= 0
+      !Number.isSafeInteger(publishedAt) || publishedAt <= 0
     ) return [];
     return [{
       confidence: scaledConfidence,
@@ -394,26 +413,44 @@ export function parsePythTradingViewCandles(payload: unknown): MarketCandle[] {
   if (response.s !== "ok") {
     throw new Error(typeof response.errmsg === "string" ? response.errmsg : "candle provider returned no data");
   }
-  const times = numberArray(response.t, "time");
-  const opens = numberArray(response.o, "open");
-  const highs = numberArray(response.h, "high");
-  const lows = numberArray(response.l, "low");
-  const closes = numberArray(response.c, "close");
-  const volumes = Array.isArray(response.v) ? numberArray(response.v, "volume") : [];
+  const times = requiredArray(response.t, "time");
+  const opens = requiredArray(response.o, "open");
+  const highs = requiredArray(response.h, "high");
+  const lows = requiredArray(response.l, "low");
+  const closes = requiredArray(response.c, "close");
+  const volumes = response.v === undefined ? undefined : requiredArray(response.v, "volume");
   const count = Math.min(times.length, opens.length, highs.length, lows.length, closes.length);
   if (count === 0) return [];
 
   const candles: MarketCandle[] = [];
   for (let index = 0; index < count; index += 1) {
+    const time = strictNumber(times[index]);
+    const open = strictNumber(opens[index]);
+    const high = strictNumber(highs[index]);
+    const low = strictNumber(lows[index]);
+    const close = strictNumber(closes[index]);
+    const volume = volumes?.[index] === undefined ? 0 : strictNumber(volumes[index]);
+    if (
+      time === undefined || time <= 0 || !Number.isSafeInteger(time) ||
+      open === undefined || open <= 0 ||
+      high === undefined || high <= 0 ||
+      low === undefined || low <= 0 ||
+      close === undefined || close <= 0 ||
+      volume === undefined || volume < 0 ||
+      high < Math.max(open, close) || low > Math.min(open, close)
+    ) continue;
+    const timestamp = new Date(time * 1_000);
+    if (!Number.isFinite(timestamp.getTime())) continue;
     candles.push({
-      close: closes[index],
-      high: highs[index],
-      low: lows[index],
-      open: opens[index],
-      time: new Date(times[index] * 1_000).toISOString(),
-      volume: volumes[index] ?? 0,
+      close,
+      high,
+      low,
+      open,
+      time: timestamp.toISOString(),
+      volume,
     });
   }
+  if (candles.length === 0) throw new Error("candle provider returned no valid candles");
   return candles;
 }
 
@@ -466,13 +503,20 @@ function pythResolution(interval: MarketCandleInterval): string {
   return String(intervalSeconds(interval) / 60);
 }
 
-function numberArray(value: unknown, label: string): number[] {
+function requiredArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) throw new Error(`missing candle ${label}`);
-  return value.map((item) => {
-    const number = Number(item);
-    if (!Number.isFinite(number)) throw new Error(`invalid candle ${label}`);
-    return number;
-  });
+  return value;
+}
+
+function strictNumber(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  if (!normalized || !/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(normalized)) {
+    return undefined;
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 async function fetchJsonWithRetry(

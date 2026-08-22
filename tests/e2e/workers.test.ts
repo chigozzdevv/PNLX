@@ -75,6 +75,33 @@ describe("support workers", () => {
     }]);
   });
 
+  test("skips malformed and nonpositive Pyth price updates without coercion", () => {
+    const feedId = "b7a8eba68a997cd0210c2e1e4ee811ad2d174b3611c22d9ebf16f4cb7e9ba850";
+    const price = {
+      conf: "0",
+      expo: -8,
+      price: "19160237",
+      publish_time: 1_784_692_964,
+    };
+    const updates = parseHermesPriceUpdates(JSON.stringify({
+      parsed: [
+        { id: feedId, price },
+        { id: feedId, price: { ...price, expo: null } },
+        { id: feedId, price: { ...price, price: "" } },
+        { id: feedId, price: { ...price, price: "0" } },
+        { id: feedId, price: { ...price, publish_time: null } },
+      ],
+    }), new Map([[feedId, "xlm-usd-perp"]]));
+
+    expect(updates).toEqual([{
+      confidence: 0,
+      marketId: "xlm-usd-perp",
+      price: 0.19160237,
+      publishedAt: 1_784_692_964_000,
+      source: "pyth-hermes",
+    }]);
+  });
+
   test("coalesces and caches Pyth candle snapshots", async () => {
     let requests = 0;
     const fetcher = async () => {
@@ -105,6 +132,90 @@ describe("support workers", () => {
     expect(concurrent.candles).toEqual(first.candles);
     expect(cached.cached).toBe(true);
     expect(cached.candles.at(-1)?.close).toBe(0.20);
+  });
+
+  test("awaits an expired candle refresh and falls back to stale only on provider failure", async () => {
+    let now = 1_784_693_000_000;
+    let requests = 0;
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const snapshot = (close: number) => new Response(JSON.stringify({
+      c: [close],
+      h: [close + 0.005],
+      l: [close - 0.005],
+      o: [close],
+      s: "ok",
+      t: [1_784_692_900],
+      v: [0],
+    }), { status: 200 });
+    const fetcher = async () => {
+      requests += 1;
+      if (requests === 1) return snapshot(0.19);
+      if (requests === 2) {
+        await refreshGate;
+        return snapshot(0.20);
+      }
+      throw new Error("provider unavailable");
+    };
+    const service = new MarketDataService(loadEnv(), fetcher as never, () => now);
+    const input = { interval: "15m" as const, limit: 160, marketId: "xlm-usd-perp" };
+
+    const first = await service.candles(input);
+    now += 5_001;
+    let refreshSettled = false;
+    const pendingRefresh = service.candles(input).then((result) => {
+      refreshSettled = true;
+      return result;
+    });
+    await Promise.resolve();
+
+    expect(requests).toBe(2);
+    expect(refreshSettled).toBe(false);
+    releaseRefresh();
+    const refreshed = await pendingRefresh;
+    expect(refreshed.cached).toBe(false);
+    expect(refreshed.stale).toBe(false);
+    expect(refreshed.candles.at(-1)?.close).toBe(0.20);
+
+    now += 5_001;
+    const stale = await service.candles(input);
+    expect(requests).toBe(4);
+    expect(stale.cached).toBe(true);
+    expect(stale.stale).toBe(true);
+    expect(stale.candles.at(-1)?.close).toBe(0.20);
+    expect(first.candles.at(-1)?.close).toBe(0.19);
+  });
+
+  test("skips invalid Pyth OHLC rows while retaining zero volume", () => {
+    const candles = parsePythTradingViewCandles({
+      c: [0.20, 0.20, 0.20, 0, 0.23],
+      h: [0.21, 0.21, 0.21, 0.21, 0.21],
+      l: [0.18, 0.18, 0.18, 0.18, 0.18],
+      o: [0.19, 0.19, "", 0.19, 0.19],
+      s: "ok",
+      t: [1_784_692_000, null, 1_784_692_002, 1_784_692_003, 1_784_692_004],
+      v: [0, 0, 0, 0, 0],
+    });
+
+    expect(candles).toEqual([{
+      close: 0.20,
+      high: 0.21,
+      low: 0.18,
+      open: 0.19,
+      time: "2026-07-22T03:46:40.000Z",
+      volume: 0,
+    }]);
+    expect(() => parsePythTradingViewCandles({
+      c: [0],
+      h: [0],
+      l: [0],
+      o: [""],
+      s: "ok",
+      t: [null],
+      v: [0],
+    })).toThrow("candle provider returned no valid candles");
   });
 
   test("parses bounded candle history windows", () => {
@@ -205,6 +316,38 @@ describe("support workers", () => {
     expect(first.price).toBe(0.19160237);
     expect(concurrent).toEqual(first);
     expect(cached).toEqual(first);
+  });
+
+  test("does not let an older Pyth price response replace a newer cached update", async () => {
+    let now = 1_784_693_000_000;
+    let requests = 0;
+    const feedId = "b7a8eba68a997cd0210c2e1e4ee811ad2d174b3611c22d9ebf16f4cb7e9ba850";
+    const fetcher = async () => {
+      requests += 1;
+      const newer = requests === 1;
+      return new Response(JSON.stringify({
+        parsed: [{
+          id: feedId,
+          price: {
+            conf: "120",
+            expo: -8,
+            price: newer ? "20000000" : "10000000",
+            publish_time: newer ? 1_784_692_964 : 1_784_692_900,
+          },
+        }],
+      }), { status: 200 });
+    };
+    const service = new MarketDataService(loadEnv(), fetcher as never, () => now);
+
+    const newer = await service.latestPrice("xlm-usd-perp");
+    now += 751;
+    const attemptedOlder = await service.latestPrice("xlm-usd-perp");
+    const stillCached = await service.latestPrice("xlm-usd-perp");
+
+    expect(requests).toBe(2);
+    expect(newer.price).toBe(0.20);
+    expect(attemptedOlder).toEqual(newer);
+    expect(stillCached).toEqual(newer);
   });
 
   test("defaults production oracle authority to on-chain market pricing", () => {

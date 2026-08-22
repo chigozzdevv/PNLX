@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  bufferMonotonicTick,
   chooseLatestTick,
+  isTickFlushable,
   mergeCandles,
   mergeSnapshotCandles,
+  replayPriceUpdates,
   upsertPrice,
   type MarketPriceUpdate,
 } from "@/lib/use-market-candles";
@@ -30,22 +33,138 @@ describe("market candle stream helpers", () => {
 
   test("opens a new bucket from the previous close", () => {
     const next = upsertPrice([first], tick(12, Date.parse("2026-08-13T10:01:01.000Z")), "1m");
-    expect(next[1]).toMatchObject({ close: 12, high: 12, low: 10, open: 10 });
+    expect(next[1]).toEqual({
+      close: 12,
+      high: 12,
+      low: 10,
+      open: 10,
+      time: "2026-08-13T10:01:00.000Z",
+      volume: 0,
+    });
   });
 
-  test("keeps the latest same-second tick and merges sorted history", () => {
+  test("does not bridge a missing bucket with a stale prior close", () => {
+    const next = upsertPrice([first], tick(12, Date.parse("2026-08-13T10:05:01.000Z")), "1m");
+    expect(next[1]).toEqual({
+      close: 12,
+      high: 12,
+      low: 12,
+      open: 12,
+      time: "2026-08-13T10:05:00.000Z",
+      volume: 0,
+    });
+  });
+
+  test("withholds ticks before snapshot settlement and across timestamp regressions", () => {
+    const update = tick(11, 2_000);
+    expect(isTickFlushable(update, false, 0)).toBe(false);
+    expect(isTickFlushable(update, true, 2_001)).toBe(false);
+    expect(isTickFlushable(update, true, 2_000)).toBe(true);
+  });
+
+  test("buffers equal or increasing ticks while rejecting timestamp regressions", () => {
+    const firstUpdate = tick(11, 2_000);
+    const sameTimestamp = tick(12, 2_000);
+    const buffered = bufferMonotonicTick([], firstUpdate, 1_000);
+    const withSameTimestamp = bufferMonotonicTick(buffered, sameTimestamp, 1_000);
+
+    expect(withSameTimestamp).toEqual([firstUpdate, sameTimestamp]);
+    expect(bufferMonotonicTick(withSameTimestamp, tick(8, 1_999), 1_000))
+      .toBe(withSameTimestamp);
+  });
+
+  test("keeps the latest tick across coalescing windows and merges sorted history", () => {
     const older = tick(9, 1_000);
     const latest = tick(11, 1_000);
     expect(chooseLatestTick(older, latest)).toBe(latest);
-    expect(mergeCandles([first], [{ ...first, close: 12 }])[0].close).toBe(12);
+    expect(chooseLatestTick(latest, tick(8, 999))).toBe(latest);
+    expect(chooseLatestTick(undefined, tick(8, 999), 1_000)).toBeUndefined();
+    expect(mergeCandles([first], [{ ...first, close: 12, high: 12 }])[0].close).toBe(12);
   });
 
-  test("refreshes settlement volume without replacing the latest streamed price", () => {
+  test("lets a fresh snapshot repair completed and matching OHLC", () => {
     const snapshot = [{ ...first, close: 10, volume: 12.5 }];
+    const poisoned = [{ ...first, close: 12, high: 100, low: 1, open: 1, volume: 0 }];
+
+    expect(mergeSnapshotCandles(snapshot, poisoned, 300, {
+      interval: "1m",
+      livePublishedAt: Date.parse("2026-08-13T10:00:45.000Z"),
+    })).toEqual(snapshot);
+  });
+
+  test("keeps a fresh snapshot authoritative for an active matching candle", () => {
+    const snapshot = [{ ...first, volume: 12.5 }];
+    const poisoned = [{ ...first, close: 12, high: 100, low: 1, open: 1, volume: 0 }];
+
+    expect(mergeSnapshotCandles(snapshot, poisoned, 300, {
+      interval: "1m",
+      livePublishedAt: Date.parse("2026-08-13T10:00:45.000Z"),
+    })).toEqual(snapshot);
+  });
+
+  test("repairs old matching OHLC before replaying ticks received during refresh", () => {
+    const snapshot = [{ ...first, volume: 12.5 }];
+    const poisoned = [{ ...first, close: 12, high: 100, low: 1, open: 1, volume: 0 }];
+    const receivedDuringRefresh = [
+      tick(8, Date.parse("2026-08-13T10:00:41.000Z")),
+      tick(12, Date.parse("2026-08-13T10:00:42.000Z")),
+    ];
+    const repaired = mergeSnapshotCandles(snapshot, poisoned, 300, {
+      interval: "1m",
+      livePublishedAt: Date.parse("2026-08-13T10:00:40.000Z"),
+    });
+
+    expect(replayPriceUpdates(repaired, receivedDuringRefresh, "1m", 300)).toEqual([{
+      ...first,
+      close: 12,
+      high: 12,
+      low: 8,
+      volume: 12.5,
+    }]);
+  });
+
+  test("preserves a structurally plausible active range and live tail", () => {
+    const snapshot = [{
+      ...first,
+      time: "2026-08-13T09:59:00.000Z",
+      volume: 12.5,
+    }];
+    const activeTail: ChartCandle = {
+      close: 12,
+      high: 12,
+      low: 12,
+      open: 12,
+      time: "2026-08-13T10:00:00.000Z",
+      volume: 0,
+    };
+
+    expect(mergeSnapshotCandles(snapshot, [activeTail], 300, {
+      interval: "1m",
+      livePublishedAt: Date.parse("2026-08-13T10:00:30.000Z"),
+    })).toEqual([snapshot[0], activeTail]);
+  });
+
+  test("keeps live OHLC over a stale snapshot while refreshing its volume", () => {
+    const snapshot = [{ ...first, volume: 12.5 }];
     const current = [{ ...first, close: 12, high: 12, volume: 0 }];
 
-    expect(mergeSnapshotCandles(snapshot, current)).toEqual([
-      expect.objectContaining({ close: 12, high: 12, volume: 12.5 }),
+    expect(mergeSnapshotCandles(snapshot, current, 300, { stale: true })).toEqual([
+      { ...current[0], volume: 12.5 },
     ]);
+  });
+
+  test("skips malformed, nonpositive, and inconsistent candles without throwing", () => {
+    const invalidCandles: ChartCandle[] = [
+      { ...first, time: "not-a-time" },
+      { ...first, close: 0 },
+      { ...first, high: 8 },
+      { ...first, low: 12 },
+      { ...first, volume: -1 },
+      { ...first, open: Number.NaN },
+    ];
+
+    expect(mergeCandles([first], invalidCandles)).toEqual([first]);
+    expect(upsertPrice([first], tick(0, Date.parse("2026-08-13T10:00:30.000Z")), "1m"))
+      .toEqual([first]);
   });
 });
