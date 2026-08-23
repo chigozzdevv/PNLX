@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import dynamic from "next/dynamic";
 import { ActionToast } from "@/components/action-toast";
 import { AppShell } from "@/components/app-shell";
 import { BottomTicker } from "@/components/bottom-ticker";
@@ -10,7 +9,7 @@ import { MarketHeader } from "@/components/market-header";
 import { OrderTicket, type OrderTicketSubmitInput } from "@/components/order-ticket";
 import { PnlModal, type PnlModalProps } from "@/components/pnl-modal";
 import { PositionsTable, type PositionsTableView } from "@/components/positions-table";
-import type { PriceChartHandle } from "@/components/price-chart";
+import { PriceChart, type PriceChartHandle } from "@/components/price-chart";
 import type { ChartIndicatorId } from "@/lib/chart-indicators";
 import type { OwnerOrderGroup } from "@/lib/order-groups";
 import { useMarketCandles, type CandleInterval } from "@/lib/use-market-candles";
@@ -28,13 +27,6 @@ import type {
 const SELECTED_MARKET_STORAGE_KEY = "pnlx:selected-market-id:v2";
 const DEFAULT_MARKET_ID = "xlm-usd-perp";
 const OPTIMISTIC_ORDER_TTL_MS = 30_000;
-const DeferredPriceChart = dynamic(
-  () => import("@/components/deferred-price-chart").then((module) => module.DeferredPriceChart),
-  {
-    loading: () => <ChartLoadingPlaceholder />,
-    ssr: false,
-  },
-);
 
 export function TradingPage() {
   const wallet = useWalletSession();
@@ -281,14 +273,14 @@ export function TradingPage() {
               />
               {displaySelectedMarket ? (
                 <div className="chart-frame">
-                  <DeferredPriceChart
+                  <PriceChart
                     candles={candles.candles}
-                    chartRef={priceChartRef}
                     drawingScope={displaySelectedMarket.marketId}
                     indicators={chartIndicators}
                     key={`${displaySelectedMarket.marketId}:${chartInterval}`}
                     market={displaySelectedMarket}
                     onLoadOlder={candles.loadOlder}
+                    ref={priceChartRef}
                   />
                   {candles.loading || candles.error ? (
                     <div className="chart-data-status">
@@ -391,15 +383,6 @@ export function TradingPage() {
         }}
       />
     </AppShell>
-  );
-}
-
-function ChartLoadingPlaceholder() {
-  return (
-    <div aria-label="Loading chart" className="chart-loading-placeholder" role="status">
-      <span className="chart-loading-axis" />
-      <span className="chart-loading-price-line" />
-    </div>
   );
 }
 

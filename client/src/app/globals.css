@@ -5151,11 +5151,15 @@ button:disabled {
 }
 
 .chart-data-status {
-  bottom: 34px;
+  top: 50%;
+  right: auto;
+  bottom: auto;
+  left: 50%;
   border-radius: 999px;
   background: rgba(23, 22, 19, 0.9);
   font-size: 10px;
   padding: 7px 10px;
+  transform: translate(-50%, -50%);
 }
 
 .order-ticket {
