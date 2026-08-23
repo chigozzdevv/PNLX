@@ -284,13 +284,13 @@ export function TradingPage() {
                   />
                   {candles.loading || candles.error ? (
                     <div className="chart-data-status">
-                      {candles.loading ? "Loading live candles" : candles.error}
+                      {candles.loading ? "Loading chart" : candles.error}
                     </div>
                   ) : null}
                 </div>
               ) : (
                 <div className="empty-positions min-h-[456px]">
-                  <span>{trading.loading ? "Loading live markets" : trading.error ?? "No live markets"}</span>
+                  <span>{trading.loading ? "Loading chart" : trading.error ?? "No live markets"}</span>
                 </div>
               )}
             </section>
