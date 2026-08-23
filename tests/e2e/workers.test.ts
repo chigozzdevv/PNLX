@@ -1150,10 +1150,17 @@ describe("support workers", () => {
 
     const execution = batchExecutor.runOnce({ now: 1234 });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect([...executor.store.batchExecutionRuns.values()][0]).toMatchObject({
+    const provingRecord = [...executor.store.batchExecutionRuns.values()][0];
+    expect(provingRecord).toMatchObject({
       phase: "proving",
       status: "running",
     });
+    expect(executor.store.orderLifecycle.get(long.intentCommitment)?.matchingRunId)
+      .toBe(provingRecord.runId);
+    expect(executor.store.orderLifecycle.get(short.intentCommitment)?.matchingRunId)
+      .toBe(provingRecord.runId);
+    expect(typeof provingRecord.phaseTimestamps?.matcher).toBe("number");
+    expect(typeof provingRecord.phaseTimestamps?.proving).toBe("number");
     releaseProof();
     const result = await execution;
 
@@ -1161,6 +1168,23 @@ describe("support workers", () => {
     expect(result.results[0].record.status).toBe("settled");
     expect(result.results[0].record.batchId).toBe("runner-btc-usd-perp-1234");
     expect(result.results[0].record.fillCount).toBe(2);
+    expect("intentCommitments" in result.results[0].record).toBe(false);
+    expect(Object.keys(result.results[0].record.phaseTimestamps ?? {}).sort()).toEqual([
+      "batch-settlement",
+      "maker-finalize",
+      "matcher",
+      "proving",
+      "settlement-commit",
+    ]);
+    expect(Object.entries(result.results[0].record.phaseTimestamps ?? {}).map(
+      ([phase, timestamp]) => [phase, typeof timestamp],
+    )).toEqual([
+      ["matcher", "number"],
+      ["proving", "number"],
+      ["batch-settlement", "number"],
+      ["settlement-commit", "number"],
+      ["maker-finalize", "number"],
+    ]);
     expect(executor.store.settlements.size).toBe(1);
     expect(executor.store.batchExecutionRuns.size).toBe(1);
     expect([...executor.store.settlements.values()][0]).toMatchObject({
@@ -1170,6 +1194,186 @@ describe("support workers", () => {
     expect(executor.store.accountEvents.size).toBe(2);
     expect(executor.store.orderLifecycle.get(long.intentCommitment)?.status).toBe("filled");
     expect(executor.store.orderLifecycle.get(short.intentCommitment)?.status).toBe("filled");
+  });
+
+  test("discards a proven batch when an included order is cancelled before relay", async () => {
+    const executor = createExecutor();
+    const market = {
+      marketId: "btc-usd-perp",
+      oraclePrice: 50_000n * PRICE_SCALE,
+      maxLeverage: 10n,
+      initialMarginRate: 100_000n,
+      maintenanceMarginRate: 50_000n,
+      fundingIndex: 0n,
+    };
+    executor.addMarket(market);
+    const long = submitBackedIntent(executor, matchedTradeIntent("cancel-during-proof-long", "long", {
+      batchId: "ui-cancel-during-proof-long",
+      limitPrice: 50_500n * PRICE_SCALE,
+      marketId: market.marketId,
+    }));
+    const short = submitBackedIntent(executor, matchedTradeIntent("cancel-during-proof-short", "short", {
+      batchId: "ui-cancel-during-proof-short",
+      limitPrice: 49_500n * PRICE_SCALE,
+      marketId: market.marketId,
+    }));
+    const now = Date.now();
+    for (const record of [long, short]) {
+      executor.store.upsertAccountEncryptionKey({
+        algorithm: "ecdh-p256-aes-gcm",
+        createdAt: now,
+        ownerCommitment: record.ownerCommitment,
+        publicKey: rawP256PublicKey(),
+        updatedAt: now,
+      });
+    }
+
+    const batchId = "runner-btc-usd-perp-5678";
+    const transcript = await createProoflessMatcher(executor).createSettlementTranscript({
+      batchId,
+      includeOpenMarketOrders: true,
+      intentCommitments: [long.intentCommitment, short.intentCommitment],
+      marketId: market.marketId,
+    });
+    let releaseProof!: () => void;
+    const proofGate = new Promise<void>((resolve) => {
+      releaseProof = resolve;
+    });
+    const matcher = {
+      async createSettlementTranscript() {
+        await proofGate;
+        return transcript;
+      },
+    };
+    let relayCalls = 0;
+    const batchExecutor = createBatchExecutor(
+      executor,
+      matcher,
+      {
+        batchIdPrefix: "runner",
+        intervalMs: 1000,
+        settlementsOnchainRequired: true,
+      },
+      {
+        positionRoot() {
+          return executor.store.positionMembershipRoot();
+        },
+        async settleBatchAsync() {
+          relayCalls += 1;
+          throw new Error("stale batch must not be relayed");
+        },
+      } as never,
+    );
+
+    const execution = batchExecutor.runOnce({ now: 5678 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    executor.store.cancelOrder(long.intentCommitment);
+    releaseProof();
+    const result = await execution;
+
+    expect(result.results[0].record).toMatchObject({
+      batchId,
+      phase: "batch-settlement",
+      status: "skipped",
+    });
+    expect(result.results[0].record.reason).toContain("batch intent no longer active");
+    expect(relayCalls).toBe(0);
+    expect(executor.store.settlements.size).toBe(0);
+    expect(executor.store.orderLifecycle.get(long.intentCommitment)?.status).toBe("cancelled");
+    expect(executor.store.orderLifecycle.get(short.intentCommitment)?.status).toBe("open");
+  });
+
+  test("discards a stale proven batch when an included order was partially filled before relay", async () => {
+    const executor = createExecutor();
+    const market = {
+      marketId: "btc-usd-perp",
+      oraclePrice: 50_000n * PRICE_SCALE,
+      maxLeverage: 10n,
+      initialMarginRate: 100_000n,
+      maintenanceMarginRate: 50_000n,
+      fundingIndex: 0n,
+    };
+    executor.addMarket(market);
+    const long = submitBackedIntent(executor, matchedTradeIntent("partial-during-proof-long", "long", {
+      batchId: "ui-partial-during-proof-long",
+      limitPrice: 50_500n * PRICE_SCALE,
+      margin: 20_000n,
+      marketId: market.marketId,
+      size: 2n,
+    }));
+    const short = submitBackedIntent(executor, matchedTradeIntent("partial-during-proof-short", "short", {
+      batchId: "ui-partial-during-proof-short",
+      limitPrice: 49_500n * PRICE_SCALE,
+      marketId: market.marketId,
+    }));
+    const now = Date.now();
+    for (const record of [long, short]) {
+      executor.store.upsertAccountEncryptionKey({
+        algorithm: "ecdh-p256-aes-gcm",
+        createdAt: now,
+        ownerCommitment: record.ownerCommitment,
+        publicKey: rawP256PublicKey(),
+        updatedAt: now,
+      });
+    }
+
+    const batchId = "runner-btc-usd-perp-6789";
+    const transcript = await createProoflessMatcher(executor).createSettlementTranscript({
+      batchId,
+      includeOpenMarketOrders: true,
+      intentCommitments: [long.intentCommitment, short.intentCommitment],
+      marketId: market.marketId,
+    });
+    let releaseProof!: () => void;
+    const proofGate = new Promise<void>((resolve) => {
+      releaseProof = resolve;
+    });
+    const matcher = {
+      async createSettlementTranscript() {
+        await proofGate;
+        return transcript;
+      },
+    };
+    let relayCalls = 0;
+    const batchExecutor = createBatchExecutor(
+      executor,
+      matcher,
+      {
+        batchIdPrefix: "runner",
+        intervalMs: 1000,
+        settlementsOnchainRequired: true,
+      },
+      {
+        positionRoot() {
+          return executor.store.positionMembershipRoot();
+        },
+        async settleBatchAsync() {
+          relayCalls += 1;
+          throw new Error("stale batch must not be relayed");
+        },
+      } as never,
+    );
+
+    const execution = batchExecutor.runOnce({ now: 6789 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    executor.commitExternalBatchSettlement(transcript, { proofVerified: true });
+    const residualCommitment = executor.store.orderLifecycle.get(long.intentCommitment)?.residualCommitment;
+    if (!residualCommitment) throw new Error("expected residual commitment");
+    expect(executor.store.orderLifecycle.get(long.intentCommitment)?.status).toBe("partially-filled");
+    expect(executor.store.orderLifecycle.get(residualCommitment)?.status).toBe("open");
+
+    releaseProof();
+    const result = await execution;
+
+    expect(result.results[0].record).toMatchObject({
+      batchId,
+      phase: "batch-settlement",
+      status: "skipped",
+    });
+    expect(result.results[0].record.reason).toContain("batch intent no longer active");
+    expect(relayCalls).toBe(0);
+    expect(executor.store.orderLifecycle.get(long.intentCommitment)?.status).toBe("partially-filled");
+    expect(executor.store.orderLifecycle.get(residualCommitment)?.status).toBe("open");
   });
 
   test("batch executor fails before matching when the on-chain position root is out of sync", async () => {
@@ -3834,19 +4038,19 @@ function backedIntent(seed: string, executor: ReturnType<typeof createExecutor>)
 function matchedTradeIntent(
   seed: string,
   side: "long" | "short",
-  options: { batchId: string; limitPrice: bigint; marketId: string },
+  options: { batchId: string; limitPrice: bigint; margin?: bigint; marketId: string; size?: bigint },
 ): TradeIntent {
   return {
     batchId: options.batchId,
     limitPrice: options.limitPrice,
-    margin: 10_000n,
+    margin: options.margin ?? 10_000n,
 	    marketId: options.marketId,
 	    noteNullifier: hashFields("note-nullifier", [seed]),
 	    nonce: `${seed}-nonce`,
 	    owner: `G${seed.toUpperCase().replace(/[^A-Z0-9]/g, "").padEnd(55, "A").slice(0, 55)}`,
 	    salt: `${seed}-salt`,
 	    side,
-    size: 1n,
+    size: options.size ?? 1n,
   };
 }
 

@@ -11,6 +11,10 @@ import type {
   RunBatchExecutorInput,
 } from "@/workers/batch-executor/batch-executor.model";
 
+type BatchExecutionRunUpdate = BatchExecutionRunRecord & {
+  intentCommitments: Hex[];
+};
+
 const DEFAULT_BATCH_INTERVAL_MS = 5_000;
 const DEFAULT_BATCH_PREFIX = "auto";
 const FAILED_BATCH_RETRY_COOLDOWN_MS = 60_000;
@@ -114,9 +118,11 @@ export class BatchExecutorService {
   ): Promise<BatchExecutorMarketResult> {
     const batchId = this.batchIdForMarket(marketId, startedAt, input);
     const currentRunId = runId(batchId, marketId, startedAt);
+    let intentCommitments = this.activeIntentCommitments(marketId);
     try {
       await this.progress({
         batchId,
+        intentCommitments,
         marketId,
         phase: "matcher",
         runId: currentRunId,
@@ -129,8 +135,10 @@ export class BatchExecutorService {
       await runPhase("maker-liquidity", () => this.makerLiquidity?.ensureForMarket({ batchId, marketId }));
       await runPhase("maker-liquidity", () => flushStore(this.executor.store));
       await runPhase("oracle", () => this.config.sampleFundingPremium?.(marketId, startedAt));
+      intentCommitments = this.activeIntentCommitments(marketId);
       await this.progress({
         batchId,
+        intentCommitments,
         marketId,
         phase: "proving",
         runId: currentRunId,
@@ -142,12 +150,13 @@ export class BatchExecutorService {
         this.matcher.createSettlementTranscript({
           batchId,
           includeOpenMarketOrders: true,
-          intentCommitments: this.activeIntentCommitments(marketId),
+          intentCommitments,
           marketId,
         })
       );
       await this.progress({
         batchId,
+        intentCommitments,
         marketId,
         phase: "batch-settlement",
         runId: currentRunId,
@@ -156,6 +165,7 @@ export class BatchExecutorService {
         status: "running",
         updatedAt: Date.now(),
       });
+      await runPhase("batch-settlement", () => this.assertSettlementOrdersActive(transcript.settlement));
       const alreadySettledOnchain = await this.isSettledOnchain(transcript.settlement);
       const relay = alreadySettledOnchain
         ? undefined
@@ -165,6 +175,17 @@ export class BatchExecutorService {
         throw new Error("settlements require on-chain relay");
       }
       const settledTranscript = withOnchainTransactions(transcript, relay);
+      await this.progress({
+        batchId,
+        intentCommitments,
+        marketId,
+        phase: "settlement-commit",
+        runId: currentRunId,
+        settlementDigest: transcript.settlement.settlementDigest,
+        startedAt,
+        status: "running",
+        updatedAt: Date.now(),
+      });
       const settlement = await runPhase("settlement-commit", () =>
         this.executor.commitExternalBatchSettlement(settledTranscript, {
           proofVerified: proofVerified || !this.config.settlementsOnchainRequired,
@@ -172,6 +193,7 @@ export class BatchExecutorService {
       );
       await this.progress({
         batchId,
+        intentCommitments,
         marketId,
         phase: "maker-finalize",
         runId: currentRunId,
@@ -187,6 +209,7 @@ export class BatchExecutorService {
         batchId,
         completedAt: Date.now(),
         fillCount: settlement.fillCount,
+        intentCommitments,
         marketId,
         runId: currentRunId,
         settlementDigest: settlement.settlementDigest,
@@ -202,6 +225,7 @@ export class BatchExecutorService {
       return this.record({
         batchId,
         completedAt: Date.now(),
+        intentCommitments,
         marketId,
         phase,
         reason,
@@ -212,17 +236,47 @@ export class BatchExecutorService {
     }
   }
 
-  private record(record: BatchExecutionRunRecord): BatchExecutorMarketResult {
-    this.executor.store.upsertBatchExecutionRun(record);
+  private record(update: BatchExecutionRunUpdate): BatchExecutorMarketResult {
+    const { intentCommitments, ...record } = update;
+    const enriched = this.enrichRunRecord(record);
+    this.executor.store.upsertBatchExecutionRun(enriched, intentCommitments);
     return {
-      marketId: record.marketId,
-      record,
+      marketId: enriched.marketId,
+      record: enriched,
     };
   }
 
-  private async progress(record: BatchExecutionRunRecord): Promise<void> {
-    this.executor.store.upsertBatchExecutionRun(record);
+  private async progress(update: BatchExecutionRunUpdate): Promise<void> {
+    const { intentCommitments, ...record } = update;
+    this.executor.store.upsertBatchExecutionRun(this.enrichRunRecord(record), intentCommitments);
     await flushStore(this.executor.store);
+  }
+
+  private enrichRunRecord(record: BatchExecutionRunRecord): BatchExecutionRunRecord {
+    const existing = this.executor.store.batchExecutionRuns.get(record.runId);
+    const phaseTimestamps = { ...existing?.phaseTimestamps };
+    if (record.phase && phaseTimestamps[record.phase] === undefined) {
+      phaseTimestamps[record.phase] = record.updatedAt ?? record.completedAt ?? Date.now();
+    }
+    return {
+      ...existing,
+      ...record,
+      ...(Object.keys(phaseTimestamps).length > 0 ? { phaseTimestamps } : {}),
+    };
+  }
+
+  private assertSettlementOrdersActive(
+    settlement: Parameters<ExecutorService["commitExternalBatchSettlement"]>[0]["settlement"],
+  ): void {
+    const inactive = settlement.orderUpdates
+      .map((update) => update.intentCommitment)
+      .filter((intentCommitment) => {
+        const order = this.executor.store.orderLifecycle.get(intentCommitment);
+        return !order || order.status !== "open";
+      });
+    if (inactive.length > 0) {
+      throw new Error(`batch intent no longer active: ${inactive.join(",")}`);
+    }
   }
 
   private async trySettleOnchain(
@@ -293,7 +347,7 @@ export class BatchExecutorService {
     }
     const active = new Set<string>();
     for (const order of this.executor.store.orderLifecycle.values()) {
-      if (order.status === "open" || order.status === "partially-filled") {
+      if (order.status === "open") {
         active.add(order.marketId);
       }
     }
@@ -304,7 +358,7 @@ export class BatchExecutorService {
     return [...this.executor.store.orderLifecycle.values()]
       .filter((order) =>
         order.marketId === marketId &&
-        (order.status === "open" || order.status === "partially-filled")
+        order.status === "open"
       )
       .map((order) => order.intentCommitment)
       .sort();
@@ -321,7 +375,7 @@ export class BatchExecutorService {
     const clientOrderIds = [...this.executor.store.orderLifecycle.values()]
       .filter((order) =>
         order.marketId === marketId &&
-        (order.status === "open" || order.status === "partially-filled") &&
+        order.status === "open" &&
         !order.batchId.startsWith("maker-auto-")
       )
       .map((order) => order.intentCommitment)
@@ -407,6 +461,7 @@ function shouldSkip(reason: string): boolean {
   return [
     "batch has no active intents",
     "batch has no crossed liquidity",
+    "batch intent no longer active",
     "private match payload not found",
     "account encryption key not found",
   ].some((message) => reason.includes(message));

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 import {
   positionMerkleProof,
   positionMerkleRoot,
@@ -62,4 +62,49 @@ describe("matcher proof jobs", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect((await jobs.get(first.jobId)).status).toBe("completed");
   });
+
+  test("requeues a failed proof job when its retry delay has elapsed", async () => {
+    const startedAt = new Date("2026-08-23T00:00:00.000Z");
+    setSystemTime(startedAt);
+    let calls = 0;
+    const jobs = MatcherJobService.memory(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("temporary proof failure");
+      return {
+        accountEvents: [],
+        positionOpenings: [],
+        settlement: { batchId: "batch-retry" },
+      } as never;
+    });
+
+    try {
+      const input = { batchId: "batch-retry", marketId: "xlm-usd-perp" };
+      const queued = await jobs.enqueue(input);
+      await waitForJobStatus(jobs, queued.jobId, "failed");
+      const failed = await jobs.get(queued.jobId);
+      expect(failed).toMatchObject({ attempts: 1, status: "failed" });
+      expect(failed.nextAttemptAt).toBe(startedAt.getTime() + 5 * 60_000);
+
+      setSystemTime(new Date(startedAt.getTime() + 5 * 60_000));
+      await jobs.enqueue(input);
+      const completed = await waitForJobStatus(jobs, queued.jobId, "completed");
+      expect(completed).toMatchObject({ attempts: 2, status: "completed" });
+      expect(calls).toBe(2);
+    } finally {
+      setSystemTime();
+    }
+  });
 });
+
+async function waitForJobStatus(
+  jobs: MatcherJobService,
+  jobId: string,
+  status: "completed" | "failed",
+) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const job = await jobs.get(jobId);
+    if (job.status === status) return job;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error(`matcher job did not reach ${status}`);
+}

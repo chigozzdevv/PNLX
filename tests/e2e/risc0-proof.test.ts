@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import {
   RISC0_GROTH16_SEAL_BYTES,
+  resumableBoundlessRequest,
   risc0ProofMetadataReady,
   validateRisc0Seal,
 } from "@/workers/risc0-matcher/risc0-proof";
@@ -44,5 +45,21 @@ describe("RISC0 Groth16 proof artifacts", () => {
     writeFileSync(journalPath, "journal");
     writeFileSync(sealPath, "seal");
     expect(risc0ProofMetadataReady(metadataPath)).toBe(true);
+  });
+
+  test("resumes only unexpired Boundless requests", () => {
+    const proofDir = mkdtempSync(join(tmpdir(), "pnlx-risc0-request-"));
+    const requestPath = join(proofDir, "request.json");
+    const requestId = `0x${"12".repeat(32)}`;
+    const now = Math.floor(Date.now() / 1_000);
+
+    writeFileSync(requestPath, JSON.stringify({ expires_at: now + 60, request_id: requestId }));
+    expect(resumableBoundlessRequest(requestPath)).toEqual({
+      expiresAt: now + 60,
+      requestId,
+    });
+
+    writeFileSync(requestPath, JSON.stringify({ expires_at: now - 1, request_id: requestId }));
+    expect(resumableBoundlessRequest(requestPath)).toBeUndefined();
   });
 });

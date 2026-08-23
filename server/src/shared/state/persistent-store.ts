@@ -107,12 +107,12 @@ export class FileProtocolStore extends ProtocolStore {
     this.persist(() => super.updateLiquidationAutomationJob(record));
   }
 
-  override addBatchExecutionRun(record: BatchExecutionRunRecord): void {
-    this.persist(() => super.addBatchExecutionRun(record));
+  override addBatchExecutionRun(record: BatchExecutionRunRecord, intentCommitments: Hex[] = []): void {
+    this.persist(() => super.addBatchExecutionRun(record, intentCommitments));
   }
 
-  override upsertBatchExecutionRun(record: BatchExecutionRunRecord): void {
-    this.persist(() => super.upsertBatchExecutionRun(record));
+  override upsertBatchExecutionRun(record: BatchExecutionRunRecord, intentCommitments: Hex[] = []): void {
+    this.persist(() => super.upsertBatchExecutionRun(record, intentCommitments));
   }
 
   override addIntent(record: IntentRecord, privateMatchIntent?: PrivateMatchIntent): void {

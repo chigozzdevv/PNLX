@@ -48,7 +48,27 @@ describe("public and owner indexer", () => {
     store.addIntent(open);
     const submissionTxHash = hashFields("tx", [filled.intentCommitment]);
     store.updateIntentSubmissionTxHash(filled.intentCommitment, submissionTxHash);
+    const settlementRunId = hashFields("batch-run", [settlement.settlementDigest]);
+    const settlementStartedAt = Date.now() - 2_000;
+    store.addBatchExecutionRun({
+      batchId: settlement.batchId,
+      marketId: market.marketId,
+      phase: "settlement-commit",
+      runId: settlementRunId,
+      startedAt: settlementStartedAt,
+      status: "running",
+      updatedAt: settlementStartedAt,
+    }, [filled.intentCommitment, partial.intentCommitment]);
     store.addSettlement(settlement, positionOpenings);
+    store.upsertBatchExecutionRun({
+      batchId: settlement.batchId,
+      completedAt: settlementStartedAt + 1_000,
+      marketId: market.marketId,
+      runId: settlementRunId,
+      settlementDigest: settlement.settlementDigest,
+      startedAt: settlementStartedAt,
+      status: "settled",
+    }, [filled.intentCommitment, partial.intentCommitment]);
     const enrichedSettlement = store.updateSettlementTransactions(settlement.settlementDigest, {
       boundlessRequestId: hashFields("boundless-request", [filled.intentCommitment]),
       proofVerificationTxHash: hashFields("tx", ["proof-verification", filled.intentCommitment]),
@@ -62,7 +82,7 @@ describe("public and owner indexer", () => {
       startedAt: Date.now(),
       status: "running",
       updatedAt: Date.now(),
-    });
+    }, [open.intentCommitment]);
     const provingRun = [...store.batchExecutionRuns.values()].find(
       (run) => run.phase === "proving" && run.status === "running",
     );
@@ -76,6 +96,16 @@ describe("public and owner indexer", () => {
       runId: hashFields("batch-run", [open.intentCommitment, "older-failure"]),
       startedAt: provingRun.startedAt - 1_000,
       status: "failed",
+    });
+    const unrelatedRunId = hashFields("batch-run", ["unrelated"]);
+    store.addBatchExecutionRun({
+      batchId: "unrelated-batch",
+      marketId: market.marketId,
+      phase: "matcher",
+      runId: unrelatedRunId,
+      startedAt: provingRun.startedAt + 1_000,
+      status: "running",
+      updatedAt: provingRun.startedAt + 1_000,
     });
     store.addConditionalOrder({
       closeCommitment,
@@ -159,6 +189,13 @@ describe("public and owner indexer", () => {
       });
     expect(orders.find((order) => order.intentCommitment === partial.intentCommitment)?.residualCommitment)
       .toMatch(/^0x[0-9a-f]{64}$/);
+    expect(orders.find((order) => order.intentCommitment === partial.intentCommitment)?.matching)
+      .toMatchObject({
+        message: "Batch settled; refreshing position state",
+        runId: settlementRunId,
+        state: "settled",
+        status: "settled",
+      });
     expect(positions).toHaveLength(2);
     expect(Object.fromEntries(positions.map((position) => [position.sourceIntentCommitment, position.status]))).toEqual({
       [filled.intentCommitment]: "closed",

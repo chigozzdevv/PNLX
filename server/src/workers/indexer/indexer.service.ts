@@ -122,17 +122,9 @@ export class IndexerService {
   }
 
   private latestMatchingRunForOrder(order: OrderLifecycleRecord): BatchExecutionRunRecord | undefined {
-    return [...this.store.batchExecutionRuns.values()]
-      .filter((run) =>
-        run.marketId === order.marketId &&
-        run.startedAt >= order.createdAt - 5_000
-      )
-      .sort((left, right) =>
-        right.startedAt - left.startedAt ||
-        (right.completedAt ?? right.updatedAt ?? right.startedAt) -
-          (left.completedAt ?? left.updatedAt ?? left.startedAt) ||
-        right.runId.localeCompare(left.runId)
-      )[0];
+    if (!order.matchingRunId) return undefined;
+    const run = this.store.batchExecutionRuns.get(order.matchingRunId);
+    return run?.marketId === order.marketId ? run : undefined;
   }
 
   positionsFor(ownerCommitment: Hex): OwnerPositionSnapshot[] {

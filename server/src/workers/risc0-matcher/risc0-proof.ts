@@ -406,7 +406,7 @@ function prebuiltProverIsFresh(root: string, binary: string): boolean {
   return true;
 }
 
-function resumableBoundlessRequest(
+export function resumableBoundlessRequest(
   requestPath: string,
 ): { expiresAt: number; requestId: string } | undefined {
   if (!existsSync(requestPath)) return undefined;

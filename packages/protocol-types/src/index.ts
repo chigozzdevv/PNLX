@@ -94,6 +94,7 @@ export interface OrderLifecycleUpdate {
 export interface OrderLifecycleRecord extends OrderLifecycleUpdate {
   batchId: string;
   createdAt: number;
+  matchingRunId?: Hex;
   marketId: string;
   ownerCommitment: Hex;
   cancellationTxHash?: Hex;
@@ -253,6 +254,7 @@ export interface BatchExecutionRunRecord {
   fillCount?: number;
   marketId: string;
   phase?: BatchExecutionPhase;
+  phaseTimestamps?: Partial<Record<BatchExecutionPhase, number>>;
   reason?: string;
   runId: Hex;
   settlementDigest?: Hex;

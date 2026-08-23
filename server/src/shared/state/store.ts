@@ -185,16 +185,18 @@ export class ProtocolStore {
     this.liquidationAutomationJobs.set(record.jobId, record);
   }
 
-  addBatchExecutionRun(record: BatchExecutionRunRecord): void {
+  addBatchExecutionRun(record: BatchExecutionRunRecord, intentCommitments: Hex[] = []): void {
     if (this.batchExecutionRuns.has(record.runId)) {
       throw new Error("batch execution run already exists");
     }
     this.batchExecutionRuns.set(record.runId, record);
+    this.associateBatchExecutionRun(record.runId, intentCommitments);
     trimBatchExecutionRuns(this.batchExecutionRuns);
   }
 
-  upsertBatchExecutionRun(record: BatchExecutionRunRecord): void {
+  upsertBatchExecutionRun(record: BatchExecutionRunRecord, intentCommitments: Hex[] = []): void {
     this.batchExecutionRuns.set(record.runId, record);
+    this.associateBatchExecutionRun(record.runId, intentCommitments);
     trimBatchExecutionRuns(this.batchExecutionRuns);
   }
 
@@ -408,6 +410,7 @@ export class ProtocolStore {
         batchId: order.batchId,
         createdAt: previous?.createdAt ?? now,
         intentCommitment: update.intentCommitment,
+        matchingRunId: previous?.matchingRunId,
         marketId: order.marketId,
         ownerCommitment: order.ownerCommitment,
         residualCommitment: update.residualCommitment,
@@ -425,6 +428,17 @@ export class ProtocolStore {
     this.spend(record.positionNullifier);
     this.markPositionLiquidated(record);
     this.liquidations.set(record.positionNullifier, record);
+  }
+
+  private associateBatchExecutionRun(runId: Hex, intentCommitments: Hex[]): void {
+    for (const intentCommitment of intentCommitments) {
+      const order = this.orderLifecycle.get(intentCommitment);
+      if (!order || order.status !== "open" || order.matchingRunId === runId) continue;
+      this.orderLifecycle.set(intentCommitment, {
+        ...order,
+        matchingRunId: runId,
+      });
+    }
   }
 
   addConditionalOrder(record: ConditionalOrderCommitment): void {
