@@ -1,26 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { ActionToast } from "@/components/action-toast";
 import { AppShell } from "@/components/app-shell";
 import { BottomTicker } from "@/components/bottom-ticker";
 import { ChartToolbar } from "@/components/chart-toolbar";
 import { MarketHeader } from "@/components/market-header";
-import { OrderTicket } from "@/components/order-ticket";
+import { OrderTicket, type OrderTicketSubmitInput } from "@/components/order-ticket";
 import { PnlModal, type PnlModalProps } from "@/components/pnl-modal";
 import { PositionsTable, type PositionsTableView } from "@/components/positions-table";
-import { PriceChart, type PriceChartHandle } from "@/components/price-chart";
+import type { PriceChartHandle } from "@/components/price-chart";
 import type { ChartIndicatorId } from "@/lib/chart-indicators";
-import { cancelOrderGroup } from "@/lib/order-cancel";
 import type { OwnerOrderGroup } from "@/lib/order-groups";
-import { closePosition } from "@/lib/position-close";
-import { reconcilePrivateMarginNotes } from "@/lib/private-margin-notes";
-import { depositPrivateMargin, submitTradeIntent } from "@/lib/trade-submit";
 import { useMarketCandles, type CandleInterval } from "@/lib/use-market-candles";
 import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useTradingData } from "@/lib/use-trading-data";
 import { useWalletSession } from "@/lib/use-wallet-session";
-import type { OrderTicketSubmitInput } from "@/components/order-ticket";
 import type {
   MarketDisplay,
   OrderDraft,
@@ -32,6 +28,13 @@ import type {
 const SELECTED_MARKET_STORAGE_KEY = "pnlx:selected-market-id:v2";
 const DEFAULT_MARKET_ID = "xlm-usd-perp";
 const OPTIMISTIC_ORDER_TTL_MS = 30_000;
+const DeferredPriceChart = dynamic(
+  () => import("@/components/deferred-price-chart").then((module) => module.DeferredPriceChart),
+  {
+    loading: () => <ChartLoadingPlaceholder />,
+    ssr: false,
+  },
+);
 
 export function TradingPage() {
   const wallet = useWalletSession();
@@ -127,6 +130,7 @@ export function TradingPage() {
     setClosingPositionId(position.id);
     setPositionActionMessage(undefined);
     try {
+      const { closePosition } = await import("@/lib/position-close");
       const record = await closePosition({ market, position, session: wallet.session });
       
       const entryPrice = position.entryPrice ?? 0;
@@ -169,6 +173,10 @@ export function TradingPage() {
     setCancellingOrderId(order.id);
     setPositionActionMessage(undefined);
     try {
+      const [{ cancelOrderGroup }, { reconcilePrivateMarginNotes }] = await Promise.all([
+        import("@/lib/order-cancel"),
+        import("@/lib/private-margin-notes"),
+      ]);
       const result = await cancelOrderGroup({
         group: order,
         token: wallet.session.token,
@@ -223,6 +231,23 @@ export function TradingPage() {
     return () => window.clearInterval(timer);
   }, [pendingOrders.length]);
 
+  useEffect(() => {
+    const preload = () => {
+      void Promise.all([
+        import("@/lib/order-cancel"),
+        import("@/lib/position-close"),
+        import("@/lib/private-margin-notes"),
+        import("@/lib/trade-submit"),
+      ]);
+    };
+    if ("requestIdleCallback" in window) {
+      const idleId = window.requestIdleCallback(preload, { timeout: 4_000 });
+      return () => window.cancelIdleCallback(idleId);
+    }
+    const timer = globalThis.setTimeout(preload, 1_500);
+    return () => globalThis.clearTimeout(timer);
+  }, []);
+
   return (
     <AppShell
       account={trading.data.account}
@@ -256,14 +281,14 @@ export function TradingPage() {
               />
               {displaySelectedMarket ? (
                 <div className="chart-frame">
-                  <PriceChart
+                  <DeferredPriceChart
                     candles={candles.candles}
+                    chartRef={priceChartRef}
                     drawingScope={displaySelectedMarket.marketId}
                     indicators={chartIndicators}
                     key={`${displaySelectedMarket.marketId}:${chartInterval}`}
                     market={displaySelectedMarket}
                     onLoadOlder={candles.loadOlder}
-                    ref={priceChartRef}
                   />
                   {candles.loading || candles.error ? (
                     <div className="chart-data-status">
@@ -290,6 +315,7 @@ export function TradingPage() {
               key={displaySelectedMarket.marketId}
               onDeposit={async (input) => {
                 if (!wallet.session) throw new Error("Connect a wallet first");
+                const { depositPrivateMargin } = await import("@/lib/trade-submit");
                 await depositPrivateMargin({
                   ...input,
                   session: wallet.session,
@@ -299,6 +325,7 @@ export function TradingPage() {
               market={displaySelectedMarket}
               onSubmit={async (input: OrderTicketSubmitInput) => {
                 if (!wallet.session) throw new Error("Connect a wallet first");
+                const { submitTradeIntent } = await import("@/lib/trade-submit");
                 const result = await submitTradeIntent({
                   ...input,
                   market: displaySelectedMarket,
@@ -364,6 +391,15 @@ export function TradingPage() {
         }}
       />
     </AppShell>
+  );
+}
+
+function ChartLoadingPlaceholder() {
+  return (
+    <div aria-label="Loading chart" className="chart-loading-placeholder" role="status">
+      <span className="chart-loading-axis" />
+      <span className="chart-loading-price-line" />
+    </div>
   );
 }
 

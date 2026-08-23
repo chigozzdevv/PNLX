@@ -33,7 +33,7 @@ import { latestLogicalRange } from "@/lib/chart-range";
 import { formatNumber } from "@/lib/format";
 import type { ChartCandle, MarketDisplay } from "@/types/trading";
 
-interface PriceChartProps {
+export interface PriceChartProps {
   candles: ChartCandle[];
   drawingScope: string;
   indicators: ChartIndicatorId[];

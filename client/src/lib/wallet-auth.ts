@@ -1,15 +1,10 @@
-import {
-  isConnected as freighterIsConnected,
-  requestAccess as freighterRequestAccess,
-  signMessage as freighterSignMessage,
-  signTransaction as freighterSignTransaction,
-} from "@stellar/freighter-api";
 import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
 import { ensureAccountEncryptionKey } from "@/lib/account-encryption";
 
 const STORAGE_KEY = "pnlx.wallet.session";
 const FREIGHTER_DETECTION_TIMEOUT_MS = 3_000;
 const FREIGHTER_APPROVAL_TIMEOUT_MS = 120_000;
+let freighterApiPromise: Promise<typeof import("@stellar/freighter-api")> | undefined;
 
 interface AuthChallenge {
   address: string;
@@ -120,9 +115,10 @@ export async function signWalletTransaction(
     networkPassphrase?: string;
   } = {},
 ): Promise<string> {
+  const { signTransaction } = await loadFreighterApi();
   await assertFreighterConnected();
   const result = await withTimeout(
-    freighterSignTransaction(xdr, {
+    signTransaction(xdr, {
       address: options.address,
       networkPassphrase: options.networkPassphrase,
     }),
@@ -140,9 +136,10 @@ function storeWalletSession(session: WalletSession): void {
 }
 
 async function requestWalletAddress(): Promise<string> {
+  const { requestAccess } = await loadFreighterApi();
   await assertFreighterConnected();
   const access = await withTimeout(
-    freighterRequestAccess(),
+    requestAccess(),
     FREIGHTER_APPROVAL_TIMEOUT_MS,
     "Freighter approval timed out",
   );
@@ -153,8 +150,9 @@ async function requestWalletAddress(): Promise<string> {
 }
 
 async function signChallenge(message: string, address: string): Promise<string> {
+  const { signMessage } = await loadFreighterApi();
   const result = await withTimeout(
-    freighterSignMessage(message, { address }),
+    signMessage(message, { address }),
     FREIGHTER_APPROVAL_TIMEOUT_MS,
     "Freighter signing timed out",
   );
@@ -169,8 +167,9 @@ async function assertFreighterConnected(): Promise<void> {
     throw new Error("Wallet connection is only available in the browser");
   }
 
+  const { isConnected } = await loadFreighterApi();
   const connected = await withTimeout(
-    freighterIsConnected(),
+    isConnected(),
     FREIGHTER_DETECTION_TIMEOUT_MS,
     "Open this page in a browser with Freighter installed",
   );
@@ -178,6 +177,11 @@ async function assertFreighterConnected(): Promise<void> {
   if (!connected.isConnected) {
     throw new Error("Open this page in a browser with Freighter installed");
   }
+}
+
+function loadFreighterApi(): Promise<typeof import("@stellar/freighter-api")> {
+  freighterApiPromise ??= import("@stellar/freighter-api");
+  return freighterApiPromise;
 }
 
 function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {

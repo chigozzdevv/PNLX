@@ -1,6 +1,5 @@
 "use client";
 
-import { motion } from "framer-motion";
 import { ArrowLeft, CircleDollarSign, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ActionToast } from "@/components/action-toast";
@@ -286,17 +285,15 @@ export function OrderTicket({
             </div>
           </div>
 
-          <motion.button
+          <button
             className="primary-trade-button"
             data-side="long"
             disabled={!canDeposit}
             type="button"
             onClick={() => depositMargin()}
-            whileHover={{ y: -1 }}
-            whileTap={{ scale: 0.99 }}
           >
             {!connected ? "Connect Wallet" : depositing ? "Depositing" : "Deposit"}
-          </motion.button>
+          </button>
 
           <TradeProgress depositing={depositing} stage={submitStage} />
 
@@ -512,14 +509,12 @@ export function OrderTicket({
       </div>
 
       <div className="ticket-primary-area">
-        <motion.button
+        <button
           className="primary-trade-button"
           data-side={side}
           disabled={primaryDisabled}
           type="button"
           onClick={primaryAction}
-          whileHover={{ y: -1 }}
-          whileTap={{ scale: 0.99 }}
         >
           {!connected
             ? "Connect Wallet"
@@ -532,7 +527,7 @@ export function OrderTicket({
                 : side === "long"
                   ? `Submit Long ${market.baseAsset}`
                   : `Submit Short ${market.baseAsset}`}
-        </motion.button>
+        </button>
       </div>
 
       <TradeProgress depositing={depositing} stage={submitStage} />
