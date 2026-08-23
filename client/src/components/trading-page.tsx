@@ -288,9 +288,11 @@ export function TradingPage() {
                     </div>
                   ) : null}
                 </div>
+              ) : trading.loading ? (
+                <ChartLoadingPlaceholder />
               ) : (
                 <div className="empty-positions min-h-[456px]">
-                  <span>{trading.loading ? "Loading chart" : trading.error ?? "No live markets"}</span>
+                  <span>{trading.error ?? "No live markets"}</span>
                 </div>
               )}
             </section>
@@ -383,6 +385,15 @@ export function TradingPage() {
         }}
       />
     </AppShell>
+  );
+}
+
+function ChartLoadingPlaceholder() {
+  return (
+    <div aria-label="Loading chart" className="chart-loading-placeholder" role="status">
+      <span className="chart-loading-axis" />
+      <span className="chart-loading-price-line" />
+    </div>
   );
 }
 
