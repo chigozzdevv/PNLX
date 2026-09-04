@@ -195,7 +195,9 @@ describe("support workers", () => {
 
     now += 5_001;
     const stale = await service.candles(input);
-    expect(requests).toBe(4);
+    // The expired refresh retries Pyth twice, then retries the Hyperliquid
+    // fallback twice before returning the cached snapshot.
+    expect(requests).toBe(6);
     expect(stale.cached).toBe(true);
     expect(stale.stale).toBe(true);
     expect(stale.candles.at(-1)?.close).toBe(0.20);
