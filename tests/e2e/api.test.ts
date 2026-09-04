@@ -942,6 +942,33 @@ describe("server api", () => {
     }
   });
 
+  test("reports external on-chain oracle freshness without committee configuration", async () => {
+    const previousSource = process.env.ORACLE_PRICE_SOURCE;
+    const previousPriceMaxAge = process.env.ORACLE_PRICE_MAX_AGE_SECONDS;
+    const previousCommitteeMaxAge = process.env.ORACLE_COMMITTEE_MAX_AGE_SECONDS;
+
+    process.env.ORACLE_PRICE_SOURCE = "onchain-market";
+    process.env.ORACLE_PRICE_MAX_AGE_SECONDS = "600";
+    process.env.ORACLE_COMMITTEE_MAX_AGE_SECONDS = "300";
+
+    try {
+      const app = createApp();
+      const healthResponse = await app.handle(new Request("http://pnlx.local/health"));
+      expect(healthResponse.status).toBe(200);
+      const health = (await healthResponse.json()) as Record<string, Record<string, unknown>>;
+      const oracle = health.oracle as Record<string, unknown>;
+
+      expect(oracle.freshness).toEqual({ maxAgeSeconds: 600 });
+      expect(oracle).not.toHaveProperty("committee");
+      expect(oracle).not.toHaveProperty("publishMode");
+      expect(oracle).not.toHaveProperty("publisherCount");
+    } finally {
+      restoreEnv("ORACLE_PRICE_SOURCE", previousSource);
+      restoreEnv("ORACLE_PRICE_MAX_AGE_SECONDS", previousPriceMaxAge);
+      restoreEnv("ORACLE_COMMITTEE_MAX_AGE_SECONDS", previousCommitteeMaxAge);
+    }
+  });
+
   test("returns verifier registry entries", async () => {
     const result = await call("/proofs/verifiers");
     const verifiers = result.verifiers as Record<string, string>[];

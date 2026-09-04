@@ -128,18 +128,25 @@ export class HealthController {
       },
       oracle: {
         contractConfigured: Boolean(this.env.oracleContractId),
+        freshness: {
+          maxAgeSeconds: this.env.oraclePriceMaxAgeSeconds,
+        },
         hermesUrlConfigured: Boolean(this.env.pythHermesUrl),
         issues: oracleIssues,
         kind: this.env.oracleKind,
         onchainRequired: this.env.oracleOnchainRequired,
-        committee: {
-          maxAgeSeconds: this.env.oracleCommitteeMaxAgeSeconds,
-          maxDeviationBps: this.env.oracleCommitteeMaxDeviationBps,
-          ready: oracleIssues.length === 0,
-          threshold: this.env.oracleCommitteeThreshold,
-        },
-        publishMode: this.env.oraclePublishMode,
-        publisherCount: this.env.oraclePublisherAddresses.length,
+        ...(this.env.oraclePriceSource === "onchain-market"
+          ? {}
+          : {
+              committee: {
+                maxAgeSeconds: this.env.oracleCommitteeMaxAgeSeconds,
+                maxDeviationBps: this.env.oracleCommitteeMaxDeviationBps,
+                ready: oracleIssues.length === 0,
+                threshold: this.env.oracleCommitteeThreshold,
+              },
+              publishMode: this.env.oraclePublishMode,
+              publisherCount: this.env.oraclePublisherAddresses.length,
+            }),
         source: this.env.oraclePriceSource,
       },
       persistence: {
