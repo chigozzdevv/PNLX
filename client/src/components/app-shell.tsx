@@ -26,6 +26,7 @@ export function AppShell({ account, activeView, children, wallet }: AppShellProp
   const address = wallet.session?.address ?? account.address;
   const connected = Boolean(wallet.session);
   const connecting = wallet.status === "connecting";
+  const totalCollateral = formatUsd(account.accountValue ?? 0);
   const availableCollateral = formatUsd(account.availableShieldedUsdc ?? 0);
   const compactAddress = address.length <= 10
     ? address
@@ -62,10 +63,10 @@ export function AppShell({ account, activeView, children, wallet }: AppShellProp
             {connected && activeView === "trade" ? (
               <details className="balance-menu">
                 <summary
-                  aria-label={`Available collateral ${availableCollateral}. Show collateral breakdown`}
+                  aria-label={`Total collateral ${totalCollateral}. Show collateral breakdown`}
                   className="balance-trigger"
                 >
-                  <strong>{availableCollateral}</strong>
+                  <strong>{totalCollateral}</strong>
                   <ChevronDown aria-hidden="true" className="balance-chevron" size={13} />
                 </summary>
                 <div className="balance-popover">

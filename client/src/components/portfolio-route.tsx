@@ -118,6 +118,8 @@ export function PortfolioRoute() {
       reconcilePrivateMarginNotes({
         orders: result.cancelled.map((cancelled) => ({
           intentCommitment: cancelled.intentCommitment,
+          noteNullifier: cancelled.noteNullifier,
+          sourceIntentCommitment: cancelled.sourceIntentCommitment,
           status: "cancelled",
         })),
       });

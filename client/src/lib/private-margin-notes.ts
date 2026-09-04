@@ -6,6 +6,13 @@ const RUNTIME_SCOPE_KEY = "pnlx.private.margin-notes.runtime-scope.v1";
 export type PrivateMarginNoteStatus = "available" | "locked" | "pending" | "spent";
 type ReconciledOrderStatus = "open" | "filled" | "partially-filled" | "cancelled";
 
+export interface ReconciledPrivateMarginOrder {
+  intentCommitment: Hex;
+  noteNullifier?: Hex;
+  sourceIntentCommitment?: Hex;
+  status: ReconciledOrderStatus;
+}
+
 let activeRuntimeScope: string | undefined;
 
 export interface PrivateMarginNoteRuntimeHealth {
@@ -268,16 +275,14 @@ export function savePendingPrivateMarginChange(
 }
 
 export function reconcilePrivateMarginNotes(input: {
-  orders: Array<{
-    intentCommitment: Hex;
-    status: ReconciledOrderStatus;
-  }>;
+  orders: ReconciledPrivateMarginOrder[];
 }): void {
-  const orderStatus = new Map(input.orders.map((order) => [order.intentCommitment, order.status]));
+  const notes = readPrivateMarginNotes();
+  const orderStatus = reconciledOrderStatuses(input.orders, notes);
   let changed = false;
-  const next = readPrivateMarginNotes().map((note) => {
+  const next = notes.map((note) => {
     if (!note.lockedByIntentCommitment) return note;
-    const status = orderStatus.get(note.lockedByIntentCommitment);
+    const status = orderStatus.get(intentCommitmentKey(note.lockedByIntentCommitment));
     if (!status) return note;
 
     if (status === "filled" || status === "partially-filled") {
@@ -323,6 +328,92 @@ export function reconcilePrivateMarginNotes(input: {
     return note;
   });
   if (changed) writeNotes(next);
+}
+
+function reconciledOrderStatuses(
+  orders: ReconciledPrivateMarginOrder[],
+  notes: StoredPrivateMarginNote[],
+): Map<string, ReconciledOrderStatus> {
+  const statuses = new Map<string, ReconciledOrderStatus>();
+  const statusesByNullifier = new Map<string, Set<ReconciledOrderStatus>>();
+  for (const order of orders) {
+    setReconciledOrderStatus(statuses, order.intentCommitment, order.status);
+    if (order.noteNullifier) {
+      const key = noteNullifierKey(order.noteNullifier);
+      const values = statusesByNullifier.get(key) ?? new Set<ReconciledOrderStatus>();
+      values.add(order.status);
+      statusesByNullifier.set(key, values);
+    }
+
+    // A residual exists only after its source intent has settled a partial fill.
+    // The source note must therefore be consumed and its pre-submission change
+    // released, even when the cancellation response names only the residual.
+    if (
+      order.sourceIntentCommitment &&
+      intentCommitmentKey(order.sourceIntentCommitment) !== intentCommitmentKey(order.intentCommitment)
+    ) {
+      setReconciledOrderStatus(statuses, order.sourceIntentCommitment, "partially-filled");
+    }
+  }
+
+  // The server names an order by its intent commitment, while the wallet owns
+  // the source note by nullifier. Use that one-to-one proof input only when
+  // the stored intent is absent from the server response. An exact active
+  // intent always wins: an old cancelled order must never release a newer
+  // order that reused the same note after its earlier cancellation.
+  for (const note of notes) {
+    if (note.status !== "locked" || !note.lockedByIntentCommitment) continue;
+    const intentKey = intentCommitmentKey(note.lockedByIntentCommitment);
+    if (statuses.has(intentKey)) continue;
+    const status = fallbackStatusForNullifier(statusesByNullifier.get(noteNullifierKey(note.noteNullifier)));
+    if (status) setReconciledOrderStatus(statuses, note.lockedByIntentCommitment, status);
+  }
+  return statuses;
+}
+
+function fallbackStatusForNullifier(
+  statuses: Set<ReconciledOrderStatus> | undefined,
+): ReconciledOrderStatus | undefined {
+  if (!statuses || statuses.size === 0) return undefined;
+
+  // `partially-filled` remains matcher-active. Keep the note locked unless
+  // the exact source intent is present above and can be reconciled directly.
+  if (statuses.has("open") || statuses.has("partially-filled")) return "open";
+  if (statuses.has("filled")) return "filled";
+  if (statuses.has("cancelled")) return "cancelled";
+  return undefined;
+}
+
+function setReconciledOrderStatus(
+  statuses: Map<string, ReconciledOrderStatus>,
+  intentCommitment: Hex,
+  status: ReconciledOrderStatus,
+): void {
+  const key = intentCommitmentKey(intentCommitment);
+  const current = statuses.get(key);
+  if (!current || reconciliationStatusPriority(status) >= reconciliationStatusPriority(current)) {
+    statuses.set(key, status);
+  }
+}
+
+function reconciliationStatusPriority(status: ReconciledOrderStatus): number {
+  switch (status) {
+    case "cancelled":
+    case "filled":
+      return 3;
+    case "partially-filled":
+      return 2;
+    case "open":
+      return 1;
+  }
+}
+
+function intentCommitmentKey(intentCommitment: Hex): string {
+  return intentCommitment.toLowerCase();
+}
+
+function noteNullifierKey(noteNullifier: Hex): string {
+  return noteNullifier.toLowerCase();
 }
 
 function writeNotes(notes: StoredPrivateMarginNote[]): void {

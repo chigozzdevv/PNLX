@@ -26,6 +26,7 @@ export interface OwnerOrderSnapshot {
   matching: OwnerOrderMatchingSnapshot;
   matchingPayloadCommitment: Hex;
   marketId: string;
+  noteNullifier?: Hex;
   residualCommitment?: Hex;
   sourceIntentCommitment?: Hex;
   status: OrderStatus;

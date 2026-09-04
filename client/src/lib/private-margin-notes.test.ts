@@ -148,6 +148,219 @@ describe("private margin note allocation", () => {
       }
     }
   });
+
+  test("releases a cancelled source note and consumes its pending change", () => {
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        dispatchEvent: () => true,
+        localStorage,
+        sessionStorage,
+      },
+    });
+
+    try {
+      setPrivateMarginNoteRuntimeScope("test:cancelled-source");
+      const intentCommitment = `0x${"AA".repeat(32)}` as Hex;
+      savePrivateMarginNote({
+        ...note("source", 4_000_000n),
+        lockedByIntentCommitment: intentCommitment,
+        status: "locked",
+      });
+      savePrivateMarginNote({
+        ...note("change", 2_000_000n),
+        lockedByIntentCommitment: intentCommitment,
+        status: "pending",
+      });
+
+      // API commitments are canonical lowercase while older browser storage
+      // can retain uppercase hex from the client proof result.
+      reconcilePrivateMarginNotes({
+        orders: [{
+          intentCommitment: intentCommitment.toLowerCase() as Hex,
+          noteNullifier: `0x${"73".repeat(32)}` as Hex,
+          status: "cancelled",
+        }],
+      });
+
+      expect(privateSpendableBalance(OWNER)).toBe(4_000_000n);
+      expect(privateReservedBalance(OWNER)).toBe(0n);
+      expect(privatePendingBalance(OWNER)).toBe(0n);
+      expect(Object.fromEntries(privateMarginNotes(OWNER).map((item) => [item.amount, item.status]))).toEqual({
+        "4000000": "available",
+        "2000000": "spent",
+      });
+    } finally {
+      setPrivateMarginNoteRuntimeScope(undefined);
+      if (previousWindow) {
+        Object.defineProperty(globalThis, "window", previousWindow);
+      } else {
+        Reflect.deleteProperty(globalThis, "window");
+      }
+    }
+  });
+
+  test("releases a residual source change when the residual is cancelled", () => {
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        dispatchEvent: () => true,
+        localStorage,
+        sessionStorage,
+      },
+    });
+
+    try {
+      setPrivateMarginNoteRuntimeScope("test:cancelled-residual");
+      const sourceIntentCommitment = `0x${"55".repeat(32)}` as Hex;
+      const residualIntentCommitment = `0x${"66".repeat(32)}` as Hex;
+      savePrivateMarginNote({
+        ...note("source", 4_000_000n),
+        lockedByIntentCommitment: sourceIntentCommitment,
+        status: "locked",
+      });
+      savePrivateMarginNote({
+        ...note("change", 2_000_000n),
+        lockedByIntentCommitment: sourceIntentCommitment,
+        status: "pending",
+      });
+
+      reconcilePrivateMarginNotes({
+        orders: [{
+          intentCommitment: residualIntentCommitment,
+          sourceIntentCommitment,
+          status: "cancelled",
+        }],
+      });
+
+      expect(privateSpendableBalance(OWNER)).toBe(2_000_000n);
+      expect(privateReservedBalance(OWNER)).toBe(0n);
+      expect(privatePendingBalance(OWNER)).toBe(0n);
+      expect(Object.fromEntries(privateMarginNotes(OWNER).map((item) => [item.amount, item.status]))).toEqual({
+        "4000000": "spent",
+        "2000000": "available",
+      });
+    } finally {
+      setPrivateMarginNoteRuntimeScope(undefined);
+      if (previousWindow) {
+        Object.defineProperty(globalThis, "window", previousWindow);
+      } else {
+        Reflect.deleteProperty(globalThis, "window");
+      }
+    }
+  });
+
+  test("releases the matching source and change through its cancelled note nullifier", () => {
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        dispatchEvent: () => true,
+        localStorage,
+        sessionStorage,
+      },
+    });
+
+    try {
+      setPrivateMarginNoteRuntimeScope("test:cancelled-nullifier");
+      const localIntentCommitment = `0x${"A1".repeat(32)}` as Hex;
+      const serverIntentCommitment = `0x${"B2".repeat(32)}` as Hex;
+      const noteNullifier = `0x${"C3".repeat(32)}` as Hex;
+      savePrivateMarginNote({
+        ...note("source", 4_000_000n),
+        lockedByIntentCommitment: localIntentCommitment,
+        noteNullifier,
+        status: "locked",
+      });
+      savePrivateMarginNote({
+        ...note("change", 2_000_000n),
+        lockedByIntentCommitment: localIntentCommitment,
+        status: "pending",
+      });
+
+      reconcilePrivateMarginNotes({
+        orders: [{ intentCommitment: serverIntentCommitment, noteNullifier, status: "cancelled" }],
+      });
+
+      expect(privateSpendableBalance(OWNER)).toBe(4_000_000n);
+      expect(privateReservedBalance(OWNER)).toBe(0n);
+      expect(privatePendingBalance(OWNER)).toBe(0n);
+      expect(Object.fromEntries(privateMarginNotes(OWNER).map((item) => [item.amount, item.status]))).toEqual({
+        "4000000": "available",
+        "2000000": "spent",
+      });
+    } finally {
+      setPrivateMarginNoteRuntimeScope(undefined);
+      if (previousWindow) {
+        Object.defineProperty(globalThis, "window", previousWindow);
+      } else {
+        Reflect.deleteProperty(globalThis, "window");
+      }
+    }
+  });
+
+  test("does not release an active order because an older order shares its note nullifier", () => {
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        dispatchEvent: () => true,
+        localStorage,
+        sessionStorage,
+      },
+    });
+
+    try {
+      setPrivateMarginNoteRuntimeScope("test:active-nullifier");
+      const staleIntentCommitment = `0x${"A1".repeat(32)}` as Hex;
+      const activeIntentCommitment = `0x${"B2".repeat(32)}` as Hex;
+      const localIntentCommitment = `0x${"C3".repeat(32)}` as Hex;
+      const noteNullifier = `0x${"D4".repeat(32)}` as Hex;
+      savePrivateMarginNote({
+        ...note("source", 4_000_000n),
+        lockedByIntentCommitment: localIntentCommitment,
+        noteNullifier,
+        status: "locked",
+      });
+      savePrivateMarginNote({
+        ...note("change", 2_000_000n),
+        lockedByIntentCommitment: localIntentCommitment,
+        status: "pending",
+      });
+
+      reconcilePrivateMarginNotes({
+        orders: [
+          { intentCommitment: staleIntentCommitment, noteNullifier, status: "cancelled" },
+          { intentCommitment: activeIntentCommitment, noteNullifier, status: "open" },
+        ],
+      });
+
+      expect(privateSpendableBalance(OWNER)).toBe(0n);
+      expect(privateReservedBalance(OWNER)).toBe(2_000_000n);
+      expect(privatePendingBalance(OWNER)).toBe(2_000_000n);
+      expect(Object.fromEntries(privateMarginNotes(OWNER).map((item) => [item.amount, item.status]))).toEqual({
+        "4000000": "locked",
+        "2000000": "pending",
+      });
+    } finally {
+      setPrivateMarginNoteRuntimeScope(undefined);
+      if (previousWindow) {
+        Object.defineProperty(globalThis, "window", previousWindow);
+      } else {
+        Reflect.deleteProperty(globalThis, "window");
+      }
+    }
+  });
 });
 
 class MemoryStorage implements Storage {

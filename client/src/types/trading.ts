@@ -79,6 +79,7 @@ export interface ServerOwnerOrderSnapshot {
   };
   matchingPayloadCommitment: Hex;
   marketId: string;
+  noteNullifier?: Hex;
   residualCommitment?: Hex;
   sourceIntentCommitment?: Hex;
   status: "open" | "filled" | "partially-filled" | "cancelled";

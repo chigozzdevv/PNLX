@@ -49,6 +49,7 @@ export class IndexerService {
             residual?.matchingPayloadCommitment ??
             "0x0",
           marketId: order.marketId,
+          noteNullifier: intent?.noteNullifier ?? residual?.noteNullifier,
           residualCommitment: order.residualCommitment,
           sourceIntentCommitment: residual?.sourceIntentCommitment,
           status: order.status,
