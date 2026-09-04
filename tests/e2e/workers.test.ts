@@ -356,6 +356,43 @@ describe("support workers", () => {
     }]);
   });
 
+  test("falls back to Hyperliquid when a Pyth Pro market is not entitled", async () => {
+    const requestedProviders: string[] = [];
+    const fetcher = async (input: URL | RequestInfo) => {
+      const url = String(input);
+      requestedProviders.push(url);
+      if (url.includes("pyth.dourolabs.app")) {
+        return new Response("Not entitled", { status: 403 });
+      }
+      return new Response(JSON.stringify([{
+        T: 1_784_692_959_999,
+        c: "0.20",
+        h: "0.205",
+        i: "1m",
+        l: "0.185",
+        n: 12,
+        o: "0.19",
+        s: "XLM",
+        t: 1_784_692_900_000,
+        v: "400.5",
+      }]), { status: 200 });
+    };
+    const env = loadEnv();
+    env.pythApiKey = "test-pyth-history-key";
+    const service = new MarketDataService(env, fetcher as never, () => 1_784_693_000_000);
+
+    const response = await service.candles({
+      interval: "1m",
+      limit: 160,
+      marketId: "xlm-usd-perp",
+    });
+
+    expect(requestedProviders.filter((url) => url.includes("pyth.dourolabs.app"))).toHaveLength(2);
+    expect(requestedProviders.at(-1)).toBe("https://api.hyperliquid.xyz/info");
+    expect(response.source).toBe("hyperliquid");
+    expect(response.candles.at(-1)?.close).toBe(0.20);
+  });
+
   test("rejects malformed Hyperliquid candle rows", () => {
     expect(parseHyperliquidCandles([])).toEqual([]);
     expect(() => parseHyperliquidCandles({})).toThrow("invalid candle provider response");

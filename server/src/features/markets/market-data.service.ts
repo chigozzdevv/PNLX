@@ -168,13 +168,17 @@ export class MarketDataService {
     return request;
   }
 
-  private fetchCandles(
+  private async fetchCandles(
     input: MarketCandlesInput,
     symbol: string,
   ): Promise<CandleCacheEntry> {
-    return this.env.pythApiKey
-      ? this.fetchPythProCandles(input, symbol)
-      : this.fetchHyperliquidCandles(input, symbol);
+    if (!this.env.pythApiKey) return this.fetchHyperliquidCandles(input, symbol);
+
+    try {
+      return await this.fetchPythProCandles(input, symbol);
+    } catch {
+      return this.fetchHyperliquidCandles(input, symbol);
+    }
   }
 
   private async fetchPythProCandles(
