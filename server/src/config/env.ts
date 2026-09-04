@@ -65,6 +65,7 @@ export interface ServerEnv {
   pythBtcUsdFeedId: string;
   pythFeedIds: Record<string, string>;
   pythApiKey: string;
+  pythHermesApiKey: string;
   pythHermesUrl: string;
   risc0DevMode: boolean;
   smokeMarketSymbols: string[];
@@ -175,6 +176,7 @@ export function loadEnv(): ServerEnv {
     pythBtcUsdFeedId: pythFeedIds.BTC,
     pythFeedIds,
     pythApiKey: value("PYTH_API_KEY", ""),
+    pythHermesApiKey: value("PYTH_HERMES_API_KEY", ""),
     pythHermesUrl: value("PYTH_HERMES_URL", "https://hermes.pyth.network"),
     risc0DevMode: booleanValue("RISC0_DEV_MODE", false),
     smokeMarketSymbols: listValue("PNLX_SMOKE_MARKETS", DEFAULT_SMOKE_MARKET_SYMBOLS),

@@ -402,7 +402,7 @@ describe("support workers", () => {
       }), { status: 200 });
     };
     const env = loadEnv();
-    env.pythApiKey = "test-pyth-key";
+    env.pythHermesApiKey = "test-pyth-key";
     const service = new MarketDataService(env, fetcher as never);
 
     const [first, concurrent] = await Promise.all([
@@ -437,7 +437,7 @@ describe("support workers", () => {
       }), { status: 200 });
     };
     const env = loadEnv();
-    env.pythApiKey = "test-pyth-key";
+    env.pythHermesApiKey = "test-pyth-key";
     const service = new MarketDataService(env, fetcher as never, () => now);
 
     const newer = await service.latestPrice("xlm-usd-perp");
@@ -451,14 +451,15 @@ describe("support workers", () => {
     expect(stillCached).toEqual(newer);
   });
 
-  test("uses Hyperliquid latest prices when Pyth is not configured", async () => {
+  test("uses Hyperliquid latest prices when only Pyth history is configured", async () => {
     let requestedBody = "";
     const fetcher = async (_input: URL | RequestInfo, init?: RequestInit) => {
       requestedBody = String(init?.body ?? "");
       return new Response(JSON.stringify({ XLM: "0.19160237" }), { status: 200 });
     };
     const env = loadEnv();
-    env.pythApiKey = "";
+    env.pythApiKey = "test-pyth-history-key";
+    env.pythHermesApiKey = "";
     const service = new MarketDataService(env, fetcher as never, () => 1_784_692_964_000);
 
     const update = await service.latestPrice("xlm-usd-perp");
@@ -473,7 +474,7 @@ describe("support workers", () => {
     });
   });
 
-  test("streams Hyperliquid prices when Pyth is not configured", async () => {
+  test("streams Hyperliquid prices when only Pyth history is configured", async () => {
     class TestWebSocket {
       onclose: ((event: CloseEvent) => void) | null = null;
       onerror: ((event: Event) => void) | null = null;
@@ -489,7 +490,8 @@ describe("support workers", () => {
     }
     const socket = new TestWebSocket();
     const env = loadEnv();
-    env.pythApiKey = "";
+    env.pythApiKey = "test-pyth-history-key";
+    env.pythHermesApiKey = "";
     const service = new MarketDataService(
       env,
       globalThis.fetch,

@@ -113,7 +113,7 @@ export class MarketDataService {
         controller.enqueue(this.encoder.encode("retry: 1500\n\n"));
         const latest = this.latestPrices.get(marketId);
         if (latest) controller.enqueue(this.priceEvent(latest));
-        if (this.env.pythApiKey) {
+        if (this.env.pythHermesApiKey) {
           this.ensureHermesStream();
         } else {
           this.ensureHyperliquidPriceStream();
@@ -255,7 +255,7 @@ export class MarketDataService {
   }
 
   private async fetchLatestPrice(marketId: string): Promise<MarketPriceUpdate> {
-    if (!this.env.pythApiKey) {
+    if (!this.env.pythHermesApiKey) {
       const update = (await this.fetchHyperliquidPrices([marketId]))[0];
       if (!update) throw new Error(`price provider returned no update for ${marketId}`);
       if (this.cachePrice(update)) return update;
@@ -272,7 +272,9 @@ export class MarketDataService {
     const payload = await fetchJsonWithRetry(this.fetcher, url, {
       headers: {
         accept: "application/json",
-        ...(this.env.pythApiKey ? { authorization: `Bearer ${this.env.pythApiKey}` } : {}),
+        ...(this.env.pythHermesApiKey
+          ? { authorization: `Bearer ${this.env.pythHermesApiKey}` }
+          : {}),
       },
     }, PRICE_FETCH_TIMEOUT_MS, "price provider");
     const update = parseHermesPriceUpdates(JSON.stringify(payload), feeds)
@@ -425,7 +427,7 @@ export class MarketDataService {
   }
 
   private scheduleHyperliquidReconnect(): void {
-    if (this.hyperliquidReconnectTimer || this.clients.size === 0 || this.env.pythApiKey) return;
+    if (this.hyperliquidReconnectTimer || this.clients.size === 0 || this.env.pythHermesApiKey) return;
     const reconnectMs = this.hyperliquidReconnectMs;
     this.hyperliquidReconnectMs = Math.min(
       reconnectMs * 2,
@@ -492,7 +494,9 @@ export class MarketDataService {
       response = await fetchStreamWithTimeout(this.fetcher, url, {
         headers: {
           accept: "text/event-stream",
-          ...(this.env.pythApiKey ? { authorization: `Bearer ${this.env.pythApiKey}` } : {}),
+          ...(this.env.pythHermesApiKey
+            ? { authorization: `Bearer ${this.env.pythHermesApiKey}` }
+            : {}),
         },
       }, connection, HERMES_CONNECT_TIMEOUT_MS);
     } catch (error) {
@@ -573,7 +577,7 @@ export class MarketDataService {
     if (!client) return;
     clearInterval(client.heartbeat);
     this.clients.delete(clientId);
-    if (!this.env.pythApiKey && this.clients.size > 0 && this.hyperliquidSocket) {
+    if (!this.env.pythHermesApiKey && this.clients.size > 0 && this.hyperliquidSocket) {
       this.syncHyperliquidSubscriptions(this.hyperliquidSocket);
     }
     if (this.clients.size === 0 && !this.streamStopTimer) {
