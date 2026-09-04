@@ -373,7 +373,9 @@ describe("support workers", () => {
         }],
       }), { status: 200 });
     };
-    const service = new MarketDataService(loadEnv(), fetcher as never);
+    const env = loadEnv();
+    env.pythApiKey = "test-pyth-key";
+    const service = new MarketDataService(env, fetcher as never);
 
     const [first, concurrent] = await Promise.all([
       service.latestPrice("xlm-usd-perp"),
@@ -406,7 +408,9 @@ describe("support workers", () => {
         }],
       }), { status: 200 });
     };
-    const service = new MarketDataService(loadEnv(), fetcher as never, () => now);
+    const env = loadEnv();
+    env.pythApiKey = "test-pyth-key";
+    const service = new MarketDataService(env, fetcher as never, () => now);
 
     const newer = await service.latestPrice("xlm-usd-perp");
     now += 751;
@@ -417,6 +421,46 @@ describe("support workers", () => {
     expect(newer.price).toBe(0.20);
     expect(attemptedOlder).toEqual(newer);
     expect(stillCached).toEqual(newer);
+  });
+
+  test("uses Hyperliquid latest prices when Pyth is not configured", async () => {
+    let requestedBody = "";
+    const fetcher = async (_input: URL | RequestInfo, init?: RequestInit) => {
+      requestedBody = String(init?.body ?? "");
+      return new Response(JSON.stringify({ XLM: "0.19160237" }), { status: 200 });
+    };
+    const env = loadEnv();
+    env.pythApiKey = "";
+    const service = new MarketDataService(env, fetcher as never, () => 1_784_692_964_000);
+
+    const update = await service.latestPrice("xlm-usd-perp");
+
+    expect(JSON.parse(requestedBody)).toEqual({ type: "allMids" });
+    expect(update).toEqual({
+      confidence: 0,
+      marketId: "xlm-usd-perp",
+      price: 0.19160237,
+      publishedAt: 1_784_692_964_000,
+      source: "hyperliquid",
+    });
+  });
+
+  test("streams Hyperliquid prices when Pyth is not configured", async () => {
+    const fetcher = async () =>
+      new Response(JSON.stringify({ XLM: "0.19160237" }), { status: 200 });
+    const env = loadEnv();
+    env.pythApiKey = "";
+    const service = new MarketDataService(env, fetcher as never, () => 1_784_692_964_000);
+    const response = service.stream("xlm-usd-perp");
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+
+    expect(decoder.decode((await reader?.read())?.value)).toBe("retry: 1500\n\n");
+    const priceEvent = decoder.decode((await reader?.read())?.value);
+
+    expect(priceEvent).toContain("event: price");
+    expect(priceEvent).toContain('"source":"hyperliquid"');
+    await reader?.cancel();
   });
 
   test("defaults production oracle authority to on-chain market pricing", () => {

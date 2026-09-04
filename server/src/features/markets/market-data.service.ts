@@ -19,6 +19,7 @@ const STREAM_IDLE_GRACE_MS = 30_000;
 const HERMES_RECONNECT_MIN_MS = 1_000;
 const HERMES_RECONNECT_MAX_MS = 15_000;
 const HERMES_CONNECT_TIMEOUT_MS = 10_000;
+const HYPERLIQUID_PRICE_POLL_MS = 5_000;
 
 type Fetcher = typeof fetch;
 
@@ -44,7 +45,7 @@ export interface MarketPriceUpdate {
   marketId: string;
   price: number;
   publishedAt: number;
-  source: "pyth-hermes";
+  source: "hyperliquid" | "pyth-hermes";
 }
 
 export class MarketDataService {
@@ -58,6 +59,8 @@ export class MarketDataService {
   private nextClientId = 1;
   private hermesAbort?: AbortController;
   private hermesTask?: Promise<void>;
+  private hyperliquidPriceTimer?: ReturnType<typeof setInterval>;
+  private hyperliquidPriceRunning = false;
   private streamStopTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
@@ -100,7 +103,11 @@ export class MarketDataService {
         controller.enqueue(this.encoder.encode("retry: 1500\n\n"));
         const latest = this.latestPrices.get(marketId);
         if (latest) controller.enqueue(this.priceEvent(latest));
-        this.ensureHermesStream();
+        if (this.env.pythApiKey) {
+          this.ensureHermesStream();
+        } else {
+          this.ensureHyperliquidPriceStream();
+        }
       },
       cancel: () => this.removeClient(clientId),
     });
@@ -238,6 +245,14 @@ export class MarketDataService {
   }
 
   private async fetchLatestPrice(marketId: string): Promise<MarketPriceUpdate> {
+    if (!this.env.pythApiKey) {
+      const update = (await this.fetchHyperliquidPrices([marketId]))[0];
+      if (!update) throw new Error(`price provider returned no update for ${marketId}`);
+      if (this.cachePrice(update)) return update;
+      this.latestPriceFetchedAt.set(marketId, this.now());
+      return this.latestPrices.get(marketId) ?? update;
+    }
+
     const feeds = feedMarkets(this.env);
     const feedId = [...feeds].find(([, candidate]) => candidate === marketId)?.[0];
     if (!feedId) throw new Error(`missing Pyth feed for ${marketId}`);
@@ -256,6 +271,66 @@ export class MarketDataService {
     if (this.cachePrice(update)) return update;
     this.latestPriceFetchedAt.set(marketId, this.now());
     return this.latestPrices.get(marketId) ?? update;
+  }
+
+  private async fetchHyperliquidPrices(
+    marketIds: string[],
+  ): Promise<MarketPriceUpdate[]> {
+    const payload = await fetchJsonWithRetry(
+      this.fetcher,
+      new URL("https://api.hyperliquid.xyz/info"),
+      {
+        body: JSON.stringify({ type: "allMids" }),
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "user-agent": "pnlx-market-prices/0.1",
+        },
+        method: "POST",
+      },
+      PRICE_FETCH_TIMEOUT_MS,
+      "price provider",
+    );
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new Error("invalid price provider response");
+    }
+
+    const mids = payload as Record<string, unknown>;
+    const publishedAt = this.now();
+    return marketIds.flatMap((marketId) => {
+      const symbol = supportedAsset(marketId).symbol;
+      const price = strictNumber(mids[symbol]);
+      if (price === undefined || price <= 0) return [];
+      return [{
+        confidence: 0,
+        marketId,
+        price,
+        publishedAt,
+        source: "hyperliquid" as const,
+      }];
+    });
+  }
+
+  private ensureHyperliquidPriceStream(): void {
+    if (this.hyperliquidPriceTimer || this.clients.size === 0) return;
+    const refresh = async () => {
+      if (this.hyperliquidPriceRunning) return;
+      this.hyperliquidPriceRunning = true;
+      try {
+        const marketIds = [...new Set([...this.clients.values()].map((client) => client.marketId))];
+        const updates = await this.fetchHyperliquidPrices(marketIds);
+        for (const update of updates) {
+          if (this.cachePrice(update)) this.broadcast(update);
+        }
+      } catch (error) {
+        console.error(`[MarketDataService] Hyperliquid price refresh failed: ${errorMessage(error)}`);
+      } finally {
+        this.hyperliquidPriceRunning = false;
+      }
+    };
+    void refresh();
+    this.hyperliquidPriceTimer = setInterval(() => void refresh(), HYPERLIQUID_PRICE_POLL_MS);
+    this.hyperliquidPriceTimer.unref?.();
   }
 
   private ensureHermesStream(): void {
@@ -384,7 +459,10 @@ export class MarketDataService {
     if (this.clients.size === 0 && !this.streamStopTimer) {
       this.streamStopTimer = setTimeout(() => {
         this.streamStopTimer = undefined;
-        if (this.clients.size === 0) this.hermesAbort?.abort();
+        if (this.clients.size !== 0) return;
+        this.hermesAbort?.abort();
+        if (this.hyperliquidPriceTimer) clearInterval(this.hyperliquidPriceTimer);
+        this.hyperliquidPriceTimer = undefined;
       }, STREAM_IDLE_GRACE_MS);
       this.streamStopTimer.unref?.();
     }

@@ -40,7 +40,7 @@ export interface MarketPriceUpdate {
   marketId: string;
   price: number;
   publishedAt: number;
-  source: "pyth-hermes";
+  source: "hyperliquid" | "pyth-hermes";
 }
 
 export interface SnapshotMergeOptions {
