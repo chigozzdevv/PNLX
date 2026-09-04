@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { hashFields } from "@pnlx/crypto";
 import { PRICE_SCALE } from "@pnlx/market-math";
 import type { Hex } from "@pnlx/protocol-types";
+import { hermesEndpoint } from "@/shared/http/hermes";
 import type { CommandResult } from "@/workers/relayer/relayer.model";
 import type { OracleConfig, OracleMarketPriceInput, OraclePrice, PythPriceResponse } from "@/workers/oracle/oracle.model";
 
@@ -17,7 +18,7 @@ export class OracleService {
 
   async latest(feedId: Hex): Promise<OraclePrice> {
     const normalizedFeedId = feedId.replace(/^0x/i, "");
-    const url = new URL("/v2/updates/price/latest", this.config.hermesUrl);
+    const url = hermesEndpoint(this.config.hermesUrl, "/v2/updates/price/latest");
     url.searchParams.append("ids[]", normalizedFeedId);
 
     const response = await fetch(url, {

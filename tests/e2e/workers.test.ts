@@ -32,6 +32,7 @@ import {
 import { parseMarketCandles } from "@/features/markets/markets.schema";
 import { NotesService } from "@/features/notes/notes.service";
 import { OrdersService } from "@/features/orders/orders.service";
+import { hermesEndpoint } from "@/shared/http/hermes";
 import {
   positionOpeningAccountEventDataCommitment,
   positionOpeningAccountEventId,
@@ -54,6 +55,13 @@ import type { SettlementProofInput } from "@/workers/proof-coordinator/proof-coo
 import { createRelayer } from "@/workers/relayer/relayer.worker";
 
 describe("support workers", () => {
+  test("preserves the authenticated Hermes base path", () => {
+    expect(String(hermesEndpoint(
+      "https://pyth.dourolabs.app/hermes",
+      "/v2/updates/price/latest",
+    ))).toBe("https://pyth.dourolabs.app/hermes/v2/updates/price/latest");
+  });
+
   test("parses aligned Pyth price stream updates", () => {
     const feedId = "b7a8eba68a997cd0210c2e1e4ee811ad2d174b3611c22d9ebf16f4cb7e9ba850";
     const updates = parseHermesPriceUpdates(JSON.stringify({

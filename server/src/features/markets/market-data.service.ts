@@ -5,6 +5,7 @@ import type {
   MarketCandleInterval,
   MarketCandlesInput,
 } from "@/features/markets/markets.model";
+import { hermesEndpoint } from "@/shared/http/hermes";
 
 const CANDLE_CACHE_TTL_MS = 5_000;
 const CANDLE_FETCH_TIMEOUT_MS = 5_000;
@@ -265,7 +266,7 @@ export class MarketDataService {
     const feeds = feedMarkets(this.env);
     const feedId = [...feeds].find(([, candidate]) => candidate === marketId)?.[0];
     if (!feedId) throw new Error(`missing Pyth feed for ${marketId}`);
-    const url = new URL("/v2/updates/price/latest", this.env.pythHermesUrl);
+    const url = hermesEndpoint(this.env.pythHermesUrl, "/v2/updates/price/latest");
     url.searchParams.append("ids[]", feedId);
     url.searchParams.set("parsed", "true");
     const payload = await fetchJsonWithRetry(this.fetcher, url, {
@@ -480,7 +481,7 @@ export class MarketDataService {
 
   private async consumeHermesStream(signal: AbortSignal): Promise<void> {
     const feeds = feedMarkets(this.env);
-    const url = new URL("/v2/updates/price/stream", this.env.pythHermesUrl);
+    const url = hermesEndpoint(this.env.pythHermesUrl, "/v2/updates/price/stream");
     for (const feedId of feeds.keys()) url.searchParams.append("ids[]", feedId);
     url.searchParams.set("parsed", "true");
     const connection = new AbortController();
