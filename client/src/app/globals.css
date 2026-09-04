@@ -241,6 +241,36 @@ button:disabled {
   font-weight: 750;
 }
 
+.balance-popover-action {
+  margin-top: 9px;
+  border-top: 1px solid var(--line);
+  padding-top: 9px;
+}
+
+.balance-repair-action {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid rgba(39, 214, 139, 0.22);
+  border-radius: 6px;
+  background: rgba(39, 214, 139, 0.1);
+  padding: 0 10px;
+  color: var(--accent-green);
+  font-size: 11px;
+  font-weight: 850;
+  text-align: center;
+  transition: background 140ms ease, border-color 140ms ease, transform 100ms ease;
+}
+
+.balance-repair-action:hover:not(:disabled) {
+  border-color: rgba(39, 214, 139, 0.38);
+  background: rgba(39, 214, 139, 0.16);
+}
+
+.balance-repair-action:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
 .account-button {
   max-width: min(150px, 40vw);
 }

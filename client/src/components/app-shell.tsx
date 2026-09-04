@@ -19,10 +19,19 @@ interface AppShellProps {
   account: AccountSnapshot;
   activeView: AppView;
   children: ReactNode;
+  onRepairCollateral?: () => void;
+  showRepairCollateral?: boolean;
   wallet: WalletSessionController;
 }
 
-export function AppShell({ account, activeView, children, wallet }: AppShellProps) {
+export function AppShell({
+  account,
+  activeView,
+  children,
+  onRepairCollateral,
+  showRepairCollateral = false,
+  wallet,
+}: AppShellProps) {
   const address = wallet.session?.address ?? account.address;
   const connected = Boolean(wallet.session);
   const connecting = wallet.status === "connecting";
@@ -85,6 +94,13 @@ export function AppShell({ account, activeView, children, wallet }: AppShellProp
                       <dd>{formatUsd(account.pendingShieldedUsdc)}</dd>
                     </div>
                   </dl>
+                  {showRepairCollateral && onRepairCollateral ? (
+                    <div className="balance-popover-action">
+                      <button className="balance-repair-action" type="button" onClick={onRepairCollateral}>
+                        Repair collateral
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               </details>
             ) : null}

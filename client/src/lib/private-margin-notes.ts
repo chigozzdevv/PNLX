@@ -59,6 +59,21 @@ export interface PrivateMarginNoteAllocation {
   note: StoredPrivateMarginNote;
 }
 
+export interface PrivateMarginRepairCandidate {
+  changeAmount: bigint;
+  changeCommitment: Hex;
+  intentCommitment: Hex;
+  sourceAmount: bigint;
+  sourceCommitment: Hex;
+}
+
+export interface PrivateMarginRepairEligibility {
+  hasActiveOrders: boolean;
+  hasCancelledOrder: boolean;
+  hasOpenPositions: boolean;
+  ownerCommitment: Hex;
+}
+
 export function privateSpendableBalance(ownerCommitment?: Hex): bigint {
   return privateMarginNotes(ownerCommitment)
     .filter((note) => note.status === "available")
@@ -92,6 +107,77 @@ export function privatePendingBalance(ownerCommitment?: Hex): bigint {
   return privateMarginNotes(ownerCommitment)
     .filter((note) => note.status === "pending")
     .reduce((total, note) => total + BigInt(note.amount), 0n);
+}
+
+export function findPrivateMarginRepairCandidate(
+  input: PrivateMarginRepairEligibility,
+): PrivateMarginRepairCandidate | undefined {
+  if (input.hasActiveOrders || input.hasOpenPositions || !input.hasCancelledOrder) return undefined;
+
+  const notes = privateMarginNotes(input.ownerCommitment);
+  const sources = notes.filter((note) => note.status === "locked" && Boolean(note.lockedByIntentCommitment));
+  const changes = notes.filter((note) => note.status === "pending" && Boolean(note.lockedByIntentCommitment));
+  if (sources.length !== 1 || changes.length !== 1) return undefined;
+
+  const source = sources[0];
+  const change = changes[0];
+  const intentCommitment = source.lockedByIntentCommitment;
+  if (!intentCommitment || !change.lockedByIntentCommitment) return undefined;
+  if (source.commitment === change.commitment) return undefined;
+  if (intentCommitmentKey(intentCommitment) !== intentCommitmentKey(change.lockedByIntentCommitment)) {
+    return undefined;
+  }
+
+  const sourceAmount = BigInt(source.amount);
+  const changeAmount = BigInt(change.amount);
+  if (sourceAmount <= 0n || changeAmount <= 0n || changeAmount > sourceAmount) return undefined;
+
+  return {
+    changeAmount,
+    changeCommitment: change.commitment,
+    intentCommitment,
+    sourceAmount,
+    sourceCommitment: source.commitment,
+  };
+}
+
+export function repairPrivateMarginNotes(candidate: PrivateMarginRepairCandidate): boolean {
+  const notes = readPrivateMarginNotes();
+  const source = notes.find((note) => note.commitment === candidate.sourceCommitment);
+  const change = notes.find((note) => note.commitment === candidate.changeCommitment);
+  if (
+    !source ||
+    !change ||
+    source.status !== "locked" ||
+    change.status !== "pending" ||
+    !source.lockedByIntentCommitment ||
+    !change.lockedByIntentCommitment ||
+    intentCommitmentKey(source.lockedByIntentCommitment) !== intentCommitmentKey(candidate.intentCommitment) ||
+    intentCommitmentKey(change.lockedByIntentCommitment) !== intentCommitmentKey(candidate.intentCommitment)
+  ) {
+    return false;
+  }
+
+  const now = Date.now();
+  writeNotes(notes.map((note) => {
+    if (note.commitment === candidate.sourceCommitment) {
+      return {
+        ...note,
+        lockedByIntentCommitment: undefined,
+        status: "available" as const,
+        updatedAt: now,
+      };
+    }
+    if (note.commitment === candidate.changeCommitment) {
+      return {
+        ...note,
+        status: "spent" as const,
+        updatedAt: now,
+      };
+    }
+    return note;
+  }));
+  return true;
 }
 
 export function privateMarginNotes(ownerCommitment?: Hex): StoredPrivateMarginNote[] {

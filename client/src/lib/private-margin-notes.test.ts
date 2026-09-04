@@ -4,10 +4,12 @@ import { describe, expect, test } from "bun:test";
 import type { Hex } from "@/types/trading";
 import {
   planPrivateMarginNoteAllocations,
+  findPrivateMarginRepairCandidate,
   privateMarginNotes,
   privatePendingBalance,
   privateReservedBalance,
   privateSpendableBalance,
+  repairPrivateMarginNotes,
   reconcilePrivateMarginNotes,
   savePrivateMarginNote,
   selectWithdrawablePrivateMarginNote,
@@ -352,6 +354,73 @@ describe("private margin note allocation", () => {
         "4000000": "locked",
         "2000000": "pending",
       });
+    } finally {
+      setPrivateMarginNoteRuntimeScope(undefined);
+      if (previousWindow) {
+        Object.defineProperty(globalThis, "window", previousWindow);
+      } else {
+        Reflect.deleteProperty(globalThis, "window");
+      }
+    }
+  });
+
+  test("repairs one isolated cancelled source and pending change pair", () => {
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const localStorage = new MemoryStorage();
+    const sessionStorage = new MemoryStorage();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        dispatchEvent: () => true,
+        localStorage,
+        sessionStorage,
+      },
+    });
+
+    try {
+      setPrivateMarginNoteRuntimeScope("test:manual-repair");
+      const intentCommitment = `0x${"E1".repeat(32)}` as Hex;
+      savePrivateMarginNote({
+        ...note("source", 4_000_000n),
+        lockedByIntentCommitment: intentCommitment,
+        status: "locked",
+      });
+      savePrivateMarginNote({
+        ...note("change", 2_000_000n),
+        lockedByIntentCommitment: intentCommitment.toLowerCase() as Hex,
+        status: "pending",
+      });
+
+      const candidate = findPrivateMarginRepairCandidate({
+        hasActiveOrders: false,
+        hasCancelledOrder: true,
+        hasOpenPositions: false,
+        ownerCommitment: OWNER,
+      });
+      expect(candidate?.sourceAmount).toBe(4_000_000n);
+      expect(candidate?.changeAmount).toBe(2_000_000n);
+      expect(findPrivateMarginRepairCandidate({
+        hasActiveOrders: true,
+        hasCancelledOrder: true,
+        hasOpenPositions: false,
+        ownerCommitment: OWNER,
+      })).toBeUndefined();
+      expect(findPrivateMarginRepairCandidate({
+        hasActiveOrders: false,
+        hasCancelledOrder: true,
+        hasOpenPositions: true,
+        ownerCommitment: OWNER,
+      })).toBeUndefined();
+      expect(repairPrivateMarginNotes(candidate!)).toBe(true);
+      expect(privateSpendableBalance(OWNER)).toBe(4_000_000n);
+      expect(privateReservedBalance(OWNER)).toBe(0n);
+      expect(privatePendingBalance(OWNER)).toBe(0n);
+      expect(findPrivateMarginRepairCandidate({
+        hasActiveOrders: false,
+        hasCancelledOrder: true,
+        hasOpenPositions: false,
+        ownerCommitment: OWNER,
+      })).toBeUndefined();
     } finally {
       setPrivateMarginNoteRuntimeScope(undefined);
       if (previousWindow) {

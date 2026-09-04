@@ -11,7 +11,13 @@ import { PnlModal, type PnlModalProps } from "@/components/pnl-modal";
 import { PositionsTable, type PositionsTableView } from "@/components/positions-table";
 import { PriceChart, type PriceChartHandle } from "@/components/price-chart";
 import type { ChartIndicatorId } from "@/lib/chart-indicators";
+import { protocolUsdcToDisplay } from "@/lib/asset-units";
+import { formatUsd } from "@/lib/format";
 import type { OwnerOrderGroup } from "@/lib/order-groups";
+import {
+  findPrivateMarginRepairCandidate,
+  repairPrivateMarginNotes,
+} from "@/lib/private-margin-notes";
 import { useMarketCandles, type CandleInterval } from "@/lib/use-market-candles";
 import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useTradingData } from "@/lib/use-trading-data";
@@ -99,6 +105,17 @@ export function TradingPage() {
     trading.data.orders,
     trading.data.positions,
   ]);
+  const repairCandidate = useMemo(() => {
+    if (!wallet.session) return undefined;
+    return findPrivateMarginRepairCandidate({
+      hasActiveOrders: orders.some((order) => isActiveOrderStatus(order.status)),
+      hasCancelledOrder: trading.data.activity.some(
+        (activity) => activity.kind === "order" && activity.status === "cancelled",
+      ),
+      hasOpenPositions: trading.data.positions.some((position) => position.status === "open"),
+      ownerCommitment: wallet.session.ownerCommitment,
+    });
+  }, [orders, trading.data.activity, trading.data.positions, wallet.session]);
   const hasPendingOrders = orders.some((order) => isActiveOrderStatus(order.status));
   const handleSelectMarket = useCallback((marketId: string) => {
     setSelectedMarketId(marketId);
@@ -209,6 +226,43 @@ export function TradingPage() {
     }
   }, [wallet.session]);
 
+  const handleRepairCollateral = useCallback(() => {
+    if (!repairCandidate) {
+      setPositionActionMessage({
+        tone: "error",
+        text: "No eligible collateral repair found",
+      });
+      return;
+    }
+
+    const sourceAmount = formatUsd(protocolUsdcToDisplay(repairCandidate.sourceAmount), {
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 2,
+    });
+    const changeAmount = formatUsd(protocolUsdcToDisplay(repairCandidate.changeAmount), {
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 2,
+    });
+    const confirmed = window.confirm(
+      `Repair local collateral ledger?\n\n${sourceAmount} source note → Available\n${changeAmount} pending change → Spent\n\nNo transaction will be sent.`,
+    );
+    if (!confirmed) return;
+
+    if (!repairPrivateMarginNotes(repairCandidate)) {
+      setPositionActionMessage({
+        tone: "error",
+        text: "The local ledger changed before repair; refresh and try again",
+      });
+      return;
+    }
+
+    setPositionActionMessage({
+      tone: "success",
+      text: "Collateral repaired",
+    });
+    setRefreshKey((value) => value + 1);
+  }, [repairCandidate]);
+
   useEffect(() => {
     if (!wallet.session || !hasPendingOrders) return;
     const timer = window.setInterval(() => {
@@ -246,6 +300,8 @@ export function TradingPage() {
     <AppShell
       account={trading.data.account}
       activeView="trade"
+      onRepairCollateral={handleRepairCollateral}
+      showRepairCollateral={Boolean(repairCandidate)}
       wallet={wallet}
     >
       <main className="trade-grid">
