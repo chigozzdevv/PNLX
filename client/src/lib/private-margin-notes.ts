@@ -356,11 +356,7 @@ function reconciledOrderStatuses(
     }
   }
 
-  // The server names an order by its intent commitment, while the wallet owns
-  // the source note by nullifier. Use that one-to-one proof input only when
-  // the stored intent is absent from the server response. An exact active
-  // intent always wins: an old cancelled order must never release a newer
-  // order that reused the same note after its earlier cancellation.
+  // Fall back to a note nullifier only when its stored intent is absent; exact active intents always win.
   for (const note of notes) {
     if (note.status !== "locked" || !note.lockedByIntentCommitment) continue;
     const intentKey = intentCommitmentKey(note.lockedByIntentCommitment);

@@ -16,6 +16,7 @@ import {
   privateSpendableBalance,
   privateMarginNoteRuntimeScopeFromHealth,
   reconcilePrivateMarginNotes,
+  type ReconciledPrivateMarginOrder,
   setPrivateMarginNoteRuntimeScope,
 } from "@/lib/private-margin-notes";
 import { priceFromOracleString, rateFromMicroBps } from "@/lib/format";
@@ -133,7 +134,18 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
       activePortfolio = await fetchPortfolio(session);
     }
     void syncPrivateConditionalOrders(session, activePortfolio.accountEvents);
-    reconcilePrivateMarginNotes({ orders: activePortfolio.orders });
+    reconcilePrivateMarginNotes({
+      orders: [
+        ...activePortfolio.orders,
+        ...activePortfolio.activities.flatMap((activity): ReconciledPrivateMarginOrder[] => {
+          if (activity.kind !== "order" || !isReconciledOrderStatus(activity.status)) return [];
+          return [{
+            intentCommitment: activity.id,
+            status: activity.status,
+          }];
+        }),
+      ],
+    });
   }
   const publicMarkets = new Map(
     (activePortfolio?.publicState.markets ?? []).map((market) => [market.marketId, market]),
@@ -309,6 +321,10 @@ function markPrivateOpeningRecoveryAttempt(
   portfolio: ServerPortfolioSnapshot,
 ): void {
   window.sessionStorage.setItem(privateOpeningRecoveryKey(session, portfolio), "1");
+}
+
+function isReconciledOrderStatus(status: string | undefined): status is ReconciledPrivateMarginOrder["status"] {
+  return status === "open" || status === "filled" || status === "partially-filled" || status === "cancelled";
 }
 
 function canonicalMarkets(markets: ServerMarketConfig[]): ServerMarketConfig[] {
