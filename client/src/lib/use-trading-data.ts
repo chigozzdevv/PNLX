@@ -141,6 +141,8 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
           if (activity.kind !== "order" || !isReconciledOrderStatus(activity.status)) return [];
           return [{
             intentCommitment: activity.id,
+            noteNullifier: activity.noteNullifier,
+            sourceIntentCommitment: activity.sourceIntentCommitment,
             status: activity.status,
           }];
         }),
