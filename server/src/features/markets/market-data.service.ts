@@ -19,9 +19,13 @@ const STREAM_IDLE_GRACE_MS = 30_000;
 const HERMES_RECONNECT_MIN_MS = 1_000;
 const HERMES_RECONNECT_MAX_MS = 15_000;
 const HERMES_CONNECT_TIMEOUT_MS = 10_000;
-const HYPERLIQUID_PRICE_POLL_MS = 5_000;
+const HYPERLIQUID_WS_URL = "wss://api.hyperliquid.xyz/ws";
+const HYPERLIQUID_RECONNECT_MIN_MS = 1_000;
+const HYPERLIQUID_RECONNECT_MAX_MS = 15_000;
+const HYPERLIQUID_STREAM_IDLE_MS = 30_000;
 
 type Fetcher = typeof fetch;
+type WebSocketFactory = (url: string) => WebSocket;
 
 interface CandleCacheEntry {
   candles: MarketCandle[];
@@ -59,14 +63,18 @@ export class MarketDataService {
   private nextClientId = 1;
   private hermesAbort?: AbortController;
   private hermesTask?: Promise<void>;
-  private hyperliquidPriceTimer?: ReturnType<typeof setInterval>;
-  private hyperliquidPriceRunning = false;
+  private hyperliquidFallbackRunning = false;
+  private hyperliquidIdleTimer?: ReturnType<typeof setTimeout>;
+  private hyperliquidReconnectMs = HYPERLIQUID_RECONNECT_MIN_MS;
+  private hyperliquidReconnectTimer?: ReturnType<typeof setTimeout>;
+  private hyperliquidSocket?: WebSocket;
   private streamStopTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
     private readonly env: ServerEnv,
     private readonly fetcher: Fetcher = globalThis.fetch,
     private readonly now: () => number = Date.now,
+    private readonly webSocketFactory: WebSocketFactory = (url) => new WebSocket(url),
   ) {}
 
   async candles(input: MarketCandlesInput) {
@@ -312,25 +320,102 @@ export class MarketDataService {
   }
 
   private ensureHyperliquidPriceStream(): void {
-    if (this.hyperliquidPriceTimer || this.clients.size === 0) return;
-    const refresh = async () => {
-      if (this.hyperliquidPriceRunning) return;
-      this.hyperliquidPriceRunning = true;
-      try {
-        const marketIds = [...new Set([...this.clients.values()].map((client) => client.marketId))];
-        const updates = await this.fetchHyperliquidPrices(marketIds);
-        for (const update of updates) {
-          if (this.cachePrice(update)) this.broadcast(update);
-        }
-      } catch (error) {
-        console.error(`[MarketDataService] Hyperliquid price refresh failed: ${errorMessage(error)}`);
-      } finally {
-        this.hyperliquidPriceRunning = false;
+    if (this.streamStopTimer) {
+      clearTimeout(this.streamStopTimer);
+      this.streamStopTimer = undefined;
+    }
+    if (this.hyperliquidSocket || this.hyperliquidReconnectTimer || this.clients.size === 0) return;
+
+    let socket: WebSocket;
+    try {
+      socket = this.webSocketFactory(HYPERLIQUID_WS_URL);
+    } catch (error) {
+      console.error(`[MarketDataService] Hyperliquid stream failed: ${errorMessage(error)}`);
+      void this.refreshHyperliquidFallback();
+      this.scheduleHyperliquidReconnect();
+      return;
+    }
+    this.hyperliquidSocket = socket;
+    socket.onopen = () => {
+      if (this.hyperliquidSocket !== socket) return;
+      socket.send(JSON.stringify({
+        method: "subscribe",
+        subscription: { type: "allMids" },
+      }));
+      this.armHyperliquidIdleTimeout(socket);
+    };
+    socket.onmessage = (event) => {
+      if (this.hyperliquidSocket !== socket) return;
+      const marketIds = [...new Set([...this.clients.values()].map((client) => client.marketId))];
+      const updates = parseHyperliquidMidUpdates(event.data, marketIds, this.now());
+      if (updates.length > 0) {
+        this.hyperliquidReconnectMs = HYPERLIQUID_RECONNECT_MIN_MS;
+        this.armHyperliquidIdleTimeout(socket);
+      }
+      for (const update of updates) {
+        if (this.cachePrice(update)) this.broadcast(update);
       }
     };
-    void refresh();
-    this.hyperliquidPriceTimer = setInterval(() => void refresh(), HYPERLIQUID_PRICE_POLL_MS);
-    this.hyperliquidPriceTimer.unref?.();
+    socket.onerror = () => {
+      if (this.hyperliquidSocket === socket) socket.close();
+    };
+    socket.onclose = () => {
+      if (this.hyperliquidSocket !== socket) return;
+      if (this.hyperliquidIdleTimer) clearTimeout(this.hyperliquidIdleTimer);
+      this.hyperliquidIdleTimer = undefined;
+      this.hyperliquidSocket = undefined;
+      void this.refreshHyperliquidFallback();
+      this.scheduleHyperliquidReconnect();
+    };
+  }
+
+  private armHyperliquidIdleTimeout(socket: WebSocket): void {
+    if (this.hyperliquidIdleTimer) clearTimeout(this.hyperliquidIdleTimer);
+    this.hyperliquidIdleTimer = setTimeout(() => {
+      if (this.hyperliquidSocket === socket) socket.close();
+    }, HYPERLIQUID_STREAM_IDLE_MS);
+    this.hyperliquidIdleTimer.unref?.();
+  }
+
+  private async refreshHyperliquidFallback(): Promise<void> {
+    if (this.hyperliquidFallbackRunning || this.clients.size === 0) return;
+    this.hyperliquidFallbackRunning = true;
+    try {
+      const marketIds = [...new Set([...this.clients.values()].map((client) => client.marketId))];
+      const updates = await this.fetchHyperliquidPrices(marketIds);
+      for (const update of updates) {
+        if (this.cachePrice(update)) this.broadcast(update);
+      }
+    } catch (error) {
+      console.error(`[MarketDataService] Hyperliquid fallback failed: ${errorMessage(error)}`);
+    } finally {
+      this.hyperliquidFallbackRunning = false;
+    }
+  }
+
+  private scheduleHyperliquidReconnect(): void {
+    if (this.hyperliquidReconnectTimer || this.clients.size === 0 || this.env.pythApiKey) return;
+    const reconnectMs = this.hyperliquidReconnectMs;
+    this.hyperliquidReconnectMs = Math.min(
+      reconnectMs * 2,
+      HYPERLIQUID_RECONNECT_MAX_MS,
+    );
+    this.hyperliquidReconnectTimer = setTimeout(() => {
+      this.hyperliquidReconnectTimer = undefined;
+      this.ensureHyperliquidPriceStream();
+    }, reconnectMs);
+    this.hyperliquidReconnectTimer.unref?.();
+  }
+
+  private stopHyperliquidPriceStream(): void {
+    if (this.hyperliquidIdleTimer) clearTimeout(this.hyperliquidIdleTimer);
+    this.hyperliquidIdleTimer = undefined;
+    if (this.hyperliquidReconnectTimer) clearTimeout(this.hyperliquidReconnectTimer);
+    this.hyperliquidReconnectTimer = undefined;
+    this.hyperliquidReconnectMs = HYPERLIQUID_RECONNECT_MIN_MS;
+    const socket = this.hyperliquidSocket;
+    this.hyperliquidSocket = undefined;
+    socket?.close();
   }
 
   private ensureHermesStream(): void {
@@ -461,8 +546,7 @@ export class MarketDataService {
         this.streamStopTimer = undefined;
         if (this.clients.size !== 0) return;
         this.hermesAbort?.abort();
-        if (this.hyperliquidPriceTimer) clearInterval(this.hyperliquidPriceTimer);
-        this.hyperliquidPriceTimer = undefined;
+        this.stopHyperliquidPriceStream();
       }, STREAM_IDLE_GRACE_MS);
       this.streamStopTimer.unref?.();
     }
@@ -620,6 +704,38 @@ export function parseHyperliquidCandles(payload: unknown): MarketCandle[] {
     throw new Error("candle provider returned no valid candles");
   }
   return candles;
+}
+
+export function parseHyperliquidMidUpdates(
+  raw: unknown,
+  marketIds: string[],
+  publishedAt: number,
+): MarketPriceUpdate[] {
+  if (typeof raw !== "string" || !Number.isSafeInteger(publishedAt) || publishedAt <= 0) return [];
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+  const message = payload as Record<string, unknown>;
+  if (message.channel !== "allMids" || !message.data || typeof message.data !== "object") return [];
+  const mids = (message.data as Record<string, unknown>).mids;
+  if (!mids || typeof mids !== "object" || Array.isArray(mids)) return [];
+
+  return marketIds.flatMap((marketId) => {
+    const symbol = supportedAsset(marketId).symbol;
+    const price = strictNumber((mids as Record<string, unknown>)[symbol]);
+    if (price === undefined || price <= 0) return [];
+    return [{
+      confidence: 0,
+      marketId,
+      price,
+      publishedAt,
+      source: "hyperliquid" as const,
+    }];
+  });
 }
 
 function candleCacheKey(input: MarketCandlesInput): string {

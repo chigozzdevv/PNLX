@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   bufferMonotonicTick,
   chooseLatestTick,
+  isMarketPriceUpdate,
   isTickFlushable,
   mergeCandles,
   mergeSnapshotCandles,
@@ -25,6 +26,22 @@ function tick(price: number, publishedAt: number): MarketPriceUpdate {
 }
 
 describe("market candle stream helpers", () => {
+  test("accepts supported live price sources for the selected market", () => {
+    const pythUpdate = tick(11, 2_000);
+    const hyperliquidUpdate: MarketPriceUpdate = {
+      ...pythUpdate,
+      source: "hyperliquid",
+    };
+
+    expect(isMarketPriceUpdate(pythUpdate, "xlm-usd-perp")).toBe(true);
+    expect(isMarketPriceUpdate(hyperliquidUpdate, "xlm-usd-perp")).toBe(true);
+    expect(isMarketPriceUpdate(hyperliquidUpdate, "btc-usd-perp")).toBe(false);
+    expect(isMarketPriceUpdate(
+      { ...pythUpdate, source: "unsupported" } as unknown as MarketPriceUpdate,
+      "xlm-usd-perp",
+    )).toBe(false);
+  });
+
   test("folds ticks into the active OHLC bucket", () => {
     const lower = upsertPrice([first], tick(8, Date.parse("2026-08-13T10:00:30.000Z")), "1m");
     const higher = upsertPrice(lower, tick(12, Date.parse("2026-08-13T10:00:45.000Z")), "1m");

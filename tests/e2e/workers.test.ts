@@ -25,6 +25,7 @@ import { MarketsService } from "@/features/markets/markets.service";
 import {
   MarketDataService,
   parseHyperliquidCandles,
+  parseHyperliquidMidUpdates,
   parseHermesPriceUpdates,
   parsePythTradingViewCandles,
 } from "@/features/markets/market-data.service";
@@ -355,6 +356,29 @@ describe("support workers", () => {
     );
   });
 
+  test("parses Hyperliquid websocket mid-price updates", () => {
+    expect(parseHyperliquidMidUpdates(JSON.stringify({
+      channel: "allMids",
+      data: { mids: { BTC: "63800.5", XLM: "0.19160237" } },
+    }), ["xlm-usd-perp", "btc-usd-perp"], 1_784_692_964_000)).toEqual([
+      {
+        confidence: 0,
+        marketId: "xlm-usd-perp",
+        price: 0.19160237,
+        publishedAt: 1_784_692_964_000,
+        source: "hyperliquid",
+      },
+      {
+        confidence: 0,
+        marketId: "btc-usd-perp",
+        price: 63_800.5,
+        publishedAt: 1_784_692_964_000,
+        source: "hyperliquid",
+      },
+    ]);
+    expect(parseHyperliquidMidUpdates("not-json", ["xlm-usd-perp"], 1)).toEqual([]);
+  });
+
   test("coalesces and briefly caches latest Pyth prices", async () => {
     let requests = 0;
     const feedId = "b7a8eba68a997cd0210c2e1e4ee811ad2d174b3611c22d9ebf16f4cb7e9ba850";
@@ -446,16 +470,43 @@ describe("support workers", () => {
   });
 
   test("streams Hyperliquid prices when Pyth is not configured", async () => {
-    const fetcher = async () =>
-      new Response(JSON.stringify({ XLM: "0.19160237" }), { status: 200 });
+    class TestWebSocket {
+      onclose: ((event: CloseEvent) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onopen: ((event: Event) => void) | null = null;
+      sent: string[] = [];
+
+      close() {}
+      send(value: string) {
+        this.sent.push(value);
+      }
+    }
+    const socket = new TestWebSocket();
     const env = loadEnv();
     env.pythApiKey = "";
-    const service = new MarketDataService(env, fetcher as never, () => 1_784_692_964_000);
+    const service = new MarketDataService(
+      env,
+      globalThis.fetch,
+      () => 1_784_692_964_000,
+      () => socket as unknown as WebSocket,
+    );
     const response = service.stream("xlm-usd-perp");
     const reader = response.body?.getReader();
     const decoder = new TextDecoder();
 
     expect(decoder.decode((await reader?.read())?.value)).toBe("retry: 1500\n\n");
+    socket.onopen?.(new Event("open"));
+    expect(socket.sent.map((message) => JSON.parse(message))).toEqual([{
+      method: "subscribe",
+      subscription: { type: "allMids" },
+    }]);
+    socket.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({
+        channel: "allMids",
+        data: { mids: { XLM: "0.19160237" } },
+      }),
+    }));
     const priceEvent = decoder.decode((await reader?.read())?.value);
 
     expect(priceEvent).toContain("event: price");

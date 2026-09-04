@@ -133,7 +133,7 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
       },
       handleScale: {
         axisDoubleClickReset: true,
-        axisPressedMouseMove: true,
+        axisPressedMouseMove: { price: true, time: false },
         mouseWheel: true,
         pinch: true,
       },

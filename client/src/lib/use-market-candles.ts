@@ -339,8 +339,9 @@ export function useMarketCandles(
   return { ...state, loadOlder };
 }
 
-function isMarketPriceUpdate(update: MarketPriceUpdate, marketId: string): boolean {
-  if (update.marketId !== marketId || update.source !== "pyth-hermes") return false;
+export function isMarketPriceUpdate(update: MarketPriceUpdate, marketId: string): boolean {
+  if (update.marketId !== marketId) return false;
+  if (update.source !== "pyth-hermes" && update.source !== "hyperliquid") return false;
   if (!Number.isFinite(update.price) || update.price <= 0) return false;
   return Number.isFinite(update.publishedAt) && update.publishedAt > 0;
 }
