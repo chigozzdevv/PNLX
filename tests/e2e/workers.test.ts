@@ -1810,9 +1810,11 @@ describe("support workers", () => {
   test("normalizes Pyth feed ids with or without a hex prefix", async () => {
     const originalFetch = globalThis.fetch;
     const requestedIds: string[] = [];
-    globalThis.fetch = (input) => {
+    const authorizationHeaders: Array<string | null> = [];
+    globalThis.fetch = (input, init) => {
       const url = new URL(String(input));
       requestedIds.push(url.searchParams.get("ids[]") ?? "");
+      authorizationHeaders.push(new Headers(init?.headers).get("authorization"));
       return Promise.resolve(new Response(JSON.stringify({
         parsed: [{
           id: "abcd",
@@ -1821,6 +1823,7 @@ describe("support workers", () => {
       }), { status: 200 }));
     };
     const oracle = new OracleService({
+      apiKey: "test-pyth-key",
       hermesUrl: "https://hermes.example",
       maxAgeSeconds: 120,
       maxConfidenceBps: 100n,
@@ -1835,6 +1838,10 @@ describe("support workers", () => {
     }
 
     expect(requestedIds).toEqual(["abcd", "abcd"]);
+    expect(authorizationHeaders).toEqual([
+      "Bearer test-pyth-key",
+      "Bearer test-pyth-key",
+    ]);
   });
 
   test("runs bounded funding engine cycles from market oracle price", () => {

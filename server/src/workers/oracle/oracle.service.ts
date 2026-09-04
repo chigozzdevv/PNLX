@@ -20,7 +20,13 @@ export class OracleService {
     const url = new URL("/v2/updates/price/latest", this.config.hermesUrl);
     url.searchParams.append("ids[]", normalizedFeedId);
 
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      headers: {
+        ...(this.config.apiKey
+          ? { authorization: `Bearer ${this.config.apiKey}` }
+          : {}),
+      },
+    });
     if (!response.ok) {
       throw new Error(`pyth price fetch failed: ${response.status}`);
     }

@@ -76,6 +76,7 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
     ? loadDeploymentRegistry(env.stellarDeploymentFile)
     : undefined;
   const oracle = new OracleService({
+    apiKey: env.pythApiKey,
     hermesUrl: env.pythHermesUrl,
     marketContractId: deployment?.contracts.market,
     maxAgeSeconds: env.oraclePriceMaxAgeSeconds,

@@ -4,6 +4,7 @@ import type { CommandRunner } from "@/workers/relayer/relayer.model";
 export type OraclePriceSource = "hermes" | "onchain-market";
 
 export interface OracleConfig {
+  apiKey?: string;
   hermesUrl: string;
   marketContractId?: string;
   maxAgeSeconds: number;
