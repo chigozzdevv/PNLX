@@ -120,12 +120,10 @@ export interface ServerOwnerActivitySnapshot {
   id: Hex;
   kind: "account-event" | "order" | "position" | "position-close" | "liquidation";
   marketId?: string;
-  noteNullifier?: Hex;
   proofDigest?: Hex;
   proofSystem?: ServerProofMeta["proofSystem"];
   proofTxHash?: Hex;
   residualCommitment?: Hex;
-  sourceIntentCommitment?: Hex;
   status?: ServerOwnerOrderSnapshot["status"] | ServerOwnerPositionSnapshot["status"];
   settlementDigest?: Hex;
   timestamp: number;

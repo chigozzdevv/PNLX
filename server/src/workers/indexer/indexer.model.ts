@@ -89,12 +89,10 @@ export interface OwnerActivitySnapshot {
   id: Hex;
   kind: OwnerActivityKind;
   marketId?: string;
-  noteNullifier?: Hex;
   proofDigest?: Hex;
   proofSystem?: ProofMeta["proofSystem"];
   proofTxHash?: Hex;
   residualCommitment?: Hex;
-  sourceIntentCommitment?: Hex;
   status?: OrderStatus | PositionStatus;
   settlementDigest?: Hex;
   timestamp: number;

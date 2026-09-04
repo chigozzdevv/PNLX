@@ -240,10 +240,6 @@ describe("public and owner indexer", () => {
         status: "closed",
         txHash: closeSettlementTxHash,
       });
-    expect(activities.find((activity) => activity.id === filled.intentCommitment))
-      .toMatchObject({
-        noteNullifier: filled.noteNullifier,
-      });
     expect(JSON.stringify(activities)).not.toContain("positionNullifier");
   });
 });

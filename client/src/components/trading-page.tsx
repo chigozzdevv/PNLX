@@ -341,7 +341,6 @@ export function TradingPage() {
                     },
                     marketId: intent.marketId,
                     matchingPayloadCommitment: intent.matchingPayloadCommitment,
-                    noteNullifier: intent.noteNullifier,
                     status: "open" as const,
                     updatedAt: submittedAt,
                   })),

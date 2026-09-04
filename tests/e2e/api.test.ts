@@ -2216,10 +2216,9 @@ describe("server api", () => {
       [replacementCommitment]: "filled",
     });
     const activities = portfolioResult.portfolio.activities as Record<string, string>[];
-    expect(activities.find((activity) => activity.id === originalRecord.intentCommitment)).toMatchObject({
-      noteNullifier: ownerNote.note.noteNullifier,
-      status: "cancelled",
-    });
+    expect(activities.find((activity) => activity.id === originalRecord.intentCommitment)?.status).toBe(
+      "cancelled",
+    );
     expect(activities.find((activity) => activity.id === replacementCommitment)?.status).toBe(
       "filled",
     );
