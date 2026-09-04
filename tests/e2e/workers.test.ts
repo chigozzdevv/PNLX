@@ -24,8 +24,8 @@ import { IntentsService } from "@/features/intents/intents.service";
 import { MarketsService } from "@/features/markets/markets.service";
 import {
   MarketDataService,
+  parseHyperliquidAssetContextUpdates,
   parseHyperliquidCandles,
-  parseHyperliquidMidUpdates,
   parseHermesPriceUpdates,
   parsePythTradingViewCandles,
 } from "@/features/markets/market-data.service";
@@ -356,10 +356,13 @@ describe("support workers", () => {
     );
   });
 
-  test("parses Hyperliquid websocket mid-price updates", () => {
-    expect(parseHyperliquidMidUpdates(JSON.stringify({
-      channel: "allMids",
-      data: { mids: { BTC: "63800.5", XLM: "0.19160237" } },
+  test("parses Hyperliquid websocket market context updates", () => {
+    expect(parseHyperliquidAssetContextUpdates(JSON.stringify({
+      channel: "activeAssetCtx",
+      data: {
+        coin: "XLM",
+        ctx: { markPx: "0.19159", midPx: "0.19160237", oraclePx: "0.19158" },
+      },
     }), ["xlm-usd-perp", "btc-usd-perp"], 1_784_692_964_000)).toEqual([
       {
         confidence: 0,
@@ -368,15 +371,8 @@ describe("support workers", () => {
         publishedAt: 1_784_692_964_000,
         source: "hyperliquid",
       },
-      {
-        confidence: 0,
-        marketId: "btc-usd-perp",
-        price: 63_800.5,
-        publishedAt: 1_784_692_964_000,
-        source: "hyperliquid",
-      },
     ]);
-    expect(parseHyperliquidMidUpdates("not-json", ["xlm-usd-perp"], 1)).toEqual([]);
+    expect(parseHyperliquidAssetContextUpdates("not-json", ["xlm-usd-perp"], 1)).toEqual([]);
   });
 
   test("coalesces and briefly caches latest Pyth prices", async () => {
@@ -475,6 +471,7 @@ describe("support workers", () => {
       onerror: ((event: Event) => void) | null = null;
       onmessage: ((event: MessageEvent) => void) | null = null;
       onopen: ((event: Event) => void) | null = null;
+      readyState = 0;
       sent: string[] = [];
 
       close() {}
@@ -496,22 +493,35 @@ describe("support workers", () => {
     const decoder = new TextDecoder();
 
     expect(decoder.decode((await reader?.read())?.value)).toBe("retry: 1500\n\n");
+    socket.readyState = 1;
     socket.onopen?.(new Event("open"));
     expect(socket.sent.map((message) => JSON.parse(message))).toEqual([{
       method: "subscribe",
-      subscription: { type: "allMids" },
+      subscription: { coin: "XLM", type: "activeAssetCtx" },
     }]);
     socket.onmessage?.(new MessageEvent("message", {
       data: JSON.stringify({
-        channel: "allMids",
-        data: { mids: { XLM: "0.19160237" } },
+        channel: "activeAssetCtx",
+        data: { coin: "XLM", ctx: { midPx: "0.19160237" } },
       }),
     }));
     const priceEvent = decoder.decode((await reader?.read())?.value);
 
     expect(priceEvent).toContain("event: price");
     expect(priceEvent).toContain('"source":"hyperliquid"');
+    const btcResponse = service.stream("btc-usd-perp");
+    const btcReader = btcResponse.body?.getReader();
+    expect(decoder.decode((await btcReader?.read())?.value)).toBe("retry: 1500\n\n");
+    expect(socket.sent.map((message) => JSON.parse(message))).toContainEqual({
+      method: "subscribe",
+      subscription: { coin: "BTC", type: "activeAssetCtx" },
+    });
     await reader?.cancel();
+    expect(socket.sent.map((message) => JSON.parse(message))).toContainEqual({
+      method: "unsubscribe",
+      subscription: { coin: "XLM", type: "activeAssetCtx" },
+    });
+    await btcReader?.cancel();
   });
 
   test("defaults production oracle authority to on-chain market pricing", () => {

@@ -68,6 +68,7 @@ export class MarketDataService {
   private hyperliquidReconnectMs = HYPERLIQUID_RECONNECT_MIN_MS;
   private hyperliquidReconnectTimer?: ReturnType<typeof setTimeout>;
   private hyperliquidSocket?: WebSocket;
+  private readonly hyperliquidSubscriptions = new Set<string>();
   private streamStopTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
@@ -324,7 +325,11 @@ export class MarketDataService {
       clearTimeout(this.streamStopTimer);
       this.streamStopTimer = undefined;
     }
-    if (this.hyperliquidSocket || this.hyperliquidReconnectTimer || this.clients.size === 0) return;
+    if (this.hyperliquidSocket) {
+      this.syncHyperliquidSubscriptions(this.hyperliquidSocket);
+      return;
+    }
+    if (this.hyperliquidReconnectTimer || this.clients.size === 0) return;
 
     let socket: WebSocket;
     try {
@@ -338,16 +343,13 @@ export class MarketDataService {
     this.hyperliquidSocket = socket;
     socket.onopen = () => {
       if (this.hyperliquidSocket !== socket) return;
-      socket.send(JSON.stringify({
-        method: "subscribe",
-        subscription: { type: "allMids" },
-      }));
+      this.syncHyperliquidSubscriptions(socket);
       this.armHyperliquidIdleTimeout(socket);
     };
     socket.onmessage = (event) => {
       if (this.hyperliquidSocket !== socket) return;
       const marketIds = [...new Set([...this.clients.values()].map((client) => client.marketId))];
-      const updates = parseHyperliquidMidUpdates(event.data, marketIds, this.now());
+      const updates = parseHyperliquidAssetContextUpdates(event.data, marketIds, this.now());
       if (updates.length > 0) {
         this.hyperliquidReconnectMs = HYPERLIQUID_RECONNECT_MIN_MS;
         this.armHyperliquidIdleTimeout(socket);
@@ -364,9 +366,37 @@ export class MarketDataService {
       if (this.hyperliquidIdleTimer) clearTimeout(this.hyperliquidIdleTimer);
       this.hyperliquidIdleTimer = undefined;
       this.hyperliquidSocket = undefined;
+      this.hyperliquidSubscriptions.clear();
       void this.refreshHyperliquidFallback();
       this.scheduleHyperliquidReconnect();
     };
+  }
+
+  private syncHyperliquidSubscriptions(socket: WebSocket): void {
+    if (socket.readyState !== 1) return;
+    const desiredSymbols = new Set(
+      [...this.clients.values()].map((client) => supportedAsset(client.marketId).symbol),
+    );
+    try {
+      for (const symbol of this.hyperliquidSubscriptions) {
+        if (desiredSymbols.has(symbol)) continue;
+        socket.send(JSON.stringify({
+          method: "unsubscribe",
+          subscription: { coin: symbol, type: "activeAssetCtx" },
+        }));
+        this.hyperliquidSubscriptions.delete(symbol);
+      }
+      for (const symbol of desiredSymbols) {
+        if (this.hyperliquidSubscriptions.has(symbol)) continue;
+        socket.send(JSON.stringify({
+          method: "subscribe",
+          subscription: { coin: symbol, type: "activeAssetCtx" },
+        }));
+        this.hyperliquidSubscriptions.add(symbol);
+      }
+    } catch {
+      socket.close();
+    }
   }
 
   private armHyperliquidIdleTimeout(socket: WebSocket): void {
@@ -413,6 +443,7 @@ export class MarketDataService {
     if (this.hyperliquidReconnectTimer) clearTimeout(this.hyperliquidReconnectTimer);
     this.hyperliquidReconnectTimer = undefined;
     this.hyperliquidReconnectMs = HYPERLIQUID_RECONNECT_MIN_MS;
+    this.hyperliquidSubscriptions.clear();
     const socket = this.hyperliquidSocket;
     this.hyperliquidSocket = undefined;
     socket?.close();
@@ -541,6 +572,9 @@ export class MarketDataService {
     if (!client) return;
     clearInterval(client.heartbeat);
     this.clients.delete(clientId);
+    if (!this.env.pythApiKey && this.clients.size > 0 && this.hyperliquidSocket) {
+      this.syncHyperliquidSubscriptions(this.hyperliquidSocket);
+    }
     if (this.clients.size === 0 && !this.streamStopTimer) {
       this.streamStopTimer = setTimeout(() => {
         this.streamStopTimer = undefined;
@@ -706,7 +740,7 @@ export function parseHyperliquidCandles(payload: unknown): MarketCandle[] {
   return candles;
 }
 
-export function parseHyperliquidMidUpdates(
+export function parseHyperliquidAssetContextUpdates(
   raw: unknown,
   marketIds: string[],
   publishedAt: number,
@@ -720,22 +754,23 @@ export function parseHyperliquidMidUpdates(
   }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
   const message = payload as Record<string, unknown>;
-  if (message.channel !== "allMids" || !message.data || typeof message.data !== "object") return [];
-  const mids = (message.data as Record<string, unknown>).mids;
-  if (!mids || typeof mids !== "object" || Array.isArray(mids)) return [];
-
-  return marketIds.flatMap((marketId) => {
-    const symbol = supportedAsset(marketId).symbol;
-    const price = strictNumber((mids as Record<string, unknown>)[symbol]);
-    if (price === undefined || price <= 0) return [];
-    return [{
-      confidence: 0,
-      marketId,
-      price,
-      publishedAt,
-      source: "hyperliquid" as const,
-    }];
-  });
+  if (message.channel !== "activeAssetCtx" || !message.data || typeof message.data !== "object") return [];
+  const data = message.data as Record<string, unknown>;
+  const symbol = typeof data.coin === "string" ? data.coin : "";
+  const marketId = marketIds.find((candidate) => supportedAsset(candidate).symbol === symbol);
+  if (!marketId || !data.ctx || typeof data.ctx !== "object" || Array.isArray(data.ctx)) return [];
+  const context = data.ctx as Record<string, unknown>;
+  const price = [context.midPx, context.markPx, context.oraclePx]
+    .map(strictNumber)
+    .find((candidate) => candidate !== undefined && candidate > 0);
+  if (price === undefined) return [];
+  return [{
+    confidence: 0,
+    marketId,
+    price,
+    publishedAt,
+    source: "hyperliquid",
+  }];
 }
 
 function candleCacheKey(input: MarketCandlesInput): string {
