@@ -29,6 +29,7 @@ interface CandleCacheEntry {
   from: number;
   hasMore: boolean;
   productId: string;
+  source: "hyperliquid" | "pyth-pro-history";
   to: number;
 }
 
@@ -140,7 +141,7 @@ export class MarketDataService {
     const active = this.candleInflight.get(key);
     if (active) return active;
 
-    const request = this.fetchPythCandles(input, symbol)
+    const request = this.fetchCandles(input, symbol)
       .then((entry) => {
         setBoundedCache(this.candleCache, key, entry);
         return entry;
@@ -150,7 +151,16 @@ export class MarketDataService {
     return request;
   }
 
-  private async fetchPythCandles(
+  private fetchCandles(
+    input: MarketCandlesInput,
+    symbol: string,
+  ): Promise<CandleCacheEntry> {
+    return this.env.pythApiKey
+      ? this.fetchPythProCandles(input, symbol)
+      : this.fetchHyperliquidCandles(input, symbol);
+  }
+
+  private async fetchPythProCandles(
     input: MarketCandlesInput,
     symbol: string,
   ): Promise<CandleCacheEntry> {
@@ -159,7 +169,7 @@ export class MarketDataService {
     const requestedFrom = input.from ?? to - granularity * CANDLE_CACHE_LIMIT;
     const from = Math.max(requestedFrom, to - granularity * CANDLE_CACHE_LIMIT);
     const productId = `Crypto.${symbol}/USD`;
-    const url = new URL("https://benchmarks.pyth.network/v1/shims/tradingview/history");
+    const url = new URL("https://pyth.dourolabs.app/v1/fixed_rate@200ms/history");
     url.searchParams.set("symbol", productId);
     url.searchParams.set("resolution", pythResolution(input.interval));
     url.searchParams.set("from", String(from));
@@ -168,6 +178,7 @@ export class MarketDataService {
     const payload = await fetchJsonWithRetry(this.fetcher, url, {
       headers: {
         accept: "application/json",
+        authorization: `Bearer ${this.env.pythApiKey}`,
         "user-agent": "pnlx-pyth-candles/0.2",
       },
     }, CANDLE_FETCH_TIMEOUT_MS, "candle provider");
@@ -181,6 +192,47 @@ export class MarketDataService {
       from,
       hasMore: candles.length >= input.limit,
       productId,
+      source: "pyth-pro-history",
+      to,
+    };
+  }
+
+  private async fetchHyperliquidCandles(
+    input: MarketCandlesInput,
+    symbol: string,
+  ): Promise<CandleCacheEntry> {
+    const granularity = intervalSeconds(input.interval);
+    const to = input.to ?? Math.floor(this.now() / 1000);
+    const requestedFrom = input.from ?? to - granularity * CANDLE_CACHE_LIMIT;
+    const from = Math.max(requestedFrom, to - granularity * CANDLE_CACHE_LIMIT);
+    const payload = await fetchJsonWithRetry(this.fetcher, new URL("https://api.hyperliquid.xyz/info"), {
+      body: JSON.stringify({
+        req: {
+          coin: symbol,
+          endTime: to * 1_000,
+          interval: input.interval,
+          startTime: from * 1_000,
+        },
+        type: "candleSnapshot",
+      }),
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "user-agent": "pnlx-market-candles/0.3",
+      },
+      method: "POST",
+    }, CANDLE_FETCH_TIMEOUT_MS, "candle provider");
+    const candles = parseHyperliquidCandles(payload);
+    const limitedCandles = candles.slice(-input.limit);
+    const fetchedAt = this.now();
+    return {
+      candles: limitedCandles,
+      expiresAt: fetchedAt + CANDLE_CACHE_TTL_MS,
+      fetchedAt,
+      from,
+      hasMore: candles.length >= input.limit,
+      productId: symbol,
+      source: "hyperliquid",
       to,
     };
   }
@@ -355,7 +407,7 @@ function candleResponse(
     marketId: input.marketId,
     productId: entry.productId,
     realtime: true,
-    source: "pyth-benchmarks",
+    source: entry.source,
     stale,
     to: entry.to,
   };
@@ -451,6 +503,44 @@ export function parsePythTradingViewCandles(payload: unknown): MarketCandle[] {
     });
   }
   if (candles.length === 0) throw new Error("candle provider returned no valid candles");
+  return candles;
+}
+
+export function parseHyperliquidCandles(payload: unknown): MarketCandle[] {
+  if (!Array.isArray(payload)) throw new Error("invalid candle provider response");
+
+  const candles = payload.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    const time = strictNumber(record.t);
+    const open = strictNumber(record.o);
+    const high = strictNumber(record.h);
+    const low = strictNumber(record.l);
+    const close = strictNumber(record.c);
+    const volume = strictNumber(record.v);
+    if (
+      time === undefined || time <= 0 || !Number.isSafeInteger(time) ||
+      open === undefined || open <= 0 ||
+      high === undefined || high <= 0 ||
+      low === undefined || low <= 0 ||
+      close === undefined || close <= 0 ||
+      volume === undefined || volume < 0 ||
+      high < Math.max(open, close) || low > Math.min(open, close)
+    ) return [];
+    const timestamp = new Date(time);
+    if (!Number.isFinite(timestamp.getTime())) return [];
+    return [{
+      close,
+      high,
+      low,
+      open,
+      time: timestamp.toISOString(),
+      volume,
+    }];
+  });
+  if (payload.length > 0 && candles.length === 0) {
+    throw new Error("candle provider returned no valid candles");
+  }
   return candles;
 }
 

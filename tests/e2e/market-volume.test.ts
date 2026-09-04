@@ -120,7 +120,7 @@ describe("PNLX market volume", () => {
           marketId: "xlm-usd-perp",
           productId: "Crypto.XLM/USD",
           realtime: true,
-          source: "pyth-benchmarks",
+          source: "pyth-pro-history",
           stale: false,
           to: 2,
         };
@@ -140,7 +140,7 @@ describe("PNLX market volume", () => {
       marketId: "xlm-usd-perp",
     });
 
-    expect(response.source).toBe("pyth-benchmarks");
+    expect(response.source).toBe("pyth-pro-history");
     expect(response.volumeSource).toBe("pnlx-settlements");
     expect(response.candles.map((item) => item.volume)).toEqual([2, 3.5]);
     expect(JSON.stringify(response)).not.toContain("settlementDigest");

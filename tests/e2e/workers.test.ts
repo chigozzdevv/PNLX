@@ -24,6 +24,7 @@ import { IntentsService } from "@/features/intents/intents.service";
 import { MarketsService } from "@/features/markets/markets.service";
 import {
   MarketDataService,
+  parseHyperliquidCandles,
   parseHermesPriceUpdates,
   parsePythTradingViewCandles,
 } from "@/features/markets/market-data.service";
@@ -102,7 +103,7 @@ describe("support workers", () => {
     }]);
   });
 
-  test("coalesces and caches Pyth candle snapshots", async () => {
+  test("coalesces and caches Pyth Pro candle snapshots", async () => {
     let requests = 0;
     const fetcher = async () => {
       requests += 1;
@@ -117,7 +118,9 @@ describe("support workers", () => {
         v: [0, 0],
       }), { status: 200 });
     };
-    const service = new MarketDataService(loadEnv(), fetcher as never);
+    const env = loadEnv();
+    env.pythApiKey = "test-pyth-key";
+    const service = new MarketDataService(env, fetcher as never);
     const input = { interval: "15m" as const, limit: 160, marketId: "xlm-usd-perp" };
 
     const [first, concurrent] = await Promise.all([
@@ -127,7 +130,7 @@ describe("support workers", () => {
     const cached = await service.candles(input);
 
     expect(requests).toBe(1);
-    expect(first.source).toBe("pyth-benchmarks");
+    expect(first.source).toBe("pyth-pro-history");
     expect(first.cached).toBe(false);
     expect(concurrent.candles).toEqual(first.candles);
     expect(cached.cached).toBe(true);
@@ -159,7 +162,9 @@ describe("support workers", () => {
       }
       throw new Error("provider unavailable");
     };
-    const service = new MarketDataService(loadEnv(), fetcher as never, () => now);
+    const env = loadEnv();
+    env.pythApiKey = "test-pyth-key";
+    const service = new MarketDataService(env, fetcher as never, () => now);
     const input = { interval: "15m" as const, limit: 160, marketId: "xlm-usd-perp" };
 
     const first = await service.candles(input);
@@ -241,7 +246,9 @@ describe("support workers", () => {
       requestedUrl = String(input);
       return new Response(JSON.stringify({ s: "no_data" }), { status: 200 });
     };
-    const service = new MarketDataService(loadEnv(), fetcher as never);
+    const env = loadEnv();
+    env.pythApiKey = "test-pyth-key";
+    const service = new MarketDataService(env, fetcher as never);
 
     const response = await service.candles({
       from: 1_784_692_000,
@@ -254,6 +261,7 @@ describe("support workers", () => {
 
     expect(providerUrl.searchParams.get("from")).toBe("1784692000");
     expect(providerUrl.searchParams.get("to")).toBe("1784692900");
+    expect(providerUrl.pathname).toBe("/v1/fixed_rate@200ms/history");
     expect(response.candles).toEqual([]);
     expect(response.hasMore).toBe(false);
     expect(parsePythTradingViewCandles({ s: "no_data" })).toEqual([]);
@@ -274,7 +282,9 @@ describe("support workers", () => {
         v: [0],
       }), { status: 200 });
     };
-    const service = new MarketDataService(loadEnv(), fetcher as never);
+    const env = loadEnv();
+    env.pythApiKey = "test-pyth-key";
+    const service = new MarketDataService(env, fetcher as never);
 
     const response = await service.candles({
       interval: "15m",
@@ -284,6 +294,65 @@ describe("support workers", () => {
 
     expect(requests).toBe(2);
     expect(response.candles.at(-1)?.close).toBe(0.19);
+  });
+
+  test("uses public Hyperliquid candles when Pyth Pro is not configured", async () => {
+    let requestedUrl = "";
+    let requestedInit: RequestInit | undefined;
+    const fetcher = async (input: URL | RequestInfo, init?: RequestInit) => {
+      requestedUrl = String(input);
+      requestedInit = init;
+      return new Response(JSON.stringify([{
+        T: 1_784_692_959_999,
+        c: "0.20",
+        h: "0.205",
+        i: "1m",
+        l: "0.185",
+        n: 12,
+        o: "0.19",
+        s: "XLM",
+        t: 1_784_692_900_000,
+        v: "400.5",
+      }]), { status: 200 });
+    };
+    const env = loadEnv();
+    env.pythApiKey = "";
+    const service = new MarketDataService(env, fetcher as never, () => 1_784_693_000_000);
+
+    const response = await service.candles({
+      interval: "1m",
+      limit: 160,
+      marketId: "xlm-usd-perp",
+    });
+
+    expect(requestedUrl).toBe("https://api.hyperliquid.xyz/info");
+    expect(requestedInit?.method).toBe("POST");
+    expect(JSON.parse(String(requestedInit?.body))).toEqual({
+      req: {
+        coin: "XLM",
+        endTime: 1_784_693_000_000,
+        interval: "1m",
+        startTime: 1_784_675_000_000,
+      },
+      type: "candleSnapshot",
+    });
+    expect(response.source).toBe("hyperliquid");
+    expect(response.candles).toEqual([{
+      close: 0.20,
+      high: 0.205,
+      low: 0.185,
+      open: 0.19,
+      time: "2026-07-22T04:01:40.000Z",
+      volume: 400.5,
+    }]);
+  });
+
+  test("rejects malformed Hyperliquid candle rows", () => {
+    expect(parseHyperliquidCandles([])).toEqual([]);
+    expect(() => parseHyperliquidCandles({})).toThrow("invalid candle provider response");
+    expect(() => parseHyperliquidCandles([{ t: null }])).toThrow(
+      "candle provider returned no valid candles",
+    );
   });
 
   test("coalesces and briefly caches latest Pyth prices", async () => {
