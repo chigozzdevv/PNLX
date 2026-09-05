@@ -18,6 +18,8 @@ import {
   findPrivateMarginRepairCandidate,
   repairPrivateMarginNotes,
 } from "@/lib/private-margin-notes";
+import { positionLegs } from "@/lib/position-groups";
+import type { ClosePositionResult } from "@/lib/position-close";
 import { useMarketCandles, type CandleInterval } from "@/lib/use-market-candles";
 import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useTradingData } from "@/lib/use-trading-data";
@@ -140,7 +142,18 @@ export function TradingPage() {
     setPositionActionMessage(undefined);
     try {
       const { closePosition } = await import("@/lib/position-close");
-      const record = await closePosition({ market, position, session: wallet.session });
+      const records: ClosePositionResult[] = [];
+      for (const leg of positionLegs(position)) {
+        records.push(await closePosition({ market, position: leg, session: wallet.session }));
+      }
+      const record = records.at(-1);
+      if (!record) throw new Error("Position close produced no settlement");
+      const settlement = records.reduce((total, current) => ({
+        fee: total.fee + current.settlement.fee,
+        fundingPayment: total.fundingPayment + current.settlement.fundingPayment,
+        grossPricePnl: total.grossPricePnl + current.settlement.grossPricePnl,
+        returnedMargin: total.returnedMargin + current.settlement.returnedMargin,
+      }), { fee: 0, fundingPayment: 0, grossPricePnl: 0, returnedMargin: 0 });
       
       const entryPrice = position.entryPrice ?? 0;
       const closePrice = Number(record.markPrice) / 100_000_000;
@@ -150,7 +163,7 @@ export function TradingPage() {
       setPnlModalData({
         closePrice,
         entryPrice,
-        ...record.settlement,
+        ...settlement,
         marketId: position.marketId,
         side,
         size,

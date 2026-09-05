@@ -16,6 +16,8 @@ import { closePosition } from "@/lib/position-close";
 import { privateMarginNotes, reconcilePrivateMarginNotes } from "@/lib/private-margin-notes";
 import { PnlModal, type PnlModalProps } from "@/components/pnl-modal";
 import { depositPrivateMargin } from "@/lib/trade-submit";
+import { positionLegs } from "@/lib/position-groups";
+import type { ClosePositionResult } from "@/lib/position-close";
 import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useTradingData } from "@/lib/use-trading-data";
 import { useWalletSession } from "@/lib/use-wallet-session";
@@ -71,7 +73,18 @@ export function PortfolioRoute() {
     setClosingPositionId(position.id);
     setPositionActionMessage(undefined);
     try {
-      const record = await closePosition({ market, position, session: wallet.session });
+      const records: ClosePositionResult[] = [];
+      for (const leg of positionLegs(position)) {
+        records.push(await closePosition({ market, position: leg, session: wallet.session }));
+      }
+      const record = records.at(-1);
+      if (!record) throw new Error("Position close produced no settlement");
+      const settlement = records.reduce((total, current) => ({
+        fee: total.fee + current.settlement.fee,
+        fundingPayment: total.fundingPayment + current.settlement.fundingPayment,
+        grossPricePnl: total.grossPricePnl + current.settlement.grossPricePnl,
+        returnedMargin: total.returnedMargin + current.settlement.returnedMargin,
+      }), { fee: 0, fundingPayment: 0, grossPricePnl: 0, returnedMargin: 0 });
       
       const entryPrice = position.entryPrice ?? 0;
       const closePrice = Number(record.markPrice) / 100_000_000;
@@ -81,7 +94,7 @@ export function PortfolioRoute() {
       setPnlModalData({
         closePrice,
         entryPrice,
-        ...record.settlement,
+        ...settlement,
         marketId: position.marketId,
         side,
         size,

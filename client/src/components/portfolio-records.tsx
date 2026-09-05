@@ -8,6 +8,7 @@ import {
   isActiveOrderGroup,
   type OwnerOrderGroup,
 } from "@/lib/order-groups";
+import { groupPositionRows, hasPrivatePositionState } from "@/lib/position-groups";
 import type {
   Hex,
   PositionRow,
@@ -44,7 +45,10 @@ export function PortfolioRecords({
   const [view, setView] = useState<PortfolioRecordView>("positions");
   const [expandedRow, setExpandedRow] = useState<string>();
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
-  const openPositions = positions.filter((position) => position.status === "open");
+  const openPositions = useMemo(
+    () => groupPositionRows(positions.filter((position) => position.status === "open")),
+    [positions],
+  );
   const openOrderGroups = useMemo(
     () => groupOwnerOrders(orders).filter(isActiveOrderGroup),
     [orders],
@@ -220,7 +224,13 @@ function PositionsLedger({
                   type="button"
                   onClick={() => onClosePosition?.(position)}
                 >
-                  {closingPositionId === position.id ? "Closing" : "Close"}
+                  {closingPositionId === position.id
+                    ? "Closing"
+                    : !hasPrivatePositionState(position)
+                      ? "Key unavailable"
+                      : closeUnavailableReason
+                        ? "Unavailable"
+                        : "Close"}
                 </button>
                 <DetailsButton
                   controlsId={`position-details-${position.id}`}
@@ -610,7 +620,9 @@ function closeDisabledReason(
   onClosePosition?: (position: PositionRow) => Promise<void> | void,
 ): string | undefined {
   if (!onClosePosition) return "Close action is unavailable";
-  if (!position.privateState) return "Private position key is unavailable in this browser";
+  if (!hasPrivatePositionState(position)) {
+    return "Private position key is unavailable in this browser";
+  }
   return undefined;
 }
 

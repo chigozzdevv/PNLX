@@ -239,6 +239,8 @@ export interface PositionRow {
   settlementDigest?: Hex;
   settlementTxHash?: Hex;
   sourceIntentCommitment: Hex;
+  /** Protocol position legs represented by one aggregated UI row. */
+  positionLegs?: PositionRow[];
   privateState?: {
     entryPrice: string;
     fundingIndex: string;

@@ -8,6 +8,7 @@ import {
   isActiveOrderGroup,
   type OwnerOrderGroup,
 } from "@/lib/order-groups";
+import { groupPositionRows, hasPrivatePositionState } from "@/lib/position-groups";
 import type {
   Hex,
   PositionRow,
@@ -49,7 +50,10 @@ export function PositionsTable({
   const [internalView, setInternalView] = useState<TableView>("positions");
   const [expandedRow, setExpandedRow] = useState<string>();
   const view = activeView ?? internalView;
-  const openPositions = positions.filter((position) => position.status === "open");
+  const openPositions = useMemo(
+    () => groupPositionRows(positions.filter((position) => position.status === "open")),
+    [positions],
+  );
   const openOrderGroups = useMemo(
     () => groupOwnerOrders(orders).filter(isActiveOrderGroup),
     [orders],
@@ -265,7 +269,7 @@ function PositionsView({
                 >
                   {closingPositionId === position.id
                     ? "Closing"
-                    : !position.privateState
+                    : !hasPrivatePositionState(position)
                       ? "Key unavailable"
                       : closeUnavailableReason
                         ? "Unavailable"
@@ -631,7 +635,9 @@ function closeDisabledReason(
   onClosePosition?: (position: PositionRow) => Promise<void> | void,
 ): string | undefined {
   if (!onClosePosition) return "Close action is unavailable";
-  if (!position.privateState) return "Private position key is unavailable in this browser";
+  if (!hasPrivatePositionState(position)) {
+    return "Private position key is unavailable in this browser";
+  }
   return undefined;
 }
 
