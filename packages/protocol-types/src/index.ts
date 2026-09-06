@@ -238,6 +238,16 @@ export interface FundingSettlementRecord extends FundingUpdateRecord {
 }
 
 export type BatchExecutionRunStatus = "failed" | "running" | "settled" | "skipped";
+
+export interface BatchSettlementCapacity {
+  limit: number;
+  filledIntents: number;
+  positionOutputs: number;
+  marginChangeOutputs: number;
+  notesToSpend: number;
+  matchedExecutions?: number;
+}
+
 export type BatchExecutionPhase =
   | "oracle"
   | "maker-liquidity"

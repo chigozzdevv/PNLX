@@ -37,6 +37,11 @@ export function isActiveOrderGroup(group: OwnerOrderGroup): boolean {
   return group.activeOrders.length > 0;
 }
 
+export function isOrderCapacityBlocked(order: Pick<OwnerOrderGroup, "matching">): boolean {
+  return order.matching.state === "blocked" &&
+    /batch proof supports at most \d+ public items|too many public items/i.test(order.matching.reason ?? "");
+}
+
 function createOrderGroup(id: string, input: ServerOwnerOrderSnapshot[]): OwnerOrderGroup {
   const orders = [...input].sort((left, right) => {
     const leftIndex = fragmentIndex(left.batchId);

@@ -141,7 +141,6 @@ export function PortfolioRoute() {
         tone: "success",
         text: "Order cancelled",
       });
-      setRefreshKey((value) => value + 1);
     } catch (error) {
       setPositionActionMessage({
         tone: "error",
@@ -149,6 +148,7 @@ export function PortfolioRoute() {
       });
     } finally {
       setCancellingOrderId(undefined);
+      setRefreshKey((value) => value + 1);
     }
   }, [wallet.session]);
 

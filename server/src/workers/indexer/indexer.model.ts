@@ -1,4 +1,4 @@
-import type { BatchExecutionPhase, Hex, OrderStatus, PositionStatus, ProofMeta } from "@pnlx/protocol-types";
+import type { BatchExecutionPhase, BatchSettlementCapacity, Hex, OrderStatus, PositionStatus, ProofMeta } from "@pnlx/protocol-types";
 
 export interface MarketPublicSnapshot {
   aggregateVolume: string;
@@ -45,6 +45,7 @@ export type OwnerOrderMatchingState =
 
 export interface OwnerOrderMatchingSnapshot {
   batchId?: string;
+  capacity?: BatchSettlementCapacity;
   completedAt?: number;
   message: string;
   phase?: BatchExecutionPhase;

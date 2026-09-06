@@ -1,5 +1,6 @@
 import type { ProtocolStore } from "@/shared/state/store";
 import type { BatchExecutionRunRecord, Hex, OrderLifecycleRecord } from "@pnlx/protocol-types";
+import { readBatchSettlementCapacity } from "@/shared/protocol/batch-settlement-proof";
 import type {
   MarketPublicSnapshot,
   OwnerActivitySnapshot,
@@ -87,8 +88,10 @@ export class IndexerService {
     };
 
     if (latestRun.status === "failed") {
+      const capacity = readBatchSettlementCapacity(latestRun.reason);
       return {
         ...base,
+        ...(capacity ? { capacity } : {}),
         message: blockedMessage(latestRun),
         state: "blocked",
       };

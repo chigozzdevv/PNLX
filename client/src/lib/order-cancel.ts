@@ -3,7 +3,7 @@ import type { OwnerOrderGroup } from "@/lib/order-groups";
 import type { Hex, ServerOwnerOrderSnapshot } from "@/types/trading";
 
 interface CancelOrderResponse {
-  order: Pick<ServerOwnerOrderSnapshot, "intentCommitment">;
+  order: Pick<ServerOwnerOrderSnapshot, "intentCommitment" | "status">;
 }
 
 export interface CancelledOrder {
@@ -21,6 +21,12 @@ export async function cancelOrder(input: {
     { intentCommitment: input.intentCommitment },
     input.token,
   );
+  if (response.order.intentCommitment.toLowerCase() !== input.intentCommitment.toLowerCase()) {
+    throw new Error("Cancellation returned a different private order");
+  }
+  if (response.order.status !== "cancelled") {
+    throw new Error("Cancellation is not confirmed yet. Refresh Orders before trying again.");
+  }
   return response.order;
 }
 
@@ -34,13 +40,10 @@ export async function cancelOrderGroup(input: {
   const cancelled: CancelledOrder[] = [];
   for (const order of input.group.activeOrders) {
     try {
-      const response = await cancelOrder({
+      await cancelOrder({
         intentCommitment: order.intentCommitment,
         token: input.token,
       });
-      if (response.intentCommitment.toLowerCase() !== order.intentCommitment.toLowerCase()) {
-        throw new Error("Cancellation returned a different private order");
-      }
       // Preserve the loaded residual source link as the relay response only
       // contains the lifecycle record and does not include residual metadata.
       cancelled.push({

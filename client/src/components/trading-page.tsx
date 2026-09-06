@@ -228,7 +228,6 @@ export function TradingPage() {
         text: "Order cancelled",
       });
       setTableView("orders");
-      setRefreshKey((value) => value + 1);
     } catch (error) {
       setPositionActionMessage({
         tone: "error",
@@ -236,6 +235,7 @@ export function TradingPage() {
       });
     } finally {
       setCancellingOrderId(undefined);
+      setRefreshKey((value) => value + 1);
     }
   }, [wallet.session]);
 

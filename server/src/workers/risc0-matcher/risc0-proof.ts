@@ -5,7 +5,7 @@ import { delimiter, dirname, join } from "node:path";
 import { hashFields } from "@pnlx/crypto";
 import type { ProofArtifact } from "@pnlx/proof-system";
 import type { BatchSettlement, Hex, ProofMeta } from "@pnlx/protocol-types";
-import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
+import { assertBatchSettlementCapacity, batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
 import { matchTranscriptDigest } from "@/workers/batch-matcher/match-transcript";
 import type { SettlementProof, SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
 
@@ -66,6 +66,7 @@ export async function createRisc0BatchSettlement(
     spentNullifiers: input.match.spentNullifiers,
   };
 
+  assertBatchSettlementCapacity(draft, input.match.executions.length);
   const proverOutput = await runRisc0Prover(root, input, draft);
   if (proverOutput.image_id !== RISC0_BATCH_MATCH_IMAGE_ID) {
     throw new Error(

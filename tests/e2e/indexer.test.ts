@@ -13,8 +13,41 @@ import type {
 } from "@pnlx/protocol-types";
 import { FileProtocolStore } from "@/shared/state/persistent-store";
 import { createIndexer } from "@/workers/indexer/indexer.worker";
+import { assertBatchSettlementCapacity } from "@/shared/protocol/batch-settlement-proof";
 
 describe("public and owner indexer", () => {
+  test("returns recorded capacity counts only for the owner's failed batch", () => {
+    const storePath = join(mkdtempSync(join(tmpdir(), "pnlx-capacity-indexer-")), "protocol-store.json");
+    const store = new FileProtocolStore(storePath);
+    const owner = ownerCommitment("GCAPACITY");
+    const record = intentRecord("capacity", "xlm-usd-perp", owner, store.marginMembershipRoot(), proofMeta("capacity"));
+    store.recordProof(record.proof);
+    store.addIntent(record);
+    let reason = "";
+    try {
+      assertBatchSettlementCapacity({
+        orderUpdates: Array(6).fill({ intentCommitment: "0x1", status: "filled" }),
+        newCommitments: Array(10).fill("0x1"),
+        marginChangeCommitments: [],
+        spentNullifiers: Array(6).fill("0x1"),
+      }, 5);
+    } catch (error) { reason = (error as Error).message; }
+    const run = {
+      batchId: record.batchId, marketId: record.marketId, phase: "proving" as const,
+      runId: hashFields("capacity-run", [record.intentCommitment]),
+      startedAt: 100, completedAt: 200, status: "failed" as const, reason: `proving: ${reason}`,
+    };
+    store.addBatchExecutionRun(run, [record.intentCommitment]);
+    const reloaded = new FileProtocolStore(storePath);
+    const indexer = createIndexer(reloaded);
+    expect(indexer.ordersFor(owner)[0].matching.capacity).toEqual({
+      limit: 8, filledIntents: 6, positionOutputs: 10, marginChangeOutputs: 0, notesToSpend: 6, matchedExecutions: 5,
+    });
+    expect(indexer.ordersFor(ownerCommitment("GOTHER"))).toEqual([]);
+    reloaded.upsertBatchExecutionRun({ ...run, status: "running", completedAt: undefined }, [record.intentCommitment]);
+    expect(indexer.ordersFor(owner)[0].matching.capacity).toBeUndefined();
+  });
+
   test("rebuilds market aggregates and owner order status from the persistent protocol store", () => {
     const storePath = join(mkdtempSync(join(tmpdir(), "pnlx-indexer-")), "protocol-store.json");
     const store = new FileProtocolStore(storePath);

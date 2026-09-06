@@ -1,7 +1,7 @@
 /// <reference types="bun" />
 
 import { describe, expect, test } from "bun:test";
-import { groupOwnerOrders, logicalOrderId } from "@/lib/order-groups";
+import { groupOwnerOrders, isOrderCapacityBlocked, logicalOrderId } from "@/lib/order-groups";
 import type { Hex, ServerOwnerOrderSnapshot } from "@/types/trading";
 
 describe("logical owner orders", () => {
@@ -43,6 +43,26 @@ describe("logical owner orders", () => {
     const [group] = groupOwnerOrders([filled, cancelled]);
     expect(group.status).toBe("partially-filled");
     expect(group.activeOrders).toEqual([]);
+  });
+
+  test("identifies capacity failures without treating other proof failures as capacity limits", () => {
+    const source = order("ui-1-xlm-usd-perp-1", "11", "open", 100);
+    source.matching = {
+      message: "Settlement delayed.",
+      reason: "proving: batch proof supports at most 8 public items",
+      state: "blocked",
+    };
+    expect(isOrderCapacityBlocked(source)).toBe(true);
+    source.matching.reason = "batch-settlement: too many public items";
+    expect(isOrderCapacityBlocked(source)).toBe(true);
+    source.matching.reason = "proving: Boundless request timed out";
+    expect(isOrderCapacityBlocked(source)).toBe(false);
+  });
+
+  test("does not label a running retry with an old capacity reason as a new failure", () => {
+    const source = order("ui-1-xlm-usd-perp-1", "11", "open", 100);
+    source.matching.reason = "batch proof supports at most 8 public items";
+    expect(isOrderCapacityBlocked(source)).toBe(false);
   });
 });
 

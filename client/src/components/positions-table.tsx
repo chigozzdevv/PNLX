@@ -3,9 +3,11 @@
 import { ChevronDown, Copy, ExternalLink } from "lucide-react";
 import { Fragment, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { formatNumber, formatUsd, shortAddress } from "@/lib/format";
+import { OrderCapacityDetails } from "@/components/order-capacity-details";
 import {
   groupOwnerOrders,
   isActiveOrderGroup,
+  isOrderCapacityBlocked,
   type OwnerOrderGroup,
 } from "@/lib/order-groups";
 import { groupPositionRows, hasPrivatePositionState } from "@/lib/position-groups";
@@ -350,6 +352,7 @@ function OrdersView({
       {orders.map((order) => {
         const key = `order:${order.id}`;
         const expanded = expandedRow === key;
+        const capacityBlocked = isOrderCapacityBlocked(order);
         return (
           <Fragment key={order.id}>
             <div className="trade-records-row trade-order-grid">
@@ -358,8 +361,10 @@ function OrdersView({
                 <small>Private intent</small>
               </div>
               <RecordCell label="Status">
-                <span>{statusLabel(order.status)}</span>
-                <small>{matcherLabel(order.matching)}</small>
+                <span className={capacityBlocked ? "order-capacity-status" : undefined}>
+                  {capacityBlocked ? "Trade couldn’t be processed" : statusLabel(order.status)}
+                </span>
+                <small>{capacityBlocked ? "Testnet processing limit" : matcherLabel(order.matching)}</small>
               </RecordCell>
               <RecordCell label="Submitted">
                 <span>{formatDateTime(order.createdAt)}</span>
@@ -377,11 +382,19 @@ function OrdersView({
                 <DetailsButton
                   controlsId={`trade-order-details-${order.id}`}
                   expanded={expanded}
+                  label={capacityBlocked ? (expanded ? "Hide details" : "See details") : undefined}
                   onClick={() => onToggleDetails(key)}
                 />
               </div>
             </div>
-            {expanded ? <OrderDetails order={order} /> : null}
+            {expanded ? capacityBlocked ? (
+              <OrderCapacityDetails
+                cancelling={cancellingOrderId === order.id}
+                id={`trade-order-details-${order.id}`}
+                onCancelOrder={onCancelOrder}
+                order={order}
+              />
+            ) : <OrderDetails order={order} /> : null}
           </Fragment>
         );
       })}
@@ -554,7 +567,7 @@ function DetailItem({ children, label }: { children: ReactNode; label: string })
   );
 }
 
-function DetailsButton({ controlsId, expanded, onClick }: { controlsId: string; expanded: boolean; onClick: () => void }) {
+function DetailsButton({ controlsId, expanded, label = "More details", onClick }: { controlsId: string; expanded: boolean; label?: string; onClick: () => void }) {
   return (
     <button
       aria-controls={controlsId}
@@ -563,7 +576,7 @@ function DetailsButton({ controlsId, expanded, onClick }: { controlsId: string; 
       type="button"
       onClick={onClick}
     >
-      <span>More details</span>
+      <span>{label}</span>
       <ChevronDown aria-hidden="true" size={14} strokeWidth={2} />
     </button>
   );

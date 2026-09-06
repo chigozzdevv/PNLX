@@ -3,9 +3,11 @@
 import { ChevronDown, Copy, ExternalLink } from "lucide-react";
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { formatUsd, shortAddress } from "@/lib/format";
+import { OrderCapacityDetails } from "@/components/order-capacity-details";
 import {
   groupOwnerOrders,
   isActiveOrderGroup,
+  isOrderCapacityBlocked,
   type OwnerOrderGroup,
 } from "@/lib/order-groups";
 import { groupPositionRows, hasPrivatePositionState } from "@/lib/position-groups";
@@ -316,6 +318,7 @@ function OrdersLedger({
       {orders.map((order) => {
         const key = `order:${order.id}`;
         const expanded = expandedRow === key;
+        const capacityBlocked = isOrderCapacityBlocked(order);
         return (
           <Fragment key={order.id}>
             <div className="portfolio-ledger-row portfolio-order-grid">
@@ -325,8 +328,10 @@ function OrdersLedger({
               </div>
               <LedgerCell label="Origin">{order.isResidual ? "Residual" : "Private"}</LedgerCell>
               <LedgerCell label="Status">
-                <span>{statusLabel(order.status)}</span>
-                <small>{matcherLabel(order.matching)}</small>
+                <span className={capacityBlocked ? "order-capacity-status" : undefined}>
+                  {capacityBlocked ? "Trade couldn’t be processed" : statusLabel(order.status)}
+                </span>
+                <small>{capacityBlocked ? "Testnet processing limit" : matcherLabel(order.matching)}</small>
               </LedgerCell>
               <LedgerCell label="Submitted">{formatDateTime(order.createdAt)}</LedgerCell>
               <LedgerCell label="Updated">{formatDateTime(order.updatedAt)}</LedgerCell>
@@ -342,11 +347,19 @@ function OrdersLedger({
                 <DetailsButton
                   controlsId={`order-details-${order.id}`}
                   expanded={expanded}
+                  label={capacityBlocked ? (expanded ? "Hide details" : "See details") : undefined}
                   onClick={() => onToggleDetails(key)}
                 />
               </div>
             </div>
-            {expanded ? <OrderDetails order={order} /> : null}
+            {expanded ? capacityBlocked ? (
+              <OrderCapacityDetails
+                cancelling={cancellingOrderId === order.id}
+                id={`order-details-${order.id}`}
+                onCancelOrder={onCancelOrder}
+                order={order}
+              />
+            ) : <OrderDetails order={order} /> : null}
           </Fragment>
         );
       })}
@@ -544,7 +557,7 @@ function DetailItem({ children, label }: { children: ReactNode; label: string })
   );
 }
 
-function DetailsButton({ controlsId, expanded, onClick }: { controlsId: string; expanded: boolean; onClick: () => void }) {
+function DetailsButton({ controlsId, expanded, label = "More details", onClick }: { controlsId: string; expanded: boolean; label?: string; onClick: () => void }) {
   return (
     <button
       aria-controls={controlsId}
@@ -553,7 +566,7 @@ function DetailsButton({ controlsId, expanded, onClick }: { controlsId: string; 
       type="button"
       onClick={onClick}
     >
-      <span>More details</span>
+      <span>{label}</span>
       <ChevronDown aria-hidden="true" size={15} strokeWidth={2} />
     </button>
   );

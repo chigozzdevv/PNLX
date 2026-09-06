@@ -69,6 +69,14 @@ export interface ServerOwnerOrderSnapshot {
   isResidual: boolean;
   matching: {
     batchId?: string;
+    capacity?: {
+      limit: number;
+      filledIntents: number;
+      positionOutputs: number;
+      marginChangeOutputs: number;
+      notesToSpend: number;
+      matchedExecutions?: number;
+    };
     completedAt?: number;
     message: string;
     phase?: "oracle" | "maker-liquidity" | "matcher" | "proving" | "batch-settlement" | "settlement-commit" | "maker-finalize";
