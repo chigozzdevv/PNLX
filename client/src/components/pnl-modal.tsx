@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { CheckCircle, ExternalLink } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Share } from "lucide-react";
 import {
   formatNumber,
+  formatPct,
   formatSignedSettlementUsd,
-  formatUsd,
-  formatUsdc,
   settlementAmountSign,
 } from "@/lib/format";
+import { createPnlShareCardFile } from "@/lib/pnl-share-card";
 
 export interface PnlModalProps {
   closePrice: number;
@@ -16,6 +16,7 @@ export interface PnlModalProps {
   fee: number;
   fundingPayment: number;
   grossPricePnl: number;
+  initialMargin?: number;
   isOpen: boolean;
   marketId: string;
   onClose: () => void;
@@ -31,32 +32,39 @@ export function PnlModal({
   fee,
   fundingPayment,
   grossPricePnl,
+  initialMargin,
   isOpen,
   marketId,
   onClose,
-  returnedMargin,
   side,
-  size,
   txHash,
 }: PnlModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const doneButtonRef = useRef<HTMLButtonElement>(null);
+  const shareButtonRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
+  const [shareStatus, setShareStatus] = useState<"idle" | "sharing" | "shared" | "copied" | "downloaded">("idle");
 
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
 
   useEffect(() => {
+    if (shareStatus !== "shared" && shareStatus !== "copied" && shareStatus !== "downloaded") return;
+    const clearStatus = window.setTimeout(() => setShareStatus("idle"), 2_400);
+    return () => window.clearTimeout(clearStatus);
+  }, [shareStatus]);
+
+  useEffect(() => {
     if (!isOpen) return;
     const previouslyFocused = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : undefined;
-    const focusFrame = requestAnimationFrame(() => doneButtonRef.current?.focus());
+    const focusFrame = requestAnimationFrame(() => shareButtonRef.current?.focus({ preventScroll: true }));
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
+        setShareStatus("idle");
         onCloseRef.current();
         return;
       }
@@ -96,112 +104,155 @@ export function PnlModal({
   const feeImpact = -fee;
   const netRealizedPnl = grossPricePnl + fundingImpact + feeImpact;
   const netPnlSign = settlementAmountSign(netRealizedPnl);
+  const pnlPercent = initialMargin && initialMargin > 0 ? (netRealizedPnl / initialMargin) * 100 : undefined;
+  const txUrl = txHash ? `https://stellar.expert/explorer/testnet/tx/${txHash.replace(/^0x/, "")}` : undefined;
+  const compactTxHash = txHash
+    ? `${txHash.replace(/^0x/, "").slice(0, 4)}...${txHash.slice(-4)}`.toUpperCase()
+    : undefined;
+  async function handleShare() {
+    setShareStatus("sharing");
+    try {
+      const imageFile = await createPnlShareCardFile({
+        closePrice,
+        entryPrice,
+        marketId,
+        netRealizedPnl,
+        pnlPercent,
+        side,
+        txHash,
+      });
+
+      if (
+        typeof navigator.share === "function"
+        && typeof navigator.canShare === "function"
+        && navigator.canShare({ files: [imageFile] })
+      ) {
+        try {
+          await navigator.share({
+            files: [imageFile],
+            title: `PNLX ${pairName} PNL`,
+          });
+          setShareStatus("shared");
+          return;
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            setShareStatus("idle");
+            return;
+          }
+        }
+      }
+
+      if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+        await navigator.clipboard.write([
+          new ClipboardItem({ "image/png": imageFile }),
+        ]);
+        setShareStatus("copied");
+        return;
+      }
+
+      const imageUrl = URL.createObjectURL(imageFile);
+      const download = document.createElement("a");
+      download.download = imageFile.name;
+      download.href = imageUrl;
+      download.click();
+      window.setTimeout(() => URL.revokeObjectURL(imageUrl), 0);
+      setShareStatus("downloaded");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setShareStatus("idle");
+        return;
+      }
+      setShareStatus("idle");
+    }
+  }
 
   return (
-    <div className="pnl-modal-overlay">
+    <div
+      className="pnl-modal-overlay"
+      onPointerDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        setShareStatus("idle");
+        onClose();
+      }}
+    >
       <div
-        aria-labelledby="pnl-modal-title"
+        aria-label={`${pairName} PNL result`}
         aria-modal="true"
         className="pnl-modal-container"
         ref={dialogRef}
         role="dialog"
       >
         <div className="pnl-modal-header">
-          <h2 className="pnl-modal-title" id="pnl-modal-title">
-            <CheckCircle aria-hidden="true" className="pnl-modal-icon-success" size={20} />
-            <span>Position closed</span>
-          </h2>
+          <div className="pnl-modal-header-row">
+            <button
+              aria-label="Share PNL card"
+              className="pnl-modal-share"
+              disabled={shareStatus === "sharing"}
+              onClick={handleShare}
+              ref={shareButtonRef}
+              type="button"
+            >
+              <Share aria-hidden="true" size={20} />
+            </button>
+          </div>
         </div>
 
         <div className="pnl-modal-body">
-          <div className="pnl-modal-market">
-            <div className="pnl-modal-market-identity">
-              <h3>{pairName}</h3>
-              <span className={`pnl-modal-side pnl-modal-side-${side}`}>
-                {side === "long" ? "Long" : "Short"}
+          <div className="pnl-modal-pnl-section">
+            <span className="pnl-modal-pnl-label">PNL</span>
+            <strong className={`pnl-modal-pnl-val ${valueClass(netPnlSign)}`}>
+              {formatSignedSettlementUsd(netRealizedPnl)}
+            </strong>
+            {pnlPercent === undefined ? null : (
+              <span className={`pnl-modal-pnl-percent ${valueClass(netPnlSign)}`}>
+                {formatPct(pnlPercent)}
               </span>
-            </div>
-            <span className="pnl-modal-market-size">{formatNumber(size, 6)} {pairName.split("/")[0]}</span>
+            )}
           </div>
 
-          <div className="pnl-modal-pnl-section">
-            <span className="pnl-modal-pnl-label">Net realized PnL</span>
-            <span className={`pnl-modal-pnl-val ${valueClass(netPnlSign)}`}>
-              {formatSignedSettlementUsd(netRealizedPnl)}
+          <div className="pnl-modal-market">
+            <h3>{pairName}</h3>
+            <span className={`pnl-modal-side pnl-modal-side-${side}`}>
+              {side === "long" ? "Long" : "Short"} · Market
             </span>
           </div>
 
           <div className="pnl-modal-breakdown">
-            <span className="pnl-modal-section-label">Settlement breakdown</span>
             <div className="pnl-modal-row">
-              <span className="pnl-modal-label">Entry price</span>
-              <span className="pnl-modal-value">{formatUsd(entryPrice, { maximumFractionDigits: 5 })}</span>
+              <span className="pnl-modal-label">Entry</span>
+              <span className="pnl-modal-value">{formatNumber(entryPrice, 4)}</span>
             </div>
             <div className="pnl-modal-row">
-              <span className="pnl-modal-label">Close mark price</span>
-              <span className="pnl-modal-value">{formatUsd(closePrice, { maximumFractionDigits: 5 })}</span>
+              <span className="pnl-modal-label">Exit</span>
+              <span className="pnl-modal-value">{formatNumber(closePrice, 4)}</span>
             </div>
-            <div className="pnl-modal-divider" />
-            <SettlementRow label="Gross price PnL" value={grossPricePnl} />
-            <SettlementRow label="Funding impact" value={fundingImpact} />
-            <SettlementRow label="Close fee" value={feeImpact} />
-          </div>
-
-          <div className="pnl-modal-row pnl-modal-returned-margin">
-            <span className="pnl-modal-label">Returned margin</span>
-            <span className="pnl-modal-returned-value">
-              {formatUsdc(returnedMargin)} <small>USDC</small>
-            </span>
           </div>
 
           {txHash ? (
-            <>
-              <div className="pnl-modal-divider" />
-              <div className="pnl-modal-row">
-                <span className="pnl-modal-label">Settlement transaction</span>
-                <a
-                  href={`https://stellar.expert/explorer/testnet/tx/${txHash.replace(/^0x/, "")}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="pnl-modal-link"
-                >
-                  <span>txn_{txHash.slice(0, 6)}...{txHash.slice(-6)}</span>
-                  <ExternalLink size={14} />
-                </a>
-              </div>
-            </>
+            <a className="pnl-modal-tx-link" href={txUrl} rel="noopener noreferrer" target="_blank">
+              <span>
+                <small>SETTLEMENT TX</small>
+                <strong>{compactTxHash}</strong>
+              </span>
+            </a>
           ) : null}
-        </div>
-
-        <div className="pnl-modal-footer">
-          <button
-            className="pnl-modal-btn-done"
-            onClick={onClose}
-            ref={doneButtonRef}
-            type="button"
-          >
-            Done
-          </button>
+          <p aria-live="polite" className="pnl-modal-share-status">
+            {shareStatus === "shared"
+              ? "PNL card image shared"
+              : shareStatus === "copied"
+                ? "PNL card image copied"
+                : shareStatus === "downloaded"
+                  ? "PNL card image downloaded"
+                  : ""}
+          </p>
         </div>
       </div>
     </div>
   );
 }
 
-function SettlementRow({ label, value }: { label: string; value: number }) {
-  const sign = settlementAmountSign(value);
-  return (
-    <div className="pnl-modal-row">
-      <span className="pnl-modal-label">{label}</span>
-      <span className={`pnl-modal-value ${valueClass(sign, "metric")}`}>
-        {formatSignedSettlementUsd(value)}
-      </span>
-    </div>
-  );
-}
-
-function valueClass(sign: -1 | 0 | 1, prefix = "pnl"): string {
-  if (sign > 0) return `${prefix}-positive`;
-  if (sign < 0) return `${prefix}-negative`;
+function valueClass(sign: -1 | 0 | 1): string {
+  if (sign > 0) return "pnl-positive";
+  if (sign < 0) return "pnl-negative";
   return "";
 }

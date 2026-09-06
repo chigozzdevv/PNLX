@@ -164,6 +164,7 @@ export function TradingPage() {
         closePrice,
         entryPrice,
         ...settlement,
+        initialMargin: position.collateral,
         marketId: position.marketId,
         side,
         size,

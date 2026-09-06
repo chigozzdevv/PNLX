@@ -95,6 +95,7 @@ export function PortfolioRoute() {
         closePrice,
         entryPrice,
         ...settlement,
+        initialMargin: position.collateral,
         marketId: position.marketId,
         side,
         size,
