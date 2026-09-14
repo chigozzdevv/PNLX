@@ -27,6 +27,17 @@ export function formatSignedSettlementUsd(value: number): string {
   })}`;
 }
 
+export function formatSignedPnlUsd(value: number): string {
+  const rounded = roundToUsdcPrecision(value);
+  if (Math.abs(rounded) < 0.01) {
+    return formatSignedSettlementUsd(rounded);
+  }
+  return `${rounded > 0 ? "+" : "−"}${formatUsd(Math.abs(rounded), {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+  })}`;
+}
+
 export function settlementAmountSign(value: number): -1 | 0 | 1 {
   const rounded = roundToUsdcPrecision(value);
   if (rounded === 0) return 0;

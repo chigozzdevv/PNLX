@@ -5,7 +5,7 @@ import { Share } from "lucide-react";
 import {
   formatNumber,
   formatPct,
-  formatSignedSettlementUsd,
+  formatSignedPnlUsd,
   settlementAmountSign,
 } from "@/lib/format";
 import { createPnlShareCardFile } from "@/lib/pnl-share-card";
@@ -201,7 +201,7 @@ export function PnlModal({
           <div className="pnl-modal-pnl-section">
             <span className="pnl-modal-pnl-label">PNL</span>
             <strong className={`pnl-modal-pnl-val ${valueClass(netPnlSign)}`}>
-              {formatSignedSettlementUsd(netRealizedPnl)}
+              {formatSignedPnlUsd(netRealizedPnl)}
             </strong>
             {pnlPercent === undefined ? null : (
               <span className={`pnl-modal-pnl-percent ${valueClass(netPnlSign)}`}>

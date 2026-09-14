@@ -1,4 +1,4 @@
-import { formatNumber, formatPct, formatSignedSettlementUsd } from "@/lib/format";
+import { formatNumber, formatPct, formatSignedPnlUsd } from "@/lib/format";
 
 const CARD_WIDTH = 1122;
 const CARD_HEIGHT = 1402;
@@ -23,7 +23,7 @@ export function pnlShareCardContent(input: PnlShareCardInput) {
     exit: formatNumber(input.closePrice, 4),
     fileName: `pnlx-${asset.toLowerCase()}-pnl.png`,
     market: `${asset}/USD`,
-    pnl: formatSignedSettlementUsd(input.netRealizedPnl),
+    pnl: formatSignedPnlUsd(input.netRealizedPnl),
     pnlPercent: input.pnlPercent === undefined ? undefined : formatPct(input.pnlPercent),
     side: `${input.side === "long" ? "Long" : "Short"} · Market`,
     txHash: txHash ? `${txHash.slice(0, 4)}...${txHash.slice(-4)}`.toUpperCase() : undefined,

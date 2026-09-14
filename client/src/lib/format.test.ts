@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  formatSignedPnlUsd,
   formatSignedSettlementUsd,
   formatUsdc,
   settlementAmountSign,
@@ -22,5 +23,11 @@ describe("settlement amount formatting", () => {
     expect(formatSignedSettlementUsd(0.00000004)).toBe("$0.00");
     expect(formatSignedSettlementUsd(-0.00000004)).toBe("$0.00");
     expect(settlementAmountSign(-0.00000004)).toBe(0);
+  });
+
+  test("keeps headline PNL compact without hiding sub-cent results", () => {
+    expect(formatSignedPnlUsd(2.894314)).toBe("+$2.89");
+    expect(formatSignedPnlUsd(-2.894314)).toBe("−$2.89");
+    expect(formatSignedPnlUsd(0.004)).toBe("+$0.004");
   });
 });
