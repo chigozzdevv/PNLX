@@ -20,28 +20,39 @@ async function pnlxRequest<T>(
   data?: unknown,
   token?: string,
 ): Promise<T> {
-  const response = await fetch(`/api/pnlx/${path.replace(/^\/+/, "")}`, {
-    body: data === undefined ? undefined : stringifyBody(data),
-    cache: "no-store",
-    headers: {
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-      ...(data === undefined ? {} : { "content-type": "application/json" }),
-    },
-    method,
-  });
-  const text = await response.text();
+  const requestBody = data === undefined ? undefined : stringifyBody(data);
+  let response: Response;
+  let text: string;
+  try {
+    response = await fetch(`/api/pnlx/${path.replace(/^\/+/, "")}`, {
+      body: requestBody,
+      cache: "no-store",
+      headers: {
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...(data === undefined ? {} : { "content-type": "application/json" }),
+      },
+      method,
+    });
+    text = await response.text();
+  } catch {
+    throw new Error("Trading service temporarily unavailable");
+  }
   const body = parseBody(text);
+
+  // Gateway pages can also arrive with a successful HTTP status.
+  if (typeof body === "string" || response.headers.get("content-type")?.includes("text/html")) {
+    throw new Error("Trading service temporarily unavailable");
+  }
 
   if (!response.ok) {
     const message =
       body &&
       typeof body === "object" &&
       "error" in body &&
-      typeof (body as { error: unknown }).error === "string"
+      typeof (body as { error: unknown }).error === "string" &&
+      !/<\/?[a-z][^>]*>|<!doctype/i.test((body as { error: string }).error)
         ? (body as { error: string }).error
-        : typeof body === "string" && body.trim()
-          ? body.trim()
-          : `PNLX API request failed with ${response.status}`;
+        : "Trading service temporarily unavailable";
     throw new Error(message);
   }
 

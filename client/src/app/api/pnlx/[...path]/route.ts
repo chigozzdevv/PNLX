@@ -44,11 +44,18 @@ async function proxyPnlx(request: NextRequest, context: RouteContext): Promise<R
       headers,
       method: request.method,
     });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "fetch failed";
+  } catch {
     return Response.json(
-      { error: `PNLX backend unavailable at ${target.origin}: ${detail}` },
-      { status: 502 },
+      { error: "Trading service temporarily unavailable" },
+      { status: 502, headers: { "cache-control": "no-store" } },
+    );
+  }
+
+  if (response.headers.get("content-type")?.includes("text/html")) {
+    await response.body?.cancel();
+    return Response.json(
+      { error: "Trading service temporarily unavailable" },
+      { status: response.ok ? 502 : response.status, headers: { "cache-control": "no-store" } },
     );
   }
 

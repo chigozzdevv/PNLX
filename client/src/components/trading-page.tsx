@@ -435,6 +435,7 @@ export function TradingPage() {
             cancellingOrderId={cancellingOrderId}
             closingPositionId={closingPositionId}
             loading={trading.loading}
+            unavailable={Boolean(trading.error)}
             onCancelOrder={handleCancelOrder}
             onClosePosition={handleClosePosition}
             onViewChange={setTableView}

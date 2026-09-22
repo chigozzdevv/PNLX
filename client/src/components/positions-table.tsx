@@ -22,6 +22,7 @@ interface PositionsTableProps {
   activity?: ServerOwnerActivitySnapshot[];
   activeView?: PositionsTableView;
   loading?: boolean;
+  unavailable?: boolean;
   closingPositionId?: string;
   cancellingOrderId?: string;
   actionMessage?: { tone: "error" | "success"; text: string };
@@ -43,6 +44,7 @@ export function PositionsTable({
   activeView,
   closingPositionId,
   loading = false,
+  unavailable = false,
   onCancelOrder,
   onClosePosition,
   onViewChange,
@@ -97,7 +99,7 @@ export function PositionsTable({
         <div className="positions-tabs" role="tablist" aria-label="Trade records">
           <TradeRecordTab
             active={view === "positions"}
-            count={openPositions.length}
+            count={unavailable ? undefined : openPositions.length}
             label="Positions"
             onClick={() => selectView("positions")}
             onKeyDown={(event) => handleTabKeyDown(event, "positions")}
@@ -105,7 +107,7 @@ export function PositionsTable({
           />
           <TradeRecordTab
             active={view === "orders"}
-            count={openOrderGroups.length}
+            count={unavailable ? undefined : openOrderGroups.length}
             label="Orders"
             onClick={() => selectView("orders")}
             onKeyDown={(event) => handleTabKeyDown(event, "orders")}
@@ -113,7 +115,7 @@ export function PositionsTable({
           />
           <TradeRecordTab
             active={view === "activity"}
-            count={visibleActivity.length}
+            count={unavailable ? undefined : visibleActivity.length}
             label="Activity"
             onClick={() => selectView("activity")}
             onKeyDown={(event) => handleTabKeyDown(event, "activity")}
@@ -137,7 +139,12 @@ export function PositionsTable({
         id={panelId(view)}
         role="tabpanel"
       >
-        {view === "positions" ? (
+        {unavailable ? (
+          <div className="trade-records-empty" role="status">
+            <strong>Unable to load records</strong>
+            <span>Please try again shortly.</span>
+          </div>
+        ) : view === "positions" ? (
           <PositionsView
             closingPositionId={closingPositionId}
             expandedRow={expandedRow}
