@@ -22,6 +22,7 @@ const note = {
   rhoDigest: hashFields("maker", ["rho"]),
   spendSecretDigest: hashFields("maker", ["spend"]),
   status: "available" as const,
+  token: "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
   walletAddress: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
 };
 
@@ -88,6 +89,15 @@ describe("maker note allocation", () => {
     );
     expect(repeated?.commitment).toBe(change?.commitment);
     expect(repeated?.noteNullifier).toBe(change?.noteNullifier);
+
+    const vaultedChange = buildMakerChangeNote(
+      { ...note, vaultAllocationId: "vault:allocation" },
+      payload.margin,
+      payload.intentCommitment,
+    );
+    expect(vaultedChange?.vaultAllocationId).toBe("vault:allocation");
+    expect(vaultedChange?.vaultParentCommitment).toBe(note.commitment);
+    expect(vaultedChange?.token).toBe(note.token);
 
     const privateVariant = buildMakerChangeNote(
       { ...note, spendSecretDigest: hashFields("maker", ["another-private-spend"]) },

@@ -130,7 +130,29 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
         url: env.matcherServiceUrl,
       })
     : createMatcher(executor);
-  const makerLiquidity = new MakerLiquidityService(executor, prover, onchain, env);
+  const vaultContractId = deployment?.contracts["liquidity-vault"];
+  const makerLiquidity = new MakerLiquidityService(
+    executor,
+    prover,
+    onchain,
+    env,
+    vaultContractId && env.collateralTokenContract
+      ? {
+          asset: env.collateralTokenContract,
+          readDeployedPrincipal: async () => {
+            const result = await relayer.readAsync({
+              kind: "contract-invoke",
+              payload: { contractId: vaultContractId, functionName: "deployed_principal", send: "no" },
+            });
+            const raw = result.output.trim();
+            const value = raw.startsWith('"') ? JSON.parse(raw) : raw;
+            if (!/^[0-9]+$/.test(String(value))) throw new Error("invalid vault deployed principal");
+            return BigInt(value);
+          },
+          vault: vaultContractId,
+        }
+      : undefined,
+  );
   const markets = new MarketsService(executor, oracle, env, onchain);
   const batchExecutor = createBatchExecutor(
     executor,

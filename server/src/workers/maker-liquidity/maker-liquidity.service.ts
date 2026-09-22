@@ -19,6 +19,10 @@ import {
   saveMakerNotes,
   type StoredMakerNoteRecord,
 } from "@/shared/maker-note-store";
+import {
+  eligibleVaultMakerNotes,
+  readVaultMakerAllocations,
+} from "@/shared/vault-maker-backing";
 import type { ServerEnv } from "@/config/env";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { OnchainRelay, OnchainRelayResult } from "@/workers/onchain/onchain.model";
@@ -41,6 +45,8 @@ type StoredMakerNote = StoredMakerNoteRecord & {
   walletAddress: string;
   lockedByIntentCommitment?: Hex;
   sourceIntentCommitment?: Hex;
+  vaultAllocationId?: string;
+  vaultParentCommitment?: Hex;
 };
 
 type MakerNoteAllocation = {
@@ -61,6 +67,11 @@ export class MakerLiquidityService {
     private readonly onchain: OnchainRelay | undefined,
     private readonly env: Pick<ServerEnv, "intentRegistryOnchainRequired"> &
       Partial<Pick<ServerEnv, "makerWalletAddress">>,
+    private readonly vaultBacking?: {
+      asset: string;
+      readDeployedPrincipal: () => Promise<bigint>;
+      vault: string;
+    },
   ) {}
 
   async ensureForMarket(input: {
@@ -92,6 +103,10 @@ export class MakerLiquidityService {
       .filter((intent) => !makerOwners.has(intent.ownerCommitment))
       .filter((intent) => this.executor.store.orderLifecycle.get(intent.intentCommitment)?.status === "open")
       .sort((left, right) => left.intentCommitment.localeCompare(right.intentCommitment));
+    if (openClientIntents.length === 0) return { created: 0, skipped: 0 };
+    const backing = this.env.makerWalletAddress
+      ? await this.currentVaultBacking()
+      : undefined;
 
     let created = 0;
     let skipped = 0;
@@ -107,7 +122,14 @@ export class MakerLiquidityService {
         continue;
       }
       const allocations = selectMakerNoteAllocations(
-        eligibleMakerNotes(currentNotes, this.env.makerWalletAddress),
+        this.env.makerWalletAddress
+          ? eligibleVaultMakerNotes(currentNotes, backing!.allocations, {
+              asset: backing!.asset,
+              deployedPrincipal: backing!.deployedPrincipal,
+              maker: this.env.makerWalletAddress.trim().toUpperCase(),
+              vault: backing!.vault,
+            })
+          : eligibleMakerNotes(currentNotes),
         payload,
       );
       if (allocations.length === 0) {
@@ -137,6 +159,21 @@ export class MakerLiquidityService {
     }
 
     return { created, skipped };
+  }
+
+  private async currentVaultBacking(): Promise<{
+    allocations: Awaited<ReturnType<typeof readVaultMakerAllocations>>;
+    asset: string;
+    deployedPrincipal: bigint;
+    vault: string;
+  }> {
+    if (!this.vaultBacking) throw new Error("vault maker backing is not configured");
+    const [allocations, deployedPrincipal] = await Promise.all([
+      readVaultMakerAllocations(),
+      this.vaultBacking.readDeployedPrincipal(),
+    ]);
+    return { allocations, asset: this.vaultBacking.asset,
+      deployedPrincipal, vault: this.vaultBacking.vault };
   }
 
   async finalizeSettlement(settlement: BatchSettlement): Promise<void> {
@@ -470,7 +507,12 @@ export function buildMakerChangeNote(
     source: "maker-change",
     spendSecretDigest,
     status: "available",
+    ...(note.token ? { token: note.token } : {}),
+    ...(note.shieldedPool ? { shieldedPool: note.shieldedPool } : {}),
     updatedAt: Date.now(),
+    ...(note.vaultAllocationId
+      ? { vaultAllocationId: note.vaultAllocationId, vaultParentCommitment: note.commitment }
+      : {}),
     walletAddress: note.walletAddress,
   };
 }
