@@ -37,7 +37,7 @@ type StoredMakerNote = StoredMakerNoteRecord & {
   ownerDigest: Hex;
   rhoDigest: Hex;
   spendSecretDigest: Hex;
-  status: "available" | "locked" | "spent";
+  status: "available" | "locked" | "withdrawing" | "spent";
   walletAddress: string;
   lockedByIntentCommitment?: Hex;
   sourceIntentCommitment?: Hex;
@@ -59,13 +59,17 @@ export class MakerLiquidityService {
     private readonly executor: ExecutorService,
     private readonly prover: ProverService,
     private readonly onchain: OnchainRelay | undefined,
-    private readonly env: Pick<ServerEnv, "intentRegistryOnchainRequired">,
+    private readonly env: Pick<ServerEnv, "intentRegistryOnchainRequired"> &
+      Partial<Pick<ServerEnv, "makerWalletAddress">>,
   ) {}
 
   async ensureForMarket(input: {
     batchId: string;
     marketId: string;
   }): Promise<MakerLiquidityRunResult> {
+    if (this.env.makerWalletAddress && input.marketId !== "xlm-usd-perp") {
+      return { created: 0, skipped: 0 };
+    }
     let notes = normalizeMakerNotes(await readMakerNotes());
     const unlocked = unlockStaleMakerLocks(notes, this.executor.store.intents);
     if (unlocked.changed) {
@@ -102,7 +106,10 @@ export class MakerLiquidityService {
         skipped += 1;
         continue;
       }
-      const allocations = selectMakerNoteAllocations(currentNotes, payload);
+      const allocations = selectMakerNoteAllocations(
+        eligibleMakerNotes(currentNotes, this.env.makerWalletAddress),
+        payload,
+      );
       if (allocations.length === 0) {
         skipped += 1;
         continue;
@@ -340,6 +347,16 @@ function normalizeMakerNotes(notes: StoredMakerNoteRecord[]): StoredMakerNote[] 
           note.walletAddress,
       )
     );
+}
+
+export function eligibleMakerNotes<T extends { walletAddress: string }>(
+  notes: T[],
+  walletAddress?: string,
+): T[] {
+  if (!walletAddress) return notes;
+  const expected = walletAddress.trim().toUpperCase();
+  if (!/^G[A-Z2-7]{55}$/.test(expected)) throw new Error("invalid maker wallet address");
+  return notes.filter((note) => note.walletAddress.trim().toUpperCase() === expected);
 }
 
 function noteOwnerCommitment(note: StoredMakerNote): Hex {

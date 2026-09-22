@@ -17,6 +17,7 @@
   },
   "scripts": {
     "build:contracts": "stellar contract build --manifest-path contracts/Cargo.toml --out-dir contracts/target/stellar --locked --optimize=false",
+    "build:liquidity-vault": "stellar contract build --manifest-path contracts/Cargo.toml --package liquidity-vault --out-dir contracts/target/stellar --locked --optimize=false",
     "build:risc0-verifier-stack": "cd vendor/stellar-risc0-verifier && stellar contract build --optimize",
     "client:build": "bun run --filter @pnlx/client build",
     "client:dev": "bun run --filter @pnlx/client dev",
@@ -24,6 +25,7 @@
     "collateral:setup-test-usdc": "bun scripts/collateral/setup-test-usdc.ts",
     "deploy:dry": "bun scripts/deploy/run.ts --dry-run",
     "deploy:finalize": "bun scripts/deploy/finalize.ts",
+    "deploy:liquidity-vault": "bun scripts/deploy/liquidity-vault.ts",
     "deploy:local": "bun scripts/deploy/run.ts --network local --source pnlx-admin --setup-local --build",
     "docker:down": "docker compose down",
     "docker:infra": "docker compose up -d mongo redis",
@@ -38,6 +40,7 @@
     "smoke:custody": "bun scripts/smoke/custody.ts",
     "smoke:custody:prepare": "bun scripts/smoke/custody.ts --prepare-only",
     "smoke:trade": "bun scripts/smoke/trade.ts",
+    "maker:withdraw-notes": "bun scripts/operations/withdraw-maker-notes.ts",
     "state:migrate-mongo": "bun scripts/operations/migrate-protocol-state.ts",
     "test": "bun test",
     "test:circuits": "bash scripts/ci/test-noir.sh",

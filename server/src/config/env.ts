@@ -32,6 +32,7 @@ export interface ServerEnv {
   liquidationAutomationIntervalMs: number;
   matcherServiceUrl: string;
   matcherServiceToken: string;
+  makerWalletAddress?: string;
   matcherApiToken: string;
   matcherProvider: "risc0";
   matcherPort: number;
@@ -141,6 +142,7 @@ export function loadEnv(): ServerEnv {
     liquidationAutomationIntervalMs: Number(value("LIQUIDATION_AUTOMATION_INTERVAL_MS", "5000")),
     matcherServiceUrl: value("MATCHER_SERVICE_URL", value("EXTERNAL_MATCHER_URL", "")),
     matcherServiceToken: value("MATCHER_SERVICE_TOKEN", value("EXTERNAL_MATCHER_TOKEN", "")),
+    makerWalletAddress: value("MAKER_WALLET_ADDRESS", "") || undefined,
     matcherApiToken: value("MATCHER_API_TOKEN", ""),
     matcherProvider: matcherProvider(value("MATCHER_PROVIDER", "risc0")),
     matcherPort: Number(value("MATCHER_PORT", "4102")),

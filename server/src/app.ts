@@ -9,6 +9,7 @@ import { registerHealthRoute } from "@/features/health/health.route";
 import { registerIntentsRoute } from "@/features/intents/intents.route";
 import { registerLiquidationAutomationRoute } from "@/features/liquidation-automation/liquidation-automation.route";
 import { registerLiquidationsRoute } from "@/features/liquidations/liquidations.route";
+import { registerLiquidityVaultRoute } from "@/features/liquidity-vault/liquidity-vault.route";
 import { registerMarketsRoute } from "@/features/markets/markets.route";
 import { MarketsService } from "@/features/markets/markets.service";
 import { registerNotesRoute } from "@/features/notes/notes.route";
@@ -176,6 +177,9 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
     witnessRoutesEnabled: env.serverWitnessRoutesEnabled,
   });
   registerRelaysRoute(router, relayer, env, executor);
+  if (deployment?.contracts["liquidity-vault"]) {
+    registerLiquidityVaultRoute(router, relayer, deployment);
+  }
   registerLiquidationsRoute(router, executor, prover, env, onchain, {
     witnessRoutesEnabled: env.serverWitnessRoutesEnabled,
   });

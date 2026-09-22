@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "liquidity-vault",
   "shielded-pool",
   "intent-registry",
   "intent-registry-interface",

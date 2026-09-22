@@ -72,6 +72,29 @@ export async function saveMakerNotes(notes: StoredMakerNoteRecord[]): Promise<vo
   }
 }
 
+export async function transitionMakerNoteStatus(
+  commitment: string,
+  from: string,
+  to: string,
+): Promise<boolean> {
+  const config = requiredMongoConfig();
+  const client = new MongoClient(config.uri);
+  try {
+    await client.connect();
+    const result = await client.db(config.database).collection<MakerNoteDocument>(config.collection).updateOne(
+      {
+        _id: makerNoteDocumentId(config.namespace, commitment),
+        namespace: config.namespace,
+        status: from,
+      },
+      { $set: { status: to, updatedAt: Date.now() } },
+    );
+    return result.modifiedCount === 1;
+  } finally {
+    await client.close();
+  }
+}
+
 function requiredMongoConfig(): {
   collection: string;
   database: string;

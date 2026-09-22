@@ -6,6 +6,8 @@ import {
 import type { PrivateMatchIntent } from "@pnlx/protocol-types";
 import {
   buildMakerChangeNote,
+  eligibleMakerNotes,
+  MakerLiquidityService,
   selectMakerNoteAllocations,
 } from "@/workers/maker-liquidity/maker-liquidity.service";
 
@@ -36,6 +38,24 @@ const payload: PrivateMatchIntent = {
 };
 
 describe("maker note allocation", () => {
+  test("uses only notes from the configured maker account", () => {
+    const anotherWallet = "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA";
+    const otherNote = { ...note, walletAddress: anotherWallet };
+    expect(eligibleMakerNotes([note, otherNote], note.walletAddress)).toEqual([note]);
+    expect(eligibleMakerNotes([note, otherNote])).toHaveLength(2);
+  });
+
+  test("does not use the vault maker account outside XLM/USD", async () => {
+    const service = new MakerLiquidityService(
+      undefined as never,
+      undefined as never,
+      undefined,
+      { intentRegistryOnchainRequired: true, makerWalletAddress: note.walletAddress },
+    );
+    expect(await service.ensureForMarket({ batchId: "other-market", marketId: "btc-usd-perp" }))
+      .toEqual({ created: 0, skipped: 0 });
+  });
+
   test("uses only required margin from a larger maker note", () => {
     const [allocation] = selectMakerNoteAllocations([note], payload);
     expect(allocation.margin).toBe(payload.margin);
