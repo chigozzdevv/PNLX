@@ -58,6 +58,30 @@ import { createRelayer } from "@/workers/relayer/relayer.worker";
 import { prepareRisc0SettlementDraft } from "@/workers/risc0-matcher/risc0-proof";
 
 describe("support workers", () => {
+  test("uses the relayer's configured source for custody reads across deployment hosts", () => {
+    const reads: Array<{ payload: { source?: string } }> = [];
+    const onchain = createOnchainRelay({
+      read(request: { payload: { source?: string; functionName: string } }) {
+        reads.push(request);
+        return { output: request.payload.functionName === "token_digest"
+          ? JSON.stringify(`0x${"ab".repeat(32)}`)
+          : '"123"' };
+      },
+    } as never, {
+      deployment: {
+        contracts: { "shielded-pool": "pool" },
+        network: "testnet",
+        source: "alias-only-on-deployer-host",
+        sourceAddress: "GADMIN",
+        verifiers: {},
+      },
+      enabled: true,
+    });
+    expect(onchain.tokenDigest("USDC")).toBe(`0x${"ab".repeat(32)}`);
+    expect(onchain.assetBalance("USDC", "GOWNER")).toBe(123n);
+    expect(reads.every((read) => read.payload.source === undefined)).toBe(true);
+  });
+
   test("preserves the authenticated Hermes base path", () => {
     expect(String(hermesEndpoint(
       "https://pyth.dourolabs.app/hermes",

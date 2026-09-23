@@ -124,7 +124,7 @@ export class OnchainRelayService implements OnchainRelay {
         contractId: contractId(deployment, "shielded-pool"),
         functionName: "token_digest",
         send: "no",
-        source: source ?? deployment.source,
+        ...(source ? { source } : {}),
       },
     });
     return parseHex32(result.output, `token digest for ${token}`);
@@ -143,7 +143,7 @@ export class OnchainRelayService implements OnchainRelay {
           contractId: token,
           functionName: "balance",
           send: "no",
-          source: source ?? deployment.source,
+          ...(source ? { source } : {}),
         },
       });
       return parseInteger(result.output, `asset balance for ${account}`);
