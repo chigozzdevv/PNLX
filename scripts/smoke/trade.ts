@@ -126,11 +126,12 @@ const smokeTradeMargin = parseSmokeTradeMargin();
 const vaultAllocationTx = argValue("--vault-allocation-tx");
 const vaultMakerCommitment = argValue("--maker-commitment");
 const takerCommitment = argValue("--taker-commitment");
+const resumeVaultBatch = argValue("--resume-vault-batch");
 const results = [];
 
 for (const asset of marketAssets) {
   results.push(vaultAllocationTx
-    ? await runVaultMarketSmoke(asset, vaultAllocationTx, vaultMakerCommitment, takerCommitment)
+    ? await runVaultMarketSmoke(asset, vaultAllocationTx, vaultMakerCommitment, takerCommitment, resumeVaultBatch)
     : await runMarketSmoke(asset));
 }
 
@@ -297,6 +298,7 @@ async function runVaultMarketSmoke(
   allocationTx: string,
   makerNoteCommitment?: string,
   takerNoteCommitment?: string,
+  resumeBatch?: string,
 ): Promise<Record<string, unknown>> {
   if (asset.marketId !== "xlm-usd-perp" || !makerNoteCommitment || !takerNoteCommitment) {
     throw new Error("vault trade requires --markets=XLM, --maker-commitment, and --taker-commitment");
@@ -304,6 +306,9 @@ async function runVaultMarketSmoke(
   const vault = readDeployment().contracts["liquidity-vault"];
   if (!vault) throw new Error("liquidity vault is not deployed");
   const vaultAllocationId = allocationId(vault, normalizedHash(allocationTx));
+  if (resumeBatch) {
+    return resumeVaultMarketSmoke(asset, vault, vaultAllocationId, resumeBatch, makerNoteCommitment, takerNoteCommitment);
+  }
   const notes = await readMakerNotes() as StoredMakerNote[];
   const longNote = notes.find((note) => note.commitment === makerNoteCommitment &&
     note.vaultAllocationId === vaultAllocationId &&
@@ -364,8 +369,8 @@ async function runVaultMarketSmoke(
     }
     throw error;
   }
-  await registerAccountKey(makerSession.ownerCommitment);
-  await registerAccountKey(adminSession.ownerCommitment, adminSession);
+  await ensureAccountKey(makerSession.ownerCommitment);
+  await ensureAccountKey(adminSession.ownerCommitment, adminSession);
   await waitForExternalMatcherPersistence();
   const settlementResult = await settleBatch(batchId, asset.marketId);
   const settlement = settlementResult.settlement as Record<string, unknown>;
@@ -384,6 +389,95 @@ async function runVaultMarketSmoke(
     symbol: asset.symbol,
     batchId,
     entryPrice: entryPrice.toString(),
+    longIntent: longRecord.intentCommitment,
+    makerClose,
+    makerNote: longNote.commitment,
+    settlementDigest: settlement.settlementDigest,
+    settlementTxHash: settlement.settlementTxHash,
+    shortIntent: shortRecord.intentCommitment,
+    takerClose,
+    takerNote: shortNote.commitment,
+    vaultAllocationId,
+  };
+}
+
+async function resumeVaultMarketSmoke(
+  asset: SupportedPerpAsset,
+  vault: string,
+  vaultAllocationId: string,
+  batchId: string,
+  makerNoteCommitment: string,
+  takerNoteCommitment: string,
+): Promise<Record<string, unknown>> {
+  const notes = await readMakerNotes() as StoredMakerNote[];
+  const longNote = notes.find((note) => note.commitment === makerNoteCommitment &&
+    note.vaultAllocationId === vaultAllocationId && note.walletAddress === makerSession.address &&
+    note.status === "locked");
+  const shortNote = notes.find((note) => note.commitment === takerNoteCommitment &&
+    note.walletAddress === adminSession.address && !note.vaultAllocationId && note.status === "locked");
+  if (!longNote || !shortNote || longNote.amount !== shortNote.amount ||
+    !longNote.lockedByIntentCommitment || !shortNote.lockedByIntentCommitment) {
+    throw new Error("resume requires the exact locked vault-maker and independent taker notes");
+  }
+  const allocation = (await readVaultMakerAllocations()).find((item) => item.id === vaultAllocationId);
+  const principal = BigInt(JSON.parse(invoke(vault, "deployed_principal", [])));
+  if (!allocation || allocation.status !== "outstanding" ||
+    allocation.maker !== makerSession.address || allocation.asset !== env.collateralTokenContract ||
+    !allocation.noteCommitments.includes(longNote.commitment) ||
+    BigInt(allocation.amount) !== principal || principal < BigInt(longNote.amount)) {
+    throw new Error("locked maker note is not backed by the outstanding vault principal");
+  }
+  const longRecord = runtime.executor.store.intents.get(longNote.lockedByIntentCommitment);
+  const shortRecord = runtime.executor.store.intents.get(shortNote.lockedByIntentCommitment);
+  const longPayload = runtime.executor.store.privateMatchIntents.get(longNote.lockedByIntentCommitment);
+  const shortPayload = runtime.executor.store.privateMatchIntents.get(shortNote.lockedByIntentCommitment);
+  const longOrder = runtime.executor.store.orderLifecycle.get(longNote.lockedByIntentCommitment);
+  const shortOrder = runtime.executor.store.orderLifecycle.get(shortNote.lockedByIntentCommitment);
+  if (!longRecord || !shortRecord || !longPayload || !shortPayload ||
+    longRecord.batchId !== batchId || shortRecord.batchId !== batchId ||
+    longPayload.batchId !== batchId || shortPayload.batchId !== batchId ||
+    longRecord.marketId !== asset.marketId || shortRecord.marketId !== asset.marketId ||
+    longOrder?.status !== "open" || shortOrder?.status !== "open" ||
+    longPayload.ownerCommitment !== makerSession.ownerCommitment ||
+    shortPayload.ownerCommitment !== adminSession.ownerCommitment ||
+    longPayload.noteNullifier !== longNote.noteNullifier ||
+    shortPayload.noteNullifier !== shortNote.noteNullifier ||
+    longPayload.margin !== BigInt(longNote.amount) || shortPayload.margin !== BigInt(shortNote.amount) ||
+    longPayload.signedSize <= 0n || shortPayload.signedSize !== -longPayload.signedSize ||
+    longPayload.limitPrice !== shortPayload.limitPrice ||
+    runtime.executor.store.settlements.has(`${asset.marketId}:${batchId}`)) {
+    throw new Error("existing batch is not the two open, opposite, unsettled intents for these notes");
+  }
+  const market = runtime.executor.store.markets.get(asset.marketId);
+  if (!market || market.oraclePrice !== longPayload.limitPrice) {
+    throw new Error("market oracle price changed since the submitted intents");
+  }
+  await ensureAccountKey(makerSession.ownerCommitment);
+  await ensureAccountKey(adminSession.ownerCommitment, adminSession);
+  await waitForExternalMatcherPersistence();
+  const settlementResult = await settleBatch(batchId, asset.marketId);
+  const settlement = settlementResult.settlement as Record<string, unknown>;
+  await spendLockedMakerNotes([longRecord.intentCommitment, shortRecord.intentCommitment]);
+  const positionCommitments = parseHexList(settlement.newCommitments, "settlement.newCommitments");
+  const closeInput = {
+    batchId,
+    entryPrice: longPayload.limitPrice,
+    fundingIndex: market.fundingIndex,
+    margin: longPayload.margin,
+    marketId: asset.marketId,
+    positionCommitments,
+    size: longPayload.signedSize,
+  };
+  const makerClose = await closeManualPosition({
+    ...closeInput, note: longNote, owner: makerSession, record: longRecord, side: "long", vaultAllocationId,
+  });
+  const takerClose = await closeManualPosition({
+    ...closeInput, note: shortNote, owner: adminSession, record: shortRecord, side: "short",
+  });
+  return {
+    symbol: asset.symbol,
+    batchId,
+    entryPrice: longPayload.limitPrice.toString(),
     longIntent: longRecord.intentCommitment,
     makerClose,
     makerNote: longNote.commitment,
@@ -579,6 +673,10 @@ async function registerAccountKey(owner: Hex, session: SmokeAuthSession = makerS
     ownerCommitment: owner,
     publicKey: rawP256PublicKey(),
   }, session.headers);
+}
+
+async function ensureAccountKey(owner: Hex, session: SmokeAuthSession = makerSession): Promise<void> {
+  if (!runtime.executor.store.accountEncryptionKey(owner)) await registerAccountKey(owner, session);
 }
 
 async function waitForExternalMatcherPersistence(): Promise<void> {
