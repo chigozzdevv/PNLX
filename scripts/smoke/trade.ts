@@ -449,8 +449,11 @@ async function resumeVaultMarketSmoke(
     throw new Error("existing batch is not the two open, opposite, unsettled intents for these notes");
   }
   const market = runtime.executor.store.markets.get(asset.marketId);
-  if (!market || market.oraclePrice !== longPayload.limitPrice) {
-    throw new Error("market oracle price changed since the submitted intents");
+  if (!market || market.fundingIndex !== 0n ||
+    (market.oraclePrice > longPayload.limitPrice
+      ? market.oraclePrice - longPayload.limitPrice
+      : longPayload.limitPrice - market.oraclePrice) > longPayload.limitPrice / 100n) {
+    throw new Error("market funding changed or price moved more than 1% since submission");
   }
   await ensureAccountKey(makerSession.ownerCommitment);
   await ensureAccountKey(adminSession.ownerCommitment, adminSession);
