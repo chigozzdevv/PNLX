@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assertSuccessfulTransaction } from "../../scripts/operations/register-vault-maker-note";
+import { assertSuccessfulTransaction, sameHex32 } from "../../scripts/operations/register-vault-maker-note";
 import {
   allocationId,
   eligibleVaultMakerNotes,
@@ -67,6 +67,11 @@ describe("vault maker note eligibility", () => {
 });
 
 describe("vault backing transaction checks", () => {
+  test("compares Stellar CLI digests with or without the 0x prefix", () => {
+    expect(sameHex32('a'.repeat(64), `0x${'a'.repeat(64)}`)).toBe(true);
+    expect(sameHex32('a'.repeat(64), `0x${'b'.repeat(64)}`)).toBe(false);
+  });
+
   test("requires a confirmed transaction with the requested hash", async () => {
     const success = (async () => Response.json({ result: { ledger: 100, status: "SUCCESS", txHash } })) as typeof fetch;
     await expect(assertSuccessfulTransaction("https://rpc.example", txHash, success)).resolves.toBe(100);

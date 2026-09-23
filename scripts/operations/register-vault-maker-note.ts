@@ -74,7 +74,7 @@ export async function register(argv: string[]): Promise<void> {
     contractRead(relayer, poolId, "token_digest", ["--token", env.collateralTokenContract]),
   ]);
   if (hasCommitment !== true || spent !== false ||
-    String(assetDigest).toLowerCase() !== String(note.assetDigest).toLowerCase()) {
+    !sameHex32(String(assetDigest), String(note.assetDigest))) {
     throw new Error("maker note commitment, nullifier, or asset does not match the shielded pool");
   }
 
@@ -129,6 +129,10 @@ async function contractRead(
   } catch {
     return result.output.trim();
   }
+}
+
+export function sameHex32(left: string, right: string): boolean {
+  return stripHex(left).toLowerCase() === stripHex(right).toLowerCase();
 }
 
 function stripHex(value: string): string {
