@@ -412,9 +412,10 @@ async function resumeVaultMarketSmoke(
   const notes = await readMakerNotes() as StoredMakerNote[];
   const longNote = notes.find((note) => note.commitment === makerNoteCommitment &&
     note.vaultAllocationId === vaultAllocationId && note.walletAddress === makerSession.address &&
-    note.status === "locked");
+    (note.status === "locked" || note.status === "spent"));
   const shortNote = notes.find((note) => note.commitment === takerNoteCommitment &&
-    note.walletAddress === adminSession.address && !note.vaultAllocationId && note.status === "locked");
+    note.walletAddress === adminSession.address && !note.vaultAllocationId &&
+    (note.status === "locked" || note.status === "spent"));
   if (!longNote || !shortNote || longNote.amount !== shortNote.amount ||
     !longNote.lockedByIntentCommitment || !shortNote.lockedByIntentCommitment) {
     throw new Error("resume requires the exact locked vault-maker and independent taker notes");
@@ -433,11 +434,11 @@ async function resumeVaultMarketSmoke(
   const shortPayload = runtime.executor.store.privateMatchIntents.get(shortNote.lockedByIntentCommitment);
   const longOrder = runtime.executor.store.orderLifecycle.get(longNote.lockedByIntentCommitment);
   const shortOrder = runtime.executor.store.orderLifecycle.get(shortNote.lockedByIntentCommitment);
+  const existingSettlement = runtime.executor.store.settlements.get(`${asset.marketId}:${batchId}`);
   if (!longRecord || !shortRecord || !longPayload || !shortPayload ||
     longRecord.batchId !== batchId || shortRecord.batchId !== batchId ||
     longPayload.batchId !== batchId || shortPayload.batchId !== batchId ||
     longRecord.marketId !== asset.marketId || shortRecord.marketId !== asset.marketId ||
-    longOrder?.status !== "open" || shortOrder?.status !== "open" ||
     longPayload.ownerCommitment !== makerSession.ownerCommitment ||
     shortPayload.ownerCommitment !== adminSession.ownerCommitment ||
     longPayload.noteNullifier !== longNote.noteNullifier ||
@@ -445,8 +446,14 @@ async function resumeVaultMarketSmoke(
     longPayload.margin !== BigInt(longNote.amount) || shortPayload.margin !== BigInt(shortNote.amount) ||
     longPayload.signedSize <= 0n || shortPayload.signedSize !== -longPayload.signedSize ||
     longPayload.limitPrice !== shortPayload.limitPrice ||
-    runtime.executor.store.settlements.has(`${asset.marketId}:${batchId}`)) {
-    throw new Error("existing batch is not the two open, opposite, unsettled intents for these notes");
+    (existingSettlement
+      ? (longOrder?.status !== "filled" || shortOrder?.status !== "filled" ||
+        existingSettlement.fillCount !== 2 || !existingSettlement.settlementTxHash ||
+        !existingSettlement.spentNullifiers.includes(longNote.noteNullifier) ||
+        !existingSettlement.spentNullifiers.includes(shortNote.noteNullifier))
+      : (longNote.status !== "locked" || shortNote.status !== "locked" ||
+        longOrder?.status !== "open" || shortOrder?.status !== "open"))) {
+    throw new Error("existing batch does not match the exact vault-maker and taker intents");
   }
   const market = runtime.executor.store.markets.get(asset.marketId);
   if (!market || market.fundingIndex !== 0n ||
@@ -455,13 +462,25 @@ async function resumeVaultMarketSmoke(
       : longPayload.limitPrice - market.oraclePrice) > longPayload.limitPrice / 100n) {
     throw new Error("market funding changed or price moved more than 1% since submission");
   }
-  await ensureAccountKey(makerSession.ownerCommitment);
-  await ensureAccountKey(adminSession.ownerCommitment, adminSession);
-  await waitForExternalMatcherPersistence();
-  const settlementResult = await settleBatch(batchId, asset.marketId);
-  const settlement = settlementResult.settlement as Record<string, unknown>;
+  let settlement: Record<string, unknown>;
+  if (existingSettlement) {
+    settlement = existingSettlement as unknown as Record<string, unknown>;
+  } else {
+    await ensureAccountKey(makerSession.ownerCommitment);
+    await ensureAccountKey(adminSession.ownerCommitment, adminSession);
+    await waitForExternalMatcherPersistence();
+    const settlementResult = await settleBatch(batchId, asset.marketId);
+    settlement = settlementResult.settlement as Record<string, unknown>;
+  }
   await spendLockedMakerNotes([longRecord.intentCommitment, shortRecord.intentCommitment]);
   const positionCommitments = parseHexList(settlement.newCommitments, "settlement.newCommitments");
+  if (positionCommitments.length !== 2 ||
+    ![longRecord.intentCommitment, shortRecord.intentCommitment].every((intentCommitment) =>
+      [...runtime.executor.store.positionLifecycle.values()].some((position) =>
+        position.batchId === batchId && position.sourceIntentCommitment === intentCommitment &&
+        position.status === "open" && positionCommitments.includes(position.positionCommitment)))) {
+    throw new Error("settled batch did not create the two expected open positions");
+  }
   const closeInput = {
     batchId,
     entryPrice: longPayload.limitPrice,
@@ -853,6 +872,7 @@ async function closeManualPosition(input: {
     assetId: "usdc",
     amount: closeSettlement.newMargin,
     owner: input.owner.address,
+    ownerDigest: position.ownerDigest,
     spendSecret: `${positionNullifier}:close-margin-spend`,
     rho: `${positionNullifier}:close-margin-rho`,
     blinding: `${positionNullifier}:close-margin-blinding`,
@@ -994,6 +1014,7 @@ async function closeLongTakeProfit(input: {
     assetId: "usdc",
     amount: closeSettlement.newMargin,
     owner: input.ownerAddress,
+    ownerDigest: position.position.ownerDigest,
     spendSecret: `${positionNullifier}:close-margin-spend`,
     rho: `${positionNullifier}:close-margin-rho`,
     blinding: `${positionNullifier}:close-margin-blinding`,
