@@ -30,6 +30,12 @@ import {
   readMakerNotes,
   saveMakerNotes,
 } from "@/shared/maker-note-store";
+import {
+  allocationId,
+  eligibleVaultMakerNotes,
+  normalizedHash,
+  readVaultMakerAllocations,
+} from "@/shared/vault-maker-backing";
 
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const ED25519_SECRET_KEY_VERSION = 18 << 3;
@@ -103,6 +109,8 @@ type StoredMakerNote = {
   walletAddress: string;
   depositTxHash?: Hex | string;
   lockedByIntentCommitment?: Hex;
+  vaultAllocationId?: string;
+  vaultParentCommitment?: Hex;
 };
 
 configureSmokeEnvironment();
@@ -115,10 +123,15 @@ const adminSession = await authSessionFor(env.stellarSource);
 const makerSession = await authSessionFor(makerSource);
 const marketAssets = resolveMarketAssets();
 const smokeTradeMargin = parseSmokeTradeMargin();
+const vaultAllocationTx = argValue("--vault-allocation-tx");
+const vaultMakerCommitment = argValue("--maker-commitment");
+const takerCommitment = argValue("--taker-commitment");
 const results = [];
 
 for (const asset of marketAssets) {
-  results.push(await runMarketSmoke(asset));
+  results.push(vaultAllocationTx
+    ? await runVaultMarketSmoke(asset, vaultAllocationTx, vaultMakerCommitment, takerCommitment)
+    : await runMarketSmoke(asset));
 }
 
 console.log(
@@ -279,6 +292,110 @@ async function runMarketSmoke(asset: SupportedPerpAsset): Promise<Record<string,
   };
 }
 
+async function runVaultMarketSmoke(
+  asset: SupportedPerpAsset,
+  allocationTx: string,
+  makerNoteCommitment?: string,
+  takerNoteCommitment?: string,
+): Promise<Record<string, unknown>> {
+  if (asset.marketId !== "xlm-usd-perp" || !makerNoteCommitment || !takerNoteCommitment) {
+    throw new Error("vault trade requires --markets=XLM, --maker-commitment, and --taker-commitment");
+  }
+  const vault = readDeployment().contracts["liquidity-vault"];
+  if (!vault) throw new Error("liquidity vault is not deployed");
+  const vaultAllocationId = allocationId(vault, normalizedHash(allocationTx));
+  const notes = await readMakerNotes() as StoredMakerNote[];
+  const longNote = notes.find((note) => note.commitment === makerNoteCommitment &&
+    note.vaultAllocationId === vaultAllocationId &&
+    note.walletAddress === makerSession.address && note.status === "available");
+  const shortNote = notes.find((note) => note.commitment === takerNoteCommitment &&
+    note.walletAddress === adminSession.address && note.status === "available" &&
+    !note.vaultAllocationId);
+  if (!longNote || !shortNote || longNote.amount !== shortNote.amount) {
+    throw new Error("exact available vault-maker and independent taker notes are required");
+  }
+  const deployedPrincipal = BigInt(JSON.parse(invoke(vault, "deployed_principal", [])));
+  const eligible = eligibleVaultMakerNotes(notes, await readVaultMakerAllocations(), {
+    asset: env.collateralTokenContract,
+    deployedPrincipal,
+    maker: makerSession.address,
+    vault,
+  });
+  if (!eligible.some((note) => note.commitment === longNote.commitment)) {
+    throw new Error("selected maker note is not backed by the outstanding vault allocation");
+  }
+  const existingOpenOrders = [...runtime.executor.store.orderLifecycle.values()]
+    .filter((order) => order.marketId === asset.marketId && order.status === "open");
+  if (existingOpenOrders.length > 0) {
+    throw new Error("vault trade requires an empty XLM/USD order book");
+  }
+  const markets = (await get("/markets")).markets as Array<Record<string, string>>;
+  const market = markets.find((item) => item.marketId === asset.marketId);
+  if (!market) throw new Error("XLM/USD market is unavailable");
+  const entryPrice = BigInt(market.oraclePrice);
+  const fundingIndex = BigInt(market.fundingIndex ?? "0");
+  const margin = BigInt(longNote.amount);
+  const size = margin * PRICE_SCALE / entryPrice;
+  if (size <= 0n) throw new Error("trade size is zero");
+  const batchId = `vault-trade-${Date.now()}`;
+  const longIntent = intent(asset, batchId, makerSession.address, "long",
+    longNote.noteNullifier, size, margin, entryPrice);
+  const shortIntent = intent(asset, batchId, adminSession.address, "short",
+    shortNote.noteNullifier, size, margin, entryPrice);
+
+  const longValidity = proveIntentValidity(longIntent, noteForProof(longNote),
+    await marginMembership(longNote.commitment));
+  const shortValidity = proveIntentValidity(shortIntent, noteForProof(shortNote),
+    await marginMembership(shortNote.commitment, adminSession));
+  const longRecord = await submitPrivateIntent(longIntent, longValidity);
+  await lockMakerNote(longNote.commitment, longRecord.intentCommitment);
+  let shortRecord: IntentRecord;
+  try {
+    shortRecord = await submitPrivateIntent(shortIntent, shortValidity, adminSession);
+    await lockMakerNote(shortNote.commitment, shortRecord.intentCommitment);
+  } catch (error) {
+    try {
+      await post("/orders/cancel", { intentCommitment: longRecord.intentCommitment }, makerSession.headers);
+      await unlockMakerNotes([longRecord.intentCommitment]);
+    } catch (cancelError) {
+      throw new Error(`taker submission failed and maker order could not be cancelled: ${String(cancelError)}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  await registerAccountKey(makerSession.ownerCommitment);
+  await registerAccountKey(adminSession.ownerCommitment, adminSession);
+  await waitForExternalMatcherPersistence();
+  const settlementResult = await settleBatch(batchId, asset.marketId);
+  const settlement = settlementResult.settlement as Record<string, unknown>;
+  await spendLockedMakerNotes([longRecord.intentCommitment, shortRecord.intentCommitment]);
+  const positionCommitments = parseHexList(settlement.newCommitments, "settlement.newCommitments");
+  const makerClose = await closeManualPosition({
+    batchId, entryPrice, fundingIndex, margin, marketId: asset.marketId,
+    note: longNote, owner: makerSession, positionCommitments, record: longRecord, side: "long", size,
+    vaultAllocationId,
+  });
+  const takerClose = await closeManualPosition({
+    batchId, entryPrice, fundingIndex, margin, marketId: asset.marketId,
+    note: shortNote, owner: adminSession, positionCommitments, record: shortRecord, side: "short", size,
+  });
+  return {
+    symbol: asset.symbol,
+    batchId,
+    entryPrice: entryPrice.toString(),
+    longIntent: longRecord.intentCommitment,
+    makerClose,
+    makerNote: longNote.commitment,
+    settlementDigest: settlement.settlementDigest,
+    settlementTxHash: settlement.settlementTxHash,
+    shortIntent: shortRecord.intentCommitment,
+    takerClose,
+    takerNote: shortNote.commitment,
+    vaultAllocationId,
+  };
+}
+
 function configureSmokeEnvironment(): void {
   const baseEnv = loadEnv();
   const deployment = readDeploymentFile(baseEnv);
@@ -317,6 +434,8 @@ function storedNoteFromCircuit(
     status: StoredMakerNote["status"];
     token: string;
     walletAddress: string;
+    vaultAllocationId?: string;
+    vaultParentCommitment?: Hex;
   },
 ): StoredMakerNote {
   const now = Date.now();
@@ -338,6 +457,8 @@ function storedNoteFromCircuit(
     token: input.token,
     updatedAt: now,
     walletAddress: input.walletAddress,
+    ...(input.vaultAllocationId ? { vaultAllocationId: input.vaultAllocationId } : {}),
+    ...(input.vaultParentCommitment ? { vaultParentCommitment: input.vaultParentCommitment } : {}),
   };
 }
 
@@ -354,8 +475,11 @@ function noteForProof(note: StoredMakerNote): CircuitMarginNote {
   };
 }
 
-async function marginMembership(commitment: Hex): Promise<MarginMembershipProof> {
-  const response = await get(`/notes/membership?commitment=${encodeURIComponent(commitment)}`, makerSession.headers);
+async function marginMembership(
+  commitment: Hex,
+  session: SmokeAuthSession = makerSession,
+): Promise<MarginMembershipProof> {
+  const response = await get(`/notes/membership?commitment=${encodeURIComponent(commitment)}`, session.headers);
   const note = response.note as { membershipProof: MarginMembershipProof };
   return note.membershipProof;
 }
@@ -432,6 +556,7 @@ function proveIntentValidity(
 async function submitPrivateIntent(
   tradeIntent: TradeIntent,
   validity: IntentValidityRecord,
+  session: SmokeAuthSession = makerSession,
 ): Promise<IntentRecord> {
   return await post("/intents", {
     intent: {
@@ -445,15 +570,15 @@ async function submitPrivateIntent(
       currentBatch: validity.currentBatch.toString(),
       expiryBatch: validity.expiryBatch.toString(),
     },
-  }, makerSession.headers) as unknown as IntentRecord;
+  }, session.headers) as unknown as IntentRecord;
 }
 
-async function registerAccountKey(owner: Hex): Promise<void> {
+async function registerAccountKey(owner: Hex, session: SmokeAuthSession = makerSession): Promise<void> {
   await post("/account-keys", {
     algorithm: "ecdh-p256-aes-gcm",
     ownerCommitment: owner,
     publicKey: rawP256PublicKey(),
-  }, makerSession.headers);
+  }, session.headers);
 }
 
 async function waitForExternalMatcherPersistence(): Promise<void> {
@@ -554,6 +679,142 @@ function parseSmokeTradeMargin(): bigint | undefined {
     throw new Error(`smoke trade margin must be positive, got ${raw}`);
   }
   return parsed;
+}
+
+async function closeManualPosition(input: {
+  batchId: string;
+  entryPrice: bigint;
+  fundingIndex: bigint;
+  margin: bigint;
+  marketId: string;
+  note: StoredMakerNote;
+  owner: SmokeAuthSession;
+  positionCommitments: Hex[];
+  record: IntentRecord;
+  side: "long" | "short";
+  size: bigint;
+  vaultAllocationId?: string;
+}): Promise<Record<string, string>> {
+  let position: ReturnType<typeof createCircuitPositionNote> | undefined;
+  for (let fillIndex = 0; fillIndex < input.positionCommitments.length; fillIndex += 1) {
+    const rho = `${input.record.intentCommitment}:position:${fillIndex}`;
+    const candidate = createCircuitPositionNote({
+      marketId: input.marketId,
+      side: input.side,
+      size: input.size,
+      entryPrice: input.entryPrice,
+      margin: input.margin,
+      fundingIndex: input.fundingIndex,
+      owner: input.record.ownerCommitment,
+      spendSecret: `${input.record.ownerCommitment}:${rho}`,
+      rho,
+      blinding: `${input.record.intentCommitment}:blinding:${fillIndex}`,
+    });
+    if (candidate.commitment === input.positionCommitments[fillIndex]) {
+      position = candidate;
+      break;
+    }
+  }
+  if (!position) throw new Error(`${input.side} position witness did not match settlement`);
+  const context = await positionCloseContext({
+    ownerCommitment: input.record.ownerCommitment,
+    positionCommitment: position.commitment as Hex,
+  }, input.owner);
+  const markPrice = BigInt(context.markPrice);
+  const currentFundingIndex = BigInt(context.fundingIndex);
+  const fundingDelta = input.size * (currentFundingIndex - input.fundingIndex) / PRICE_SCALE;
+  const fundingPayment = input.side === "long" ? fundingDelta : -fundingDelta;
+  const closeSettlement = settleClose({
+    side: input.side,
+    closeSize: input.size,
+    entryPrice: input.entryPrice,
+    markPrice,
+    margin: input.margin,
+    fundingPayment,
+    fee: 0n,
+  });
+  if (closeSettlement.newMargin <= 0n) throw new Error("manual close has no withdrawable margin");
+  const positionNullifier = position.positionNullifier as Hex;
+  const newPosition = createCircuitPositionNote({
+    marketId: input.marketId,
+    side: input.side,
+    size: 0n,
+    entryPrice: input.entryPrice,
+    margin: 0n,
+    fundingIndex: input.fundingIndex,
+    owner: input.record.ownerCommitment,
+    spendSecret: `${input.record.ownerCommitment}:${positionNullifier}:closed-position-spend`,
+    rho: `${positionNullifier}:closed-position-rho`,
+    blinding: `${positionNullifier}:closed-position-blinding`,
+  });
+  const output = createCircuitMarginNote({
+    assetDigest: input.note.assetDigest,
+    assetId: "usdc",
+    amount: closeSettlement.newMargin,
+    owner: input.owner.address,
+    spendSecret: `${positionNullifier}:close-margin-spend`,
+    rho: `${positionNullifier}:close-margin-rho`,
+    blinding: `${positionNullifier}:close-margin-blinding`,
+  });
+  const closeCommitment = hashFields("vault-smoke-close", [
+    position.commitment, input.batchId, input.side,
+  ]);
+  const proven = clientProver.provePositionClose({
+    marketId: input.marketId,
+    positionCommitment: position.commitment,
+    positionRoot: context.positionRoot,
+    positionNullifier,
+    closeCommitment,
+    side: input.side,
+    size: input.size,
+    closeSize: input.size,
+    entryPrice: input.entryPrice,
+    markPrice,
+    margin: input.margin,
+    fundingPayment,
+    fee: 0n,
+    newMargin: closeSettlement.newMargin,
+    fundingIndex: input.fundingIndex,
+    remainingMargin: 0n,
+    marginOutputAmount: closeSettlement.newMargin,
+    newPositionCommitment: newPosition.commitment,
+    marginOutputCommitment: output.commitment,
+    marketDigest: position.marketDigest,
+    ownerDigest: position.ownerDigest,
+    rhoDigest: position.rhoDigest,
+    blinding: position.blinding,
+    spendSecretDigest: position.spendSecretDigest,
+    newPositionRhoDigest: newPosition.rhoDigest,
+    newPositionBlinding: newPosition.blinding,
+    marginOutputAssetDigest: output.assetDigest,
+    marginOutputRhoDigest: output.rhoDigest,
+    marginOutputBlinding: output.blinding,
+    pathIndices: context.membershipProof.indices,
+    pathSiblings: context.membershipProof.siblings,
+  });
+  const response = await post("/position-closes/manual-proven", proven, input.owner.headers);
+  const close = response.positionClose as PositionCloseRecord;
+  const existing = await readMakerNotes() as StoredMakerNote[];
+  await saveMakerNotes([
+    storedNoteFromCircuit(output, {
+      shieldedPool: readDeployment().contracts["shielded-pool"],
+      source: input.owner.source,
+      spendSecret: `${positionNullifier}:close-margin-spend`,
+      status: "available",
+      token: env.collateralTokenContract,
+      walletAddress: input.owner.address,
+      vaultAllocationId: input.vaultAllocationId,
+      vaultParentCommitment: input.vaultAllocationId ? input.note.commitment : undefined,
+    }),
+    ...existing,
+  ]);
+  return {
+    closeCommitment,
+    marginOutputCommitment: output.commitment,
+    marginOutputAmount: closeSettlement.newMargin.toString(),
+    positionCommitment: position.commitment,
+    settlementTxHash: String(close.settlementTxHash ?? ""),
+  };
 }
 
 async function closeLongTakeProfit(input: {
@@ -703,17 +964,20 @@ async function closeLongTakeProfit(input: {
 async function positionCloseContext(input: {
   ownerCommitment: Hex;
   positionCommitment: Hex;
-}): Promise<{
+}, session: SmokeAuthSession = makerSession): Promise<{
   membershipProof: MarginMembershipProof;
   positionRoot: Hex;
+  markPrice: string;
+  fundingIndex: string;
 }> {
   const params = new URLSearchParams({
     ownerCommitment: input.ownerCommitment,
     positionCommitment: input.positionCommitment,
   });
-  const response = await get(`/position-closes/context?${params.toString()}`, makerSession.headers);
+  const response = await get(`/position-closes/context?${params.toString()}`, session.headers);
   const context = response.context as Record<string, unknown>;
   const proof = context.membershipProof as Record<string, unknown>;
+  const market = context.market as Record<string, string>;
   return {
     membershipProof: {
       indices: parseBooleanList(proof.indices, "positionCloseContext.membershipProof.indices"),
@@ -721,6 +985,8 @@ async function positionCloseContext(input: {
       siblings: parseHexList(proof.siblings, "positionCloseContext.membershipProof.siblings"),
     },
     positionRoot: String(context.positionRoot) as Hex,
+    markPrice: market.markPrice,
+    fundingIndex: market.fundingIndex,
   };
 }
 
@@ -1172,7 +1438,7 @@ function invoke(contractId: string, method: string, args: string[]): string {
 }
 
 function invokeFromSource(source: string, contractId: string, method: string, args: string[]): string {
-  const send = new Set(["current_root", "has_proof", "is_settled", "token_digest"]).has(method)
+  const send = new Set(["current_root", "deployed_principal", "has_proof", "is_settled", "token_digest"]).has(method)
     ? "no"
     : "yes";
   const command = [

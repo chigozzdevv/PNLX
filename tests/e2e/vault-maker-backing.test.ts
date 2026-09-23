@@ -22,6 +22,7 @@ const root = {
 };
 const allocation: VaultMakerAllocation = {
   id,
+  allocationLedger: 1,
   allocationTxHash: txHash,
   amount: "80000000",
   asset,
@@ -81,11 +82,11 @@ describe("vault backing transaction checks", () => {
   });
 
   test("requires a confirmed transaction with the requested hash", async () => {
-    const success = (async () => Response.json({ result: { ledger: 100, status: "SUCCESS", txHash } })) as typeof fetch;
+    const success = (async () => Response.json({ result: { ledger: 100, status: "SUCCESS", txHash } })) as unknown as typeof fetch;
     await expect(assertSuccessfulTransaction("https://rpc.example", txHash, success)).resolves.toBe(100);
-    const failed = (async () => Response.json({ result: { ledger: 100, status: "FAILED", txHash } })) as typeof fetch;
+    const failed = (async () => Response.json({ result: { ledger: 100, status: "FAILED", txHash } })) as unknown as typeof fetch;
     await expect(assertSuccessfulTransaction("https://rpc.example", txHash, failed)).rejects.toThrow();
-    const other = (async () => Response.json({ result: { ledger: 100, status: "SUCCESS", txHash: "b".repeat(64) } })) as typeof fetch;
+    const other = (async () => Response.json({ result: { ledger: 100, status: "SUCCESS", txHash: "b".repeat(64) } })) as unknown as typeof fetch;
     await expect(assertSuccessfulTransaction("https://rpc.example", txHash, other)).rejects.toThrow();
   });
 });

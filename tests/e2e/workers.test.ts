@@ -1860,7 +1860,7 @@ describe("support workers", () => {
     const originalFetch = globalThis.fetch;
     const requestedIds: string[] = [];
     const authorizationHeaders: Array<string | null> = [];
-    globalThis.fetch = (input, init) => {
+    globalThis.fetch = ((input, init) => {
       const url = new URL(String(input));
       requestedIds.push(url.searchParams.get("ids[]") ?? "");
       authorizationHeaders.push(new Headers(init?.headers).get("authorization"));
@@ -1870,7 +1870,7 @@ describe("support workers", () => {
           price: { conf: "1", expo: -8, price: "20000000", publish_time: Math.floor(Date.now() / 1000) },
         }],
       }), { status: 200 }));
-    };
+    }) as typeof fetch;
     const oracle = new OracleService({
       apiKey: "test-pyth-key",
       hermesUrl: "https://hermes.example",
