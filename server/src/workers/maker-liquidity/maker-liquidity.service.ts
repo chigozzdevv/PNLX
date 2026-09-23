@@ -97,7 +97,9 @@ export class MakerLiquidityService {
     if (this.ensureMakerAccountKeys(notes)) {
       await this.flushStore();
     }
-    const makerOwners = new Set(notes.map((note) => noteOwnerCommitment(note)));
+    const makerOwners = new Set(
+      eligibleMakerNotes(notes, this.env.makerWalletAddress).map((note) => noteOwnerCommitment(note)),
+    );
     const openClientIntents = [...this.executor.store.intents.values()]
       .filter((intent) => intent.marketId === input.marketId)
       .filter((intent) => !makerOwners.has(intent.ownerCommitment))

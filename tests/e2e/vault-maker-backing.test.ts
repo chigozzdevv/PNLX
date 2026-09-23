@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { assertSuccessfulTransaction, sameHex32 } from "../../scripts/operations/register-vault-maker-note";
+import { notesForMakerRecovery } from "../../scripts/operations/withdraw-maker-notes";
 import {
   allocationId,
   eligibleVaultMakerNotes,
@@ -67,6 +68,13 @@ describe("vault maker note eligibility", () => {
 });
 
 describe("vault backing transaction checks", () => {
+  test("recovers only notes from the requested allocation", () => {
+    const legacy = { ...root, commitment: `0x${"2".repeat(64)}`, vaultAllocationId: undefined };
+    const other = { ...root, commitment: `0x${"3".repeat(64)}`, vaultAllocationId: "other:allocation" };
+    const client = { ...root, commitment: `0x${"4".repeat(64)}`, walletAddress: "GOTHER" };
+    expect(notesForMakerRecovery([legacy, other, client, root], maker, id)).toEqual([root]);
+  });
+
   test("compares Stellar CLI digests with or without the 0x prefix", () => {
     expect(sameHex32('a'.repeat(64), `0x${'a'.repeat(64)}`)).toBe(true);
     expect(sameHex32('a'.repeat(64), `0x${'b'.repeat(64)}`)).toBe(false);

@@ -1,12 +1,14 @@
 import { loadEnv } from "@/config/env";
 import { NotesService } from "@/features/notes/notes.service";
 import { readMakerNotes, transitionMakerNoteStatus } from "@/shared/maker-note-store";
+import { allocationId, normalizedHash, readVaultMakerAllocations } from "@/shared/vault-maker-backing";
 import { createExecutorAsync } from "@/workers/executor/executor.worker";
 import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createOnchainRelay } from "@/workers/onchain/onchain.worker";
 import { createProver } from "@/workers/prover/prover.worker";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
 import type { Hex } from "@pnlx/protocol-types";
+import { sameHex32 } from "./register-vault-maker-note";
 
 interface MakerNote {
   amount: string;
@@ -46,6 +48,21 @@ export async function withdrawMakerNotes(argv: string[]): Promise<void> {
   if (!deployment?.contracts["liquidity-vault"] || !deployment.contracts["shielded-pool"]) {
     throw new Error("vault and shielded pool deployments are required");
   }
+  const allocationFlag = argv.indexOf("--allocation-tx");
+  const allocationTx = allocationFlag < 0 ? undefined : argv[allocationFlag + 1];
+  if (allocationFlag >= 0 && (!allocationTx || allocationTx.startsWith("--"))) {
+    throw new Error("--allocation-tx requires a hash");
+  }
+  const scopedAllocationId = allocationTx
+    ? allocationId(deployment.contracts["liquidity-vault"], normalizedHash(allocationTx))
+    : undefined;
+  if (scopedAllocationId) {
+    const allocation = (await readVaultMakerAllocations()).find((item) => item.id === scopedAllocationId);
+    if (!allocation || allocation.status !== "outstanding" || allocation.maker !== maker ||
+      allocation.asset !== env.collateralTokenContract) {
+      throw new Error("outstanding allocation for configured maker and asset was not found");
+    }
+  }
   const relayer = createRelayer({
     config: {
       commandTimeoutMs: env.stellarCommandTimeoutMs,
@@ -63,7 +80,7 @@ export async function withdrawMakerNotes(argv: string[]): Promise<void> {
     resolveProofArtifact: (proof) => prover.artifactFor(proof),
   });
   const notes = (await readMakerNotes()) as MakerNote[];
-  const owned = notes.filter((note) => String(note.walletAddress ?? "").toUpperCase() === maker);
+  const owned = notesForMakerRecovery(notes, maker, scopedAllocationId);
   const available = owned.filter((note) => note.status === "available" || note.status === "withdrawing");
   const locked = owned.filter((note) => note.status === "locked");
   if (locked.length > 0) throw new Error(`${locked.length} maker notes remain locked`);
@@ -73,6 +90,7 @@ export async function withdrawMakerNotes(argv: string[]): Promise<void> {
     recoveringNotes: available.filter((note) => note.status === "withdrawing").length,
     maker,
     mode: execute ? "execute" : "inspect",
+    ...(scopedAllocationId ? { allocationId: scopedAllocationId } : {}),
   };
   process.stdout.write(`${JSON.stringify(summary)}\n`);
   if (!execute || available.length === 0) return;
@@ -110,7 +128,7 @@ export async function withdrawMakerNotes(argv: string[]): Promise<void> {
       !note.ownerDigest || !note.rhoDigest || !note.spendSecretDigest || !note.amount) {
       throw new Error("incomplete maker note record");
     }
-    if (note.assetDigest.toLowerCase() !== assetDigest.toLowerCase()) {
+    if (!sameHex32(note.assetDigest, assetDigest)) {
       throw new Error(`maker note asset mismatch: ${note.commitment}`);
     }
     if (note.status === "available") {
@@ -163,6 +181,16 @@ export async function withdrawMakerNotes(argv: string[]): Promise<void> {
     process.stdout.write(`${JSON.stringify({ amount: note.amount, commitment: note.commitment, nullifier: withdrawal.nullifier })}\n`);
   }
   process.stdout.write(`${JSON.stringify({ recoveredAmount: recovered.toString(), maker })}\n`);
+}
+
+export function notesForMakerRecovery<T extends { walletAddress: string; vaultAllocationId?: string }>(
+  notes: T[],
+  maker: string,
+  scopedAllocationId?: string,
+): T[] {
+  return notes.filter((note) =>
+    note.walletAddress.trim().toUpperCase() === maker &&
+    (!scopedAllocationId || note.vaultAllocationId === scopedAllocationId));
 }
 
 function parseOutput(output: string): unknown {
