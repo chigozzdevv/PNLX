@@ -7,6 +7,10 @@ export function matchTranscriptDigest(
 ): Hex {
   return hashFields("match-transcript", [
     match.executions.map((execution) => [
+      execution.grossTakerFee,
+      execution.makerRebate,
+      execution.insurance,
+      execution.treasury,
       execution.longIntentCommitment,
       execution.longLimitPrice,
       execution.longNoteNullifier,
@@ -21,6 +25,7 @@ export function matchTranscriptDigest(
       execution.size,
       execution.takerIntentCommitment,
     ]),
+    [match.fees.grossTakerFee, match.fees.makerRebate, match.fees.insurance, match.fees.treasury],
     match.fills.map((fill) => [
       fill.intentCommitment,
       fill.marketId,

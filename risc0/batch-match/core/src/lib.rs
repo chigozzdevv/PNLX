@@ -10,6 +10,10 @@ const RIGHT_FACTOR: u32 = 137;
 const DOMAIN_FACTOR: u32 = 17;
 const PRICE_SCALE: u128 = 100_000_000;
 const RATE_SCALE: u128 = 1_000_000;
+const TAKER_FEE_PPM: u128 = 500;
+const MAKER_REBATE_PPM: u128 = 150;
+const INSURANCE_FEE_PPM: u128 = 100;
+const FEE_EPOCH: u128 = 1;
 const MAX_PUBLIC_ITEMS: usize = 8;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -47,7 +51,18 @@ pub struct SettlementDraft {
     pub aggregate_volume: String,
     pub batch_id: String,
     pub fill_count: u32,
+    pub fee_config_hash: String,
+    pub gross_taker_fee: String,
+    pub maker_rebate: String,
+    pub insurance_fee: String,
+    pub treasury_fee: String,
+    pub maker_intents: Vec<String>,
+    pub taker_intents: Vec<String>,
     pub margin_change_commitments: Vec<String>,
+    pub matching_payload_commitments: Vec<String>,
+    pub residual_commitments: Vec<String>,
+    pub residual_margins: Vec<String>,
+    pub residual_payload_commitments: Vec<String>,
     pub market_id: String,
     pub match_transcript_digest: String,
     pub new_commitments: Vec<String>,
@@ -105,6 +120,10 @@ struct Fill {
 }
 
 struct Execution {
+    gross_taker_fee: u128,
+    maker_rebate: u128,
+    insurance: u128,
+    treasury: u128,
     long_intent_commitment: String,
     long_limit_price: u128,
     long_note_nullifier: String,
@@ -134,6 +153,7 @@ struct Residual {
 struct MatchOutput {
     executions: Vec<Execution>,
     fills: Vec<Fill>,
+    fees: FillFees,
     margin_change_commitments: Vec<String>,
     order_updates: Vec<OrderUpdate>,
     residuals: Vec<Residual>,
@@ -146,6 +166,27 @@ struct MatchOutput {
     match_transcript_digest: String,
 }
 
+#[derive(Clone, Copy, Default)]
+struct FillFees {
+    gross_taker_fee: u128,
+    maker_rebate: u128,
+    insurance: u128,
+    treasury: u128,
+}
+
+fn fill_fees(size: u128, price: u128) -> FillFees {
+    let value = notional(size, price);
+    let gross_taker_fee = value * TAKER_FEE_PPM / RATE_SCALE;
+    let maker_rebate = value * MAKER_REBATE_PPM / RATE_SCALE;
+    let insurance = value * INSURANCE_FEE_PPM / RATE_SCALE;
+    FillFees {
+        gross_taker_fee,
+        maker_rebate,
+        insurance,
+        treasury: gross_taker_fee - maker_rebate - insurance,
+    }
+}
+
 pub fn prove_request(request: &ProofRequest) -> ProvedSettlement {
     let matched = match_batch(request);
     let fill_commitments = matched
@@ -155,11 +196,76 @@ pub fn prove_request(request: &ProofRequest) -> ProvedSettlement {
         .collect::<Vec<_>>();
     let settlement_digest =
         settlement_digest(&request.batch_id, &request.market.market_id, &matched);
+    let matching_payload_commitments = matched
+        .order_updates
+        .iter()
+        .map(|update| {
+            let intent = request
+                .intents
+                .iter()
+                .find(|intent| intent.intent_commitment == update.intent_commitment)
+                .expect("filled intent payload missing");
+            matching_payload_commitment(intent)
+        })
+        .collect();
+    let residual_commitments = matched
+        .order_updates
+        .iter()
+        .map(|update| {
+            update
+                .residual_commitment
+                .clone()
+                .unwrap_or_else(|| "0x0".to_string())
+        })
+        .collect();
+    let residual_payload_commitments = matched
+        .order_updates
+        .iter()
+        .map(|update| {
+            matched
+                .residuals
+                .iter()
+                .find(|residual| residual.source_intent_commitment == update.intent_commitment)
+                .map(residual_payload_commitment)
+                .unwrap_or_else(|| "0x0".to_string())
+        })
+        .collect();
+    let residual_margins = matched
+        .order_updates
+        .iter()
+        .map(|update| {
+            matched
+                .residuals
+                .iter()
+                .find(|residual| residual.source_intent_commitment == update.intent_commitment)
+                .map(|residual| residual.margin.to_string())
+                .unwrap_or_else(|| "0".to_string())
+        })
+        .collect();
     let draft = SettlementDraft {
         aggregate_volume: matched.aggregate_volume.to_string(),
         batch_id: request.batch_id.clone(),
         fill_count: matched.fills.len() as u32,
+        fee_config_hash: fee_config_hash(),
+        gross_taker_fee: matched.fees.gross_taker_fee.to_string(),
+        maker_rebate: matched.fees.maker_rebate.to_string(),
+        insurance_fee: matched.fees.insurance.to_string(),
+        treasury_fee: matched.fees.treasury.to_string(),
+        maker_intents: matched
+            .executions
+            .iter()
+            .map(|execution| execution.maker_intent_commitment.clone())
+            .collect(),
+        taker_intents: matched
+            .executions
+            .iter()
+            .map(|execution| execution.taker_intent_commitment.clone())
+            .collect(),
         margin_change_commitments: matched.margin_change_commitments.clone(),
+        matching_payload_commitments,
+        residual_commitments,
+        residual_margins,
+        residual_payload_commitments,
         market_id: request.market.market_id.clone(),
         match_transcript_digest: matched.match_transcript_digest.clone(),
         new_commitments: fill_commitments,
@@ -220,13 +326,33 @@ fn match_batch(request: &ProofRequest) -> MatchOutput {
             .remaining
             .min(shorts[short_index].remaining);
         let price = execution_price(&longs[long_index], &shorts[short_index]);
-        let long_fill = create_fill(request, &mut longs[long_index], size, price, fills.len());
+        let fees = fill_fees(size, price);
+        let long_maker = longs[long_index].sequence <= shorts[short_index].sequence;
+        let long_delta = if long_maker {
+            fees.maker_rebate as i128
+        } else {
+            -(fees.gross_taker_fee as i128)
+        };
+        let short_delta = if long_maker {
+            -(fees.gross_taker_fee as i128)
+        } else {
+            fees.maker_rebate as i128
+        };
+        let long_fill = create_fill(
+            request,
+            &mut longs[long_index],
+            size,
+            price,
+            fills.len(),
+            long_delta,
+        );
         let short_fill = create_fill(
             request,
             &mut shorts[short_index],
             size,
             price,
             fills.len() + 1,
+            short_delta,
         );
         let execution = create_execution(
             &longs[long_index],
@@ -235,6 +361,7 @@ fn match_batch(request: &ProofRequest) -> MatchOutput {
             price,
             &long_fill,
             &short_fill,
+            fees,
         );
 
         push_unique(
@@ -297,6 +424,7 @@ fn match_batch(request: &ProofRequest) -> MatchOutput {
     let mut output = MatchOutput {
         executions,
         fills,
+        fees: FillFees::default(),
         margin_change_commitments: create_margin_change_commitments(&orders),
         order_updates: create_order_updates(&orders),
         residuals: create_residuals(request, &orders),
@@ -308,6 +436,12 @@ fn match_batch(request: &ProofRequest) -> MatchOutput {
         total_short_size,
         match_transcript_digest: String::new(),
     };
+    for execution in &output.executions {
+        output.fees.gross_taker_fee += execution.gross_taker_fee;
+        output.fees.maker_rebate += execution.maker_rebate;
+        output.fees.insurance += execution.insurance;
+        output.fees.treasury += execution.treasury;
+    }
     output.match_transcript_digest = match_transcript_digest(&output);
     output
 }
@@ -366,8 +500,18 @@ fn create_fill(
     size: u128,
     price: u128,
     fill_index: usize,
+    fee_delta: i128,
 ) -> Fill {
-    let margin = allocate_margin(order, size);
+    let allocated_margin = allocate_margin(order, size);
+    let margin = if fee_delta < 0 {
+        allocated_margin
+            .checked_sub(fee_delta.unsigned_abs())
+            .expect("fee exceeds allocated margin")
+    } else {
+        allocated_margin
+            .checked_add(fee_delta as u128)
+            .expect("fee margin overflow")
+    };
     assert!(
         has_initial_margin(
             size,
@@ -437,6 +581,7 @@ fn create_execution(
     price: u128,
     long_fill: &Fill,
     short_fill: &Fill,
+    fees: FillFees,
 ) -> Execution {
     let maker = if long.sequence <= short.sequence {
         long
@@ -449,6 +594,10 @@ fn create_execution(
         long
     };
     Execution {
+        gross_taker_fee: fees.gross_taker_fee,
+        maker_rebate: fees.maker_rebate,
+        insurance: fees.insurance,
+        treasury: fees.treasury,
         long_intent_commitment: long.intent.intent_commitment.clone(),
         long_limit_price: long.limit_price,
         long_note_nullifier: long.intent.note_nullifier.clone(),
@@ -511,37 +660,11 @@ fn create_residuals(request: &ProofRequest, orders: &[BookOrder]) -> Vec<Residua
 }
 
 fn create_margin_change_commitments(orders: &[BookOrder]) -> Vec<String> {
-    let mut commitments = orders
+    orders
         .iter()
-        .filter(|order| order.filled > 0 && order.remaining > 0)
-        .map(|order| {
-            let remaining_margin = order.margin - order.allocated_margin;
-            assert!(remaining_margin > 0, "invalid margin change");
-            hash_fields(
-                "margin-note",
-                &[
-                    Norm::text("usdc"),
-                    Norm::num(remaining_margin),
-                    Norm::text(&order.intent.owner_commitment),
-                    Norm::text(format!(
-                        "{}:margin-change:{}",
-                        order.intent.intent_commitment, order.filled
-                    )),
-                    Norm::text(format!(
-                        "{}:margin-change-blinding:{}",
-                        order.intent.intent_commitment, order.remaining
-                    )),
-                ],
-            )
-        })
-        .collect::<Vec<_>>();
-    commitments.extend(
-        orders
-            .iter()
-            .filter(|order| order.filled > 0 && order.intent.note_change_commitment != "0x0")
-            .map(|order| order.intent.note_change_commitment.clone()),
-    );
-    commitments
+        .filter(|order| order.filled > 0 && order.intent.note_change_commitment != "0x0")
+        .map(|order| order.intent.note_change_commitment.clone())
+        .collect()
 }
 
 fn residual_commitment(order: &BookOrder) -> String {
@@ -577,6 +700,10 @@ fn match_transcript_digest(output: &MatchOutput) -> String {
                     .iter()
                     .map(|execution| {
                         Norm::Array(vec![
+                            Norm::num(execution.gross_taker_fee),
+                            Norm::num(execution.maker_rebate),
+                            Norm::num(execution.insurance),
+                            Norm::num(execution.treasury),
                             Norm::text(&execution.long_intent_commitment),
                             Norm::num(execution.long_limit_price),
                             Norm::text(&execution.long_note_nullifier),
@@ -594,6 +721,12 @@ fn match_transcript_digest(output: &MatchOutput) -> String {
                     })
                     .collect(),
             ),
+            Norm::Array(vec![
+                Norm::num(output.fees.gross_taker_fee),
+                Norm::num(output.fees.maker_rebate),
+                Norm::num(output.fees.insurance),
+                Norm::num(output.fees.treasury),
+            ]),
             Norm::Array(
                 output
                     .fills
@@ -739,8 +872,19 @@ fn batch_public_input_bytes(draft: &SettlementDraft) -> Vec<u8> {
     append_public_vec(&mut out, &draft.new_commitments);
     append_public_vec(&mut out, &draft.margin_change_commitments);
     append_public_vec(&mut out, &draft.spent_nullifiers);
+    append_public_vec(&mut out, &draft.matching_payload_commitments);
+    append_public_vec(&mut out, &draft.residual_commitments);
+    append_public_amounts(&mut out, &draft.residual_margins);
+    append_public_vec(&mut out, &draft.residual_payload_commitments);
     append_u128(&mut out, parse_u128(&draft.residual_size));
     append_u128(&mut out, parse_u128(&draft.aggregate_volume));
+    append_field(&mut out, &draft.fee_config_hash);
+    append_u128(&mut out, parse_u128(&draft.gross_taker_fee));
+    append_u128(&mut out, parse_u128(&draft.maker_rebate));
+    append_u128(&mut out, parse_u128(&draft.insurance_fee));
+    append_u128(&mut out, parse_u128(&draft.treasury_fee));
+    append_public_vec(&mut out, &draft.maker_intents);
+    append_public_vec(&mut out, &draft.taker_intents);
     out
 }
 
@@ -755,6 +899,20 @@ fn append_public_vec(out: &mut Vec<u8>, values: &[String]) {
     }
     for _ in values.len()..MAX_PUBLIC_ITEMS {
         append_field(out, "0x0");
+    }
+}
+
+fn append_public_amounts(out: &mut Vec<u8>, values: &[String]) {
+    assert!(
+        values.len() <= MAX_PUBLIC_ITEMS,
+        "batch proof supports at most 8 public items"
+    );
+    append_u128(out, values.len() as u128);
+    for value in values {
+        append_u128(out, parse_u128(value));
+    }
+    for _ in values.len()..MAX_PUBLIC_ITEMS {
+        append_u128(out, 0);
     }
 }
 
@@ -777,9 +935,26 @@ fn assert_settlement(actual: &SettlementDraft, expected: &SettlementDraft) {
     assert_eq!(actual.aggregate_volume, expected.aggregate_volume);
     assert_eq!(actual.batch_id, expected.batch_id);
     assert_eq!(actual.fill_count, expected.fill_count);
+    assert_eq!(actual.fee_config_hash, expected.fee_config_hash);
+    assert_eq!(actual.gross_taker_fee, expected.gross_taker_fee);
+    assert_eq!(actual.maker_rebate, expected.maker_rebate);
+    assert_eq!(actual.insurance_fee, expected.insurance_fee);
+    assert_eq!(actual.treasury_fee, expected.treasury_fee);
+    assert_eq!(actual.maker_intents, expected.maker_intents);
+    assert_eq!(actual.taker_intents, expected.taker_intents);
     assert_eq!(
         actual.margin_change_commitments,
         expected.margin_change_commitments
+    );
+    assert_eq!(
+        actual.matching_payload_commitments,
+        expected.matching_payload_commitments
+    );
+    assert_eq!(actual.residual_commitments, expected.residual_commitments);
+    assert_eq!(actual.residual_margins, expected.residual_margins);
+    assert_eq!(
+        actual.residual_payload_commitments,
+        expected.residual_payload_commitments
     );
     assert_eq!(actual.market_id, expected.market_id);
     assert_eq!(
@@ -792,6 +967,49 @@ fn assert_settlement(actual: &SettlementDraft, expected: &SettlementDraft) {
     assert_eq!(actual.residual_size, expected.residual_size);
     assert_eq!(actual.settlement_digest, expected.settlement_digest);
     assert_eq!(actual.spent_nullifiers, expected.spent_nullifiers);
+}
+
+fn fee_config_hash() -> String {
+    let mut bytes = Vec::new();
+    append_u128(&mut bytes, FEE_EPOCH);
+    append_u128(&mut bytes, TAKER_FEE_PPM);
+    append_u128(&mut bytes, MAKER_REBATE_PPM);
+    append_u128(&mut bytes, INSURANCE_FEE_PPM);
+    format!("0x{}", hex::encode(Sha256::digest(&bytes)))
+}
+
+#[cfg(test)]
+mod fee_tests {
+    use super::{fee_config_hash, fill_fees, prove_request, ProofRequest, PRICE_SCALE};
+
+    #[test]
+    fn matches_type_script_fee_configuration_and_base_unit_split() {
+        assert_eq!(
+            fee_config_hash(),
+            "0xbb5f68bb955bd581f42275c73aa5063589736f55c733db22e05cf372dfedd687"
+        );
+        let fees = fill_fees(10_000_000_000, PRICE_SCALE);
+        assert_eq!(fees.gross_taker_fee, 5_000_000);
+        assert_eq!(fees.maker_rebate, 1_500_000);
+        assert_eq!(fees.insurance, 1_000_000);
+        assert_eq!(fees.treasury, 2_500_000);
+    }
+
+    #[test]
+    fn proves_typescript_fee_match_fixture() {
+        let request: ProofRequest =
+            serde_json::from_str(include_str!("../tests/fixtures/fee-match.json"))
+                .expect("valid cross-language proof request");
+        let proved = prove_request(&request);
+        assert_eq!(
+            proved.journal_digest,
+            "0x454bf8cc942884e428d8fa6f70fca5ca16eb0896da0d77c347c4fd81a769a15f"
+        );
+        assert_eq!(proved.draft.gross_taker_fee, "500000");
+        assert_eq!(proved.draft.maker_rebate, "150000");
+        assert_eq!(proved.draft.insurance_fee, "100000");
+        assert_eq!(proved.draft.treasury_fee, "250000");
+    }
 }
 
 fn has_initial_margin(size: u128, price: u128, margin: u128, initial_rate: u128) -> bool {
@@ -897,6 +1115,40 @@ fn hash_fields(domain: &str, fields: &[Norm]) -> String {
             .as_bytes(),
     );
     format!("0x{}", hex::encode(hash.finalize()))
+}
+
+fn matching_payload_commitment(intent: &RecoveredIntent) -> String {
+    hash_fields(
+        "matching-payload",
+        &[
+            Norm::text(&intent.intent_commitment),
+            Norm::text(&intent.market_id),
+            Norm::text(&intent.owner_commitment),
+            Norm::I128(parse_i128(&intent.signed_size)),
+            Norm::num(parse_u128(&intent.limit_price)),
+            Norm::num(parse_u128(&intent.margin)),
+            Norm::text(&intent.note_nullifier),
+            Norm::text(&intent.note_change_commitment),
+            Norm::text(intent.source_intent_commitment.as_deref().unwrap_or("0x0")),
+        ],
+    )
+}
+
+fn residual_payload_commitment(residual: &Residual) -> String {
+    hash_fields(
+        "matching-payload",
+        &[
+            Norm::text(&residual.intent_commitment),
+            Norm::text(&residual.market_id),
+            Norm::text(&residual.owner_commitment),
+            Norm::I128(residual.signed_size),
+            Norm::num(residual.limit_price),
+            Norm::num(residual.margin),
+            Norm::text(&residual.note_nullifier),
+            Norm::text("0x0"),
+            Norm::text(&residual.source_intent_commitment),
+        ],
+    )
 }
 
 enum Norm {

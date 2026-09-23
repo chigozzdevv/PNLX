@@ -3,8 +3,11 @@
 import { ArrowLeft, CircleDollarSign, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ActionToast } from "@/components/action-toast";
+import { USDC_SCALE, usdcToProtocolAmount } from "@/lib/asset-units";
 import { formatNumber, formatUsd } from "@/lib/format";
+import { protocolOrderSize } from "@/lib/trade-submit";
 import type { SubmitTradeIntentResult, TradeSubmitStage } from "@/lib/trade-submit";
+import { fillFees, PRICE_SCALE } from "@pnlx/market-math";
 import type { MarketDisplay, OrderDraft, Side } from "@/types/trading";
 import type { WalletSession } from "@/lib/wallet-auth";
 
@@ -79,8 +82,15 @@ export function OrderTicket({
   const sizingPrice = orderType === "market"
     ? market.price * (1 + Math.max(slippagePercent, 0) / 100)
     : (side === "long" ? limitPrice : Math.max(market.price, limitPrice));
-  const exposure = margin * leverage;
-  const size = sizingPrice > 0 ? exposure / sizingPrice : 0;
+  const protocolSize = margin > 0 && Math.round(margin * USDC_SCALE) > 0 && leverage > 0 &&
+    sizingPrice > 0 && Number.isFinite(margin) && Number.isFinite(sizingPrice)
+    ? protocolOrderSize(usdcToProtocolAmount(margin), leverage, sizingPrice)
+    : 0n;
+  const size = Number(protocolSize) / USDC_SCALE;
+  const exposure = size * sizingPrice;
+  const maxTakerFee = protocolSize > 0n
+    ? Number(fillFees(protocolSize, BigInt(Math.round(sizingPrice * Number(PRICE_SCALE)))).grossTakerFee) / USDC_SCALE
+    : 0;
   const takeProfitPnl = estimatePnl(side, size, sizingPrice, takeProfitPrice);
   const stopLossPnl = estimatePnl(side, size, sizingPrice, stopLossPrice);
   const takeProfitPercent = percentFromPnl("tp", takeProfitPnl, margin);
@@ -501,6 +511,10 @@ export function OrderTicket({
         <div>
           <span>Exposure</span>
           <strong>{formatUsd(exposure, { maximumFractionDigits: 2 })}</strong>
+        </div>
+        <div>
+          <span>Max taker fee</span>
+          <strong>{formatUsd(maxTakerFee, { maximumFractionDigits: 4 })}</strong>
         </div>
         <div>
           <span>Est. liquidation</span>

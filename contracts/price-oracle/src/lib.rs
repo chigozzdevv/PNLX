@@ -1,7 +1,7 @@
 #![no_std]
 
 use oracle_interface::{OracleAsset, PriceData};
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
 
 const MAX_RECORDS: u32 = 64;
 const MAX_COMMITTEE_SUBMISSIONS: u32 = 16;
@@ -11,6 +11,7 @@ const BPS_SCALE: i128 = 10_000;
 #[contracttype]
 pub enum DataKey {
     Admin,
+    UpgradeAuthority,
     CommitteeConfig,
     Decimals,
     LatestRound(OracleAsset),
@@ -34,6 +35,35 @@ pub struct PriceOracle;
 
 #[contractimpl]
 impl PriceOracle {
+    pub fn set_upgrade_authority(env: Env, authority: Address) {
+        let admin: Address = env.storage().persistent().get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("not initialized"));
+        admin.require_auth();
+        if authority == admin || env.storage().persistent().has(&DataKey::UpgradeAuthority) {
+            panic!("invalid upgrade authority");
+        }
+        env.storage().persistent().set(&DataKey::UpgradeAuthority, &authority);
+    }
+
+    pub fn rotate_upgrade_authority(env: Env, authority: Address) {
+        Self::upgrade_authority(env.clone()).require_auth();
+        let admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
+        if authority == admin {
+            panic!("upgrade authority must differ from admin");
+        }
+        env.storage().persistent().set(&DataKey::UpgradeAuthority, &authority);
+    }
+
+    pub fn upgrade_authority(env: Env) -> Address {
+        env.storage().persistent().get(&DataKey::UpgradeAuthority)
+            .unwrap_or_else(|| panic!("upgrade authority not configured"))
+    }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        Self::upgrade_authority(env.clone()).require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+
     pub fn init(env: Env, admin: Address, decimals: u32) {
         if env.storage().persistent().has(&DataKey::Admin) {
             panic!("already initialized");

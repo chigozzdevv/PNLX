@@ -194,9 +194,10 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
       const entryPrice = priceAmount(opening?.entryPrice);
       const size = baseAmount(opening?.size);
       const collateral = usdcAmount(opening?.margin);
+      const entryFee = usdcAmount(opening?.entryFee);
       const marketPrice = marketPrices.get(position.marketId);
       const unrealizedPnl = opening && typeof marketPrice === "number" && typeof entryPrice === "number"
-        ? (opening.side === "long" ? marketPrice - entryPrice : entryPrice - marketPrice) * size
+        ? (opening.side === "long" ? marketPrice - entryPrice : entryPrice - marketPrice) * size - entryFee
         : undefined;
 
       return {
@@ -204,13 +205,14 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
         boundlessRequestId: position.boundlessRequestId,
         closePrice: null,
         collateral: collateral || undefined,
+        entryFee: opening?.entryFee === undefined ? undefined : entryFee,
         commitment: position.positionCommitment,
         entryPrice,
         id: position.positionCommitment,
         marketId: position.marketId,
         market: pairFromMarketId(position.marketId),
         marketPrice,
-        netValue: collateral ? collateral + (unrealizedPnl ?? 0) : undefined,
+        netValue: collateral ? collateral + (unrealizedPnl ?? 0) + entryFee : undefined,
         openedAt: position.openedAt,
         journalDigest: position.journalDigest,
         lifecycleKind: position.lifecycleKind,
@@ -223,6 +225,7 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
         proofVerificationTxHash: position.proofVerificationTxHash,
         privateState: opening
           ? {
+              entryFee: opening.entryFee,
               entryPrice: opening.entryPrice,
               fundingIndex: opening.fundingIndex,
               margin: opening.margin,

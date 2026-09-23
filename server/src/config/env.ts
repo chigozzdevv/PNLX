@@ -83,13 +83,13 @@ export interface ServerEnv {
   stellarSource: string;
 }
 
-export function loadEnv(): ServerEnv {
+export function loadEnv(options: { validateRuntime?: boolean } = {}): ServerEnv {
   if (process.env.NODE_ENV !== "test") loadEnvFile();
 
   const nodeEnv = process.env.NODE_ENV ?? "development";
   const persistentByDefault = nodeEnv !== "test";
   const mongodbUri = value("MONGODB_URI", "");
-  if (persistentByDefault && !mongodbUri) {
+  if (options.validateRuntime !== false && persistentByDefault && !mongodbUri) {
     throw new Error("MONGODB_URI is required for PNLX runtime");
   }
   const stellarRelayerMode = value("STELLAR_RELAYER_MODE", "local");
@@ -99,7 +99,7 @@ export function loadEnv(): ServerEnv {
     "AUTH_SESSION_SECRET",
     nodeEnv === "test" ? "pnlx-test-auth-session-secret-at-least-32-bytes" : "",
   );
-  if (authRequired && authSessionSecret.length < 32) {
+  if (options.validateRuntime !== false && authRequired && authSessionSecret.length < 32) {
     throw new Error("AUTH_SESSION_SECRET must contain at least 32 characters when auth is required");
   }
   const pythFeedIds = Object.fromEntries(

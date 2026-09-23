@@ -3,6 +3,7 @@ import {
   circuitPositionNullifier,
   digestToFieldHex,
 } from "@pnlx/crypto";
+import { fillFees } from "@pnlx/market-math";
 import type {
   AccountEventRecord,
   BatchSettlement,
@@ -98,14 +99,28 @@ function reconstructSettlementOpenings(
 
     const long = leftState.side === "long" ? leftState : rightState;
     const short = leftState.side === "short" ? leftState : rightState;
-    if (long.intent.limitPrice !== short.intent.limitPrice) continue;
-
+    const maker = settlement.makerIntents?.[index / 2];
+    const taker = settlement.takerIntents?.[index / 2];
+    const feeBearing = maker && taker &&
+      [left.sourceIntentCommitment, right.sourceIntentCommitment].includes(maker) &&
+      [left.sourceIntentCommitment, right.sourceIntentCommitment].includes(taker) && maker !== taker;
+    if (!feeBearing && (settlement.grossTakerFee ?? 0n) !== 0n) continue;
+    if (long.intent.limitPrice < short.intent.limitPrice ||
+      (!feeBearing && long.intent.limitPrice !== short.intent.limitPrice)) continue;
     const size = minBigInt(long.remaining, short.remaining);
-    const price = long.intent.limitPrice;
-    const leftMargin = allocateMargin(leftState, size);
-    const rightMargin = allocateMargin(rightState, size);
+    const price = feeBearing
+      ? maker === long.intent.intentCommitment ? long.intent.limitPrice : short.intent.limitPrice
+      : long.intent.limitPrice;
+    const fees = feeBearing ? fillFees(size, price) : undefined;
+    const leftEntryFee = fees
+      ? left.sourceIntentCommitment === maker ? -fees.makerRebate : fees.grossTakerFee : 0n;
+    const rightEntryFee = fees
+      ? right.sourceIntentCommitment === maker ? -fees.makerRebate : fees.grossTakerFee : 0n;
+    const leftMargin = allocateMargin(leftState, size) - leftEntryFee;
+    const rightMargin = allocateMargin(rightState, size) - rightEntryFee;
 
     addIfValid(out, left, {
+      ...(fees ? { entryFee: leftEntryFee } : {}),
       entryPrice: price,
       fundingIndex: 0n,
       margin: leftMargin,
@@ -117,6 +132,7 @@ function reconstructSettlementOpenings(
       sourceIntentCommitment: left.sourceIntentCommitment,
     }, index);
     addIfValid(out, right, {
+      ...(fees ? { entryFee: rightEntryFee } : {}),
       entryPrice: price,
       fundingIndex: 0n,
       margin: rightMargin,

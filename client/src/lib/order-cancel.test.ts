@@ -22,9 +22,8 @@ describe("grouped order cancellation", () => {
 
     const result = await cancelOrderGroup({ group });
     expect(result.error).toBeUndefined();
-    expect(requested).toEqual([first.intentCommitment, residual.intentCommitment]);
+    expect(requested).toEqual([residual.intentCommitment]);
     expect(result.cancelled).toEqual([
-      { intentCommitment: first.intentCommitment, noteNullifier: first.noteNullifier, sourceIntentCommitment: undefined },
       { intentCommitment: residual.intentCommitment, noteNullifier: residual.noteNullifier, sourceIntentCommitment: first.intentCommitment },
     ]);
   });

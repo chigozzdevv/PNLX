@@ -9,7 +9,7 @@ import {
   hashFields,
   ownerCommitment,
 } from "@pnlx/crypto";
-import { PRICE_SCALE, settleClose } from "@pnlx/market-math";
+import { fillFees, PRICE_SCALE, settleClose } from "@pnlx/market-math";
 import { createCircuitMarginNote, createCircuitPositionNote } from "@pnlx/sdk";
 import type {
   ConditionalOrderRecord,
@@ -24,6 +24,7 @@ import type {
 import { createAppRuntimeAsync } from "@/app";
 import { getSupportedPerpAsset, type SupportedPerpAsset } from "@/config/assets";
 import { loadEnv } from "@/config/env";
+import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
 import { stellarSignedMessageHash } from "@/features/auth/auth.service";
 import { ProverService } from "@/workers/prover/prover.service";
 import {
@@ -374,15 +375,17 @@ async function runVaultMarketSmoke(
   await waitForExternalMatcherPersistence();
   const settlementResult = await settleBatch(batchId, asset.marketId);
   const settlement = settlementResult.settlement as Record<string, unknown>;
+  const fees = assertVaultTradeFees(settlement, size, entryPrice,
+    longRecord.intentCommitment, shortRecord.intentCommitment);
   await spendLockedMakerNotes([longRecord.intentCommitment, shortRecord.intentCommitment]);
   const positionCommitments = parseHexList(settlement.newCommitments, "settlement.newCommitments");
   const makerClose = await closeManualPosition({
-    batchId, entryPrice, fundingIndex, margin, marketId: asset.marketId,
+    batchId, entryPrice, fundingIndex, margin: margin + fees.makerRebate, marketId: asset.marketId,
     note: longNote, owner: makerSession, positionCommitments, record: longRecord, side: "long", size,
     vaultAllocationId,
   });
   const takerClose = await closeManualPosition({
-    batchId, entryPrice, fundingIndex, margin, marketId: asset.marketId,
+    batchId, entryPrice, fundingIndex, margin: margin - fees.grossTakerFee, marketId: asset.marketId,
     note: shortNote, owner: adminSession, positionCommitments, record: shortRecord, side: "short", size,
   });
   return {
@@ -472,6 +475,8 @@ async function resumeVaultMarketSmoke(
     const settlementResult = await settleBatch(batchId, asset.marketId);
     settlement = settlementResult.settlement as Record<string, unknown>;
   }
+  const fees = assertVaultTradeFees(settlement, longPayload.signedSize,
+    longPayload.limitPrice, longRecord.intentCommitment, shortRecord.intentCommitment);
   await spendLockedMakerNotes([longRecord.intentCommitment, shortRecord.intentCommitment]);
   const positionCommitments = parseHexList(settlement.newCommitments, "settlement.newCommitments");
   if (positionCommitments.length !== 2 ||
@@ -485,16 +490,17 @@ async function resumeVaultMarketSmoke(
     batchId,
     entryPrice: longPayload.limitPrice,
     fundingIndex: market.fundingIndex,
-    margin: longPayload.margin,
     marketId: asset.marketId,
     positionCommitments,
     size: longPayload.signedSize,
   };
   const makerClose = await closeManualPosition({
-    ...closeInput, note: longNote, owner: makerSession, record: longRecord, side: "long", vaultAllocationId,
+    ...closeInput, margin: longPayload.margin + fees.makerRebate,
+    note: longNote, owner: makerSession, record: longRecord, side: "long", vaultAllocationId,
   });
   const takerClose = await closeManualPosition({
-    ...closeInput, note: shortNote, owner: adminSession, record: shortRecord, side: "short",
+    ...closeInput, margin: shortPayload.margin - fees.grossTakerFee,
+    note: shortNote, owner: adminSession, record: shortRecord, side: "short",
   });
   return {
     symbol: asset.symbol,
@@ -799,6 +805,28 @@ function parseSmokeTradeMargin(): bigint | undefined {
     throw new Error(`smoke trade margin must be positive, got ${raw}`);
   }
   return parsed;
+}
+
+function assertVaultTradeFees(
+  settlement: Record<string, unknown>,
+  size: bigint,
+  price: bigint,
+  makerIntent: Hex,
+  takerIntent: Hex,
+): ReturnType<typeof fillFees> {
+  const fees = fillFees(size, price);
+  const actualMaker = Array.isArray(settlement.makerIntents) ? settlement.makerIntents : [];
+  const actualTaker = Array.isArray(settlement.takerIntents) ? settlement.takerIntents : [];
+  if (String(settlement.feeConfigHash).toLowerCase() !== FEE_CONFIG_HASH ||
+    actualMaker.length !== 1 || actualMaker[0] !== makerIntent ||
+    actualTaker.length !== 1 || actualTaker[0] !== takerIntent ||
+    String(settlement.grossTakerFee) !== fees.grossTakerFee.toString() ||
+    String(settlement.makerRebate) !== fees.makerRebate.toString() ||
+    String(settlement.insuranceFee) !== fees.insurance.toString() ||
+    String(settlement.treasuryFee) !== fees.treasury.toString()) {
+    throw new Error("vault trade settlement does not match the expected maker fee allocation");
+  }
+  return fees;
 }
 
 async function closeManualPosition(input: {

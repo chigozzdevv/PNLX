@@ -81,6 +81,7 @@ export interface IntentRecord {
   proof: ProofMeta;
   noteNullifier: Hex;
   submissionTxHash?: Hex;
+  submissionSequence?: bigint;
 }
 
 export type OrderStatus = "open" | "partially-filled" | "filled" | "cancelled";
@@ -110,6 +111,7 @@ export interface ResidualOrderRecord {
   noteNullifier: Hex;
   ownerCommitment: Hex;
   sourceIntentCommitment: Hex;
+  submissionSequence?: bigint;
   updatedAt: number;
 }
 
@@ -310,7 +312,18 @@ export interface BatchSettlement {
   newCommitments: Hex[];
   marginChangeCommitments: Hex[];
   spentNullifiers: Hex[];
+  matchingPayloadCommitments: Hex[];
+  residualCommitments: Hex[];
+  residualMargins: bigint[];
+  residualPayloadCommitments: Hex[];
   fillCount: number;
+  feeConfigHash: Hex;
+  grossTakerFee: bigint;
+  makerRebate: bigint;
+  insuranceFee: bigint;
+  treasuryFee: bigint;
+  makerIntents: Hex[];
+  takerIntents: Hex[];
   aggregateVolume: bigint;
   openInterestDelta: bigint;
   orderUpdates: OrderLifecycleUpdate[];
@@ -318,6 +331,7 @@ export interface BatchSettlement {
   proof: ProofMeta;
   proofVerificationTxHash?: Hex;
   settlementTxHash?: Hex;
+  onchainConfirmed?: boolean;
 }
 
 export interface LiquidationWitness {

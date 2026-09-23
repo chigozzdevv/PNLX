@@ -150,6 +150,7 @@ export function applyProtocolStoreSnapshot(store: ProtocolStore, snapshot: Parti
       ...value,
       matchTranscriptDigest: value.matchTranscriptDigest ?? ZERO_HEX,
       marginChangeCommitments: value.marginChangeCommitments ?? [],
+      residualMargins: value.residualMargins ?? [],
       orderUpdates: value.orderUpdates ?? [],
       settlementDigest: value.settlementDigest ?? ZERO_HEX,
     });

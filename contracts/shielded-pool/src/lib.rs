@@ -34,6 +34,14 @@ pub enum DataKey {
     DepositCircuit,
     WithdrawCircuit,
     Writer(Address),
+    FeeReserve(Address),
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct FeeReserve {
+    pub insurance: i128,
+    pub treasury: i128,
 }
 
 #[contract]
@@ -78,6 +86,13 @@ impl ShieldedPool {
             .set(&DataKey::Writer(writer), &enabled);
     }
 
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let governance_id: Address = env.storage().persistent().get(&DataKey::Governance)
+            .unwrap_or_else(|| panic!("not initialized"));
+        GovernanceClient::new(&env, &governance_id).upgrade_authority().require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+
     pub fn deposit_asset(
         env: Env,
         token: Address,
@@ -98,6 +113,25 @@ impl ShieldedPool {
         record_commitment(&env, commitment);
     }
 
+    pub fn deposit_claim(
+        env: Env,
+        writer: Address,
+        token: Address,
+        amount: i128,
+        commitment: BytesN<32>,
+        proof: ProofMeta,
+    ) {
+        require_writer(&env, writer);
+        if amount <= 0 {
+            panic!("invalid amount");
+        }
+        validate_hash(&env, &commitment);
+        validate_proof(&env, &proof, DataKey::DepositCircuit);
+        let token_digest = address_digest(&env, &token);
+        validate_deposit_public_inputs(&env, amount, &token_digest, &commitment, &proof);
+        record_commitment(&env, commitment);
+    }
+
     pub fn token_digest(env: Env, token: Address) -> BytesN<32> {
         address_digest(&env, &token)
     }
@@ -109,6 +143,11 @@ impl ShieldedPool {
     }
 
     pub fn spend(env: Env, writer: Address, nullifier: BytesN<32>) {
+        require_writer(&env, writer);
+        record_nullifier(&env, nullifier);
+    }
+
+    pub fn accrue_fees(env: Env, writer: Address, token: Address, insurance: i128, treasury: i128) {
         writer.require_auth();
         if !env
             .storage()
@@ -118,7 +157,46 @@ impl ShieldedPool {
         {
             panic!("unauthorized writer");
         }
-        record_nullifier(&env, nullifier);
+        if insurance < 0 || treasury < 0 {
+            panic!("negative fee reserve");
+        }
+        let key = DataKey::FeeReserve(token.clone());
+        let mut reserve = Self::fee_reserve(env.clone(), token.clone());
+        reserve.insurance = reserve
+            .insurance
+            .checked_add(insurance)
+            .expect("insurance overflow");
+        reserve.treasury = reserve
+            .treasury
+            .checked_add(treasury)
+            .expect("treasury overflow");
+        if TokenClient::new(&env, &token).balance(&env.current_contract_address())
+            < reserve
+                .insurance
+                .checked_add(reserve.treasury)
+                .expect("fee reserve overflow")
+        {
+            panic!("fee reserve exceeds pool balance");
+        }
+        env.storage().persistent().set(&key, &reserve);
+    }
+
+    pub fn fee_reserve(env: Env, token: Address) -> FeeReserve {
+        env.storage()
+            .persistent()
+            .get(&DataKey::FeeReserve(token))
+            .unwrap_or(FeeReserve {
+                insurance: 0,
+                treasury: 0,
+            })
+    }
+
+    pub fn withdraw_insurance(env: Env, token: Address, recipient: Address, amount: i128) {
+        release_fee_reserve(&env, token, recipient, amount, true);
+    }
+
+    pub fn withdraw_treasury(env: Env, token: Address, recipient: Address, amount: i128) {
+        release_fee_reserve(&env, token, recipient, amount, false);
     }
 
     pub fn withdraw(
@@ -180,6 +258,15 @@ impl ShieldedPool {
             &proof,
         );
         record_nullifier(&env, nullifier.clone());
+        let reserve = Self::fee_reserve(env.clone(), token.clone());
+        let reserved = reserve
+            .insurance
+            .checked_add(reserve.treasury)
+            .expect("fee reserve overflow");
+        let balance = TokenClient::new(&env, &token).balance(&env.current_contract_address());
+        if balance.checked_sub(amount).unwrap_or(-1) < reserved {
+            panic!("withdrawal would consume fee reserve");
+        }
         TokenClient::new(&env, &token).transfer(
             &env.current_contract_address(),
             &recipient,
@@ -211,6 +298,18 @@ impl ShieldedPool {
     }
 }
 
+fn require_writer(env: &Env, writer: Address) {
+    writer.require_auth();
+    if !env
+        .storage()
+        .persistent()
+        .get(&DataKey::Writer(writer))
+        .unwrap_or(false)
+    {
+        panic!("unauthorized writer");
+    }
+}
+
 fn require_admin(env: &Env) {
     let governance_id: Address = env
         .storage()
@@ -220,6 +319,32 @@ fn require_admin(env: &Env) {
     GovernanceClient::new(env, &governance_id)
         .admin()
         .require_auth();
+}
+
+fn release_fee_reserve(
+    env: &Env,
+    token: Address,
+    recipient: Address,
+    amount: i128,
+    insurance: bool,
+) {
+    require_admin(env);
+    if amount <= 0 {
+        panic!("invalid fee withdrawal");
+    }
+    let key = DataKey::FeeReserve(token.clone());
+    let mut reserve = ShieldedPool::fee_reserve(env.clone(), token.clone());
+    let balance = if insurance {
+        &mut reserve.insurance
+    } else {
+        &mut reserve.treasury
+    };
+    if *balance < amount {
+        panic!("insufficient fee reserve");
+    }
+    *balance -= amount;
+    env.storage().persistent().set(&key, &reserve);
+    TokenClient::new(env, &token).transfer(&env.current_contract_address(), &recipient, &amount);
 }
 
 fn record_commitment(env: &Env, commitment: BytesN<32>) {
@@ -457,6 +582,34 @@ mod tests {
     }
 
     #[test]
+    fn claim_deposit_registers_only_a_proven_note_from_an_authorized_writer() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register(ShieldedPool, ());
+        let client = ShieldedPoolClient::new(&env, &id);
+        let writer = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(Address::generate(&env))
+            .address();
+        let commitment = BytesN::from_array(&env, &[61; 32]);
+        let proof = deposit_proof(&env, 4_000, &address_digest(&env, &token_id), &commitment);
+        client.init(
+            &setup_governance(&env),
+            &setup_proof_ledger(&env, Some(&proof)),
+            &deposit_circuit(&env),
+            &circuit(&env),
+        );
+        client.set_writer(&writer, &true);
+        assert!(client
+            .try_deposit_claim(&writer, &token_id, &3_999, &commitment, &proof)
+            .is_err());
+        assert!(!client.has_commitment(&commitment));
+        client.deposit_claim(&writer, &token_id, &4_000, &commitment, &proof);
+        assert!(client.has_commitment(&commitment));
+        assert_eq!(TokenClient::new(&env, &token_id).balance(&id), 0);
+    }
+
+    #[test]
     fn withdraws_with_change() {
         let env = Env::default();
         let id = env.register(ShieldedPool, ());
@@ -581,6 +734,81 @@ mod tests {
         assert!(client.has_commitment(&change));
         assert_eq!(token.balance(&recipient), 1_500);
         assert_eq!(token.balance(&id), 2_500);
+    }
+
+    #[test]
+    #[should_panic(expected = "withdrawal would consume fee reserve")]
+    fn prevents_private_withdrawal_from_consuming_fee_reserves() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register(ShieldedPool, ());
+        let client = ShieldedPoolClient::new(&env, &id);
+        let writer = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(Address::generate(&env))
+            .address();
+        let token_admin = StellarAssetClient::new(&env, &token_id);
+        let root = root(&env);
+        let nullifier = BytesN::from_array(&env, &[8; 32]);
+        let change = BytesN::from_array(&env, &[5; 32]);
+        let proof = proof(
+            &env,
+            3_001,
+            &root,
+            &nullifier,
+            &address_digest(&env, &token_id),
+            &address_digest(&env, &recipient),
+            &change,
+        );
+        token_admin.mint(&id, &4_000);
+        client.init(
+            &setup_governance(&env),
+            &setup_proof_ledger(&env, Some(&proof)),
+            &deposit_circuit(&env),
+            &circuit(&env),
+        );
+        client.set_writer(&writer, &true);
+        client.accrue_fees(&writer, &token_id, &400, &600);
+        assert_eq!(client.fee_reserve(&token_id).insurance, 400);
+        assert_eq!(client.fee_reserve(&token_id).treasury, 600);
+        client.withdraw_asset(
+            &token_id, &root, &nullifier, &recipient, &3_001, &proof, &change,
+        );
+    }
+
+    #[test]
+    fn releases_only_the_selected_fee_reserve() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register(ShieldedPool, ());
+        let client = ShieldedPoolClient::new(&env, &id);
+        let writer = Address::generate(&env);
+        let treasury_recipient = Address::generate(&env);
+        let insurance_recipient = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(Address::generate(&env))
+            .address();
+        let token = TokenClient::new(&env, &token_id);
+        StellarAssetClient::new(&env, &token_id).mint(&id, &4_000);
+        client.init(
+            &setup_governance(&env),
+            &setup_proof_ledger(&env, None),
+            &deposit_circuit(&env),
+            &circuit(&env),
+        );
+        client.set_writer(&writer, &true);
+        client.accrue_fees(&writer, &token_id, &400, &600);
+
+        client.withdraw_treasury(&token_id, &treasury_recipient, &250);
+        client.withdraw_insurance(&token_id, &insurance_recipient, &100);
+
+        let reserve = client.fee_reserve(&token_id);
+        assert_eq!(reserve.insurance, 300);
+        assert_eq!(reserve.treasury, 350);
+        assert_eq!(token.balance(&treasury_recipient), 250);
+        assert_eq!(token.balance(&insurance_recipient), 100);
+        assert_eq!(token.balance(&id), 3_650);
     }
 
     #[test]

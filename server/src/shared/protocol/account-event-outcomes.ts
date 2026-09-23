@@ -19,6 +19,7 @@ import {
 import { encryptAccountEventPayload } from "@/shared/protocol/account-event-encryption";
 
 export interface PositionOpeningAccountEventPayload {
+  entryFee?: bigint;
   entryPrice: bigint;
   fundingIndex: bigint;
   margin: bigint;

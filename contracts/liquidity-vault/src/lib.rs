@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token::Client as TokenClient, Address, Env,
+    contract, contractimpl, contracttype, token::Client as TokenClient, Address, BytesN, Env,
 };
 
 const MAX_ALLOCATION_BPS: u32 = 8_000;
@@ -13,6 +13,7 @@ const TTL_TARGET: u32 = 1_000_000;
 enum DataKey {
     Asset,
     Operator,
+    UpgradeAuthority,
     Maker,
     Paused,
     AllocationLimitBps,
@@ -29,6 +30,40 @@ pub struct LiquidityVault;
 
 #[contractimpl]
 impl LiquidityVault {
+    pub fn set_upgrade_authority(env: Env, authority: Address) {
+        let operator = Self::operator(env.clone());
+        operator.require_auth();
+        if authority == operator
+            || env.storage().instance().has(&DataKey::UpgradeAuthority)
+            || Self::total_shares(env.clone()) != 0
+            || Self::deployed_principal(env.clone()) != 0
+            || Self::liquid_assets(env.clone()) != 0
+        {
+            panic!("invalid upgrade authority");
+        }
+        env.storage().instance().set(&DataKey::UpgradeAuthority, &authority);
+        extend_instance(&env);
+    }
+
+    pub fn rotate_upgrade_authority(env: Env, authority: Address) {
+        Self::upgrade_authority(env.clone()).require_auth();
+        if authority == Self::operator(env.clone()) {
+            panic!("upgrade authority must differ from operator");
+        }
+        env.storage().instance().set(&DataKey::UpgradeAuthority, &authority);
+        extend_instance(&env);
+    }
+
+    pub fn upgrade_authority(env: Env) -> Address {
+        env.storage().instance().get(&DataKey::UpgradeAuthority)
+            .unwrap_or_else(|| panic!("upgrade authority not configured"))
+    }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        Self::upgrade_authority(env.clone()).require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+
     pub fn __constructor(
         env: Env,
         asset: Address,
@@ -481,6 +516,23 @@ mod tests {
         asset_admin.mint(&alice, &10_000);
         asset_admin.mint(&bob, &10_000);
         (env, client, asset_admin, token, operator, alice, bob)
+    }
+
+    #[test]
+    fn upgrade_authority_is_set_before_funding_and_cannot_be_the_operator() {
+        let (env, vault, _, _, operator, alice, _) = setup();
+        let upgrade = Address::generate(&env);
+        assert!(vault.try_upgrade_authority().is_err());
+        assert!(vault.try_set_upgrade_authority(&operator).is_err());
+        vault.set_upgrade_authority(&upgrade);
+        assert_eq!(vault.upgrade_authority(), upgrade);
+        assert!(vault.try_set_upgrade_authority(&Address::generate(&env)).is_err());
+        vault.set_paused(&false);
+        vault.deposit(&alice, &1_000, &1_000);
+        assert!(vault.try_set_upgrade_authority(&Address::generate(&env)).is_err());
+        let replacement = Address::generate(&env);
+        vault.rotate_upgrade_authority(&replacement);
+        assert_eq!(vault.upgrade_authority(), replacement);
     }
 
     #[test]

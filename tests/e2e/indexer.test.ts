@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
+import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
 import { digestToFieldHex, hashFields, intentOwnerCommitmentField, ownerCommitment } from "@pnlx/crypto";
 import type {
   BatchSettlement,
@@ -64,7 +65,14 @@ describe("public and owner indexer", () => {
     const filled = intentRecord("filled", market.marketId, owner, store.marginMembershipRoot(), proof);
     const partial = intentRecord("partial", market.marketId, owner, store.marginMembershipRoot(), proof);
     const open = intentRecord("open", market.marketId, owner, store.marginMembershipRoot(), proof);
-    const settlement = settlementRecord(market.marketId, filled, partial, proof);
+    const settlement = {
+      ...settlementRecord(market.marketId, filled, partial, proof),
+      grossTakerFee: 50n,
+      makerRebate: 15n,
+      insuranceFee: 10n,
+      treasuryFee: 25n,
+      onchainConfirmed: true,
+    };
     const positionOpenings = lifecycleOpenings(settlement, owner, filled, partial);
     const closeProof = proofMeta("indexer-close-proof");
     const closeCommitment = hashFields("conditional-close", ["filled"]);
@@ -186,6 +194,7 @@ describe("public and owner indexer", () => {
     expect(publicState.markets).toEqual([
       {
         aggregateVolume: "1",
+        confirmedFees: { grossTaker: "50", makerRebate: "15", insurance: "10", treasury: "25" },
         conditionalCloseCount: 1,
         conditionalOrderCount: 1,
         fundingIndex: "12",
@@ -321,7 +330,15 @@ function settlementRecord(
     aggregateVolume: 2n,
     batchId: filled.batchId,
     fillCount: 2,
+    feeConfigHash: FEE_CONFIG_HASH,
+    grossTakerFee: 0n,
+    makerRebate: 0n,
+    insuranceFee: 0n,
+    treasuryFee: 0n,
+    makerIntents: [],
+    takerIntents: [],
     matchTranscriptDigest: hashFields("match-transcript", [filled.intentCommitment, partial.intentCommitment]),
+    matchingPayloadCommitments: [],
     marginChangeCommitments: [],
     marketId,
     newCommitments: [hashFields("position", ["a"]), hashFields("position", ["b"])],
@@ -339,6 +356,9 @@ function settlementRecord(
     ],
     proof,
     residualSize: 0n,
+    residualCommitments: [],
+    residualMargins: [],
+    residualPayloadCommitments: [],
     settlementDigest: hashFields("settlement", [filled.intentCommitment, partial.intentCommitment]),
     spentNullifiers: [filled.noteNullifier, partial.noteNullifier],
   };

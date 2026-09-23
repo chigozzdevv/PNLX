@@ -282,6 +282,9 @@ export class ProtocolStore {
     if (!existing) throw new Error("unknown order");
     if (existing.status === "filled") throw new Error("filled order cannot be cancelled");
     if (existing.status === "cancelled") throw new Error("order already cancelled");
+    if (existing.status === "partially-filled" && existing.residualCommitment) {
+      throw new Error("This order has rolled over; cancel its active residual instead");
+    }
 
     const record = {
       ...existing,
@@ -298,6 +301,9 @@ export class ProtocolStore {
     if (!existing) throw new Error("unknown order");
     if (existing.status === "filled") throw new Error("filled order cannot be cancelled");
     if (existing.status === "cancelled") throw new Error("order already cancelled");
+    if (existing.status === "partially-filled" && existing.residualCommitment) {
+      throw new Error("This order has rolled over; cancel its active residual instead");
+    }
     return existing;
   }
 

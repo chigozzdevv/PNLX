@@ -128,10 +128,10 @@ class EmbeddedMatcherProviderGateway implements MatcherProviderGateway {
     return proofTask.then((settlement) => {
       const positionOpenings = createPositionOpenings(settlement, match.fills);
       return {
-        positionEvents: createPositionEvents(match.fills, input.market.fundingIndex),
+        positionEvents: createPositionEvents(match.fills, input.market.fundingIndex, match.executions),
         positionOpenings,
         privateMatchIntents: match.residuals,
-        residualOrders: createResidualOrderRecords(settlement, match.residuals),
+        residualOrders: createResidualOrderRecords(input, settlement, match.residuals),
         settlement,
       };
     });
@@ -190,7 +190,10 @@ function activeIntents(
         store.orderLifecycle.get(intent.intentCommitment)?.status === "open",
     )
     .sort((left, right) =>
-      left.batchId.localeCompare(right.batchId) || left.intentCommitment.localeCompare(right.intentCommitment)
+      left.submissionSequence !== undefined && right.submissionSequence !== undefined
+        ? left.submissionSequence < right.submissionSequence ? -1 : left.submissionSequence > right.submissionSequence ? 1 : 0
+        : (store.orderLifecycle.get(left.intentCommitment)?.createdAt ?? 0) -
+          (store.orderLifecycle.get(right.intentCommitment)?.createdAt ?? 0)
     );
 }
 
@@ -213,10 +216,17 @@ function privateMatchIntentsFor(
   records: IntentRecord[],
   residuals: ResidualOrderRecord[],
 ): PrivateMatchIntent[] {
-  return [
-    ...residuals.map((record) => privateMatchIntentFor(store, record, batchId)),
-    ...records.map((record) => privateMatchIntentFor(store, record, batchId)),
-  ];
+  const all = [...records, ...residuals];
+  if (all.some((record) => record.submissionSequence !== undefined) &&
+    all.some((record) => record.submissionSequence === undefined)) {
+    throw new Error("mixed sequenced and unsequenced intents cannot be matched");
+  }
+  return all.sort((left, right) =>
+    left.submissionSequence !== undefined && right.submissionSequence !== undefined
+      ? left.submissionSequence < right.submissionSequence ? -1 : left.submissionSequence > right.submissionSequence ? 1 : 0
+      : (store.orderLifecycle.get(left.intentCommitment)?.createdAt ?? 0) -
+        (store.orderLifecycle.get(right.intentCommitment)?.createdAt ?? 0),
+  ).map((record) => privateMatchIntentFor(store, record, batchId));
 }
 
 function privateMatchIntentFor(
@@ -245,18 +255,33 @@ function createPositionEvents(
     size: bigint;
   }>,
   fundingIndex: bigint,
+  executions: Array<{
+    grossTakerFee: bigint;
+    longPositionCommitment: `0x${string}`;
+    makerIntentCommitment: `0x${string}`;
+    makerRebate: bigint;
+    shortPositionCommitment: `0x${string}`;
+  }>,
 ): PrivatePositionOpeningEvent[] {
-  return fills.map((fill) => ({
-    entryPrice: fill.price,
-    fundingIndex,
-    margin: fill.margin,
-    marketId: fill.marketId,
-    positionCommitment: fill.positionCommitment,
-    positionNullifier: fill.positionNullifier,
-    side: fill.side,
-    size: fill.size,
-    sourceIntentCommitment: fill.intentCommitment,
-  }));
+  return fills.map((fill) => {
+    const execution = executions.find((candidate) =>
+      candidate.longPositionCommitment === fill.positionCommitment ||
+      candidate.shortPositionCommitment === fill.positionCommitment);
+    if (!execution) throw new Error("position fee allocation is missing");
+    return {
+      entryFee: execution.makerIntentCommitment === fill.intentCommitment
+        ? -execution.makerRebate : execution.grossTakerFee,
+      entryPrice: fill.price,
+      fundingIndex,
+      margin: fill.margin,
+      marketId: fill.marketId,
+      positionCommitment: fill.positionCommitment,
+      positionNullifier: fill.positionNullifier,
+      side: fill.side,
+      size: fill.size,
+      sourceIntentCommitment: fill.intentCommitment,
+    };
+  });
 }
 
 function createPositionOpenings(
@@ -285,6 +310,7 @@ function createPositionOpenings(
 }
 
 function createResidualOrderRecords(
+  input: MatcherSettlementInput,
   settlement: BatchSettlement,
   residuals: PrivateMatchIntent[],
 ): ResidualOrderRecord[] {
@@ -298,6 +324,8 @@ function createResidualOrderRecords(
     noteNullifier: residual.noteNullifier,
     ownerCommitment: residual.ownerCommitment,
     sourceIntentCommitment: residual.sourceIntentCommitment ?? residual.intentCommitment,
+    submissionSequence: [...input.records, ...(input.residuals ?? [])]
+      .find((record) => record.intentCommitment === (residual.sourceIntentCommitment ?? residual.intentCommitment))?.submissionSequence,
     updatedAt: now,
   }));
 }

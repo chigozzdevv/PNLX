@@ -23,6 +23,7 @@ import {
   type PrivateMarginNoteAllocation,
 } from "@/lib/private-margin-notes";
 import { usdcToProtocolAmount } from "@/lib/asset-units";
+import { RATE_SCALE, TAKER_FEE_PPM } from "@pnlx/market-math";
 import type { Hex, MarketDisplay, ServerIntentRecord, Side } from "@/types/trading";
 import type { WalletSession } from "@/lib/wallet-auth";
 import type { ServerProofMeta } from "@/types/trading";
@@ -684,7 +685,8 @@ export function protocolOrderSize(margin: bigint, leverage: number, price: numbe
   if (effectiveMargin === 0n) return 0n;
   const priceProtocol = toPrice(price);
   const leverageProtocol = BigInt(Math.round(leverage * Number(LEVERAGE_SCALE)));
-  const notional = (effectiveMargin * leverageProtocol) / LEVERAGE_SCALE;
+  const notional = effectiveMargin * leverageProtocol * RATE_SCALE /
+    (LEVERAGE_SCALE * RATE_SCALE + leverageProtocol * TAKER_FEE_PPM);
   const size = (notional * PRICE_SCALE) / priceProtocol;
   return size > 0n ? size : 0n;
 }

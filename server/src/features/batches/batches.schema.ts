@@ -29,7 +29,18 @@ export function parseExternalBatchSettlement(input: BatchBody): CommitExternalBa
       newCommitments: parseHexArray(settlement.newCommitments),
       marginChangeCommitments: parseHexArray(settlement.marginChangeCommitments),
       spentNullifiers: parseHexArray(settlement.spentNullifiers),
+      matchingPayloadCommitments: parseHexArray(settlement.matchingPayloadCommitments),
+      residualCommitments: parseHexArray(settlement.residualCommitments),
+      residualMargins: parseBigIntArray(settlement.residualMargins),
+      residualPayloadCommitments: parseHexArray(settlement.residualPayloadCommitments),
       fillCount: Number(settlement.fillCount),
+      feeConfigHash: String(settlement.feeConfigHash) as `0x${string}`,
+      grossTakerFee: BigInt(String(settlement.grossTakerFee)),
+      makerRebate: BigInt(String(settlement.makerRebate)),
+      insuranceFee: BigInt(String(settlement.insuranceFee)),
+      treasuryFee: BigInt(String(settlement.treasuryFee)),
+      makerIntents: parseHexArray(settlement.makerIntents),
+      takerIntents: parseHexArray(settlement.takerIntents),
       aggregateVolume: BigInt(String(settlement.aggregateVolume)),
       openInterestDelta: BigInt(String(settlement.openInterestDelta)),
       orderUpdates: parseOrderUpdates(settlement.orderUpdates),
@@ -106,6 +117,7 @@ function parseResidualOrders(value: unknown): CommitExternalBatchSettlementReque
       noteNullifier: String(body.noteNullifier) as `0x${string}`,
       ownerCommitment: String(body.ownerCommitment) as `0x${string}`,
       sourceIntentCommitment: String(body.sourceIntentCommitment) as `0x${string}`,
+      ...(body.submissionSequence === undefined ? {} : { submissionSequence: BigInt(String(body.submissionSequence)) }),
       updatedAt: Number(body.updatedAt),
     };
   });
@@ -150,6 +162,11 @@ function parseAccountEvents(value: unknown): CommitExternalBatchSettlementReques
 function parseHexArray(value: unknown): `0x${string}`[] {
   if (!Array.isArray(value)) throw new Error("expected hex array");
   return value.map((entry) => String(entry) as `0x${string}`);
+}
+
+function parseBigIntArray(value: unknown): bigint[] {
+  if (!Array.isArray(value)) throw new Error("expected amount array");
+  return value.map((entry) => BigInt(String(entry)));
 }
 
 function optionalHex(value: unknown): `0x${string}` | undefined {

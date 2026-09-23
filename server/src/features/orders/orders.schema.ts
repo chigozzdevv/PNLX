@@ -1,12 +1,20 @@
 import type { Hex } from "@pnlx/protocol-types";
 import { parseIntent } from "@/features/intents/intents.schema";
-import type { CancelOrderInput, ReplaceOrderInput } from "@/features/orders/orders.model";
+import { parseDepositNoteRecord } from "@/features/notes/notes.schema";
+import type { CancelOrderInput, ClaimResidualInput, ReplaceOrderInput } from "@/features/orders/orders.model";
 
 type OrderBody = Record<string, unknown>;
 
 export function parseCancelOrder(input: OrderBody): CancelOrderInput {
   return {
     intentCommitment: String(input.intentCommitment) as Hex,
+  };
+}
+
+export function parseClaimResidual(input: OrderBody): ClaimResidualInput {
+  return {
+    intentCommitment: String(input.intentCommitment) as Hex,
+    depositProof: parseDepositNoteRecord(requiredObject(input.depositProof, "depositProof")),
   };
 }
 

@@ -164,7 +164,9 @@ export function TradingPage() {
         closePrice,
         entryPrice,
         ...settlement,
-        initialMargin: position.collateral,
+        fee: settlement.fee + (position.entryFee ?? 0),
+        initialMargin: position.collateral === undefined
+          ? undefined : position.collateral + (position.entryFee ?? 0),
         marketId: position.marketId,
         side,
         size,
@@ -196,14 +198,14 @@ export function TradingPage() {
     setCancellingOrderId(order.id);
     setPositionActionMessage(undefined);
     try {
-      const [{ cancelOrderGroup }, { reconcilePrivateMarginNotes }] = await Promise.all([
+      const [{ cancelOrderGroup }, { reconcilePrivateMarginNotes }, { recoverCancelledResiduals }] = await Promise.all([
         import("@/lib/order-cancel"),
         import("@/lib/private-margin-notes"),
+        import("@/lib/residual-claim"),
       ]);
-      const result = await cancelOrderGroup({
-        group: order,
-        token: wallet.session.token,
-      });
+      const result = order.activeOrders.length
+        ? await cancelOrderGroup({ group: order, token: wallet.session.token })
+        : { cancelled: [] as Awaited<ReturnType<typeof cancelOrderGroup>>["cancelled"] };
       const cancelledIds = new Set(result.cancelled.map((item) => item.intentCommitment));
       setPendingOrders((current) =>
         current.filter((item) => !cancelledIds.has(item.intentCommitment)),
@@ -224,9 +226,14 @@ export function TradingPage() {
         })),
       });
       if (result.error) throw result.error;
+      const recovered = await recoverCancelledResiduals({
+        cancelledIntentCommitments: result.cancelled.map((item) => item.intentCommitment),
+        orders: order.orders,
+        session: wallet.session,
+      });
       setPositionActionMessage({
         tone: "success",
-        text: "Order cancelled",
+        text: order.activeOrders.length ? (recovered ? "Order cancelled and collateral recovered" : "Order cancelled") : "Collateral recovered",
       });
       setTableView("orders");
     } catch (error) {

@@ -6,7 +6,9 @@ import { hashFields } from "@pnlx/crypto";
 import type { ProofArtifact } from "@pnlx/proof-system";
 import type { BatchSettlement, Hex, ProofMeta } from "@pnlx/protocol-types";
 import { assertBatchSettlementCapacity, batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
+import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
 import { matchTranscriptDigest } from "@/workers/batch-matcher/match-transcript";
+import { matchingPayloadCommitment } from "@/workers/batch-matcher/private-intent";
 import type { SettlementProof, SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
 
 export const RISC0_BATCH_MATCH_CIRCUIT_ID = "batch-match";
@@ -46,27 +48,9 @@ export async function createRisc0BatchSettlement(
   input: SettlementProofInput,
   root = process.cwd(),
 ): Promise<Risc0BatchSettlementResult> {
-  assertMatchTranscript(input);
-
-  const newCommitments = input.match.fills.map((fill) => fill.positionCommitment);
-  const settlementDigest = risc0SettlementDigest(input, newCommitments);
-
-  const draft = {
-    aggregateVolume: input.match.aggregateVolume,
-    batchId: input.batchId,
-    fillCount: input.match.fills.length,
-    matchTranscriptDigest: input.match.matchTranscriptDigest,
-    marginChangeCommitments: input.match.marginChangeCommitments,
-    marketId: input.market.marketId,
-    newCommitments,
-    openInterestDelta: input.match.openInterestDelta,
-    orderUpdates: input.match.orderUpdates,
-    residualSize: input.match.residualSize,
-    settlementDigest,
-    spentNullifiers: input.match.spentNullifiers,
-  };
-
+  const draft = prepareRisc0SettlementDraft(input);
   assertBatchSettlementCapacity(draft, input.match.executions.length);
+  assertRisc0DeploymentImageId(root);
   const proverOutput = await runRisc0Prover(root, input, draft);
   if (proverOutput.image_id !== RISC0_BATCH_MATCH_IMAGE_ID) {
     throw new Error(
@@ -112,6 +96,60 @@ export async function createRisc0BatchSettlement(
       proof,
     },
   };
+}
+
+export function prepareRisc0SettlementDraft(input: SettlementProofInput): Omit<BatchSettlement, "proof"> {
+  assertMatchTranscript(input);
+
+  const newCommitments = input.match.fills.map((fill) => fill.positionCommitment);
+  const settlementDigest = risc0SettlementDigest(input, newCommitments);
+  const intentByCommitment = new Map(input.intents.map((intent) => [intent.intentCommitment, intent]));
+  const residualBySource = new Map(input.match.residuals.map((residual) => [residual.sourceIntentCommitment, residual]));
+  const matchingPayloadCommitments = input.match.orderUpdates.map((update) => {
+    const intent = intentByCommitment.get(update.intentCommitment);
+    if (!intent) throw new Error("filled intent private payload is missing");
+    return matchingPayloadCommitment(intent);
+  });
+  const residualCommitments = input.match.orderUpdates.map((update) => update.residualCommitment ?? "0x0" as Hex);
+  const residualMargins = input.match.orderUpdates.map((update) => residualBySource.get(update.intentCommitment)?.margin ?? 0n);
+  const residualPayloadCommitments = input.match.orderUpdates.map((update) => {
+    const residual = residualBySource.get(update.intentCommitment);
+    if (Boolean(residual) !== Boolean(update.residualCommitment)) {
+      throw new Error("residual private payload does not match order update");
+    }
+    if (residual && residual.intentCommitment !== update.residualCommitment) {
+      throw new Error("residual commitment does not match order update");
+    }
+    return residual ? matchingPayloadCommitment(residual) : "0x0" as Hex;
+  });
+
+  const draft = {
+    aggregateVolume: input.match.aggregateVolume,
+    batchId: input.batchId,
+    fillCount: input.match.fills.length,
+    feeConfigHash: FEE_CONFIG_HASH,
+    grossTakerFee: input.match.fees.grossTakerFee,
+    makerRebate: input.match.fees.makerRebate,
+    insuranceFee: input.match.fees.insurance,
+    treasuryFee: input.match.fees.treasury,
+    makerIntents: input.match.executions.map((execution) => execution.makerIntentCommitment),
+    takerIntents: input.match.executions.map((execution) => execution.takerIntentCommitment),
+    matchTranscriptDigest: input.match.matchTranscriptDigest,
+    marginChangeCommitments: input.match.marginChangeCommitments,
+    matchingPayloadCommitments,
+    marketId: input.market.marketId,
+    newCommitments,
+    openInterestDelta: input.match.openInterestDelta,
+    orderUpdates: input.match.orderUpdates,
+    residualSize: input.match.residualSize,
+    residualCommitments,
+    residualMargins,
+    residualPayloadCommitments,
+    settlementDigest,
+    spentNullifiers: input.match.spentNullifiers,
+  };
+
+  return draft;
 }
 
 function proofMeta(receipt: {
@@ -243,20 +281,35 @@ export function validateRisc0Seal(seal: Uint8Array, expectedSelector: string): v
   }
 }
 
-function expectedRisc0Selector(root: string): string {
-  const deploymentPath = process.env.STELLAR_DEPLOYMENT_FILE || "deployments/testnet.json";
-  const absolutePath = deploymentPath.startsWith("/") ? deploymentPath : join(root, deploymentPath);
-  if (!existsSync(absolutePath)) {
-    throw new Error(`RISC0 deployment registry was not found: ${absolutePath}`);
+export function assertRisc0DeploymentImageId(root: string): void {
+  const deployment = readRisc0Deployment(root);
+  assertHex32(deployment.risc0BatchMatchImageId, "deployed RISC0 batch-match image id");
+  if (deployment.risc0BatchMatchImageId.toLowerCase() !== RISC0_BATCH_MATCH_IMAGE_ID) {
+    throw new Error(
+      `RISC0 deployment image id mismatch: expected ${RISC0_BATCH_MATCH_IMAGE_ID}, deployed ${deployment.risc0BatchMatchImageId}`,
+    );
   }
-  const deployment = JSON.parse(readFileSync(absolutePath, "utf8")) as {
-    risc0VerifierStack?: { selector?: unknown };
-  };
+}
+
+function expectedRisc0Selector(root: string): string {
+  const deployment = readRisc0Deployment(root);
   const selector = deployment.risc0VerifierStack?.selector;
   if (typeof selector !== "string") {
     throw new Error("RISC0 deployment registry is missing the Groth16 selector");
   }
   return selector;
+}
+
+function readRisc0Deployment(root: string): {
+  risc0BatchMatchImageId?: unknown;
+  risc0VerifierStack?: { selector?: unknown };
+} {
+  const deploymentPath = process.env.STELLAR_DEPLOYMENT_FILE || "deployments/testnet.json";
+  const absolutePath = deploymentPath.startsWith("/") ? deploymentPath : join(root, deploymentPath);
+  if (!existsSync(absolutePath)) {
+    throw new Error(`RISC0 deployment registry was not found: ${absolutePath}`);
+  }
+  return JSON.parse(readFileSync(absolutePath, "utf8"));
 }
 
 function assertHex32(value: unknown, label: string): asserts value is Hex {
@@ -298,6 +351,7 @@ function runBoundlessProver(root: string, inputPath: string, proofDir: string): 
             : {}),
           BOUNDLESS_IGNORE_PREFLIGHT: process.env.BOUNDLESS_IGNORE_PREFLIGHT ?? "1",
           PATH: risc0ToolPath(process.env.HOME || "", process.env.PATH),
+          PNLX_EXPECTED_BATCH_MATCH_IMAGE_ID: RISC0_BATCH_MATCH_IMAGE_ID,
           RISC0_DEV_MODE: "0",
         },
       },
@@ -390,8 +444,13 @@ function prebuiltProverIsFresh(root: string, binary: string): boolean {
     join(root, "risc0/batch-match/Cargo.lock"),
     join(root, "risc0/batch-match/host/Cargo.toml"),
     join(root, "risc0/batch-match/host/src"),
+    join(root, "risc0/batch-match/core/Cargo.toml"),
+    join(root, "risc0/batch-match/core/src"),
     join(root, "risc0/batch-match/methods/Cargo.toml"),
+    join(root, "risc0/batch-match/methods/build.rs"),
     join(root, "risc0/batch-match/methods/src"),
+    join(root, "risc0/batch-match/methods/guest/Cargo.toml"),
+    join(root, "risc0/batch-match/methods/guest/src"),
   ];
   for (const path of watched) {
     if (!existsSync(path)) continue;
@@ -448,14 +507,25 @@ function risc0ToolPath(home: string, existingPath = ""): string {
   ].filter(Boolean).join(delimiter);
 }
 
-function toProverInput(input: SettlementProofInput, draft: Omit<BatchSettlement, "proof">) {
+export function toProverInput(input: SettlementProofInput, draft: Omit<BatchSettlement, "proof">) {
   return {
     batch_id: input.batchId,
     expected: {
       aggregate_volume: draft.aggregateVolume,
       batch_id: draft.batchId,
       fill_count: draft.fillCount,
+      fee_config_hash: draft.feeConfigHash,
+      gross_taker_fee: draft.grossTakerFee,
+      maker_rebate: draft.makerRebate,
+      insurance_fee: draft.insuranceFee,
+      treasury_fee: draft.treasuryFee,
+      maker_intents: draft.makerIntents,
+      taker_intents: draft.takerIntents,
       margin_change_commitments: draft.marginChangeCommitments,
+      matching_payload_commitments: draft.matchingPayloadCommitments,
+      residual_commitments: draft.residualCommitments,
+      residual_payload_commitments: draft.residualPayloadCommitments,
+      residual_margins: draft.residualMargins.map(String),
       market_id: draft.marketId,
       match_transcript_digest: draft.matchTranscriptDigest,
       new_commitments: draft.newCommitments,

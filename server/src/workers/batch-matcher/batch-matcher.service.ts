@@ -1,11 +1,11 @@
 import {
   circuitPositionCommitment,
   circuitPositionNullifier,
-  commitMargin,
   digestToFieldHex,
   hashFields,
 } from "@pnlx/crypto";
-import type { Fill, Hex, MarginNote, PositionNote, PrivateMatchIntent } from "@pnlx/protocol-types";
+import type { Fill, Hex, PositionNote, PrivateMatchIntent } from "@pnlx/protocol-types";
+import { fillFees } from "@pnlx/market-math";
 import type { MatchExecution, MatchInput, MatchResult } from "@/workers/batch-matcher/batch-matcher.model";
 import { matchTranscriptDigest } from "@/workers/batch-matcher/match-transcript";
 import { MatchRiskEngine } from "@/workers/batch-matcher/risk-engine";
@@ -50,9 +50,13 @@ export class BatchMatcherService {
 
       const size = min(long.remaining, short.remaining);
       const price = executionPrice(long, short);
-      const longFill = createFill(input, long, size, price, fills.length);
-      const shortFill = createFill(input, short, size, price, fills.length + 1);
-      const execution = createExecution(long, short, size, price, longFill, shortFill);
+      const fees = fillFees(size, price);
+      const maker = long.sequence <= short.sequence ? long : short;
+      const longDelta = maker === long ? fees.makerRebate : -fees.grossTakerFee;
+      const shortDelta = maker === short ? fees.makerRebate : -fees.grossTakerFee;
+      const longFill = createFill(input, long, size, price, fills.length, longDelta);
+      const shortFill = createFill(input, short, size, price, fills.length + 1, shortDelta);
+      const execution = createExecution(long, short, size, price, longFill, shortFill, fees);
 
       fills.push(longFill, shortFill);
       executions.push(execution);
@@ -85,6 +89,12 @@ export class BatchMatcherService {
 
     const match = {
       executions,
+      fees: executions.reduce((total, execution) => ({
+        grossTakerFee: total.grossTakerFee + execution.grossTakerFee,
+        makerRebate: total.makerRebate + execution.makerRebate,
+        insurance: total.insurance + execution.insurance,
+        treasury: total.treasury + execution.treasury,
+      }), { grossTakerFee: 0n, makerRebate: 0n, insurance: 0n, treasury: 0n }),
       fills,
       marginChangeCommitments: createMarginChangeCommitments(orders),
       orderUpdates: createOrderUpdates(orders),
@@ -180,10 +190,12 @@ function createExecution(
   price: bigint,
   longFill: Fill,
   shortFill: Fill,
+  fees: ReturnType<typeof fillFees>,
 ): MatchExecution {
   const maker = long.sequence <= short.sequence ? long : short;
   const taker = maker === long ? short : long;
   return {
+    ...fees,
     longIntentCommitment: long.intent.intentCommitment,
     longLimitPrice: long.intent.limitPrice,
     longNoteNullifier: long.intent.noteNullifier,
@@ -200,8 +212,8 @@ function createExecution(
   };
 }
 
-function createFill(input: MatchInput, order: BookOrder, size: bigint, price: bigint, fillIndex: number): Fill {
-  const margin = allocateMargin(order, size);
+function createFill(input: MatchInput, order: BookOrder, size: bigint, price: bigint, fillIndex: number, feeDelta: bigint): Fill {
+  const margin = allocateMargin(order, size) + feeDelta;
   RISK.assertFill({ margin, market: input.market, price, size });
 
   const position: PositionNote = {
@@ -257,24 +269,9 @@ function allocateMargin(order: BookOrder, fillSize: bigint): bigint {
 }
 
 function createMarginChangeCommitments(orders: BookOrder[]): Hex[] {
-  const residualMarginChanges = orders
-    .filter((order) => order.filled > 0n && order.remaining > 0n)
-    .map((order) => {
-      const remainingMargin = order.intent.margin - order.allocatedMargin;
-      if (remainingMargin <= 0n) throw new Error("invalid margin change");
-      const note: MarginNote = {
-        assetId: "usdc",
-        amount: remainingMargin,
-        owner: order.intent.ownerCommitment,
-        rho: `${order.intent.intentCommitment}:margin-change:${order.filled}`,
-        blinding: `${order.intent.intentCommitment}:margin-change-blinding:${order.remaining}`,
-      };
-      return commitMargin(note);
-    });
-  const noteChanges = orders
+  return orders
     .filter((order) => order.filled > 0n && order.intent.noteChangeCommitment !== ZERO_HEX)
     .map((order) => order.intent.noteChangeCommitment);
-  return [...residualMarginChanges, ...noteChanges];
 }
 
 function residualCommitment(order: BookOrder): Hex {

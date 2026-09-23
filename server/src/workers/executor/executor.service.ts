@@ -172,7 +172,7 @@ export class ExecutorService implements PnlxExecutor {
     });
     const positionOpenings = createPositionOpenings(settlement, match.fills);
     const residualPrivateIntents = match.residuals;
-    const residualOrders = createResidualOrderRecords(settlement, residualPrivateIntents);
+    const residualOrders = createResidualOrderRecords(this.store, settlement, residualPrivateIntents);
     this.pendingPositionOpenings.set(
       settlement.settlementDigest,
       positionOpenings,
@@ -216,7 +216,7 @@ export class ExecutorService implements PnlxExecutor {
     });
     const positionOpenings = createPositionOpenings(settlement, match.fills);
     const residualPrivateIntents = match.residuals;
-    const residualOrders = createResidualOrderRecords(settlement, residualPrivateIntents);
+    const residualOrders = createResidualOrderRecords(this.store, settlement, residualPrivateIntents);
     this.pendingPositionOpenings.set(settlement.settlementDigest, positionOpenings);
     this.pendingResidualOrders.set(settlement.settlementDigest, residualOrders);
     for (const privateIntent of residualPrivateIntents) {
@@ -295,13 +295,19 @@ export class ExecutorService implements PnlxExecutor {
     const activeOrders = activeOrderRecords(this.store, settlement.marketId);
     const expectedSpentNullifiers = new Set<Hex>();
     const updatedIntents = new Set<Hex>();
-    for (const update of settlement.orderUpdates) {
+    for (const [index, update] of settlement.orderUpdates.entries()) {
       if (updatedIntents.has(update.intentCommitment)) {
         throw new Error("external settlement duplicate order update");
       }
       updatedIntents.add(update.intentCommitment);
       const order = activeOrders.get(update.intentCommitment);
       if (!order) throw new Error("external settlement unknown active order");
+      if (settlement.matchingPayloadCommitments[index] !== order.matchingPayloadCommitment) {
+        throw new Error("external settlement registered payload mismatch");
+      }
+      if (settlement.residualCommitments[index] !== (update.residualCommitment ?? ZERO_HEX)) {
+        throw new Error("external settlement residual commitment mismatch");
+      }
       if (update.status !== "filled" && update.status !== "partially-filled") {
         throw new Error("external settlement invalid order status");
       }
@@ -383,6 +389,15 @@ export class ExecutorService implements PnlxExecutor {
       if (residual.sourceIntentCommitment !== update.intentCommitment) {
         throw new Error("external residual order source mismatch");
       }
+      const updateIndex = settlement.orderUpdates.findIndex((item) => item.intentCommitment === update.intentCommitment);
+      if (settlement.residualPayloadCommitments[updateIndex] !== residual.matchingPayloadCommitment) {
+        throw new Error("external residual order payload mismatch");
+      }
+      const sourceSequence = this.store.intents.get(update.intentCommitment)?.submissionSequence ??
+        this.store.residualOrders.get(update.intentCommitment)?.submissionSequence;
+      if (sourceSequence !== undefined && residual.submissionSequence !== sourceSequence) {
+        throw new Error("external residual order priority mismatch");
+      }
       const owner = updateOwners.get(update.intentCommitment);
       if (!owner || owner !== residual.ownerCommitment) {
         throw new Error("external residual order owner mismatch");
@@ -394,6 +409,11 @@ export class ExecutorService implements PnlxExecutor {
     if (residualOrders.length !== residualUpdates.size) {
       throw new Error("external residual order count mismatch");
     }
+    for (const [index, update] of settlement.orderUpdates.entries()) {
+      if (!update.residualCommitment && settlement.residualPayloadCommitments[index] !== ZERO_HEX) {
+        throw new Error("external settlement unexpected residual payload");
+      }
+    }
     const privateResiduals = new Map(
       (transcript.privateMatchIntents ?? []).map((payload) => [payload.intentCommitment, payload]),
     );
@@ -401,6 +421,10 @@ export class ExecutorService implements PnlxExecutor {
       const payload = privateResiduals.get(residual.intentCommitment);
       if (!payload) throw new Error("external residual private match payload is required");
       assertPrivateMatchIntent(residual, payload);
+      const updateIndex = settlement.orderUpdates.findIndex((item) => item.residualCommitment === residual.intentCommitment);
+      if (settlement.residualMargins[updateIndex] !== payload.margin) {
+        throw new Error("external residual order margin mismatch");
+      }
     }
 
     this.validateExternalAccountEvents(
@@ -472,13 +496,13 @@ function activeOrderRecords(
   marketId: string,
 ): Map<
   Hex,
-  Pick<IntentRecord | ResidualOrderRecord, "intentCommitment" | "noteNullifier" | "ownerCommitment"> & {
+  Pick<IntentRecord | ResidualOrderRecord, "intentCommitment" | "noteNullifier" | "ownerCommitment" | "matchingPayloadCommitment"> & {
     noteChangeCommitment?: Hex;
   }
 > {
   const orders = new Map<
     Hex,
-    Pick<IntentRecord | ResidualOrderRecord, "intentCommitment" | "noteNullifier" | "ownerCommitment"> & {
+    Pick<IntentRecord | ResidualOrderRecord, "intentCommitment" | "noteNullifier" | "ownerCommitment" | "matchingPayloadCommitment"> & {
       noteChangeCommitment?: Hex;
     }
   >();
@@ -558,6 +582,7 @@ function createPositionOpenings(
 }
 
 function createResidualOrderRecords(
+  store: ProtocolStore,
   settlement: BatchSettlement,
   residuals: PrivateMatchIntent[],
 ): ResidualOrderRecord[] {
@@ -571,6 +596,8 @@ function createResidualOrderRecords(
     noteNullifier: residual.noteNullifier,
     ownerCommitment: residual.ownerCommitment,
     sourceIntentCommitment: residual.sourceIntentCommitment ?? residual.intentCommitment,
+    submissionSequence: store.intents.get(residual.sourceIntentCommitment ?? residual.intentCommitment)?.submissionSequence ??
+      store.residualOrders.get(residual.sourceIntentCommitment ?? residual.intentCommitment)?.submissionSequence,
     updatedAt: now,
   }));
 }

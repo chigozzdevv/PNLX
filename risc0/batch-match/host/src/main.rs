@@ -108,6 +108,7 @@ async fn main() -> Result<()> {
 
 async fn run(args: Args) -> Result<()> {
     reject_dev_mode()?;
+    verify_expected_image_id()?;
     let input_path = args.input_path.as_ref().expect("validated input path");
     let output_dir = args
         .output_dir
@@ -268,6 +269,17 @@ fn reject_dev_mode() -> Result<()> {
         .unwrap_or(false);
     if enabled {
         anyhow::bail!("RISC0_DEV_MODE must be disabled for Boundless Groth16 batch-match proving");
+    }
+    Ok(())
+}
+
+fn verify_expected_image_id() -> Result<()> {
+    let Ok(expected) = env::var("PNLX_EXPECTED_BATCH_MATCH_IMAGE_ID") else {
+        return Ok(());
+    };
+    let actual = format!("0x{}", hex::encode(image_id_bytes()));
+    if !actual.eq_ignore_ascii_case(&expected) {
+        anyhow::bail!("batch-match guest image ID does not match the pinned deployment image ID: expected {expected}, built {actual}");
     }
     Ok(())
 }

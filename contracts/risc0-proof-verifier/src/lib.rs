@@ -100,6 +100,19 @@ impl Risc0ProofVerifier {
         );
     }
 
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let governance = GovernanceClient::new(&env, &Self::governance(env.clone()));
+        governance.upgrade_authority().require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+
+    pub fn set_image_id(env: Env, image_id: BytesN<32>) {
+        validate_hash(&env, &image_id);
+        let governance = GovernanceClient::new(&env, &Self::governance(env.clone()));
+        governance.upgrade_authority().require_auth();
+        env.storage().instance().set(&DataKey::ImageId, &image_id);
+    }
+
     pub fn governance(env: Env) -> Address {
         get_address(&env, DataKey::Governance)
     }
@@ -150,6 +163,7 @@ fn validate_hash(env: &Env, value: &BytesN<32>) {
 #[cfg(test)]
 mod test {
     use super::*;
+    use governance::{Governance, GovernanceClient};
     use soroban_sdk::testutils::Address as _;
 
     #[test]
@@ -167,6 +181,34 @@ mod test {
             &BytesN::from_array(&env, &[2; 32]),
         );
         assert_eq!(client.image_id(), image_id);
+    }
+
+    #[test]
+    fn changes_the_guest_image_with_upgrade_authority_without_pausing_exits() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let governance_id = env.register(Governance, ());
+        let governance = GovernanceClient::new(&env, &governance_id);
+        governance.init(&Address::generate(&env));
+        let upgrade_authority = Address::generate(&env);
+        let contract = env.register(Risc0ProofVerifier, ());
+        let client = Risc0ProofVerifierClient::new(&env, &contract);
+        let original = BytesN::from_array(&env, &[7; 32]);
+        let replacement = BytesN::from_array(&env, &[8; 32]);
+        client.init(
+            &governance_id,
+            &Address::generate(&env),
+            &Address::generate(&env),
+            &BytesN::from_array(&env, &[1; 32]),
+            &original,
+            &BytesN::from_array(&env, &[2; 32]),
+        );
+        assert!(client.try_set_image_id(&replacement).is_err());
+        assert_eq!(client.image_id(), original);
+        governance.set_upgrade_authority(&upgrade_authority);
+        client.set_image_id(&replacement);
+        assert_eq!(client.image_id(), replacement);
+        assert!(!governance.paused());
     }
 
     #[test]

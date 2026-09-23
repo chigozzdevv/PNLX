@@ -9,6 +9,12 @@ export interface MatchInput {
 export interface MatchResult {
   executions: MatchExecution[];
   fills: Fill[];
+  fees: {
+    grossTakerFee: bigint;
+    makerRebate: bigint;
+    insurance: bigint;
+    treasury: bigint;
+  };
   matchTranscriptDigest: Hex;
   marginChangeCommitments: Hex[];
   orderUpdates: OrderLifecycleUpdate[];
@@ -22,6 +28,10 @@ export interface MatchResult {
 }
 
 export interface MatchExecution {
+  grossTakerFee: bigint;
+  makerRebate: bigint;
+  insurance: bigint;
+  treasury: bigint;
   longIntentCommitment: Hex;
   longLimitPrice: bigint;
   longNoteNullifier: Hex;

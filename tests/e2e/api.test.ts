@@ -10,7 +10,7 @@ import {
   ownerCommitment,
   positionMerkleProof,
 } from "@pnlx/crypto";
-import { PRICE_SCALE, settleClose } from "@pnlx/market-math";
+import { PRICE_SCALE, fillFees, settleClose } from "@pnlx/market-math";
 import { circuitKey } from "@pnlx/proof-system";
 import type { BatchSettlement, Hex, ProofMeta, TradeIntent } from "@pnlx/protocol-types";
 import { createCircuitMarginNote, createCircuitPositionNote } from "@pnlx/sdk";
@@ -26,11 +26,13 @@ import { createExecutor } from "@/workers/executor/executor.worker";
 import { ExecutorService } from "@/workers/executor/executor.service";
 import { FileProtocolStore } from "@/shared/state/persistent-store";
 import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
+import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
 import { ProverService } from "@/workers/prover/prover.service";
 import type { SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
 import {
   RISC0_BATCH_MATCH_CIRCUIT_KEY,
   RISC0_STELLAR_VERIFIER_HASH,
+  prepareRisc0SettlementDraft,
 } from "@/workers/risc0-matcher/risc0-proof";
 
 process.env.ASSET_CUSTODY_REQUIRED = "false";
@@ -324,7 +326,7 @@ function createSettledPositionWitness(input: {
     side: input.side,
     size: input.size,
     limitPrice: input.intent.limitPrice,
-    margin: input.margin,
+    margin: input.intent.margin,
     noteNullifier: input.intent.noteNullifier,
     nonce: input.intent.nonce,
     salt: input.intent.salt,
@@ -438,7 +440,7 @@ async function createCloseableLongPositionFixture(
       fillIndex: 0,
       fundingIndex: 0n,
       intent: long.intent,
-      margin: 12_000n,
+      margin: 12_000n + fillFees(1n, 51_000n * PRICE_SCALE).makerRebate,
       owner: `${suffix}-long-owner`,
       side: "long",
       size: 1n,
@@ -2357,7 +2359,7 @@ describe("server api", () => {
       fillIndex: 0,
       fundingIndex: 0n,
       intent: long.intent,
-      margin: 12_000n,
+      margin: 12_000n + fillFees(1n, 51_000n * PRICE_SCALE).makerRebate,
       owner: "shared-long-owner",
       side: "long",
       size: 1n,
@@ -2412,7 +2414,7 @@ describe("server api", () => {
       closeSize: 1n,
       entryPrice: 51_000n * PRICE_SCALE,
       markPrice: closeMarkPrice,
-      margin: 12_000n,
+      margin: longPosition.position.margin,
       fundingPayment: 0n,
       fee: 10n,
     });
@@ -2448,7 +2450,7 @@ describe("server api", () => {
       closeSize: 1n,
       entryPrice: 51_000n * PRICE_SCALE,
       markPrice: closeMarkPrice,
-      margin: 12_000n,
+      margin: longPosition.position.margin,
       fundingIndex: 0n,
       fundingPayment: 0n,
       fee: 10n,
@@ -2495,7 +2497,7 @@ describe("server api", () => {
       closeSize: 1n,
       entryPrice: 51_000n * PRICE_SCALE,
       markPrice: fixture.closeMarkPrice,
-      margin: 12_000n,
+      margin: fixture.longPosition.position.margin,
       fundingPayment: 0n,
       fee: 10n,
     });
@@ -2544,7 +2546,7 @@ describe("server api", () => {
       closeSize: 1n,
       entryPrice: 51_000n * PRICE_SCALE,
       markPrice: fixture.closeMarkPrice,
-      margin: 12_000n,
+      margin: fixture.longPosition.position.margin,
       fundingIndex: 0n,
       fundingPayment: 0n,
       fee: 10n,
@@ -2705,7 +2707,7 @@ describe("server api", () => {
       size: 1n,
       entryPrice: 51_000n * PRICE_SCALE,
       markPrice: liquidationMarkPrice,
-      margin: 12_000n,
+      margin: fixture.longPosition.position.margin,
       fundingPayment: 0n,
       fundingIndex: 0n,
       maintenanceRate: fixture.market.maintenanceMarginRate,
@@ -2914,7 +2916,7 @@ describe("server api", () => {
 	      fillIndex: 0,
 	      fundingIndex: 160n,
 	      intent: aliceTradeIntent,
-      margin: 12_000n,
+      margin: 12_000n + fillFees(1n, 51_000n * PRICE_SCALE).makerRebate,
       owner: "alice",
       side: "long",
       size: 1n,
@@ -2925,7 +2927,7 @@ describe("server api", () => {
 	      fillIndex: 1,
 	      fundingIndex: 160n,
 	      intent: bobTradeIntent,
-      margin: 12_000n,
+      margin: 12_000n - fillFees(1n, 51_000n * PRICE_SCALE).grossTakerFee,
       owner: "bob",
       side: "short",
       size: 1n,
@@ -2947,7 +2949,7 @@ describe("server api", () => {
       size: 1n,
       entryPrice: 51_000n * PRICE_SCALE,
       markPrice: 60_000n * PRICE_SCALE,
-      margin: 12_000n,
+      margin: bobPosition.position.margin,
       fundingPayment: 0n,
       fundingIndex: 160n,
       maintenanceRate: 100_000n,
@@ -3022,12 +3024,12 @@ describe("server api", () => {
       closeSize: 1n,
       entryPrice: 51_000n * PRICE_SCALE,
       markPrice: 56_000n * PRICE_SCALE,
-      margin: 12_000n,
+      margin: alicePosition.position.margin,
       fundingPayment: 0n,
       fee: 10n,
     });
     expect(closeSettlement.realizedPnl).toBe(5_000n);
-    expect(closeSettlement.newMargin).toBe(16_990n);
+    expect(closeSettlement.newMargin).toBe(16_990n + fillFees(1n, 51_000n * PRICE_SCALE).makerRebate);
     const aliceOwner = ownerCommitment("alice");
     const closedPosition = createCircuitPositionNote({
       marketId: market.marketId,
@@ -3061,7 +3063,7 @@ describe("server api", () => {
       closeSize: "1",
       entryPrice: (51_000n * PRICE_SCALE).toString(),
       markPrice: (56_000n * PRICE_SCALE).toString(),
-      margin: "12000",
+      margin: alicePosition.position.margin.toString(),
       fundingIndex: "160",
       fundingPayment: "0",
       fee: "10",
@@ -3092,7 +3094,7 @@ describe("server api", () => {
     expect(positionCloseProof.verifierHash).toBe(positionCloseProof.vkHash);
     expect(positionCloseText).not.toContain("entryPrice");
     expect(positionCloseText).not.toContain("realizedPnl");
-    expect(positionCloseText).not.toContain("16990");
+    expect(positionCloseText).not.toContain(closeSettlement.newMargin.toString());
 
     const disclosureSubject = hashFields("subject", ["alice"]);
     const disclosureClaim = "margin-ratio-above-threshold";
@@ -3478,6 +3480,13 @@ function prooflessProofs(): ConstructorParameters<typeof MatcherService>[1] {
         aggregateVolume: input.match.aggregateVolume,
         batchId: input.batchId,
         fillCount: input.match.fills.length,
+        feeConfigHash: FEE_CONFIG_HASH,
+        grossTakerFee: input.match.fees.grossTakerFee,
+        makerRebate: input.match.fees.makerRebate,
+        insuranceFee: input.match.fees.insurance,
+        treasuryFee: input.match.fees.treasury,
+        makerIntents: input.match.executions.map((execution) => execution.makerIntentCommitment),
+        takerIntents: input.match.executions.map((execution) => execution.takerIntentCommitment),
         marginChangeCommitments: input.match.marginChangeCommitments,
         marketId: input.market.marketId,
         matchTranscriptDigest: input.match.matchTranscriptDigest,
@@ -3487,6 +3496,10 @@ function prooflessProofs(): ConstructorParameters<typeof MatcherService>[1] {
         residualSize: input.match.residualSize,
         settlementDigest: hashFields("test-settlement", [input.batchId, input.match.matchTranscriptDigest]),
         spentNullifiers: input.match.spentNullifiers,
+        matchingPayloadCommitments: prepareRisc0SettlementDraft(input).matchingPayloadCommitments,
+        residualCommitments: prepareRisc0SettlementDraft(input).residualCommitments,
+        residualMargins: prepareRisc0SettlementDraft(input).residualMargins,
+        residualPayloadCommitments: prepareRisc0SettlementDraft(input).residualPayloadCommitments,
       };
       const publicInputHash = batchSettlementPublicInputHash({
         ...draft,

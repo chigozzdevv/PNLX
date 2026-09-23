@@ -12,7 +12,9 @@ import {
   createRisc0BatchSettlement,
 } from "@/workers/risc0-matcher/risc0-proof";
 import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
+import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
 import { matchTranscriptDigest } from "@/workers/batch-matcher/match-transcript";
+import { matchingPayloadCommitment } from "@/workers/batch-matcher/private-intent";
 
 export class ProofCoordinatorService {
   private readonly artifacts = new Map<string, ProofArtifact>();
@@ -48,11 +50,31 @@ export class ProofCoordinatorService {
 
   private createOfflineTestSettlement(input: SettlementProofInput): SettlementProof {
     const newCommitments = input.match.fills.map((fill) => fill.positionCommitment);
+    const privateByIntent = new Map(input.intents.map((intent) => [intent.intentCommitment, intent]));
+    const residualBySource = new Map(input.match.residuals.map((intent) => [intent.sourceIntentCommitment, intent]));
     const draft = {
       aggregateVolume: input.match.aggregateVolume,
       batchId: input.batchId,
       fillCount: input.match.fills.length,
+      feeConfigHash: FEE_CONFIG_HASH,
+      grossTakerFee: input.match.fees.grossTakerFee,
+      makerRebate: input.match.fees.makerRebate,
+      insuranceFee: input.match.fees.insurance,
+      treasuryFee: input.match.fees.treasury,
+      makerIntents: input.match.executions.map((execution) => execution.makerIntentCommitment),
+      takerIntents: input.match.executions.map((execution) => execution.takerIntentCommitment),
       marginChangeCommitments: input.match.marginChangeCommitments,
+      matchingPayloadCommitments: input.match.orderUpdates.map((update) => {
+        const intent = privateByIntent.get(update.intentCommitment);
+        if (!intent) throw new Error("filled intent private payload is missing");
+        return matchingPayloadCommitment(intent);
+      }),
+      residualCommitments: input.match.orderUpdates.map((update) => update.residualCommitment ?? "0x0" as const),
+      residualMargins: input.match.orderUpdates.map((update) => residualBySource.get(update.intentCommitment)?.margin ?? 0n),
+      residualPayloadCommitments: input.match.orderUpdates.map((update) => {
+        const residual = residualBySource.get(update.intentCommitment);
+        return residual ? matchingPayloadCommitment(residual) : "0x0" as const;
+      }),
       marketId: input.market.marketId,
       matchTranscriptDigest: input.match.matchTranscriptDigest,
       newCommitments,

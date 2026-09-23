@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 interface Registry {
@@ -7,16 +8,20 @@ interface Registry {
   network: string;
   source: string;
   sourceAddress: string;
+  upgradeAuthority?: string;
+  wasmHashes?: Record<string, string>;
   [key: string]: unknown;
 }
 
 interface Options {
+  alias: string;
   allocationLimitBps: number;
   asset: string;
   dryRun: boolean;
   maker: string;
   registry: string;
   source: string;
+  upgradeAuthority: string;
   wasm: string;
 }
 
@@ -26,21 +31,25 @@ if (import.meta.main) {
 
 export function parseOptions(argv: string[]): Options {
   return {
+    alias: value(argv, "--alias", "pnlx-liquidity-vault"),
     allocationLimitBps: Number(value(argv, "--allocation-limit-bps", "8000")),
     asset: value(argv, "--asset", process.env.COLLATERAL_TOKEN_CONTRACT ?? ""),
     dryRun: argv.includes("--dry-run"),
     maker: value(argv, "--maker", ""),
     registry: value(argv, "--registry", "deployments/testnet.json"),
     source: value(argv, "--source", ""),
+    upgradeAuthority: value(argv, "--upgrade-authority", ""),
     wasm: value(argv, "--wasm", "contracts/target/stellar/liquidity_vault.wasm"),
   };
 }
 
 export function deployLiquidityVault(options: Options): void {
   const registryPath = resolve(options.registry);
+  const checkpointPath = `${registryPath}.vault.partial`;
   const registry = JSON.parse(readFileSync(registryPath, "utf8")) as Registry;
   if (registry.network !== "testnet") throw new Error("liquidity vault deployment is Testnet-only");
   if (registry.contracts["liquidity-vault"]) throw new Error("liquidity vault is already registered");
+  if (existsSync(checkpointPath)) throw new Error(`unfinished vault deployment: ${checkpointPath}`);
   const source = options.source;
   if (!source) throw new Error("dedicated vault operator source is required");
   if (!/^C[A-Z2-7]{55}$/.test(options.asset)) throw new Error("valid USDC asset contract is required");
@@ -59,10 +68,18 @@ export function deployLiquidityVault(options: Options): void {
   if (operator === registry.sourceAddress) throw new Error("use a separate vault maker account");
   const maker = options.maker || operator;
   if (maker !== operator) throw new Error("maker must equal the vault operator account");
+  const upgradeCandidate = options.upgradeAuthority || registry.upgradeAuthority;
+  if (!upgradeCandidate) throw new Error("--upgrade-authority is required");
+  const upgradeAuthority = /^G[A-Z2-7]{55}$/.test(upgradeCandidate)
+    ? upgradeCandidate
+    : run(["stellar", "keys", "address", upgradeCandidate]).trim();
+  if (!/^G[A-Z2-7]{55}$/.test(upgradeAuthority) || upgradeAuthority === operator || upgradeAuthority === registry.sourceAddress) {
+    throw new Error("upgrade authority must be a separate Stellar account");
+  }
 
   const deployCommand = [
     "stellar", "contract", "deploy", "--wasm", options.wasm,
-    "--source", source, "--network", "testnet", "--alias", "pnlx-liquidity-vault", "--auto-sign",
+    "--source", source, "--network", "testnet", "--alias", options.alias, "--auto-sign",
     "--", "--asset", options.asset, "--operator", operator, "--maker", maker,
     "--allocation_limit_bps", String(options.allocationLimitBps),
   ];
@@ -74,6 +91,12 @@ export function deployLiquidityVault(options: Options): void {
   const deployed = run(deployCommand);
   const id = deployed.match(/\bC[A-Z2-7]{55}\b/)?.[0];
   if (!id) throw new Error(`vault deployment returned no contract id: ${deployed}`);
+  writeFileSync(checkpointPath, `${JSON.stringify({ id, asset: options.asset, operator, upgradeAuthority }, null, 2)}\n`);
+  run([
+    "stellar", "contract", "invoke", "--id", id, "--source", source,
+    "--network", "testnet", "--send", "yes", "--auto-sign", "--",
+    "set_upgrade_authority", "--authority", upgradeAuthority,
+  ]);
 
   for (const [method, expected] of [
     ["asset", options.asset],
@@ -81,6 +104,7 @@ export function deployLiquidityVault(options: Options): void {
     ["maker", maker],
     ["allocation_limit_bps", String(options.allocationLimitBps)],
     ["paused", "true"],
+    ["upgrade_authority", upgradeAuthority],
   ]) {
     const output = run([
       "stellar", "contract", "invoke", "--id", id, "--source", source,
@@ -94,7 +118,12 @@ export function deployLiquidityVault(options: Options): void {
   const current = JSON.parse(readFileSync(registryPath, "utf8")) as Registry;
   if (current.contracts["liquidity-vault"]) throw new Error("liquidity vault was registered during deployment");
   current.contracts["liquidity-vault"] = id;
-  writeFileSync(registryPath, `${JSON.stringify(current, null, 2)}\n`);
+  current.wasmHashes ??= {};
+  current.wasmHashes["liquidity-vault"] = `0x${createHash("sha256").update(readFileSync(options.wasm)).digest("hex")}`;
+  const pendingRegistryPath = `${registryPath}.${process.pid}.tmp`;
+  writeFileSync(pendingRegistryPath, `${JSON.stringify(current, null, 2)}\n`);
+  renameSync(pendingRegistryPath, registryPath);
+  unlinkSync(checkpointPath);
   process.stdout.write(`${id}\n`);
 }
 

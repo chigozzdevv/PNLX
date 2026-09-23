@@ -83,6 +83,7 @@ export interface RemoteMatcherConfig {
 }
 
 export interface PrivatePositionOpeningEvent {
+  entryFee?: bigint;
   entryPrice: bigint;
   fundingIndex: bigint;
   margin: bigint;

@@ -11,6 +11,7 @@ import { protocolUsdcToDisplay } from "@/lib/asset-units";
 import { formatUsd } from "@/lib/format";
 import { withdrawPrivateMarginNote } from "@/lib/collateral-withdraw";
 import { cancelOrderGroup } from "@/lib/order-cancel";
+import { recoverCancelledResiduals } from "@/lib/residual-claim";
 import type { OwnerOrderGroup } from "@/lib/order-groups";
 import { closePosition } from "@/lib/position-close";
 import { privateMarginNotes, reconcilePrivateMarginNotes } from "@/lib/private-margin-notes";
@@ -95,7 +96,9 @@ export function PortfolioRoute() {
         closePrice,
         entryPrice,
         ...settlement,
-        initialMargin: position.collateral,
+        fee: settlement.fee + (position.entryFee ?? 0),
+        initialMargin: position.collateral === undefined
+          ? undefined : position.collateral + (position.entryFee ?? 0),
         marketId: position.marketId,
         side,
         size,
@@ -125,10 +128,9 @@ export function PortfolioRoute() {
     setCancellingOrderId(order.id);
     setPositionActionMessage(undefined);
     try {
-      const result = await cancelOrderGroup({
-        group: order,
-        token: wallet.session.token,
-      });
+      const result = order.activeOrders.length
+        ? await cancelOrderGroup({ group: order, token: wallet.session.token })
+        : { cancelled: [] as Awaited<ReturnType<typeof cancelOrderGroup>>["cancelled"] };
       reconcilePrivateMarginNotes({
         orders: result.cancelled.map((cancelled) => ({
           intentCommitment: cancelled.intentCommitment,
@@ -138,9 +140,14 @@ export function PortfolioRoute() {
         })),
       });
       if (result.error) throw result.error;
+      const recovered = await recoverCancelledResiduals({
+        cancelledIntentCommitments: result.cancelled.map((item) => item.intentCommitment),
+        orders: order.orders,
+        session: wallet.session,
+      });
       setPositionActionMessage({
         tone: "success",
-        text: "Order cancelled",
+        text: order.activeOrders.length ? (recovered ? "Order cancelled and collateral recovered" : "Order cancelled") : "Collateral recovered",
       });
     } catch (error) {
       setPositionActionMessage({

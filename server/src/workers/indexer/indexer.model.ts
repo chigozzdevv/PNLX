@@ -2,6 +2,12 @@ import type { BatchExecutionPhase, BatchSettlementCapacity, Hex, OrderStatus, Po
 
 export interface MarketPublicSnapshot {
   aggregateVolume: string;
+  confirmedFees: {
+    grossTaker: string;
+    makerRebate: string;
+    insurance: string;
+    treasury: string;
+  };
   conditionalCloseCount: number;
   conditionalOrderCount: number;
   fundingIndex: string;

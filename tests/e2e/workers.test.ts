@@ -5,6 +5,7 @@ import {
   hashFields,
   intentBindingFields,
   intentOwnerCommitmentField,
+  ownerCommitment,
 } from "@pnlx/crypto";
 import { createECDH } from "node:crypto";
 import { mkdtempSync } from "node:fs";
@@ -20,6 +21,7 @@ import type {
 } from "@pnlx/protocol-types";
 import { loadEnv } from "@/config/env";
 import { BatchesService } from "@/features/batches/batches.service";
+import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
 import { IntentsService } from "@/features/intents/intents.service";
 import { MarketsService } from "@/features/markets/markets.service";
 import {
@@ -53,6 +55,7 @@ import { createOnchainRelay } from "@/workers/onchain/onchain.worker";
 import { OracleService } from "@/workers/oracle/oracle.service";
 import type { SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
+import { prepareRisc0SettlementDraft } from "@/workers/risc0-matcher/risc0-proof";
 
 describe("support workers", () => {
   test("preserves the authenticated Hermes base path", () => {
@@ -746,7 +749,7 @@ describe("support workers", () => {
     expect(executor.store.orderLifecycle.get(record.intentCommitment)?.status).toBe("open");
   });
 
-  test("cancels settlement-created residuals without relaying an unknown registry intent", () => {
+  test("cancels settlement-created residuals through the registry", () => {
     const executor = createExecutor();
     const residual = {
       batchId: "settled-batch",
@@ -765,7 +768,7 @@ describe("support workers", () => {
       enabled: true,
       cancelIntent() {
         relayed = true;
-        throw new Error("residual is not registered in IntentRegistry");
+        return { relays: [{ functionName: "cancel", submitted: true, txHash: hashFields("tx", ["residual-cancel"]) }] };
       },
     };
     const orders = new OrdersService(
@@ -776,7 +779,56 @@ describe("support workers", () => {
     );
 
     expect(orders.cancel({ intentCommitment: residual.intentCommitment }).order.status).toBe("cancelled");
-    expect(relayed).toBe(false);
+    expect(relayed).toBe(true);
+  });
+
+  test("releases a cancelled residual only through its owner's proven note claim", () => {
+    const executor = createExecutor();
+    const owner = "residual-claim-owner";
+    const intentCommitment = hashFields("intent", ["residual-claim"]);
+    executor.store.addResidualOrder({
+      batchId: "settled-batch",
+      createdAt: Date.now(),
+      intentCommitment,
+      marketId: "xlm-usd-perp",
+      matchingPayloadCommitment: hashFields("matching-payload", ["residual-claim"]),
+      noteNullifier: hashFields("nullifier", ["residual-claim"]),
+      ownerCommitment: ownerCommitment(owner),
+      sourceIntentCommitment: hashFields("intent", ["residual-source"]),
+      updatedAt: Date.now(),
+    });
+    executor.store.cancelOrder(intentCommitment);
+    const tokenDigest = hashFields("token", ["usdc"]);
+    const commitment = hashFields("claim-note", ["residual-claim"]);
+    let claimed: `0x${string}` | undefined;
+    let claimCalls = 0;
+    const onchain = {
+      enabled: true,
+      residualMargin: () => claimed ? 0n : 100n,
+      claimedResidual: () => claimed,
+      verifyProof: () => ({ relays: [{ functionName: "verify_and_record", submitted: true, txHash: hashFields("tx", ["claim-proof"]) }] }),
+      claimResidual: () => {
+        claimCalls += 1;
+        claimed = commitment;
+        return { relays: [{ functionName: "claim_residual", submitted: true, txHash: hashFields("tx", ["claim"]) }] };
+      },
+    };
+    const orders = new OrdersService(
+      executor,
+      { assertBoundProof() {} } as never,
+      onchain as never,
+      { intentRegistryOnchainRequired: true, collateralTokenDigest: tokenDigest },
+    );
+    const input = { intentCommitment, depositProof: {
+      amount: 100n, commitment, tokenDigest, proof: proof("deposit-note"),
+    } };
+    expect(() => orders.claimResidual(input, "other-owner")).toThrow("order does not match authenticated account");
+    expect(() => orders.claimResidual({ ...input, depositProof: { ...input.depositProof, amount: 99n } }, owner))
+      .toThrow("residual claim amount mismatch");
+    expect(orders.claimResidual(input, owner).commitment).toBe(commitment);
+    expect(executor.store.marginCommitments.has(commitment)).toBe(true);
+    expect(orders.claimResidual(input, owner).commitment).toBe(commitment);
+    expect(claimCalls).toBe(1);
   });
 
   test("persists protocol state across executor restarts", () => {
@@ -1330,6 +1382,8 @@ describe("support workers", () => {
         return embeddedMatcher.createSettlementTranscript(input);
       },
     };
+    let confirmedOnchain = false;
+    const checkedDigests: string[] = [];
     const batchExecutor = createBatchExecutor(
       executor,
       matcher,
@@ -1342,7 +1396,12 @@ describe("support workers", () => {
         positionRoot() {
           return executor.store.positionMembershipRoot();
         },
+        async isBatchSettledAsync(_batchId: string, _marketId: string, settlementDigest: string) {
+          checkedDigests.push(settlementDigest);
+          return confirmedOnchain;
+        },
         async settleBatchAsync(settlement: BatchSettlement) {
+          confirmedOnchain = true;
           return {
             relays: [
               {
@@ -1391,6 +1450,12 @@ describe("support workers", () => {
     expect(result.results[0].record.status).toBe("settled");
     expect(result.results[0].record.batchId).toBe("runner-btc-usd-perp-1234");
     expect(result.results[0].record.fillCount).toBe(2);
+    const confirmedDigest = result.results[0].record.settlementDigest;
+    if (!confirmedDigest) throw new Error("settlement digest is required");
+    expect(checkedDigests).toEqual([
+      confirmedDigest,
+      confirmedDigest,
+    ]);
     expect("intentCommitments" in result.results[0].record).toBe(false);
     expect(Object.keys(result.results[0].record.phaseTimestamps ?? {}).sort()).toEqual([
       "batch-settlement",
@@ -2736,7 +2801,18 @@ describe("support workers", () => {
       newCommitments: [hashFields("position", [batchId])],
       marginChangeCommitments: [],
       spentNullifiers: [hashFields("nullifier", [batchId])],
+      matchingPayloadCommitments: [hashFields("matching-payload", [batchId, 0]), hashFields("matching-payload", [batchId, 1])],
+      residualCommitments: ["0x0", "0x0"],
+      residualMargins: [0n, 0n],
+      residualPayloadCommitments: ["0x0", "0x0"],
       fillCount: 1,
+      feeConfigHash: FEE_CONFIG_HASH,
+      grossTakerFee: 0n,
+      makerRebate: 0n,
+      insuranceFee: 0n,
+      treasuryFee: 0n,
+      makerIntents: [],
+      takerIntents: [],
       aggregateVolume: 50_000n,
       openInterestDelta: 1n,
       orderUpdates: [
@@ -2775,6 +2851,7 @@ describe("support workers", () => {
     expect(calls[1]).toContain(JSON.stringify([hashFields("position", [batchId]).slice(2)]));
     expect(calls[1]).toContain(JSON.stringify([]));
     expect(calls[1]).toContain(JSON.stringify([hashFields("nullifier", [batchId]).slice(2)]));
+    expect(calls[1]).toContain(JSON.stringify(["0".repeat(64), "0".repeat(64)]));
     expect(calls[1]).toContain("50000");
     expect(calls[1]).toContain("0");
   });
@@ -4364,6 +4441,13 @@ function externalSettlement(input: {
     aggregateVolume: BigInt(input.newCommitments.length),
     batchId: input.batchId,
     fillCount: input.newCommitments.length,
+    feeConfigHash: FEE_CONFIG_HASH,
+    grossTakerFee: 0n,
+    makerRebate: 0n,
+    insuranceFee: 0n,
+    treasuryFee: 0n,
+    makerIntents: [],
+    takerIntents: [],
     marginChangeCommitments: [],
     marketId: input.marketId,
     matchTranscriptDigest: hashFields("external-match-transcript", [input.batchId]),
@@ -4373,6 +4457,15 @@ function externalSettlement(input: {
     residualSize: 0n,
     settlementDigest: hashFields("external-settlement", [input.batchId]),
     spentNullifiers: input.spentNullifiers,
+    matchingPayloadCommitments: input.orderUpdates.map((update) =>
+      input.store.intents.get(update.intentCommitment)?.matchingPayloadCommitment ??
+      input.store.residualOrders.get(update.intentCommitment)?.matchingPayloadCommitment ??
+      "0x0"),
+    residualCommitments: input.orderUpdates.map((update) => update.residualCommitment ?? "0x0"),
+    residualMargins: input.orderUpdates.map(() => 0n),
+    residualPayloadCommitments: input.orderUpdates.map((update) => update.residualCommitment
+      ? input.store.residualOrders.get(update.residualCommitment)?.matchingPayloadCommitment ?? "0x0"
+      : "0x0"),
   };
   const publicInputHash = batchSettlementPublicInputHash({
     ...draft,
@@ -4409,6 +4502,13 @@ function prooflessProofs(): ConstructorParameters<typeof MatcherService>[1] {
         aggregateVolume: input.match.aggregateVolume,
         batchId: input.batchId,
         fillCount: input.match.fills.length,
+        feeConfigHash: FEE_CONFIG_HASH,
+        grossTakerFee: input.match.fees.grossTakerFee,
+        makerRebate: input.match.fees.makerRebate,
+        insuranceFee: input.match.fees.insurance,
+        treasuryFee: input.match.fees.treasury,
+        makerIntents: input.match.executions.map((execution) => execution.makerIntentCommitment),
+        takerIntents: input.match.executions.map((execution) => execution.takerIntentCommitment),
         marginChangeCommitments: input.match.marginChangeCommitments,
         marketId: input.market.marketId,
         matchTranscriptDigest: input.match.matchTranscriptDigest,
@@ -4418,6 +4518,10 @@ function prooflessProofs(): ConstructorParameters<typeof MatcherService>[1] {
         residualSize: input.match.residualSize,
         settlementDigest: hashFields("test-settlement", [input.batchId, input.match.matchTranscriptDigest]),
         spentNullifiers: input.match.spentNullifiers,
+        matchingPayloadCommitments: prepareRisc0SettlementDraft(input).matchingPayloadCommitments,
+        residualCommitments: prepareRisc0SettlementDraft(input).residualCommitments,
+        residualMargins: prepareRisc0SettlementDraft(input).residualMargins,
+        residualPayloadCommitments: prepareRisc0SettlementDraft(input).residualPayloadCommitments,
       };
       const publicInputHash = batchSettlementPublicInputHash({
         ...draft,

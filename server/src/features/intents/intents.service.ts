@@ -71,11 +71,18 @@ export class IntentsService {
     const submissionTxHash = relay?.relays.find(
       (item) => item.functionName === "submit" && item.submitted,
     )?.txHash;
+    const submissionSequence = this.onchain?.enabled
+      ? this.onchain.intentSubmissionSequence?.(prepared.record.intentCommitment)
+      : undefined;
+    if (this.env.intentRegistryOnchainRequired && submissionSequence === undefined) {
+      throw new Error("confirmed intent submission sequence is required");
+    }
     return this.executor.commitPreparedIntent({
       ...prepared,
       record: {
         ...prepared.record,
         ...(submissionTxHash ? { submissionTxHash } : {}),
+        ...(submissionSequence ? { submissionSequence } : {}),
       },
     });
   }

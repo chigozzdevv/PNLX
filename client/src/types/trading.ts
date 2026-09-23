@@ -228,6 +228,7 @@ export interface PositionRow {
   side?: Side;
   size?: number;
   collateral?: number;
+  entryFee?: number;
   entryPrice?: number;
   marketPrice?: number;
   netValue?: number;
@@ -250,6 +251,7 @@ export interface PositionRow {
   /** Protocol position legs represented by one aggregated UI row. */
   positionLegs?: PositionRow[];
   privateState?: {
+    entryFee?: string;
     entryPrice: string;
     fundingIndex: string;
     margin: string;

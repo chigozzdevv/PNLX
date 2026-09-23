@@ -8,11 +8,12 @@ import { formatUsd, shortAddress } from "@/lib/format";
 import type { WalletSessionController } from "@/lib/use-wallet-session";
 import type { AccountSnapshot } from "@/types/trading";
 
-export type AppView = "trade" | "portfolio";
+export type AppView = "trade" | "portfolio" | "liquidity";
 
 const navItems: Array<{ href: string; id: AppView; label: string }> = [
   { href: "/trade", id: "trade", label: "Trade" },
   { href: "/portfolio", id: "portfolio", label: "Portfolio" },
+  { href: "/liquidity", id: "liquidity", label: "Liquidity" },
 ];
 
 interface AppShellProps {
@@ -149,6 +150,18 @@ export function AppShell({
             </div>
           </div>
         </div>
+        <nav aria-label="App pages" className="app-mobile-nav">
+          {navItems.map((item) => (
+            <Link
+              aria-current={item.id === activeView ? "page" : undefined}
+              className={item.id === activeView ? "app-mobile-nav-active" : ""}
+              href={item.href}
+              key={item.id}
+            >
+              {item.label}
+            </Link>
+          ))}
+        </nav>
       </header>
 
       <div className="px-2 pb-12 pt-2 md:px-3">{children}</div>

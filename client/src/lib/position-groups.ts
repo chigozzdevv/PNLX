@@ -37,6 +37,7 @@ function createPositionGroup(input: PositionRow[]): PositionRow {
   const sizes = fullyPrivate ? legs.map((leg) => leg.size) : [];
   const size = sumKnown(sizes);
   const collateral = fullyPrivate ? sumKnown(legs.map((leg) => leg.collateral)) : undefined;
+  const entryFee = fullyPrivate ? legs.reduce((total, leg) => total + (leg.entryFee ?? 0), 0) : undefined;
   const unrealizedPnl = fullyPrivate ? sumKnown(legs.map((leg) => leg.unrealizedPnl)) : undefined;
   const netValue = fullyPrivate ? sumKnown(legs.map((leg) => leg.netValue)) : undefined;
   const entryPrice = fullyPrivate ? weightedAverage(legs.map((leg) => ({
@@ -50,6 +51,7 @@ function createPositionGroup(input: PositionRow[]): PositionRow {
     ...first,
     closePrice: null,
     collateral,
+    entryFee,
     commitment: undefined,
     entryPrice,
     id: `position-group:${first.sourceIntentCommitment}`,

@@ -24,6 +24,7 @@ export default function TradeLoading() {
           <nav className="hidden items-center gap-1 lg:flex">
             <span className="nav-item nav-item-active">Trade</span>
             <span className="nav-item">Portfolio</span>
+            <span className="nav-item">Liquidity</span>
           </nav>
           <div className="header-controls ml-auto">
             <span className="trade-loading-pill" />

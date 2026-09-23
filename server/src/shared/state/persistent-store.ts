@@ -273,6 +273,7 @@ export class FileProtocolStore extends ProtocolStore {
         ...value,
         matchTranscriptDigest: value.matchTranscriptDigest ?? "0x0",
         marginChangeCommitments: value.marginChangeCommitments ?? [],
+        residualMargins: value.residualMargins ?? [],
         orderUpdates: value.orderUpdates ?? [],
         settlementDigest: value.settlementDigest ?? "0x0",
       });

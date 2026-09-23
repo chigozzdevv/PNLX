@@ -19,7 +19,7 @@ interface Deployment {
   verifiers: Record<string, string>;
 }
 
-const env = loadEnv();
+const env = loadEnv({ validateRuntime: false });
 const root = process.cwd();
 const deployment = readDeployment();
 const manifest = createDeployManifest(root);
@@ -86,6 +86,12 @@ invoke(deployment.contracts["position-state"], "init", [
   "--governance",
   deployment.contracts.governance,
 ], true);
+invoke(deployment.contracts["intent-registry"], "init", [
+  "--admin",
+  deployment.sourceAddress,
+  "--settler",
+  deployment.contracts["batch-settlement"],
+], true);
 invoke(deployment.contracts["batch-settlement"], "init", [
   "--governance",
   deployment.contracts.governance,
@@ -102,6 +108,11 @@ invoke(deployment.contracts["batch-settlement"], "init", [
   "--circuit_id",
   bytes32(RISC0_BATCH_MATCH_CIRCUIT_KEY),
 ], true);
+if (env.collateralTokenContract) {
+  invoke(deployment.contracts["batch-settlement"], "configure_fee_token", [
+    "--token", env.collateralTokenContract,
+  ]);
+}
 invoke(deployment.contracts.liquidation, "init", [
   "--governance",
   deployment.contracts.governance,

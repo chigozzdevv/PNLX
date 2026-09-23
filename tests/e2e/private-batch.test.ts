@@ -10,7 +10,9 @@ import { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coord
 import type { SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
 import { createExecutor } from "@/workers/executor/executor.worker";
 import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
+import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
 import { MatcherService } from "@/workers/matcher/matcher.service";
+import { prepareRisc0SettlementDraft } from "@/workers/risc0-matcher/risc0-proof";
 
 describe("private batch settlement", () => {
   test("uses the private matcher payload path", () => {
@@ -93,7 +95,7 @@ describe("private batch settlement", () => {
     ).toThrow("duplicate intent nullifier");
   });
 
-  test("returns private margin change commitments for partial fills", () => {
+  test("keeps partial margin in the residual instead of minting a synthetic note", () => {
     const matcher = new BatchMatcherService();
     const market = testMarket();
     const result = matcher.match({
@@ -109,7 +111,9 @@ describe("private batch settlement", () => {
       .filter((fill) => fill.side === "long")
       .reduce((sum, fill) => sum + fill.margin, 0n);
 
-    expect(result.marginChangeCommitments).toHaveLength(1);
+    expect(result.marginChangeCommitments).toHaveLength(0);
+    expect(result.residuals).toHaveLength(1);
+    expect(result.residuals[0]?.margin).toBe(12_000n);
     expect(result.orderUpdates).toEqual([
       {
         intentCommitment: hashFields("intent", ["partial-long"]),
@@ -125,7 +129,7 @@ describe("private batch settlement", () => {
         status: "filled",
       },
     ]);
-    expect(longFillMargin).toBe(24_000n);
+    expect(longFillMargin).toBe(24_000n + result.fees.makerRebate);
     expect(result.spentNullifiers).toContain(hashFields("nullifier", ["partial-long"]));
   });
 
@@ -863,7 +867,8 @@ describe("private batch settlement", () => {
 
     expect(settlement.fillCount).toBe(2);
     expect(settlement.aggregateVolume).toBe(2n);
-    expect(settlement.marginChangeCommitments).toHaveLength(1);
+    expect(settlement.marginChangeCommitments).toHaveLength(0);
+    expect(settlement.residualMargins).toEqual([12_000n, 0n]);
     expect(settlement.orderUpdates).toHaveLength(2);
     expect(settlement.orderUpdates.find((update) => update.intentCommitment === commitIntent({
       batchId: "batch-partial",
@@ -880,7 +885,7 @@ describe("private batch settlement", () => {
     expect(settlement.residualSize).toBe(1n);
     expect(settlement.spentNullifiers).toContain(aliceNote.nullifier as `0x${string}`);
     expect(settlement.spentNullifiers).toContain(bobNote.nullifier as `0x${string}`);
-    expect(executor.store.marginCommitments.has(settlement.marginChangeCommitments[0])).toBe(true);
+    expect(settlement.marginChangeCommitments).toHaveLength(0);
   });
 });
 
@@ -963,6 +968,13 @@ function createFastSettlementProofs(): Pick<ProofCoordinatorService, "artifactFo
         aggregateVolume: input.match.aggregateVolume,
         batchId: input.batchId,
         fillCount: input.match.fills.length,
+        feeConfigHash: FEE_CONFIG_HASH,
+        grossTakerFee: input.match.fees.grossTakerFee,
+        makerRebate: input.match.fees.makerRebate,
+        insuranceFee: input.match.fees.insurance,
+        treasuryFee: input.match.fees.treasury,
+        makerIntents: input.match.executions.map((execution) => execution.makerIntentCommitment),
+        takerIntents: input.match.executions.map((execution) => execution.takerIntentCommitment),
         matchTranscriptDigest: input.match.matchTranscriptDigest,
         marginChangeCommitments: input.match.marginChangeCommitments,
         marketId: input.market.marketId,
@@ -972,6 +984,10 @@ function createFastSettlementProofs(): Pick<ProofCoordinatorService, "artifactFo
         residualSize: input.match.residualSize,
         settlementDigest: hashFields("test-settlement", [input.batchId, input.match.matchTranscriptDigest]),
         spentNullifiers: input.match.spentNullifiers,
+        matchingPayloadCommitments: prepareRisc0SettlementDraft(input).matchingPayloadCommitments,
+        residualCommitments: prepareRisc0SettlementDraft(input).residualCommitments,
+        residualMargins: prepareRisc0SettlementDraft(input).residualMargins,
+        residualPayloadCommitments: prepareRisc0SettlementDraft(input).residualPayloadCommitments,
       };
       const publicInputHash = batchSettlementPublicInputHash({
         ...draft,

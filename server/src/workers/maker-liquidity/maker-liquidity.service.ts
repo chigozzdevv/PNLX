@@ -274,11 +274,20 @@ export class MakerLiquidityService {
     const submissionTxHash = relay?.relays.find(
       (item) => item.functionName === "submit" && item.submitted,
     )?.txHash;
+    const submissionSequence = this.onchain?.enabled
+      ? this.onchain.intentSubmissionSequenceAsync
+        ? await this.onchain.intentSubmissionSequenceAsync(prepared.record.intentCommitment)
+        : this.onchain.intentSubmissionSequence?.(prepared.record.intentCommitment)
+      : undefined;
+    if (this.env.intentRegistryOnchainRequired && submissionSequence === undefined) {
+      throw new Error("confirmed maker submission sequence is required");
+    }
     return this.executor.commitPreparedIntent({
       ...prepared,
       record: {
         ...prepared.record,
         ...(submissionTxHash ? { submissionTxHash } : {}),
+        ...(submissionSequence ? { submissionSequence } : {}),
       },
     });
   }

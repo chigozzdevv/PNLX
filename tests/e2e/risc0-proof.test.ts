@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -7,6 +7,8 @@ import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.servi
 import { assertBatchSettlementCapacity, readBatchSettlementCapacity } from "@/shared/protocol/batch-settlement-proof";
 import {
   RISC0_GROTH16_SEAL_BYTES,
+  RISC0_BATCH_MATCH_IMAGE_ID,
+  assertRisc0DeploymentImageId,
   resumableBoundlessRequest,
   risc0ProofMetadataReady,
   validateRisc0Seal,
@@ -50,7 +52,7 @@ describe("batch capacity diagnostics", () => {
   });
 
   test("checks every settlement list and accepts the exact eight-item boundary", () => {
-    const settlement = { orderUpdates: [], newCommitments: [], marginChangeCommitments: [], spentNullifiers: [] };
+    const settlement = { orderUpdates: [], newCommitments: [], marginChangeCommitments: [], spentNullifiers: [], makerIntents: [], takerIntents: [] };
     expect(() => assertBatchSettlementCapacity({ ...settlement, newCommitments: Array(8).fill("0x1") })).not.toThrow();
     for (const field of ["orderUpdates", "newCommitments", "marginChangeCommitments", "spentNullifiers"] as const) {
       expect(() => assertBatchSettlementCapacity({ ...settlement, [field]: Array(9).fill("0x1") })).toThrow("at most 8 public items");
@@ -66,6 +68,17 @@ describe("batch capacity diagnostics", () => {
 });
 
 describe("RISC0 Groth16 proof artifacts", () => {
+  test("rejects an outdated deployment image before requesting a proof", () => {
+    const root = mkdtempSync(join(tmpdir(), "pnlx-risc0-deployment-"));
+    mkdirSync(join(root, "deployments"));
+    const path = join(root, "deployments", "testnet.json");
+    writeFileSync(path, JSON.stringify({ risc0BatchMatchImageId: RISC0_BATCH_MATCH_IMAGE_ID }));
+    expect(() => assertRisc0DeploymentImageId(root)).not.toThrow();
+
+    writeFileSync(path, JSON.stringify({ risc0BatchMatchImageId: `0x${"ff".repeat(32)}` }));
+    expect(() => assertRisc0DeploymentImageId(root)).toThrow("RISC0 deployment image id mismatch");
+  });
+
   test("accepts a correctly sized seal with the deployed selector", () => {
     const seal = new Uint8Array(RISC0_GROTH16_SEAL_BYTES);
     seal.set(Buffer.from(SELECTOR, "hex"), 0);

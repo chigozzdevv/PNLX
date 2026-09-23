@@ -1,4 +1,5 @@
 import type { ServerOwnerOrderSnapshot } from "@/types/trading";
+import type { StoredPrivateMarginNote } from "@/lib/private-margin-notes";
 
 export interface OwnerOrderGroup {
   activeOrders: ServerOwnerOrderSnapshot[];
@@ -19,13 +20,16 @@ export function logicalOrderId(order: ServerOwnerOrderSnapshot): string {
 
 export function groupOwnerOrders(orders: ServerOwnerOrderSnapshot[]): OwnerOrderGroup[] {
   const grouped = new Map<string, ServerOwnerOrderSnapshot[]>();
+  const superseded = new Set(orders
+    .filter((order) => order.isResidual && order.sourceIntentCommitment)
+    .map((order) => order.sourceIntentCommitment!.toLowerCase()));
   for (const order of orders) {
     const id = logicalOrderId(order);
     grouped.set(id, [...(grouped.get(id) ?? []), order]);
   }
 
   return [...grouped.entries()]
-    .map(([id, fragments]) => createOrderGroup(id, fragments))
+    .map(([id, fragments]) => createOrderGroup(id, fragments, superseded))
     .sort((left, right) => right.createdAt - left.createdAt);
 }
 
@@ -37,18 +41,26 @@ export function isActiveOrderGroup(group: OwnerOrderGroup): boolean {
   return group.activeOrders.length > 0;
 }
 
+export function hasUnrecoveredResidual(group: OwnerOrderGroup, notes: StoredPrivateMarginNote[]): boolean {
+  return group.orders.some((order) => order.isResidual && order.status === "cancelled" &&
+    !notes.some((note) =>
+      note.status === "available" &&
+      note.claimSourceIntentCommitment?.toLowerCase() === order.intentCommitment.toLowerCase()));
+}
+
 export function isOrderCapacityBlocked(order: Pick<OwnerOrderGroup, "matching">): boolean {
   return order.matching.state === "blocked" &&
     /batch proof supports at most \d+ public items|too many public items/i.test(order.matching.reason ?? "");
 }
 
-function createOrderGroup(id: string, input: ServerOwnerOrderSnapshot[]): OwnerOrderGroup {
+function createOrderGroup(id: string, input: ServerOwnerOrderSnapshot[], superseded: Set<string>): OwnerOrderGroup {
   const orders = [...input].sort((left, right) => {
     const leftIndex = fragmentIndex(left.batchId);
     const rightIndex = fragmentIndex(right.batchId);
     return leftIndex === rightIndex ? left.createdAt - right.createdAt : leftIndex - rightIndex;
   });
-  const activeOrders = orders.filter(isActiveOrder);
+  const activeOrders = orders.filter((order) =>
+    isActiveOrder(order) && !superseded.has(order.intentCommitment.toLowerCase()));
   const matchingOrder = [...(activeOrders.length > 0 ? activeOrders : orders)]
     .sort((left, right) => matchingTimestamp(right) - matchingTimestamp(left))[0];
 

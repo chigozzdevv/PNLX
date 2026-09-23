@@ -14,6 +14,8 @@ import { createIndexer } from "@/workers/indexer/indexer.worker";
 import { createMatcher } from "@/workers/matcher/matcher.worker";
 import type { SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
 import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
+import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
+import { prepareRisc0SettlementDraft } from "@/workers/risc0-matcher/risc0-proof";
 import { FileProtocolStore } from "@/shared/state/persistent-store";
 
 describe("private orderbook residuals", () => {
@@ -279,8 +281,19 @@ function fastSettlementProofs() {
         aggregateVolume: input.match.aggregateVolume,
         batchId: input.batchId,
         fillCount: input.match.fills.length,
+        feeConfigHash: FEE_CONFIG_HASH,
+        grossTakerFee: input.match.fees.grossTakerFee,
+        makerRebate: input.match.fees.makerRebate,
+        insuranceFee: input.match.fees.insurance,
+        treasuryFee: input.match.fees.treasury,
+        makerIntents: input.match.executions.map((execution) => execution.makerIntentCommitment),
+        takerIntents: input.match.executions.map((execution) => execution.takerIntentCommitment),
         matchTranscriptDigest: input.match.matchTranscriptDigest,
         marginChangeCommitments: input.match.marginChangeCommitments,
+        matchingPayloadCommitments: prepareRisc0SettlementDraft(input).matchingPayloadCommitments,
+        residualCommitments: prepareRisc0SettlementDraft(input).residualCommitments,
+        residualMargins: prepareRisc0SettlementDraft(input).residualMargins,
+        residualPayloadCommitments: prepareRisc0SettlementDraft(input).residualPayloadCommitments,
         marketId: input.market.marketId,
         newCommitments: input.match.fills.map((fill) => fill.positionCommitment),
         openInterestDelta: input.match.openInterestDelta,

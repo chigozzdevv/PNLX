@@ -45,6 +45,18 @@ describe("logical owner orders", () => {
     expect(group.activeOrders).toEqual([]);
   });
 
+  test("does not offer an already consumed source intent for cancellation after rollover", () => {
+    const source = order("ui-1787329437845-xlm-usd-perp-1", "11", "partially-filled", 100);
+    const residual = {
+      ...order("match-2", "22", "open", 101),
+      isResidual: true,
+      sourceIntentCommitment: source.intentCommitment,
+    };
+    const groups = groupOwnerOrders([source, residual]);
+    expect(groups.flatMap((group) => group.activeOrders).map((order) => order.intentCommitment))
+      .toEqual([residual.intentCommitment]);
+  });
+
   test("identifies capacity failures without treating other proof failures as capacity limits", () => {
     const source = order("ui-1-xlm-usd-perp-1", "11", "open", 100);
     source.matching = {

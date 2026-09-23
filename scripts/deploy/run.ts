@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { circuitKey } from "@pnlx/proof-system";
 import type { Hex } from "@pnlx/protocol-types";
 import { loadEnv } from "@/config/env";
@@ -17,9 +17,11 @@ interface Options {
   dryRun: boolean;
   network: string;
   out?: string;
+  reuseVaultFrom?: string;
   setupLocal: boolean;
   smoke: boolean;
   source: string;
+  upgradeAuthority?: string;
 }
 
 interface Deployment {
@@ -29,7 +31,9 @@ interface Deployment {
   risc0BatchMatchImageId: Hex;
   source: string;
   sourceAddress: string;
+  upgradeAuthority: string;
   verifiers: Record<string, string>;
+  wasmHashes: Record<string, string>;
 }
 
 interface Risc0VerifierStackDeployment {
@@ -50,9 +54,11 @@ export function parseOptions(argv = process.argv.slice(2)): Options {
     dryRun: flag(argv, "--dry-run"),
     network: value(argv, "--network", "local"),
     out: optionalValue(argv, "--out"),
+    reuseVaultFrom: optionalValue(argv, "--reuse-vault-from"),
     setupLocal: flag(argv, "--setup-local"),
     smoke: !flag(argv, "--no-smoke"),
     source: value(argv, "--source", "pnlx-admin"),
+    upgradeAuthority: optionalValue(argv, "--upgrade-authority"),
   };
 }
 
@@ -62,14 +68,26 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
     requireContracts: false,
     requireVerifierKeys: false,
   });
-  const env = loadEnv();
+  const env = loadEnv({ validateRuntime: false });
   const sourceAddress = sourceAddressCommand(options.source);
+  const upgradeAuthority = options.upgradeAuthority && /^G[A-Z2-7]{55}$/.test(options.upgradeAuthority)
+    ? options.upgradeAuthority
+    : "$upgradeAuthority";
+
+  if (options.reuseVaultFrom) {
+    const vault = reusableVaultFromRegistry(options.reuseVaultFrom, options.network, root);
+    commands.push(readCommand(options, vault, "asset", []));
+    commands.push(readCommand(options, vault, "maker", []));
+    commands.push(readCommand(options, vault, "operator", []));
+    commands.push(readCommand(options, vault, "upgrade_authority", []));
+  }
 
   if (options.build) {
     commands.push(["bun", "run", "prove:circuits"]);
     commands.push(["bun", "run", "build:contracts"]);
     commands.push(["bun", "run", "build:risc0-verifier-stack"]);
   }
+  commands.push(risc0ImageIdCommand());
   if (options.setupLocal) {
     commands.push(...localSetupCommands(options));
   }
@@ -90,6 +108,8 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
 
   commands.push(
     invokeCommand(options, "governance", "init", ["--admin", "$sourceAddress"]),
+    invokeCommand(options, "governance", "set_upgrade_authority", ["--authority", upgradeAuthority]),
+    readCommand(options, "governance", "upgrade_authority", []),
     invokeCommand(options, "proof-ledger", "init", ["--governance", "$governance"]),
     invokeCommand(options, "price-oracle", "init", [
       "--admin",
@@ -97,6 +117,8 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
       "--decimals",
       String(env.oraclePriceDecimals),
     ]),
+    invokeCommand(options, "price-oracle", "set_upgrade_authority", ["--authority", upgradeAuthority]),
+    readCommand(options, "price-oracle", "upgrade_authority", []),
   );
 
   for (const verifier of manifest.verifiers) {
@@ -119,6 +141,14 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
   }
 
   commands.push(
+    invokeCommand(options, "intent-registry", "init", [
+      "--admin",
+      "$sourceAddress",
+      "--settler",
+      "$batch-settlement",
+    ]),
+    invokeCommand(options, "intent-registry", "set_upgrade_authority", ["--authority", upgradeAuthority]),
+    readCommand(options, "intent-registry", "upgrade_authority", []),
     invokeCommand(options, "shielded-pool", "init", [
       "--governance",
       "$governance",
@@ -235,6 +265,11 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
       bytes32(circuitKey("disclosure")),
     ]),
   );
+  if (env.collateralTokenContract) {
+    commands.push(invokeCommand(options, "batch-settlement", "configure_fee_token", [
+      "--token", env.collateralTokenContract,
+    ]));
+  }
 
   if (options.smoke) {
     commands.push(...smokeCommands(options, root));
@@ -244,6 +279,22 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
 }
 
 export function deploy(options: Options, root = process.cwd()): Deployment {
+  if (options.network !== "local" && !options.out) {
+    throw new Error("network deployment requires --out to preserve the deployed contract IDs");
+  }
+  if (options.out && existsSync(resolve(root, options.out))) {
+    throw new Error(`deployment registry already exists: ${options.out}`);
+  }
+  const progressPath = options.out ? resolve(root, `${options.out}.partial`) : undefined;
+  if (progressPath && existsSync(progressPath)) {
+    throw new Error(`unfinished deployment registry already exists: ${progressPath}`);
+  }
+  if (options.network !== "local" && !options.upgradeAuthority) {
+    throw new Error("network deployment requires --upgrade-authority");
+  }
+  const reusedVault = options.reuseVaultFrom
+    ? reusableVaultFromRegistry(options.reuseVaultFrom, options.network, root)
+    : undefined;
   const contracts = new Map<string, string>();
   const verifiers = new Map<string, string>();
 
@@ -252,19 +303,66 @@ export function deploy(options: Options, root = process.cwd()): Deployment {
     run(["bun", "run", "build:contracts"], options);
     run(["bun", "run", "build:risc0-verifier-stack"], options);
   }
+  assertCompiledRisc0ImageId(run(risc0ImageIdCommand(), options));
   const manifest = createDeployManifest(root);
   if (options.setupLocal) {
     setupLocalNetwork(options);
   }
 
-  const env = loadEnv();
+  const env = loadEnv({ validateRuntime: false });
+  if (reusedVault) {
+    if (!env.collateralTokenContract || !env.makerWalletAddress) {
+      throw new Error("reusing the vault requires COLLATERAL_TOKEN_CONTRACT and MAKER_WALLET_ADDRESS");
+    }
+    const asset = parseCliAddress(read(options, reusedVault, "asset", []));
+    const maker = parseCliAddress(read(options, reusedVault, "maker", []));
+    const operator = parseCliAddress(read(options, reusedVault, "operator", []));
+    if (asset !== env.collateralTokenContract || maker !== env.makerWalletAddress || operator !== maker) {
+      throw new Error("existing vault asset, maker, or operator does not match this deployment");
+    }
+    contracts.set("liquidity-vault", reusedVault);
+  }
   const sourceAddress = resolveSourceAddress(options);
-  const risc0VerifierStack = deployRisc0VerifierStack(options, manifest, sourceAddress);
-  contracts.set("risc0-router", risc0VerifierStack.router);
-  contracts.set("risc0-groth16-verifier", risc0VerifierStack.groth16Verifier);
-  contracts.set("risc0-emergency-stop", risc0VerifierStack.emergencyStop);
+  const upgradeAuthority = resolveUpgradeAuthority(options, sourceAddress);
+  if (reusedVault) {
+    const vaultUpgradeAuthority = parseCliAddress(read(options, reusedVault, "upgrade_authority", []));
+    if (vaultUpgradeAuthority !== upgradeAuthority) {
+      throw new Error("reused vault upgrade authority differs from this deployment");
+    }
+  }
+  const wasmHashes = Object.fromEntries([
+    ...manifest.contracts.map((contract) => [contract.name, contract.wasmHash] as const),
+    ...manifest.risc0VerifierStack.map((contract) => [contract.name, contract.wasmHash] as const),
+    ...manifest.verifiers.map((verifier) => [
+      verifier.verifierAuthority,
+      manifest.contracts.find((contract) => contract.name === verifier.verifierContract)!.wasmHash,
+    ] as const),
+  ]);
+  const saveProgress = () => {
+    if (!progressPath) return;
+    const progress = {
+      status: "deploying",
+      network: options.network,
+      source: options.source,
+      sourceAddress,
+      upgradeAuthority,
+      contracts: Object.fromEntries(contracts),
+      verifiers: Object.fromEntries(verifiers),
+      wasmHashes,
+      risc0BatchMatchImageId: RISC0_BATCH_MATCH_IMAGE_ID,
+    };
+    mkdirSync(dirname(progressPath), { recursive: true });
+    writeFileSync(`${progressPath}.tmp`, `${JSON.stringify(progress, null, 2)}\n`);
+    renameSync(`${progressPath}.tmp`, progressPath);
+  };
+  const recordContract = (name: string, id: string) => {
+    contracts.set(name, id);
+    saveProgress();
+  };
+  saveProgress();
+  const risc0VerifierStack = deployRisc0VerifierStack(options, manifest, sourceAddress, recordContract);
   for (const contract of deployableContracts(manifest)) {
-    contracts.set(
+    recordContract(
       contract.name,
       deployWasm(options, contract.path, `${options.aliasPrefix}-${contract.name}`),
     );
@@ -278,9 +376,12 @@ export function deploy(options: Options, root = process.cwd()): Deployment {
         `${options.aliasPrefix}-${verifier.verifierAuthority}`,
       ),
     );
+    saveProgress();
   }
 
   invoke(options, contracts.get("governance")!, "init", ["--admin", sourceAddress]);
+  invoke(options, contracts.get("governance")!, "set_upgrade_authority", ["--authority", upgradeAuthority]);
+  verifyUpgradeAuthority(options, contracts.get("governance")!, upgradeAuthority);
   invoke(options, contracts.get("proof-ledger")!, "init", [
     "--governance",
     contracts.get("governance")!,
@@ -291,6 +392,8 @@ export function deploy(options: Options, root = process.cwd()): Deployment {
     "--decimals",
     String(env.oraclePriceDecimals),
   ]);
+  invoke(options, contracts.get("price-oracle")!, "set_upgrade_authority", ["--authority", upgradeAuthority]);
+  verifyUpgradeAuthority(options, contracts.get("price-oracle")!, upgradeAuthority);
 
   for (const verifier of manifest.verifiers) {
     const verifierId = verifiers.get(verifier.verifierAuthority)!;
@@ -314,7 +417,9 @@ export function deploy(options: Options, root = process.cwd()): Deployment {
     ]);
   }
 
-  initProofConsumers(options, contracts);
+  initProofConsumers(options, contracts, sourceAddress);
+  invoke(options, contracts.get("intent-registry")!, "set_upgrade_authority", ["--authority", upgradeAuthority]);
+  verifyUpgradeAuthority(options, contracts.get("intent-registry")!, upgradeAuthority);
   if (options.smoke) runSmoke(options, root, verifiers);
 
   const deployment: Deployment = {
@@ -324,13 +429,66 @@ export function deploy(options: Options, root = process.cwd()): Deployment {
     risc0BatchMatchImageId: RISC0_BATCH_MATCH_IMAGE_ID,
     source: options.source,
     sourceAddress,
+    upgradeAuthority,
     verifiers: Object.fromEntries(verifiers),
+    wasmHashes,
   };
-  if (options.out) writeJson(options.out, deployment);
+  if (options.out) writeJson(resolve(root, options.out), deployment);
+  if (progressPath) unlinkSync(progressPath);
   return deployment;
 }
 
-function initProofConsumers(options: Options, contracts: Map<string, string>): void {
+function risc0ImageIdCommand(): string[] {
+  return [
+    "cargo", "run", "--release", "--manifest-path",
+    "risc0/batch-match/host/Cargo.toml", "--", "--print-image-id",
+  ];
+}
+
+export function assertCompiledRisc0ImageId(output: string): void {
+  const ids = [...new Set((output.match(/\b0x[0-9a-fA-F]{64}\b/g) ?? []).map((id) => id.toLowerCase()))];
+  if (ids.length !== 1 || ids[0] !== RISC0_BATCH_MATCH_IMAGE_ID) {
+    throw new Error(
+      `compiled RISC0 image id mismatch: expected ${RISC0_BATCH_MATCH_IMAGE_ID}, received ${ids.join(", ") || "none"}`,
+    );
+  }
+}
+
+export function reusableVaultFromRegistry(path: string, network: string, root = process.cwd()): string {
+  const resolved = resolve(root, path);
+  if (!existsSync(resolved)) throw new Error(`vault source registry was not found: ${resolved}`);
+  const registry = JSON.parse(readFileSync(resolved, "utf8")) as {
+    contracts?: Record<string, unknown>;
+    network?: unknown;
+  };
+  if (registry.network !== network) throw new Error("vault source registry network mismatch");
+  const vault = registry.contracts?.["liquidity-vault"];
+  if (typeof vault !== "string" || !/^C[A-Z2-7]{55}$/.test(vault)) {
+    throw new Error("vault source registry has no valid liquidity vault contract");
+  }
+  return vault;
+}
+
+function parseCliAddress(output: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output.trim());
+  } catch {
+    parsed = output.trim();
+  }
+  if (typeof parsed !== "string" || (!/^G[A-Z2-7]{55}$/.test(parsed) && !/^C[A-Z2-7]{55}$/.test(parsed))) {
+    throw new Error("invalid vault address response");
+  }
+  return parsed;
+}
+
+function verifyUpgradeAuthority(options: Options, id: string, expected: string): void {
+  const actual = parseCliAddress(read(options, id, "upgrade_authority", []));
+  if (actual !== expected) throw new Error(`contract ${id} upgrade authority mismatch`);
+}
+
+function initProofConsumers(options: Options, contracts: Map<string, string>, sourceAddress: string): void {
+  const env = loadEnv({ validateRuntime: false });
   const governance = contracts.get("governance")!;
   const proofLedger = contracts.get("proof-ledger")!;
   const positionState = contracts.get("position-state")!;
@@ -375,6 +533,17 @@ function initProofConsumers(options: Options, contracts: Map<string, string>): v
     "--circuit_id",
     bytes32(RISC0_BATCH_MATCH_CIRCUIT_KEY),
   ]);
+  invoke(options, contracts.get("intent-registry")!, "init", [
+    "--admin",
+    sourceAddress,
+    "--settler",
+    contracts.get("batch-settlement")!,
+  ]);
+  if (env.collateralTokenContract) {
+    invoke(options, contracts.get("batch-settlement")!, "configure_fee_token", [
+      "--token", env.collateralTokenContract,
+    ]);
+  }
   invoke(options, contracts.get("liquidation")!, "init", [
     "--governance",
     governance,
@@ -491,12 +660,14 @@ function deployRisc0VerifierStack(
   options: Options,
   manifest: ReturnType<typeof createDeployManifest>,
   sourceAddress: string,
+  recordContract: (name: string, id: string) => void,
 ): Risc0VerifierStackDeployment {
   const groth16Verifier = deployWasm(
     options,
     risc0StackContractPath(manifest, "risc0-groth16-verifier"),
     `${options.aliasPrefix}-risc0-groth16-verifier`,
   );
+  recordContract("risc0-groth16-verifier", groth16Verifier);
   const selector = normalizeSelector(read(options, groth16Verifier, "selector", []));
   const emergencyStop = deployWasm(
     options,
@@ -509,6 +680,7 @@ function deployRisc0VerifierStack(
       sourceAddress,
     ],
   );
+  recordContract("risc0-emergency-stop", emergencyStop);
   const router = deployWasm(
     options,
     risc0StackContractPath(manifest, "risc0-router"),
@@ -518,6 +690,7 @@ function deployRisc0VerifierStack(
       sourceAddress,
     ],
   );
+  recordContract("risc0-router", router);
   invoke(options, router, "add_verifier", [
     "--selector",
     selector,
@@ -578,7 +751,7 @@ function deployCommand(options: Options, wasm: string, alias: string, constructo
     options.source,
     "--network",
     options.network,
-    ...networkArgs(),
+    ...networkArgs(options),
     "--alias",
     alias,
     "--auto-sign",
@@ -607,7 +780,7 @@ function invokeCommand(options: Options, id: string, method: string, args: strin
     options.source,
     "--network",
     options.network,
-    ...networkArgs(),
+    ...networkArgs(options),
     "--send",
     "yes",
     "--auto-sign",
@@ -628,7 +801,7 @@ function readCommand(options: Options, id: string, method: string, args: string[
     options.source,
     "--network",
     options.network,
-    ...networkArgs(),
+    ...networkArgs(options),
     "--send",
     "no",
     "--",
@@ -637,8 +810,11 @@ function readCommand(options: Options, id: string, method: string, args: string[
   ];
 }
 
-function networkArgs(): string[] {
-  const env = loadEnv();
+function networkArgs(options: Options): string[] {
+  if (options.network === "local") {
+    return ["--rpc-url", LOCAL_RPC, "--network-passphrase", LOCAL_PASSPHRASE];
+  }
+  const env = loadEnv({ validateRuntime: false });
   return [
     ...(env.stellarRpcUrl ? ["--rpc-url", env.stellarRpcUrl] : []),
     ...(env.stellarNetworkPassphrase ? ["--network-passphrase", env.stellarNetworkPassphrase] : []),
@@ -646,6 +822,7 @@ function networkArgs(): string[] {
 }
 
 function localSetupCommands(options: Options): string[][] {
+  const localUpgradeAlias = options.upgradeAuthority ?? `${options.source}-upgrade`;
   return [
     [
       "stellar",
@@ -671,8 +848,11 @@ function localSetupCommands(options: Options): string[][] {
     ],
     ["stellar", "network", "use", options.network],
     ["stellar", "keys", "generate", options.source, "--network", options.network],
-    ["stellar", "network", "health", "--network", options.network],
-    ["stellar", "keys", "fund", options.source, "--network", options.network],
+    ...(/^G[A-Z2-7]{55}$/.test(localUpgradeAlias)
+      ? []
+      : [["stellar", "keys", "generate", localUpgradeAlias, "--network", options.network]]),
+    ["stellar", "network", "health", "--network", options.network, ...networkArgs(options)],
+    ["stellar", "keys", "fund", options.source, "--network", options.network, ...networkArgs(options)],
   ];
 }
 
@@ -697,6 +877,19 @@ function resolveSourceAddress(options: Options): string {
   const output = run(sourceAddressCommand(options.source), options);
   const address = output.match(/\bG[A-Z0-9]{55}\b/)?.[0];
   if (!address) throw new Error(`could not resolve source address for ${options.source}`);
+  return address;
+}
+
+function resolveUpgradeAuthority(options: Options, sourceAddress: string): string {
+  const candidate = options.upgradeAuthority ?? (options.network === "local" ? `${options.source}-upgrade` : "");
+  if (!candidate) throw new Error("--upgrade-authority is required for network deployment");
+  const address = /^G[A-Z2-7]{55}$/.test(candidate)
+    ? candidate
+    : run(sourceAddressCommand(candidate), options).match(/\bG[A-Z2-7]{55}\b/)?.[0];
+  if (!address) throw new Error("upgrade authority must resolve to a Stellar account");
+  if (address === sourceAddress || address === loadEnv({ validateRuntime: false }).makerWalletAddress) {
+    throw new Error("upgrade authority must differ from the admin and maker accounts");
+  }
   return address;
 }
 
@@ -833,7 +1026,7 @@ function bytes32(hex: Hex | string): string {
 
 function writeJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx" });
 }
 
 function flag(argv: string[], name: string): boolean {

@@ -51,8 +51,8 @@ describe("private margin note allocation", () => {
       ["40", 40n],
     ]);
     expect(allocations.map((allocation) => protocolOrderSize(allocation.amount, 10, 1))).toEqual([
-      180n,
-      80n,
+      179n,
+      79n,
     ]);
   });
 

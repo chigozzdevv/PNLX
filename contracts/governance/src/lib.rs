@@ -6,6 +6,7 @@ use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env};
 #[contracttype]
 pub enum DataKey {
     Admin,
+    UpgradeAuthority,
     Paused,
     Verifier(BytesN<32>),
     VerifierAuthority(BytesN<32>),
@@ -27,6 +28,35 @@ impl Governance {
     pub fn set_paused(env: Env, paused: bool) {
         Self::admin(env.clone()).require_auth();
         env.storage().instance().set(&DataKey::Paused, &paused);
+    }
+
+    pub fn set_upgrade_authority(env: Env, authority: Address) {
+        let admin = Self::admin(env.clone());
+        admin.require_auth();
+        if authority == admin || env.storage().instance().has(&DataKey::UpgradeAuthority) {
+            panic!("invalid upgrade authority");
+        }
+        env.storage().instance().set(&DataKey::UpgradeAuthority, &authority);
+    }
+
+    pub fn rotate_upgrade_authority(env: Env, authority: Address) {
+        Self::upgrade_authority(env.clone()).require_auth();
+        if authority == Self::admin(env.clone()) {
+            panic!("upgrade authority must differ from admin");
+        }
+        env.storage().instance().set(&DataKey::UpgradeAuthority, &authority);
+    }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        Self::upgrade_authority(env.clone()).require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+
+    pub fn upgrade_authority(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::UpgradeAuthority)
+            .unwrap_or_else(|| panic!("upgrade authority not configured"))
     }
 
     pub fn set_verifier(
@@ -86,7 +116,52 @@ mod tests {
     extern crate std;
 
     use super::{Governance, GovernanceClient};
-    use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
+    use soroban_sdk::{
+        testutils::{Address as _, MockAuth, MockAuthInvoke}, Address, BytesN, Env, IntoVal,
+    };
+
+    #[test]
+    fn upgrade_key_is_distinct_and_rotates_without_admin_permission() {
+        let env = Env::default();
+        let id = env.register(Governance, ());
+        let client = GovernanceClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        let upgrade = Address::generate(&env);
+        let replacement = Address::generate(&env);
+        client.init(&admin);
+        assert!(client.try_upgrade_authority().is_err());
+        assert!(client.try_set_upgrade_authority(&upgrade).is_err());
+        client.mock_auths(&[MockAuth {
+            address: &admin,
+            invoke: &MockAuthInvoke {
+                contract: &id,
+                fn_name: "set_upgrade_authority",
+                args: (&upgrade,).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]).set_upgrade_authority(&upgrade);
+        assert_eq!(client.upgrade_authority(), upgrade);
+        assert!(client.try_set_upgrade_authority(&replacement).is_err());
+        assert!(client.mock_auths(&[MockAuth {
+            address: &admin,
+            invoke: &MockAuthInvoke {
+                contract: &id,
+                fn_name: "rotate_upgrade_authority",
+                args: (&replacement,).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]).try_rotate_upgrade_authority(&replacement).is_err());
+        client.mock_auths(&[MockAuth {
+            address: &upgrade,
+            invoke: &MockAuthInvoke {
+                contract: &id,
+                fn_name: "rotate_upgrade_authority",
+                args: (&replacement,).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]).rotate_upgrade_authority(&replacement);
+        assert_eq!(client.upgrade_authority(), replacement);
+    }
 
     #[test]
     fn manages_pause_and_verifier() {

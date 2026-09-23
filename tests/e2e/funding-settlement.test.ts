@@ -14,6 +14,7 @@ import type {
   ProofMeta,
 } from "@pnlx/protocol-types";
 import { createExecutor } from "@/workers/executor/executor.worker";
+import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { ProverService } from "@/workers/prover/prover.service";
 import { createProver } from "@/workers/prover/prover.worker";
@@ -527,7 +528,15 @@ function setupPositionWithConditionalClose(options: { triggered?: boolean } = {}
     aggregateVolume: 1n,
     batchId: "funding-batch",
     fillCount: 1,
+    feeConfigHash: FEE_CONFIG_HASH,
+    grossTakerFee: 0n,
+    makerRebate: 0n,
+    insuranceFee: 0n,
+    treasuryFee: 0n,
+    makerIntents: [],
+    takerIntents: [],
     matchTranscriptDigest: hashFields("match-transcript", ["funding"]),
+    matchingPayloadCommitments: [],
     marginChangeCommitments: [],
     marketId: market.marketId,
     newCommitments: [positionCommitment],
@@ -535,6 +544,9 @@ function setupPositionWithConditionalClose(options: { triggered?: boolean } = {}
     orderUpdates: [],
     proof: settlementProof,
     residualSize: 0n,
+    residualCommitments: [],
+    residualMargins: [],
+    residualPayloadCommitments: [],
     settlementDigest: hashFields("settlement", ["funding"]),
     spentNullifiers: [],
   };
@@ -660,7 +672,15 @@ function setupPositionForLiquidation(): {
     aggregateVolume: 3n,
     batchId: "liquidation-batch",
     fillCount: 1,
+    feeConfigHash: FEE_CONFIG_HASH,
+    grossTakerFee: 0n,
+    makerRebate: 0n,
+    insuranceFee: 0n,
+    treasuryFee: 0n,
+    makerIntents: [],
+    takerIntents: [],
     matchTranscriptDigest: hashFields("match-transcript", ["liquidation"]),
+    matchingPayloadCommitments: [],
     marginChangeCommitments: [],
     marketId: market.marketId,
     newCommitments: [positionCommitment],
@@ -668,6 +688,9 @@ function setupPositionForLiquidation(): {
     orderUpdates: [],
     proof: settlementProof,
     residualSize: 0n,
+    residualCommitments: [],
+    residualMargins: [],
+    residualPayloadCommitments: [],
     settlementDigest: hashFields("settlement", ["liquidation"]),
     spentNullifiers: [],
   };

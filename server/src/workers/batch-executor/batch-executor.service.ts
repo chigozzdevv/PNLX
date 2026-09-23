@@ -170,11 +170,16 @@ export class BatchExecutorService {
       const relay = alreadySettledOnchain
         ? undefined
         : await runPhase("batch-settlement", () => this.trySettleOnchain(transcript.settlement));
+      const confirmedOnchain = alreadySettledOnchain ||
+        await this.isSettledOnchain(transcript.settlement);
+      if (this.config.settlementsOnchainRequired && !confirmedOnchain) {
+        throw new Error("batch settlement and fee allocation are not confirmed on-chain");
+      }
       const proofVerified = alreadySettledOnchain || hasSubmittedProofVerification(relay);
       if (this.config.settlementsOnchainRequired && !proofVerified) {
         throw new Error("settlements require on-chain relay");
       }
-      const settledTranscript = withOnchainTransactions(transcript, relay);
+      const settledTranscript = withOnchainTransactions(transcript, relay, confirmedOnchain);
       await this.progress({
         batchId,
         intentCommitments,
@@ -298,9 +303,9 @@ export class BatchExecutorService {
   ): Promise<boolean> {
     try {
       if (this.onchain?.isBatchSettledAsync) {
-        return await this.onchain.isBatchSettledAsync(settlement.batchId, settlement.marketId);
+        return await this.onchain.isBatchSettledAsync(settlement.batchId, settlement.marketId, settlement.settlementDigest);
       }
-      return Boolean(this.onchain?.isBatchSettled?.(settlement.batchId, settlement.marketId));
+      return Boolean(this.onchain?.isBatchSettled?.(settlement.batchId, settlement.marketId, settlement.settlementDigest));
     } catch {
       return false;
     }
@@ -405,10 +410,12 @@ export class BatchExecutorService {
 function withOnchainTransactions(
   transcript: Parameters<ExecutorService["commitExternalBatchSettlement"]>[0],
   result: OnchainRelayResult | undefined,
+  confirmedOnchain: boolean,
 ): Parameters<ExecutorService["commitExternalBatchSettlement"]>[0] {
   const {
     proofVerificationTxHash: _untrustedProofTxHash,
     settlementTxHash: _untrustedSettlementTxHash,
+    onchainConfirmed: _untrustedConfirmation,
     ...verifiedSettlement
   } = transcript.settlement;
   const proofVerificationTxHash = result?.relays.find(
@@ -421,6 +428,7 @@ function withOnchainTransactions(
     ...transcript,
     settlement: {
       ...verifiedSettlement,
+      onchainConfirmed: confirmedOnchain,
       ...(proofVerificationTxHash ? { proofVerificationTxHash } : {}),
       ...(settlementTxHash ? { settlementTxHash } : {}),
     },

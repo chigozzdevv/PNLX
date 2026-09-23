@@ -1,6 +1,7 @@
 import type { ProtocolStore } from "@/shared/state/store";
 import type { BatchExecutionRunRecord, Hex, OrderLifecycleRecord } from "@pnlx/protocol-types";
 import { readBatchSettlementCapacity } from "@/shared/protocol/batch-settlement-proof";
+import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
 import type {
   MarketPublicSnapshot,
   OwnerActivitySnapshot,
@@ -238,9 +239,23 @@ export class IndexerService {
           (sum, settlement) => sum + settlement.aggregateVolume,
           0n,
         );
+        const confirmedFees = settlements
+          .filter((settlement) => settlement.onchainConfirmed && settlement.feeConfigHash === FEE_CONFIG_HASH)
+          .reduce((total, settlement) => ({
+            grossTaker: total.grossTaker + settlement.grossTakerFee,
+            makerRebate: total.makerRebate + settlement.makerRebate,
+            insurance: total.insurance + settlement.insuranceFee,
+            treasury: total.treasury + settlement.treasuryFee,
+          }), { grossTaker: 0n, makerRebate: 0n, insurance: 0n, treasury: 0n });
 
         return {
           aggregateVolume: (matchedFillVolume / 2n).toString(),
+          confirmedFees: {
+            grossTaker: confirmedFees.grossTaker.toString(),
+            makerRebate: confirmedFees.makerRebate.toString(),
+            insurance: confirmedFees.insurance.toString(),
+            treasury: confirmedFees.treasury.toString(),
+          },
           conditionalCloseCount: countByMarket(this.store.conditionalCloses.values(), market.marketId),
           conditionalOrderCount: countByMarket(this.store.conditionalOrders.values(), market.marketId),
           fundingIndex: market.fundingIndex.toString(),

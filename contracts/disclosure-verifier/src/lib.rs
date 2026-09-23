@@ -43,6 +43,13 @@ pub struct DisclosureVerifier;
 
 #[contractimpl]
 impl DisclosureVerifier {
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let governance_id: Address = env.storage().persistent().get(&DataKey::Governance)
+            .unwrap_or_else(|| panic!("not initialized"));
+        GovernanceClient::new(&env, &governance_id).upgrade_authority().require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+
     pub fn init(env: Env, governance: Address, proof_ledger: Address, circuit_id: BytesN<32>) {
         validate_hash(&env, &circuit_id);
         if env.storage().persistent().has(&DataKey::Governance) {

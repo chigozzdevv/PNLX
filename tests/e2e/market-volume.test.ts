@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
 import type { BatchSettlement, Hex, ProofMeta } from "@pnlx/protocol-types";
 import { loadEnv } from "@/config/env";
 import { MarketsService } from "@/features/markets/markets.service";
@@ -164,6 +165,14 @@ function settlement(proof: ProofMeta): BatchSettlement {
     aggregateVolume: 30_000_000n,
     batchId: "batch-volume",
     fillCount: 2,
+    feeConfigHash: FEE_CONFIG_HASH,
+    grossTakerFee: 0n,
+    makerRebate: 0n,
+    insuranceFee: 0n,
+    treasuryFee: 0n,
+    makerIntents: [],
+    takerIntents: [],
+    matchingPayloadCommitments: [],
     marginChangeCommitments: [],
     marketId: "xlm-usd-perp",
     matchTranscriptDigest: "0xtranscript",
@@ -172,6 +181,9 @@ function settlement(proof: ProofMeta): BatchSettlement {
     orderUpdates: [],
     proof,
     residualSize: 0n,
+    residualCommitments: [],
+    residualMargins: [],
+    residualPayloadCommitments: [],
     settlementDigest: "0xsettlement",
     spentNullifiers: [],
   };

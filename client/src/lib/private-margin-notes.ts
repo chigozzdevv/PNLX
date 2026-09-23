@@ -3,7 +3,7 @@ import type { Hex } from "@/types/trading";
 const STORAGE_KEY = "pnlx.private.margin-notes.v1";
 const RUNTIME_SCOPE_KEY = "pnlx.private.margin-notes.runtime-scope.v1";
 
-export type PrivateMarginNoteStatus = "available" | "locked" | "pending" | "spent";
+export type PrivateMarginNoteStatus = "available" | "locked" | "pending" | "claiming" | "spent";
 type ReconciledOrderStatus = "open" | "filled" | "partially-filled" | "cancelled";
 
 export interface ReconciledPrivateMarginOrder {
@@ -51,6 +51,7 @@ export interface StoredPrivateMarginNote {
   updatedAt: number;
   walletAddress: string;
   lockedByIntentCommitment?: Hex;
+  claimSourceIntentCommitment?: Hex;
   runtimeScope?: string;
 }
 
@@ -105,7 +106,7 @@ export function privateReservedBalance(ownerCommitment?: Hex): bigint {
 
 export function privatePendingBalance(ownerCommitment?: Hex): bigint {
   return privateMarginNotes(ownerCommitment)
-    .filter((note) => note.status === "pending")
+    .filter((note) => note.status === "pending" || note.status === "claiming")
     .reduce((total, note) => total + BigInt(note.amount), 0n);
 }
 
@@ -257,6 +258,36 @@ export function savePrivateMarginNote(
     ...readPrivateMarginNotes().filter((existing) => existing.commitment !== note.commitment),
   ]);
   return note;
+}
+
+export function finalizePrivateMarginClaim(
+  intentCommitment: Hex,
+  commitment: Hex,
+  ownerCommitment: Hex,
+): StoredPrivateMarginNote {
+  const notes = readPrivateMarginNotes();
+  const scope = currentPrivateMarginNoteRuntimeScope();
+  const target = notes.find((note) =>
+    note.runtimeScope === scope &&
+    note.commitment.toLowerCase() === commitment.toLowerCase() &&
+    note.ownerCommitment.toLowerCase() === ownerCommitment.toLowerCase() &&
+    note.claimSourceIntentCommitment?.toLowerCase() === intentCommitment.toLowerCase());
+  if (!target) throw new Error("Confirmed recovery note is unavailable in this browser");
+  const now = Date.now();
+  const updated = { ...target, status: "available" as const, updatedAt: now };
+  writeNotes(notes.map((note) => {
+    if (note === target) return updated;
+    if (
+      note.ownerCommitment.toLowerCase() === ownerCommitment.toLowerCase() &&
+      note.runtimeScope === scope &&
+      note.claimSourceIntentCommitment?.toLowerCase() === intentCommitment.toLowerCase() &&
+      note.status === "claiming"
+    ) {
+      return { ...note, status: "spent" as const, updatedAt: now };
+    }
+    return note;
+  }));
+  return updated;
 }
 
 export function selectPrivateMarginNote(input: {
@@ -528,6 +559,7 @@ function normalizeNote(value: unknown): StoredPrivateMarginNote | undefined {
     commitment: note.commitment,
     createdAt: Number(note.createdAt ?? Date.now()),
     lockedByIntentCommitment: note.lockedByIntentCommitment,
+    claimSourceIntentCommitment: note.claimSourceIntentCommitment,
     noteNullifier: note.noteNullifier,
     ownerCommitment: note.ownerCommitment,
     ownerDigest: note.ownerDigest,
@@ -541,7 +573,8 @@ function normalizeNote(value: unknown): StoredPrivateMarginNote | undefined {
 }
 
 function normalizeStatus(value: unknown): PrivateMarginNoteStatus {
-  return value === "locked" || value === "pending" || value === "spent" ? value : "available";
+  return value === "locked" || value === "pending" || value === "claiming" || value === "spent"
+    ? value : "available";
 }
 
 function normalizeRuntimeScope(value: unknown): string | undefined {

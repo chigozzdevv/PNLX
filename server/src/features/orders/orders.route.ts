@@ -15,8 +15,10 @@ export function registerOrdersRoute(
   options: { witnessRoutesEnabled?: boolean } = {},
 ): void {
   const controller = new OrdersController(new OrdersService(executor, prover, onchain, env));
-  router.add("POST", "/orders/cancel", (request) => controller.cancel(request));
+  router.add("POST", "/orders/cancel", (request) => controller.cancel(request), { auth: true });
+  router.add("POST", "/orders/claim-residual", (request) => controller.claimResidual(request), { auth: true });
+  router.add("POST", "/orders/residual-claim", (request) => controller.residualClaim(request), { auth: true });
   if (options.witnessRoutesEnabled) {
-    router.add("POST", "/orders/replace", (request) => controller.replace(request));
+    router.add("POST", "/orders/replace", (request) => controller.replace(request), { auth: true });
   }
 }

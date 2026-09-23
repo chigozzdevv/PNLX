@@ -114,7 +114,7 @@ export function parseProvenWithdrawAssetNote(input: Record<string, unknown>): Pr
   };
 }
 
-function parseDepositNoteRecord(input: Record<string, unknown>) {
+export function parseDepositNoteRecord(input: Record<string, unknown>) {
   return {
     amount: BigInt(String(input.amount)),
     commitment: required(input.commitment, "commitment") as `0x${string}`,

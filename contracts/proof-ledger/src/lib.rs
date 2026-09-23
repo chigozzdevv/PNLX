@@ -15,6 +15,13 @@ pub struct ProofLedger;
 
 #[contractimpl]
 impl ProofLedger {
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let governance_id: Address = env.storage().instance().get(&DataKey::Governance)
+            .unwrap_or_else(|| panic!("not initialized"));
+        GovernanceClient::new(&env, &governance_id).upgrade_authority().require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+
     pub fn init(env: Env, governance: Address) {
         if env.storage().instance().has(&DataKey::Governance) {
             panic!("already initialized");

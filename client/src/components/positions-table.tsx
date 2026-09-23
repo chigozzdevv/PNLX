@@ -6,11 +6,13 @@ import { formatNumber, formatUsd, shortAddress } from "@/lib/format";
 import { OrderCapacityDetails } from "@/components/order-capacity-details";
 import {
   groupOwnerOrders,
+  hasUnrecoveredResidual,
   isActiveOrderGroup,
   isOrderCapacityBlocked,
   type OwnerOrderGroup,
 } from "@/lib/order-groups";
 import { groupPositionRows, hasPrivatePositionState } from "@/lib/position-groups";
+import { privateMarginNotes } from "@/lib/private-margin-notes";
 import type {
   Hex,
   PositionRow,
@@ -59,7 +61,8 @@ export function PositionsTable({
     [positions],
   );
   const openOrderGroups = useMemo(
-    () => groupOwnerOrders(orders).filter(isActiveOrderGroup),
+    () => groupOwnerOrders(orders).filter((group) =>
+      isActiveOrderGroup(group) || hasUnrecoveredResidual(group, privateMarginNotes())),
     [orders],
   );
   const visibleActivity = useMemo(
@@ -384,7 +387,9 @@ function OrdersView({
                   type="button"
                   onClick={() => onCancelOrder?.(order)}
                 >
-                  {cancellingOrderId === order.id ? "Cancelling" : "Cancel"}
+                  {cancellingOrderId === order.id
+                    ? (order.activeOrders.length ? "Cancelling" : "Recovering")
+                    : (order.activeOrders.length ? "Cancel" : "Recover")}
                 </button>
                 <DetailsButton
                   controlsId={`trade-order-details-${order.id}`}

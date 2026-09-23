@@ -4,7 +4,8 @@ import type { BatchSettlement, BatchSettlementCapacity, Hex } from "@pnlx/protoc
 
 const MAX_PUBLIC_ITEMS = 8;
 const CAPACITY_MARKER = "; capacity=";
-type SettlementOutputs = Pick<BatchSettlement, "orderUpdates" | "newCommitments" | "marginChangeCommitments" | "spentNullifiers">;
+type SettlementOutputs = Pick<BatchSettlement, "orderUpdates" | "newCommitments" | "marginChangeCommitments" | "spentNullifiers"> &
+  Partial<Pick<BatchSettlement, "makerIntents" | "takerIntents" | "matchingPayloadCommitments" | "residualCommitments" | "residualMargins" | "residualPayloadCommitments">>;
 
 export function assertBatchSettlementCapacity(settlement: SettlementOutputs, matchedExecutions?: number): void {
   const capacity: BatchSettlementCapacity = {
@@ -15,7 +16,7 @@ export function assertBatchSettlementCapacity(settlement: SettlementOutputs, mat
     notesToSpend: settlement.spentNullifiers.length,
     ...(matchedExecutions === undefined ? {} : { matchedExecutions }),
   };
-  if ([capacity.filledIntents, capacity.positionOutputs, capacity.marginChangeOutputs, capacity.notesToSpend]
+  if ([capacity.filledIntents, capacity.positionOutputs, capacity.marginChangeOutputs, capacity.notesToSpend, settlement.matchingPayloadCommitments?.length ?? 0, settlement.residualCommitments?.length ?? 0, settlement.residualMargins?.length ?? 0, settlement.residualPayloadCommitments?.length ?? 0, settlement.makerIntents?.length ?? 0, settlement.takerIntents?.length ?? 0]
     .some((count) => count > capacity.limit)) {
     throw new Error(`batch proof supports at most ${MAX_PUBLIC_ITEMS} public items${CAPACITY_MARKER}${JSON.stringify(capacity)}`);
   }
@@ -43,6 +44,10 @@ export function readBatchSettlementCapacity(reason?: string): BatchSettlementCap
 
 export function batchSettlementPublicInputHash(settlement: BatchSettlement): Hex {
   assertBatchSettlementCapacity(settlement);
+  if ([settlement.matchingPayloadCommitments, settlement.residualCommitments, settlement.residualMargins, settlement.residualPayloadCommitments]
+    .some((items) => !items || items.length !== settlement.orderUpdates.length)) {
+    throw new Error("intent payload count mismatch");
+  }
   return contractPublicInputHash([
     publicField(hashFields("batch-id", [settlement.batchId])),
     publicField(hashFields("market-id", [settlement.marketId])),
@@ -51,9 +56,31 @@ export function batchSettlementPublicInputHash(settlement: BatchSettlement): Hex
     ...publicVec(settlement.newCommitments),
     ...publicVec(settlement.marginChangeCommitments),
     ...publicVec(settlement.spentNullifiers),
+    ...publicVec(settlement.matchingPayloadCommitments),
+    ...publicVec(settlement.residualCommitments),
+    ...publicAmounts(settlement.residualMargins),
+    ...publicVec(settlement.residualPayloadCommitments),
     publicU128(settlement.residualSize),
     publicU128(settlement.aggregateVolume),
+    publicField(settlement.feeConfigHash),
+    publicU128(settlement.grossTakerFee),
+    publicU128(settlement.makerRebate),
+    publicU128(settlement.insuranceFee),
+    publicU128(settlement.treasuryFee),
+    ...publicVec(settlement.makerIntents),
+    ...publicVec(settlement.takerIntents),
   ]);
+}
+
+function publicAmounts(values: bigint[]): ContractPublicInput[] {
+  if (values.length > MAX_PUBLIC_ITEMS) {
+    throw new Error(`batch proof supports at most ${MAX_PUBLIC_ITEMS} public items`);
+  }
+  return [
+    publicU128(BigInt(values.length)),
+    ...values.map(publicU128),
+    ...Array<ContractPublicInput>(MAX_PUBLIC_ITEMS - values.length).fill(publicU128(0n)),
+  ];
 }
 
 function publicVec(values: Hex[]): ContractPublicInput[] {

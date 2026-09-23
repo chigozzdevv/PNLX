@@ -203,6 +203,46 @@ export class OnchainRelayService implements OnchainRelay {
     };
   }
 
+  residualMargin(intentCommitment: Hex): bigint {
+    if (!this.config.enabled) throw new Error("residual claim requires on-chain relay");
+    const result = this.relayer.read({
+      kind: "batch-settlement",
+      payload: {
+        args: ["--intent_commitment", bytes32(intentCommitment)],
+        contractId: contractId(this.deployment(), "batch-settlement"),
+        functionName: "residual_margin",
+        send: "no",
+      },
+    });
+    return parseInteger(result.output, "residual margin");
+  }
+
+  claimedResidual(intentCommitment: Hex): Hex | undefined {
+    if (!this.config.enabled) throw new Error("residual claim requires on-chain relay");
+    const result = this.relayer.read({
+      kind: "batch-settlement",
+      payload: {
+        args: ["--intent_commitment", bytes32(intentCommitment)],
+        contractId: contractId(this.deployment(), "batch-settlement"),
+        functionName: "claimed_residual",
+        send: "no",
+      },
+    });
+    if (/^\s*(?:null|none)\s*$/i.test(result.output)) return undefined;
+    return parseHex32(result.output, "claimed residual");
+  }
+
+  claimResidual(intentCommitment: Hex, commitment: Hex, proof: ProofMeta): OnchainRelayResult {
+    if (!this.config.enabled) throw new Error("residual claim requires on-chain relay");
+    return {
+      relays: [this.invoke("batch-settlement", "batch-settlement", "claim_residual", [
+        "--intent_commitment", bytes32(intentCommitment),
+        "--commitment", bytes32(commitment),
+        "--proof", proofArg(proof),
+      ])],
+    };
+  }
+
   isIntentRegistered(intentCommitment: Hex): boolean {
     if (!this.config.enabled) return false;
     const deployment = this.deployment();
@@ -219,6 +259,38 @@ export class OnchainRelayService implements OnchainRelay {
       },
     });
     return result.output.trim().toLowerCase().includes("true");
+  }
+
+  intentSubmissionSequence(intentCommitment: Hex): bigint {
+    if (!this.config.enabled) throw new Error("intent sequence requires on-chain relay");
+    const result = this.relayer.read({
+      kind: "intent",
+      payload: {
+        args: ["--intent_commitment", bytes32(intentCommitment)],
+        contractId: contractId(this.deployment(), "intent-registry"),
+        functionName: "submission_sequence",
+        send: "no",
+      },
+    });
+    const sequence = parseInteger(result.output, "intent submission sequence");
+    if (sequence <= 0n) throw new Error("intent submission sequence unavailable");
+    return sequence;
+  }
+
+  async intentSubmissionSequenceAsync(intentCommitment: Hex): Promise<bigint> {
+    if (!this.config.enabled) throw new Error("intent sequence requires on-chain relay");
+    const result = await this.relayer.readAsync({
+      kind: "intent",
+      payload: {
+        args: ["--intent_commitment", bytes32(intentCommitment)],
+        contractId: contractId(this.deployment(), "intent-registry"),
+        functionName: "submission_sequence",
+        send: "no",
+      },
+    });
+    const sequence = parseInteger(result.output, "intent submission sequence");
+    if (sequence <= 0n) throw new Error("intent submission sequence unavailable");
+    return sequence;
   }
 
   async isIntentRegisteredAsync(intentCommitment: Hex): Promise<boolean> {
@@ -431,10 +503,32 @@ export class OnchainRelayService implements OnchainRelay {
           bytes32Vec(record.marginChangeCommitments),
           "--spent_nullifiers",
           bytes32Vec(record.spentNullifiers),
+          "--matching_payload_commitments",
+          bytes32Vec(record.matchingPayloadCommitments),
+          "--residual_commitments",
+          bytes32Vec(record.residualCommitments),
+          "--residual_payload_commitments",
+          bytes32Vec(record.residualPayloadCommitments),
+          "--residual_margins",
+          JSON.stringify(record.residualMargins.map(String)),
           "--volume",
           record.aggregateVolume.toString(),
           "--residual",
           record.residualSize.toString(),
+          "--fee_config_hash",
+          bytes32(record.feeConfigHash),
+          "--gross_taker_fee",
+          record.grossTakerFee.toString(),
+          "--maker_rebate",
+          record.makerRebate.toString(),
+          "--insurance_fee",
+          record.insuranceFee.toString(),
+          "--treasury_fee",
+          record.treasuryFee.toString(),
+          "--maker_intents",
+          bytes32Vec(record.makerIntents),
+          "--taker_intents",
+          bytes32Vec(record.takerIntents),
         ]),
       ],
     };
@@ -462,16 +556,38 @@ export class OnchainRelayService implements OnchainRelay {
           bytes32Vec(record.marginChangeCommitments),
           "--spent_nullifiers",
           bytes32Vec(record.spentNullifiers),
+          "--matching_payload_commitments",
+          bytes32Vec(record.matchingPayloadCommitments),
+          "--residual_commitments",
+          bytes32Vec(record.residualCommitments),
+          "--residual_payload_commitments",
+          bytes32Vec(record.residualPayloadCommitments),
+          "--residual_margins",
+          JSON.stringify(record.residualMargins.map(String)),
           "--volume",
           record.aggregateVolume.toString(),
           "--residual",
           record.residualSize.toString(),
+          "--fee_config_hash",
+          bytes32(record.feeConfigHash),
+          "--gross_taker_fee",
+          record.grossTakerFee.toString(),
+          "--maker_rebate",
+          record.makerRebate.toString(),
+          "--insurance_fee",
+          record.insuranceFee.toString(),
+          "--treasury_fee",
+          record.treasuryFee.toString(),
+          "--maker_intents",
+          bytes32Vec(record.makerIntents),
+          "--taker_intents",
+          bytes32Vec(record.takerIntents),
         ]),
       ],
     };
   }
 
-  isBatchSettled(batchId: string, marketId: string): boolean {
+  isBatchSettled(batchId: string, marketId: string, settlementDigest?: Hex): boolean {
     if (!this.config.enabled) return false;
     const deployment = this.deployment();
     const result = this.relayer.read({
@@ -482,16 +598,17 @@ export class OnchainRelayService implements OnchainRelay {
           bytes32(batchKey(batchId)),
           "--market_id",
           marketKey(marketId),
+          ...(settlementDigest ? ["--settlement_digest", bytes32(settlementDigest)] : []),
         ],
         contractId: contractId(deployment, "batch-settlement"),
-        functionName: "is_settled",
+        functionName: settlementDigest ? "is_settled_digest" : "is_settled",
         send: "no",
       },
     });
     return result.output.trim().toLowerCase().includes("true");
   }
 
-  async isBatchSettledAsync(batchId: string, marketId: string): Promise<boolean> {
+  async isBatchSettledAsync(batchId: string, marketId: string, settlementDigest?: Hex): Promise<boolean> {
     if (!this.config.enabled) return false;
     const deployment = this.deployment();
     const result = await this.relayer.readAsync({
@@ -502,9 +619,10 @@ export class OnchainRelayService implements OnchainRelay {
           bytes32(batchKey(batchId)),
           "--market_id",
           marketKey(marketId),
+          ...(settlementDigest ? ["--settlement_digest", bytes32(settlementDigest)] : []),
         ],
         contractId: contractId(deployment, "batch-settlement"),
-        functionName: "is_settled",
+        functionName: settlementDigest ? "is_settled_digest" : "is_settled",
         send: "no",
       },
     });
@@ -1090,6 +1208,7 @@ function changeCommitmentArg(commitment: Hex): string {
 }
 
 function bytes32(value: Hex | string): string {
+  if (value === "0x0") return "0".repeat(64);
   return value.startsWith("0x") ? value.slice(2) : value;
 }
 

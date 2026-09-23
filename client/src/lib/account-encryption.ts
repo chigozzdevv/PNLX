@@ -47,6 +47,7 @@ export type PrivateAccountEventPayload =
   | {
       kind: "position-opening";
       opening: {
+        entryFee?: string;
         entryPrice: string;
         fundingIndex: string;
         margin: string;
