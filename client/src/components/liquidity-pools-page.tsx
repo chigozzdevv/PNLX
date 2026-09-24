@@ -45,7 +45,7 @@ export function LiquidityPoolsPage() {
                 <span className="liquidity-pool-name"><strong>XLM/USD</strong><small>USDC liquidity <ArrowUpRight aria-hidden="true" size={12} /></small></span>
                 <span className="liquidity-pool-cell"><small>Kind</small><strong>Vault</strong></span>
                 <span className="liquidity-pool-cell" title={status.operator}><small>Operator</small><strong>PNLX</strong></span>
-                <span className="liquidity-pool-cell"><small>APY</small><strong className="liquidity-pool-muted">—</strong></span>
+                <span className="liquidity-pool-cell"><small>APY</small><strong aria-label="0 percent placeholder; APY is not calculated yet" className="liquidity-apy-placeholder" title="APY is not calculated yet">0%<sup>*</sup></strong></span>
                 <span className="liquidity-pool-cell"><small>Total assets</small><strong>${formatVaultUnits(status.totalAssetsAtCost)}</strong></span>
                 <span className="liquidity-pool-cell">
                   <small>Your positions</small>

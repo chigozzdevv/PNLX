@@ -67,7 +67,7 @@ export function LiquidityPoolDetails() {
               ) : account?.equity !== null && account?.equity !== undefined ? (
                 <strong className="liquidity-account-value">${formatVaultUnits(account.equity)}</strong>
               ) : (
-                <p className="liquidity-wallet-hint">Value available after settlement</p>
+                <p className="liquidity-wallet-hint">—</p>
               )}
             </div>
             <div className="liquidity-actions">
@@ -77,9 +77,8 @@ export function LiquidityPoolDetails() {
           </div>
 
           <div className="liquidity-supporting-values">
-            <div className="portfolio-supporting-value"><span>Pool APY</span><strong>—</strong></div>
+            <div className="portfolio-supporting-value"><span>Pool APY</span><strong aria-label="0 percent placeholder; APY is not calculated yet" className="liquidity-apy-placeholder" title="APY is not calculated yet">0%<sup>*</sup></strong></div>
             <div className="portfolio-supporting-value"><span>Total assets</span><strong>{status ? `$${formatVaultUnits(status.totalAssetsAtCost)}` : "—"}</strong></div>
-            <div className="portfolio-supporting-value"><span>Your positions</span><strong>{account ? account.positions.length : "—"}</strong></div>
           </div>
           {vault.statusError ? <p className="liquidity-data-error" role="alert">{vault.statusError} <button onClick={vault.refresh} type="button">Retry</button></p> : null}
         </section>
@@ -87,12 +86,11 @@ export function LiquidityPoolDetails() {
         <section aria-label="Pool details" className="liquidity-performance">
           <div className="liquidity-section-heading"><h2>Pool details</h2></div>
           <div className="liquidity-detail-grid">
-            <div><span>New supply price</span><strong>{supplySharePrice !== null ? `$${formatVaultUnits(supplySharePrice, 4)}` : "—"}</strong></div>
+            <div><span>Share price</span><strong>{supplySharePrice !== null ? `$${formatVaultUnits(supplySharePrice, 4)}` : "—"}</strong></div>
             <div><span>Liquid USDC</span><strong>{status ? `$${formatVaultUnits(status.liquidAssets)}` : "—"}</strong></div>
             <div><span>Deployed principal</span><strong>{status ? `$${formatVaultUnits(status.deployedPrincipal)}` : "—"}</strong></div>
-            <div><span>Supply</span><strong>{status ? status.paused ? "Paused" : "Open" : "—"}</strong></div>
           </div>
-          {status ? <p className="liquidity-pool-note">{status.paused ? "Deposits are currently paused." : "Deposits are open."} Withdrawals can be requested while trading continues; claims open after that position is reconciled.</p> : null}
+          {status?.paused ? <p className="liquidity-pool-note">Deposits paused.</p> : null}
         </section>
 
         <section aria-label="Recent liquidity activity" className="liquidity-activity">
@@ -145,7 +143,7 @@ function LiquidityActionDialog({ account, accountError, error, mode, onClose, on
   const unavailable = statusError || (!status ? "Loading pool…" : deposit
     ? status.paused ? "Deposits are currently paused." : null
     : accountError || (positions.length === 0 ? "No liquidity position to withdraw." :
-      withdrawalStep === "waiting" ? "Withdrawal requested. Claim after the active maker allocation settles." : null));
+      withdrawalStep === "waiting" ? "Withdrawal requested. Claim when funds return to the vault." : null));
   let quote: ReturnType<typeof quoteVaultAction> | null = null;
   let quoteError: string | null = null;
   if (status && !deposit && withdrawalStep === "claim" && selectedPosition) {
@@ -206,6 +204,9 @@ function LiquidityActionDialog({ account, accountError, error, mode, onClose, on
         ) : (
           <>
             {unavailable ? <p className="liquidity-dialog-note" role="status">{unavailable}</p> : null}
+            {!deposit && withdrawalStep === "request" && !unavailable ? (
+              <p className="liquidity-dialog-note">Request now. Claim when funds return to the vault.</p>
+            ) : null}
             {!deposit && positions.length > 1 ? (
               <>
                 <label className="liquidity-dialog-input-label" htmlFor="liquidity-series">Position</label>

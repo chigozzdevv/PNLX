@@ -3158,6 +3158,12 @@ button:disabled {
   min-width: 165px;
 }
 
+.liquidity-apy-placeholder sup {
+  margin-left: 2px;
+  color: #e26f62;
+  font-size: 0.7em;
+}
+
 .liquidity-performance,
 .liquidity-activity {
   border-top: 1px solid rgba(255, 255, 255, 0.07);
@@ -3169,7 +3175,7 @@ button:disabled {
 
 .liquidity-detail-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 22px;
   margin-top: 28px;
 }
