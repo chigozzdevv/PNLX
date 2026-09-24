@@ -8,6 +8,9 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/PNLX
 EnvironmentFile=/home/ubuntu/PNLX/.env
+Environment=HOME=/home/ubuntu
+Environment=PATH=/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/home/ubuntu/.nargo/bin:/home/ubuntu/.bb:/home/ubuntu/.bb/bin:/home/ubuntu/.risc0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=NODE_ENV=production
 ExecStart=/home/ubuntu/.bun/bin/bun scripts/operations/manage-vault-maker-liquidity.ts --ready-usdc 1000 --operator-source pnlx-maker --maker-source pnlx-maker --api-url http://127.0.0.1:4000
 Restart=always
 RestartSec=15

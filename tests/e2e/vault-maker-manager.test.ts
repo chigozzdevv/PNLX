@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { makerTopUpAmount } from "../../scripts/operations/manage-vault-maker-liquidity";
+import { makerTopUpAmount, planIncompleteAllocation } from "../../scripts/operations/manage-vault-maker-liquidity";
 import { localApiOrigin } from "../../scripts/smoke/custody";
 
 const state = {
@@ -33,5 +33,20 @@ describe("vault maker reserve planning", () => {
     expect(makerTopUpAmount({ ...state, currentSeriesPrincipal: 399_000_000_000n,
       currentSeriesLiquid: 101_000_000_000n, deployedPrincipal: 400_100_000_000n }))
       .toBe(60_000_000n);
+  });
+
+  test("resumes a recorded allocation without allocating twice", () => {
+    const allocation = {
+      amount: "9900741423", id: "vault:allocation", noteCommitments: [],
+      registeredAmount: "0", status: "outstanding" as const,
+    };
+    expect(planIncompleteAllocation(allocation, [])).toEqual({ kind: "deposit" });
+    const commitment = `0x${"a".repeat(64)}`;
+    expect(planIncompleteAllocation(allocation, [{ amount: allocation.amount, commitment,
+      depositTxHash: `0x${"b".repeat(64)}`, status: "available", vaultAllocationId: allocation.id }]))
+      .toEqual({ kind: "register", commitment });
+    expect(() => planIncompleteAllocation(allocation, [{ amount: allocation.amount,
+      commitment, status: "pending", vaultAllocationId: allocation.id }])).toThrow(/manual reconciliation/);
+    expect(() => planIncompleteAllocation({ ...allocation, registeredAmount: "1" }, [])).toThrow(/manual reconciliation/);
   });
 });

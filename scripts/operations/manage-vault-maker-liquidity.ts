@@ -4,7 +4,7 @@ import { loadEnv } from "@/config/env";
 import { LiquidityVaultService } from "@/features/liquidity-vault/liquidity-vault.service";
 import { readMakerNotes } from "@/shared/maker-note-store";
 import { withVaultMakerLease } from "@/shared/vault-maker-lease";
-import { beginVaultMakerDrain, eligibleVaultMakerNotes, readVaultMakerAllocations } from "@/shared/vault-maker-backing";
+import { beginVaultMakerDrain, eligibleVaultMakerNotes, readVaultMakerAllocations, type VaultMakerAllocation } from "@/shared/vault-maker-backing";
 import { createExecutorAsync } from "@/workers/executor/executor.worker";
 import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
@@ -115,13 +115,6 @@ export async function provisionOnce(input: {
     const allocations = await readVaultMakerAllocations();
     const active = allocations.filter((item) => item.vault === vaultId && item.status !== "closed");
     const notes = await readMakerNotes();
-    if (notes.some((note) => note.status === "pending" &&
-      active.some((allocation) => allocation.id === note.vaultAllocationId))) {
-      throw new Error("an allocated maker note deposit is pending reconciliation");
-    }
-    if (active.some((allocation) => BigInt(allocation.registeredAmount) !== BigInt(allocation.amount))) {
-      throw new Error("an earlier vault allocation has not been fully registered");
-    }
     const seriesIds = [...new Set([...active.map((item) => item.series), current.currentSeries])];
     const seriesPrincipals = new Map(await Promise.all(seriesIds.map(async (series) =>
       [series, await readAmount("series_principal", series)] as const)));
@@ -131,6 +124,24 @@ export async function provisionOnce(input: {
       if (recorded !== seriesPrincipals.get(series)) {
         throw new Error(`series ${series} principal differs from recorded vault allocations`);
       }
+    }
+    const incomplete = active.filter((item) => BigInt(item.registeredAmount) !== BigInt(item.amount));
+    if (incomplete.length > 1) throw new Error("multiple unfinished vault allocations require reconciliation");
+    if (incomplete[0]) {
+      const action = planIncompleteAllocation(incomplete[0], notes);
+      await assertLiveApi(current.asset, current.maker);
+      if (action.kind === "deposit") {
+        await depositAllocation(incomplete[0], assertLease);
+      } else {
+        assertLease();
+        await register(["--allocation-tx", incomplete[0].allocationTxHash,
+          "--commitment", action.commitment]);
+      }
+      return;
+    }
+    if (notes.some((note) => note.status === "pending" &&
+      active.some((allocation) => allocation.id === note.vaultAllocationId))) {
+      throw new Error("an allocated maker note deposit is pending reconciliation");
     }
     const backed = eligibleVaultMakerNotes(notes as Array<typeof notes[number] & {
       commitment: string; status: string; walletAddress: string;
@@ -160,27 +171,43 @@ export async function provisionOnce(input: {
     });
     if (amount <= 0n) return;
 
+    await assertLiveApi(current.asset, current.maker);
+    assertLease();
+    const allocation = await allocate(["--amount", String(amount), "--series", String(current.currentSeries),
+      "--operator-source", input.operatorSource]);
+    await depositAllocation(allocation, assertLease);
+  });
+
+  async function assertLiveApi(asset: string, maker: string): Promise<void> {
     const apiHealth = await fetch(`${input.apiUrl}/health`);
     if (!apiHealth.ok) throw new Error(`live API is unavailable: ${apiHealth.status}`);
     const apiVaultResponse = await fetch(`${input.apiUrl}/liquidity-vault`);
     if (!apiVaultResponse.ok) throw new Error(`live API vault is unavailable: ${apiVaultResponse.status}`);
     const apiVault = (await apiVaultResponse.json()) as { vault?: { contractId?: string; asset?: string; maker?: string } };
-    if (apiVault.vault?.contractId !== vaultId || apiVault.vault.asset !== current.asset ||
-      apiVault.vault.maker !== current.maker) {
+    if (apiVault.vault?.contractId !== vaultId || apiVault.vault.asset !== asset ||
+      apiVault.vault.maker !== maker) {
       throw new Error("live API vault does not match the maker manager deployment");
     }
+  }
+
+  async function depositAllocation(allocation: VaultMakerAllocation, assertLease: () => void): Promise<void> {
     assertLease();
-    const allocation = await allocate(["--amount", String(amount), "--series", String(current.currentSeries),
-      "--operator-source", input.operatorSource]);
-    assertLease();
+    const makerBalance = await relayer.readAsync({ kind: "contract-invoke", payload: {
+      args: ["--id", allocation.maker], contractId: allocation.asset,
+      functionName: "balance", send: "no",
+    } });
+    const balanceText = makerBalance.output.trim().replace(/^"|"$/g, "");
+    if (!/^[0-9]+$/.test(balanceText) || BigInt(balanceText) < BigInt(allocation.amount)) {
+      throw new Error("maker balance cannot cover the recorded vault allocation");
+    }
     const deposit = await runCustodySmoke({
       apiUrl: input.apiUrl,
-      amount,
+      amount: BigInt(allocation.amount),
       deployAsset: false,
-      from: current.maker,
+      from: allocation.maker,
       prepareOnly: false,
       source: input.makerSource,
-      token: current.asset,
+      token: allocation.asset,
       vaultAllocationId: allocation.id,
     });
     const commitment = String(deposit.noteCommitment ?? "");
@@ -188,8 +215,8 @@ export async function provisionOnce(input: {
     assertLease();
     await register(["--allocation-tx", allocation.allocationTxHash, "--commitment", commitment]);
     console.log(JSON.stringify({ allocationTxHash: allocation.allocationTxHash,
-      amount: String(amount), commitment, status: "ready" }));
-  });
+      amount: allocation.amount, commitment, status: "ready" }));
+  }
 
   async function readAmount(functionName: string, series: number): Promise<bigint> {
     const result = await relayer.readAsync({ kind: "contract-invoke", payload: {
@@ -223,6 +250,26 @@ export async function provisionOnce(input: {
       await (executor.store as { close?: () => Promise<void> }).close?.();
     }
   }
+}
+
+export function planIncompleteAllocation(
+  allocation: Pick<VaultMakerAllocation, "amount" | "id" | "noteCommitments" | "registeredAmount" | "status">,
+  notes: Array<{ amount?: string | number; commitment?: string | number; depositTxHash?: string | number;
+    status?: string | number; vaultAllocationId?: string | number }>,
+): { kind: "deposit" } | { kind: "register"; commitment: string } {
+  if (allocation.status !== "outstanding" || BigInt(allocation.registeredAmount) !== 0n ||
+    BigInt(allocation.amount) <= 0n || allocation.noteCommitments.length !== 0) {
+    throw new Error("unfinished vault allocation requires manual reconciliation");
+  }
+  const linked = notes.filter((note) => note.vaultAllocationId === allocation.id);
+  if (linked.length === 0) return { kind: "deposit" };
+  const note = linked[0];
+  if (linked.length === 1 && note?.status === "available" &&
+    typeof note.commitment === "string" && /^0x[0-9a-fA-F]{64}$/.test(note.commitment) &&
+    typeof note.depositTxHash === "string" && BigInt(String(note.amount)) === BigInt(allocation.amount)) {
+    return { kind: "register", commitment: note.commitment };
+  }
+  throw new Error("unfinished maker note deposit requires manual reconciliation");
 }
 
 function sourceAddress(alias: string): string {
