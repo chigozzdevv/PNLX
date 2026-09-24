@@ -251,7 +251,7 @@ async function closeMakerPosition(
   const prover = createProver();
   const service = new PositionClosesService(executor, prover, onchain, env);
   const context = service.context({ ownerCommitment: owner,
-    positionCommitment: position.positionCommitment }, owner);
+    positionCommitment: position.positionCommitment }, candidate.allocation.maker);
   const markPrice = BigInt(context.market.markPrice);
   const fundingPayment = opening.size *
     (BigInt(context.market.fundingIndex) - opening.fundingIndex) / PRICE_SCALE *
