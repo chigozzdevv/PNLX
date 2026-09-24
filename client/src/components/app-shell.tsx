@@ -8,13 +8,12 @@ import { formatUsd, shortAddress } from "@/lib/format";
 import type { WalletSessionController } from "@/lib/use-wallet-session";
 import type { AccountSnapshot } from "@/types/trading";
 
-export type AppView = "trade" | "portfolio" | "liquidity" | "previous";
+export type AppView = "trade" | "portfolio" | "liquidity";
 
 const navItems: Array<{ href: string; id: AppView; label: string }> = [
   { href: "/trade", id: "trade", label: "Trade" },
   { href: "/portfolio", id: "portfolio", label: "Portfolio" },
   { href: "/liquidity", id: "liquidity", label: "Liquidity" },
-  { href: "/legacy/portfolio", id: "previous", label: "Previous positions" },
 ];
 
 interface AppShellProps {
@@ -52,11 +51,7 @@ export function AppShell({
           </Link>
 
           <nav className="hidden items-center gap-1 lg:flex">
-            {navItems.map((item) => item.id === "previous" || activeView === "previous" ? (
-              <a className={`nav-item ${item.id === activeView ? "nav-item-active" : ""}`} href={item.href} key={item.id}>
-                {item.label}
-              </a>
-            ) : (
+            {navItems.map((item) => (
               <Link className={`nav-item ${item.id === activeView ? "nav-item-active" : ""}`} href={item.href} key={item.id}>
                 {item.label}
               </Link>
@@ -145,11 +140,7 @@ export function AppShell({
           </div>
         </div>
         <nav aria-label="App pages" className="app-mobile-nav">
-          {navItems.map((item) => item.id === "previous" || activeView === "previous" ? (
-            <a aria-current={item.id === activeView ? "page" : undefined} className={item.id === activeView ? "app-mobile-nav-active" : ""} href={item.href} key={item.id}>
-              {item.label}
-            </a>
-          ) : (
+          {navItems.map((item) => (
             <Link aria-current={item.id === activeView ? "page" : undefined} className={item.id === activeView ? "app-mobile-nav-active" : ""} href={item.href} key={item.id}>
               {item.label}
             </Link>

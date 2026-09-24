@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { pnlxGet } from "@/lib/pnlx-api";
-import { apiPath } from "@/lib/api-stack";
+import { apiPath } from "@/lib/api-path";
 import type { ChartCandle } from "@/types/trading";
 
 export type CandleInterval = "1m" | "5m" | "15m" | "1h" | "1d";

@@ -1,4 +1,4 @@
-import { apiPath } from "@/lib/api-stack";
+import { apiPath } from "@/lib/api-path";
 
 export async function pnlxPost<T>(
   path: string,

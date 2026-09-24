@@ -22,7 +22,7 @@ describe("deployment runner", () => {
     const root = mkdtempSync(join(tmpdir(), "pnlx-deploy-"));
     try {
       expect(() => deploy(parseOptions([
-        "--network", "testnet", "--out", join(root, "testnet-fees.json"),
+        "--network", "testnet", "--out", join(root, "testnet.json"),
       ]))).toThrow("network deployment requires --upgrade-authority");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -32,7 +32,7 @@ describe("deployment runner", () => {
   test("preserves an unfinished deployment record instead of redeploying over it", () => {
     const root = mkdtempSync(join(tmpdir(), "pnlx-deploy-"));
     try {
-      const out = join(root, "testnet-fees.json");
+      const out = join(root, "testnet.json");
       writeFileSync(`${out}.partial`, "{}");
       expect(() => deploy(parseOptions([
         "--network", "testnet", "--out", out,
@@ -54,19 +54,19 @@ describe("deployment runner", () => {
   test("reuses only a vault from a registry on the target network", () => {
     const options = parseOptions([
       "--network", "testnet",
-      "--out", "deployments/testnet-fees.json",
+      "--out", "deployments/testnet-next.json",
       "--reuse-vault-from", "deployments/testnet.json",
     ]);
     expect(options.reuseVaultFrom).toBe("deployments/testnet.json");
     expect(reusableVaultFromRegistry(options.reuseVaultFrom!, options.network)).toBe(
-      "CAU2RWJFKWZIRWLTO734X2BSVIAH22WHCIRRYIBLQPHIUPPFQ6U5MMTQ",
+      "CAU23XCVR5EMOMCMAZ3CIKJAHS7QREUUX7QX5B5QECUPZ2NQMKOLAT2M",
     );
     expect(() => reusableVaultFromRegistry(options.reuseVaultFrom!, "local")).toThrow(
       "vault source registry network mismatch",
     );
     const plan = commandPlan({ ...options, dryRun: true, smoke: false });
-    expect(plan.some((command) => command.includes("CAU2RWJFKWZIRWLTO734X2BSVIAH22WHCIRRYIBLQPHIUPPFQ6U5MMTQ") && command.includes("asset"))).toBe(true);
-    expect(plan.some((command) => command.includes("CAU2RWJFKWZIRWLTO734X2BSVIAH22WHCIRRYIBLQPHIUPPFQ6U5MMTQ") && command.includes("upgrade_authority"))).toBe(true);
+    expect(plan.some((command) => command.includes("CAU23XCVR5EMOMCMAZ3CIKJAHS7QREUUX7QX5B5QECUPZ2NQMKOLAT2M") && command.includes("asset"))).toBe(true);
+    expect(plan.some((command) => command.includes("CAU23XCVR5EMOMCMAZ3CIKJAHS7QREUUX7QX5B5QECUPZ2NQMKOLAT2M") && command.includes("upgrade_authority"))).toBe(true);
   });
 
   test("builds localnet deployment and verifier smoke commands", () => {

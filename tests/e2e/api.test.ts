@@ -675,7 +675,6 @@ describe("server api", () => {
   test("reports RISC0 matcher readiness for private matcher service", async () => {
     const previousRequired = process.env.PRIVATE_MATCHING_REQUIRED;
     const previousMatcherUrl = process.env.MATCHER_SERVICE_URL;
-    const previousLegacyMatcherUrl = process.env.EXTERNAL_MATCHER_URL;
     const previousBoundlessRpc = process.env.BOUNDLESS_RPC_URL;
     const previousBoundlessKey = process.env.BOUNDLESS_PRIVATE_KEY;
     const previousPinataJwt = process.env.PINATA_JWT;
@@ -684,7 +683,6 @@ describe("server api", () => {
     process.env.BOUNDLESS_RPC_URL = "https://boundless-rpc.pnlx.local";
     process.env.BOUNDLESS_PRIVATE_KEY = "test-boundless-key";
     process.env.PINATA_JWT = "test-pinata-jwt";
-    delete process.env.EXTERNAL_MATCHER_URL;
     try {
       const app = createApp();
       const healthResponse = await app.handle(new Request("http://pnlx.local/health"));
@@ -706,7 +704,6 @@ describe("server api", () => {
     } finally {
       restoreEnv("PRIVATE_MATCHING_REQUIRED", previousRequired);
       restoreEnv("MATCHER_SERVICE_URL", previousMatcherUrl);
-      restoreEnv("EXTERNAL_MATCHER_URL", previousLegacyMatcherUrl);
       restoreEnv("BOUNDLESS_RPC_URL", previousBoundlessRpc);
       restoreEnv("BOUNDLESS_PRIVATE_KEY", previousBoundlessKey);
       restoreEnv("PINATA_JWT", previousPinataJwt);
@@ -716,10 +713,8 @@ describe("server api", () => {
   test("fails closed when private matching lacks a matcher service", () => {
     const previousPrivate = process.env.PRIVATE_MATCHING_REQUIRED;
     const previousUrl = process.env.MATCHER_SERVICE_URL;
-    const previousLegacyUrl = process.env.EXTERNAL_MATCHER_URL;
     process.env.PRIVATE_MATCHING_REQUIRED = "true";
     process.env.MATCHER_SERVICE_URL = "";
-    delete process.env.EXTERNAL_MATCHER_URL;
 
     try {
       expect(() => createAppRuntime()).toThrow(
@@ -728,7 +723,6 @@ describe("server api", () => {
     } finally {
       restoreEnv("PRIVATE_MATCHING_REQUIRED", previousPrivate);
       restoreEnv("MATCHER_SERVICE_URL", previousUrl);
-      restoreEnv("EXTERNAL_MATCHER_URL", previousLegacyUrl);
     }
   });
 

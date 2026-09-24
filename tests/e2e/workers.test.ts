@@ -638,31 +638,19 @@ describe("support workers", () => {
     }
   });
 
-  test("prefers matcher service env names while accepting legacy aliases", () => {
+  test("reads the matcher service configuration", () => {
     const previousServiceUrl = process.env.MATCHER_SERVICE_URL;
     const previousServiceToken = process.env.MATCHER_SERVICE_TOKEN;
-    const previousLegacyUrl = process.env.EXTERNAL_MATCHER_URL;
-    const previousLegacyToken = process.env.EXTERNAL_MATCHER_TOKEN;
 
     try {
-      delete process.env.MATCHER_SERVICE_URL;
-      delete process.env.MATCHER_SERVICE_TOKEN;
-      process.env.EXTERNAL_MATCHER_URL = "https://legacy-matcher.pnlx.local";
-      process.env.EXTERNAL_MATCHER_TOKEN = "legacy-token";
-      const legacyEnv = loadEnv();
-      expect(legacyEnv.matcherServiceUrl).toBe("https://legacy-matcher.pnlx.local");
-      expect(legacyEnv.matcherServiceToken).toBe("legacy-token");
-
       process.env.MATCHER_SERVICE_URL = "https://matcher.pnlx.local";
       process.env.MATCHER_SERVICE_TOKEN = "service-token";
-      const preferredEnv = loadEnv();
-      expect(preferredEnv.matcherServiceUrl).toBe("https://matcher.pnlx.local");
-      expect(preferredEnv.matcherServiceToken).toBe("service-token");
+      const env = loadEnv();
+      expect(env.matcherServiceUrl).toBe("https://matcher.pnlx.local");
+      expect(env.matcherServiceToken).toBe("service-token");
     } finally {
       restoreEnv("MATCHER_SERVICE_URL", previousServiceUrl);
       restoreEnv("MATCHER_SERVICE_TOKEN", previousServiceToken);
-      restoreEnv("EXTERNAL_MATCHER_URL", previousLegacyUrl);
-      restoreEnv("EXTERNAL_MATCHER_TOKEN", previousLegacyToken);
     }
   });
 
