@@ -87,7 +87,7 @@ export async function provisionOnce(input: {
   }
 
   await withVaultMakerLease(env.mongodbUri, env.mongodbDatabase, `${env.stellarNetwork}:${vaultId}`, async (assertLease) => {
-    if (await reconcileOneMakerPosition({ apiUrl: input.apiUrl,
+    if (await reconcileOneMakerPosition({ apiUrl: input.apiUrl, assertLease,
       makerSource: input.makerSource, operatorSource: input.operatorSource })) return;
     const allocationsBeforeRecovery = (await readVaultMakerAllocations())
       .filter((item) => item.vault === vaultId && item.status !== "closed");

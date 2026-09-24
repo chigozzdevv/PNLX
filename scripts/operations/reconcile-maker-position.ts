@@ -47,9 +47,10 @@ if (import.meta.main) {
   const vault = loadDeploymentRegistry(env.stellarDeploymentFile)?.contracts["liquidity-vault"];
   if (!env.mongodbUri || !vault) throw new Error("maker vault configuration is required");
   await withVaultMakerLease(env.mongodbUri, env.mongodbDatabase,
-    `${env.stellarNetwork}:${vault}`, async () => {
+    `${env.stellarNetwork}:${vault}`, async (assertLease) => {
       const changed = await reconcileOneMakerPosition({
         apiUrl: localApiOrigin(value("--api-url")),
+        assertLease,
         makerSource: value("--maker-source"),
         operatorSource: value("--operator-source"),
         manualMakerPositionCommitment: position,
@@ -139,6 +140,7 @@ export function makerPositionsReadyForReconciliation(
 
 export async function reconcileOneMakerPosition(input: {
   apiUrl: string;
+  assertLease?: () => void;
   makerSource: string;
   operatorSource: string;
   manualMakerPositionCommitment?: Hex;
@@ -176,6 +178,7 @@ export async function reconcileOneMakerPosition(input: {
       if (candidate.output) {
         throw new Error(`maker position ${makerPosition.positionCommitment} has an unresolved pending close output`);
       }
+      input.assertLease?.();
       await closeMakerPosition(candidate, executor, input, env, deployment);
       return true;
     }
@@ -192,12 +195,14 @@ export async function reconcileOneMakerPosition(input: {
     }
     if (candidate.allocation.status === "draining") return false;
     if (output.status === "draining" || output.status === "withdrawing") {
+      input.assertLease?.();
       await withdrawMakerNotes(["--allocation-tx", candidate.allocation.allocationTxHash,
         "--note-commitment", String(output.commitment), "--closed-output", "--execute",
         "--api-url", input.apiUrl, "--maker-source", input.makerSource]);
       return true;
     }
     if (output.status === "spent" && output.recoveredAmount) {
+      input.assertLease?.();
       await settleVaultMakerPosition({ allocationId: candidate.allocation.id,
         closeTxHash: makerClose.settlementTxHash, noteCommitment: String(output.commitment) as Hex,
         operatorSource: input.operatorSource, positionCommitment: makerPosition.positionCommitment,
@@ -213,7 +218,7 @@ export async function reconcileOneMakerPosition(input: {
 async function closeMakerPosition(
   candidate: MakerPositionCloseCandidate,
   executor: Awaited<ReturnType<typeof createExecutorAsync>>,
-  input: { apiUrl: string; makerSource: string; operatorSource: string },
+  input: { apiUrl: string; assertLease?: () => void; makerSource: string; operatorSource: string },
   env: ReturnType<typeof loadEnv>,
   deployment: NonNullable<ReturnType<typeof loadDeploymentRegistry>>,
 ): Promise<void> {
@@ -294,6 +299,7 @@ async function closeMakerPosition(
     pathIndices: context.membershipProof.indices,
     pathSiblings: context.membershipProof.siblings,
   });
+  input.assertLease?.();
   const now = Date.now();
   await insertPendingMakerNote({
     amount: amount.toString(), assetDigest: candidate.makerNote.assetDigest,

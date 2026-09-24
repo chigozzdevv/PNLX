@@ -73,7 +73,7 @@
     "intent-validity-proof-verifier": "0xbe24718b96844aaf4af5df11d562b80b9bd2eac5dab624f9c7096ab43cfe0d08",
     "liquidation-check-proof-verifier": "0xbe24718b96844aaf4af5df11d562b80b9bd2eac5dab624f9c7096ab43cfe0d08",
     "margin-check-proof-verifier": "0xbe24718b96844aaf4af5df11d562b80b9bd2eac5dab624f9c7096ab43cfe0d08",
-    "position-close-proof-verifier": "0xbe24718b96844aaf4af5df11d562b80b9bd2eac5dab624f9c7096ab43cfe0d08",
+    "position-close-proof-verifier": "0xd1e80da60ef1a9808caff6ba29ff7994aacd41454d41fecdd8492e74113f71bb",
     "position-transition-proof-verifier": "0xbe24718b96844aaf4af5df11d562b80b9bd2eac5dab624f9c7096ab43cfe0d08",
     "withdraw-proof-verifier": "0xbe24718b96844aaf4af5df11d562b80b9bd2eac5dab624f9c7096ab43cfe0d08",
     "batch-match-risc0-verifier": "0xa96c47407222ad66ad50a7ed34fb30bdf2c4baa0c89feb2459841ea1ff27896a",
