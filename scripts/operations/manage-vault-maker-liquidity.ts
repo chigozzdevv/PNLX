@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { ownerCommitment } from "@pnlx/crypto";
+import type { PositionLifecycleRecord } from "@pnlx/protocol-types";
 import { loadEnv } from "@/config/env";
 import { LiquidityVaultService } from "@/features/liquidity-vault/liquidity-vault.service";
 import { readMakerNotes } from "@/shared/maker-note-store";
@@ -85,12 +86,27 @@ export async function provisionOnce(input: {
   }
 
   await withVaultMakerLease(env.mongodbUri, env.mongodbDatabase, `${env.stellarNetwork}:${vaultId}`, async (assertLease) => {
+    const allocationsBeforeRecovery = (await readVaultMakerAllocations())
+      .filter((item) => item.vault === vaultId && item.status !== "closed");
+    const notesBeforeRecovery = await readMakerNotes();
+    const candidateAllocations = allocationsBeforeRecovery.filter((allocation) =>
+      allocation.status === "outstanding" && notesBeforeRecovery.some((note) =>
+        note.vaultAllocationId === allocation.id && note.status === "spent" && !note.recoveredAmount &&
+        typeof note.lockedByIntentCommitment === "string"));
+    const makerPositions = candidateAllocations.length > 0
+      ? await readMakerPositions(status.maker)
+      : [];
     for (let series = 0; series <= status.currentSeries; series += 1) {
-      if (await readAmount("series_pending_total", series) === 0n) continue;
-      const pendingAllocations = (await readVaultMakerAllocations())
-        .filter((item) => item.vault === vaultId && item.series === series && item.status !== "closed");
-      for (const allocation of pendingAllocations) {
+      const pending = await readAmount("series_pending_total", series) > 0n;
+      for (const allocation of allocationsBeforeRecovery.filter((item) => item.series === series)) {
+        const allocationNotes = notesBeforeRecovery.filter((note) => note.vaultAllocationId === allocation.id);
+        const completedTrade = shouldReconcileCompletedMakerAllocation(
+          allocation, allocationNotes, makerPositions);
+        if (!pending && allocation.status !== "draining" && !completedTrade) continue;
         assertLease();
+        if (completedTrade && !pending) {
+          console.log(`[vault-maker] reconciling completed maker allocation ${allocation.id}`);
+        }
         await beginVaultMakerDrain(allocation.id);
         try {
           await withdrawMakerNotes(["--allocation-tx", allocation.allocationTxHash,
@@ -250,6 +266,42 @@ export async function provisionOnce(input: {
       await (executor.store as { close?: () => Promise<void> }).close?.();
     }
   }
+
+  async function readMakerPositions(maker: string): Promise<PositionLifecycleRecord[]> {
+    const executor = await createExecutorAsync({ mongo: {
+      collection: env.mongodbCollection,
+      database: env.mongodbDatabase,
+      documentId: env.stellarNetwork,
+      ensureIndexes: false,
+      uri: env.mongodbUri!,
+    }, privateMatchingRequired: env.privateMatchingRequired });
+    try {
+      return executor.store.positionsFor(ownerCommitment(maker));
+    } finally {
+      await (executor.store as { close?: () => Promise<void> }).close?.();
+    }
+  }
+}
+
+export function shouldReconcileCompletedMakerAllocation(
+  allocation: Pick<VaultMakerAllocation, "amount" | "id" | "registeredAmount" | "status">,
+  notes: Array<{ commitment?: string | number; lockedByIntentCommitment?: string | number;
+    recoveredAmount?: string | number; status?: string | number }>,
+  positions: Array<Pick<PositionLifecycleRecord, "marginOutputCommitment" | "sourceIntentCommitment" | "status">>,
+): boolean {
+  if (allocation.status !== "outstanding" || BigInt(allocation.registeredAmount) !== BigInt(allocation.amount) ||
+    notes.some((note) => note.status === "pending" || note.status === "locked" ||
+      note.status === "draining" || note.status === "withdrawing")) return false;
+  const settledIntents = new Set(notes.filter((note) => note.status === "spent" &&
+    !note.recoveredAmount && typeof note.lockedByIntentCommitment === "string")
+    .map((note) => String(note.lockedByIntentCommitment)));
+  if (settledIntents.size === 0) return false;
+  return [...settledIntents].every((intent) => {
+    const matches = positions.filter((position) => position.sourceIntentCommitment === intent);
+    return matches.length === 1 && matches[0]?.status === "closed" &&
+      Boolean(matches[0].marginOutputCommitment) &&
+      notes.some((note) => note.commitment === matches[0].marginOutputCommitment);
+  });
 }
 
 export function planIncompleteAllocation(
