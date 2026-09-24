@@ -86,7 +86,7 @@ fn main(
 ) {
     assert(size > 0);
     assert(close_size > 0);
-    assert(close_size <= size);
+    assert(close_size == size);
     assert(entry_price > 0);
     assert(mark_price > 0);
     assert(price_scale > 0);
@@ -147,11 +147,7 @@ fn main(
     assert(remaining_margin + margin_output_amount == new_margin);
 
     let remaining_size = size - close_size;
-    if remaining_size == 0 {
-        assert(remaining_margin == 0);
-    } else {
-        assert(remaining_margin > 0);
-    }
+    assert(remaining_margin == 0);
     let expected_new_position = position_commitment(
         is_long,
         remaining_size,
@@ -281,8 +277,8 @@ fn valid_short_profit_close() {
     exercise_close(false, 1, 1, 5_000_000_000_000, 4_400_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, root, commitment, 1351, siblings, indices);
 }
 
-#[test]
-fn valid_partial_close() {
+#[test(should_fail)]
+fn rejects_partial_close() {
     let siblings = default_siblings();
     let indices = default_indices();
     let commitment = position_commitment(true, 4, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);

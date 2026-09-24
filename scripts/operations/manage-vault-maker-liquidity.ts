@@ -1,11 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { ownerCommitment } from "@pnlx/crypto";
-import type { PositionLifecycleRecord } from "@pnlx/protocol-types";
 import { loadEnv } from "@/config/env";
 import { LiquidityVaultService } from "@/features/liquidity-vault/liquidity-vault.service";
 import { readMakerNotes } from "@/shared/maker-note-store";
 import { withVaultMakerLease } from "@/shared/vault-maker-lease";
-import { beginVaultMakerDrain, eligibleVaultMakerNotes, readVaultMakerAllocations, type VaultMakerAllocation } from "@/shared/vault-maker-backing";
+import { beginVaultMakerDrain, eligibleVaultMakerNotes, readVaultMakerAllocations,
+  remainingVaultMakerPrincipal, type VaultMakerAllocation } from "@/shared/vault-maker-backing";
 import { createExecutorAsync } from "@/workers/executor/executor.worker";
 import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
@@ -14,6 +14,7 @@ import { allocate } from "./allocate-vault-maker";
 import { register } from "./register-vault-maker-note";
 import { settleVaultMaker } from "./settle-vault-maker";
 import { withdrawMakerNotes } from "./withdraw-maker-notes";
+import { reconcileOneMakerPosition } from "./reconcile-maker-position";
 
 const STROOP = 10_000_000n;
 const POLL_MS = 20_000;
@@ -86,27 +87,15 @@ export async function provisionOnce(input: {
   }
 
   await withVaultMakerLease(env.mongodbUri, env.mongodbDatabase, `${env.stellarNetwork}:${vaultId}`, async (assertLease) => {
+    if (await reconcileOneMakerPosition({ apiUrl: input.apiUrl,
+      makerSource: input.makerSource, operatorSource: input.operatorSource })) return;
     const allocationsBeforeRecovery = (await readVaultMakerAllocations())
       .filter((item) => item.vault === vaultId && item.status !== "closed");
-    const notesBeforeRecovery = await readMakerNotes();
-    const candidateAllocations = allocationsBeforeRecovery.filter((allocation) =>
-      allocation.status === "outstanding" && notesBeforeRecovery.some((note) =>
-        note.vaultAllocationId === allocation.id && note.status === "spent" && !note.recoveredAmount &&
-        typeof note.lockedByIntentCommitment === "string"));
-    const makerPositions = candidateAllocations.length > 0
-      ? await readMakerPositions(status.maker)
-      : [];
     for (let series = 0; series <= status.currentSeries; series += 1) {
       const pending = await readAmount("series_pending_total", series) > 0n;
       for (const allocation of allocationsBeforeRecovery.filter((item) => item.series === series)) {
-        const allocationNotes = notesBeforeRecovery.filter((note) => note.vaultAllocationId === allocation.id);
-        const completedTrade = shouldReconcileCompletedMakerAllocation(
-          allocation, allocationNotes, makerPositions);
-        if (!pending && allocation.status !== "draining" && !completedTrade) continue;
+        if (!pending && allocation.status !== "draining") continue;
         assertLease();
-        if (completedTrade && !pending) {
-          console.log(`[vault-maker] reconciling completed maker allocation ${allocation.id}`);
-        }
         await beginVaultMakerDrain(allocation.id);
         try {
           await withdrawMakerNotes(["--allocation-tx", allocation.allocationTxHash,
@@ -116,7 +105,7 @@ export async function provisionOnce(input: {
             .filter((note) => note.vaultAllocationId === allocation.id);
           if (allocationNotes.some((note) => note.status !== "spent")) continue;
           const returned = allocationNotes.reduce((sum, note) =>
-            sum + BigInt(String(note.recoveredAmount ?? "0")), 0n);
+            sum + (note.vaultSettlementTxHash ? 0n : BigInt(String(note.recoveredAmount ?? "0"))), 0n);
           assertLease();
           await settleVaultMaker(["--allocation-tx", allocation.allocationTxHash,
             "--returned", String(returned), "--operator-source", input.operatorSource,
@@ -136,7 +125,7 @@ export async function provisionOnce(input: {
       [series, await readAmount("series_principal", series)] as const)));
     for (const series of seriesIds) {
       const recorded = active.filter((item) => item.series === series)
-        .reduce((sum, item) => sum + BigInt(item.amount), 0n);
+        .reduce((sum, item) => sum + remainingVaultMakerPrincipal(item), 0n);
       if (recorded !== seriesPrincipals.get(series)) {
         throw new Error(`series ${series} principal differs from recorded vault allocations`);
       }
@@ -200,7 +189,7 @@ export async function provisionOnce(input: {
     const apiVaultResponse = await fetch(`${input.apiUrl}/liquidity-vault`);
     if (!apiVaultResponse.ok) throw new Error(`live API vault is unavailable: ${apiVaultResponse.status}`);
     const apiVault = (await apiVaultResponse.json()) as { vault?: { contractId?: string; asset?: string; maker?: string } };
-    if (apiVault.vault?.contractId !== vaultId || apiVault.vault.asset !== asset ||
+    if (!apiVault.vault || apiVault.vault.contractId !== vaultId || apiVault.vault.asset !== asset ||
       apiVault.vault.maker !== maker) {
       throw new Error("live API vault does not match the maker manager deployment");
     }
@@ -267,41 +256,6 @@ export async function provisionOnce(input: {
     }
   }
 
-  async function readMakerPositions(maker: string): Promise<PositionLifecycleRecord[]> {
-    const executor = await createExecutorAsync({ mongo: {
-      collection: env.mongodbCollection,
-      database: env.mongodbDatabase,
-      documentId: env.stellarNetwork,
-      ensureIndexes: false,
-      uri: env.mongodbUri!,
-    }, privateMatchingRequired: env.privateMatchingRequired });
-    try {
-      return executor.store.positionsFor(ownerCommitment(maker));
-    } finally {
-      await (executor.store as { close?: () => Promise<void> }).close?.();
-    }
-  }
-}
-
-export function shouldReconcileCompletedMakerAllocation(
-  allocation: Pick<VaultMakerAllocation, "amount" | "id" | "registeredAmount" | "status">,
-  notes: Array<{ commitment?: string | number; lockedByIntentCommitment?: string | number;
-    recoveredAmount?: string | number; status?: string | number }>,
-  positions: Array<Pick<PositionLifecycleRecord, "marginOutputCommitment" | "sourceIntentCommitment" | "status">>,
-): boolean {
-  if (allocation.status !== "outstanding" || BigInt(allocation.registeredAmount) !== BigInt(allocation.amount) ||
-    notes.some((note) => note.status === "pending" || note.status === "locked" ||
-      note.status === "draining" || note.status === "withdrawing")) return false;
-  const settledIntents = new Set(notes.filter((note) => note.status === "spent" &&
-    !note.recoveredAmount && typeof note.lockedByIntentCommitment === "string")
-    .map((note) => String(note.lockedByIntentCommitment)));
-  if (settledIntents.size === 0) return false;
-  return [...settledIntents].every((intent) => {
-    const matches = positions.filter((position) => position.sourceIntentCommitment === intent);
-    return matches.length === 1 && matches[0]?.status === "closed" &&
-      Boolean(matches[0].marginOutputCommitment) &&
-      notes.some((note) => note.commitment === matches[0].marginOutputCommitment);
-  });
 }
 
 export function planIncompleteAllocation(

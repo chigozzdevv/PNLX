@@ -2,7 +2,8 @@ import { ownerCommitment } from "@pnlx/crypto";
 import { loadEnv } from "@/config/env";
 import { LiquidityVaultService } from "@/features/liquidity-vault/liquidity-vault.service";
 import { readMakerNotes } from "@/shared/maker-note-store";
-import { allocationId, closeVaultMakerAllocation, normalizedHash, readVaultMakerAllocations } from "@/shared/vault-maker-backing";
+import { allocationId, closeVaultMakerAllocation, normalizedHash,
+  readVaultMakerAllocations, remainingVaultMakerPrincipal } from "@/shared/vault-maker-backing";
 import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
 import { createExecutorAsync } from "@/workers/executor/executor.worker";
@@ -45,7 +46,8 @@ export async function settleVaultMaker(argv: string[]): Promise<void> {
     throw new Error("maker notes must be recovered before vault settlement");
   }
   if (allocation.status === "draining") {
-    const recovered = notes.reduce((sum, note) => sum + BigInt(String(note.recoveredAmount ?? "0")), 0n);
+    const recovered = notes.reduce((sum, note) => sum +
+      (note.vaultSettlementTxHash ? 0n : BigInt(String(note.recoveredAmount ?? "0"))), 0n);
     if (returned !== recovered) throw new Error("returned USDC does not equal verified maker-note recoveries");
   }
   const makerIntents = new Set(notes.map((note) => String(note.lockedByIntentCommitment ?? "")).filter(Boolean));
@@ -76,10 +78,11 @@ export async function settleVaultMaker(argv: string[]): Promise<void> {
   } finally {
     await (executor.store as { close?: () => Promise<void> }).close?.();
   }
-  const principal = BigInt(allocation.amount);
+  const principal = remainingVaultMakerPrincipal(allocation);
+  if (principal <= 0n) throw new Error("allocation has no principal left to settle");
   const recordedPrincipal = allocations
     .filter((item) => item.vault === vaultId && item.series === allocation.series && item.status !== "closed")
-    .reduce((sum, item) => sum + BigInt(item.amount), 0n);
+    .reduce((sum, item) => sum + remainingVaultMakerPrincipal(item), 0n);
   const relayer = createRelayer({ config: {
     commandTimeoutMs: env.stellarCommandTimeoutMs,
     mode: "stellar-cli",
@@ -100,7 +103,7 @@ export async function settleVaultMaker(argv: string[]): Promise<void> {
   const tx = await relayer.relayAsync({
     kind: "contract-invoke",
     payload: {
-      args: ["--series", String(allocation.series), "--principal", allocation.amount,
+      args: ["--series", String(allocation.series), "--principal", principal.toString(),
         ...(returned === 0n ? [] : ["--returned", returnedText])],
       contractId: vaultId,
       functionName: method,
@@ -120,7 +123,7 @@ export async function settleVaultMaker(argv: string[]): Promise<void> {
     throw new Error(`settlement ${tx.txHash} succeeded but vault and maker balances did not reconcile`);
   }
   await closeVaultMakerAllocation(id);
-  process.stdout.write(`${JSON.stringify({ allocationId: id, principal: allocation.amount,
+  process.stdout.write(`${JSON.stringify({ allocationId: id, principal: principal.toString(),
     returned: returnedText, series: allocation.series, txHash: tx.txHash, status: "closed" })}\n`);
 
   async function seriesPrincipal(): Promise<bigint> {

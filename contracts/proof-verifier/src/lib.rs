@@ -82,6 +82,19 @@ impl ProofVerifier {
         Ok(())
     }
 
+    pub fn rotate_vk(env: Env, verifier_hash: BytesN<32>, vk_bytes: Bytes) -> Result<(), Error> {
+        let governance_id = Self::governance(env.clone())?;
+        GovernanceClient::new(&env, &governance_id).upgrade_authority().require_auth();
+        validate_hash(&env, &verifier_hash)?;
+        if env.crypto().sha256(&vk_bytes).to_bytes() != verifier_hash {
+            return Err(Error::VkHashMismatch);
+        }
+        parse_vk(&env, &vk_bytes)?;
+        env.storage().instance().set(&DataKey::VerifierHash, &verifier_hash);
+        env.storage().instance().set(&DataKey::Vk, &vk_bytes);
+        Ok(())
+    }
+
     pub fn verify_and_record(
         env: Env,
         public_inputs: Bytes,
@@ -240,8 +253,10 @@ mod tests {
         let verifier_id = env.register(ProofVerifier, ());
         let verifier = ProofVerifierClient::new(env, &verifier_id);
         let admin = Address::generate(env);
+        let upgrade_authority = Address::generate(env);
 
         governance.init(&admin);
+        governance.set_upgrade_authority(&upgrade_authority);
         proof_ledger.init(&governance_id);
         governance.set_verifier(&circuit_id, &verifier_hash, &verifier_id);
         verifier.init(
@@ -301,5 +316,20 @@ mod tests {
             .unwrap();
 
         assert_eq!(err, Error::ProofDigestMismatch);
+    }
+
+    #[test]
+    fn rotates_only_to_a_valid_verification_key() {
+        let env = Env::default();
+        let (verifier, _, _, _, _, _) = setup(&env);
+        let vk = Bytes::from_slice(&env, include_bytes!("../../../circuits/position-close/target/bb/vk"));
+        let hash = env.crypto().sha256(&vk).to_bytes();
+        env.mock_all_auths();
+        verifier.rotate_vk(&hash, &vk);
+        assert_eq!(verifier.verifier_hash(), hash);
+        assert_eq!(verifier.vk_hash(), hash);
+        let wrong = bytes32(&env, &[3; 32]);
+        assert_eq!(verifier.try_rotate_vk(&wrong, &vk).unwrap_err().unwrap(), Error::VkHashMismatch);
+        assert_eq!(verifier.verifier_hash(), hash);
     }
 }

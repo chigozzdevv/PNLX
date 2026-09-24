@@ -103,6 +103,47 @@ export async function finalizePendingMakerNote(commitment: string, depositTxHash
   }
 }
 
+export async function finalizePendingMakerCloseOutput(
+  commitment: string,
+  closeTxHash: string,
+): Promise<void> {
+  const config = requiredMongoConfig();
+  const client = new MongoClient(config.uri);
+  try {
+    await client.connect();
+    const result = await client.db(config.database).collection<MakerNoteDocument>(config.collection).updateOne(
+      { _id: makerNoteDocumentId(config.namespace, commitment), namespace: config.namespace,
+        status: "pending", closePositionCommitment: { $type: "string" } },
+      { $set: { closeTxHash, status: "draining", updatedAt: Date.now() } },
+    );
+    if (result.modifiedCount !== 1) throw new Error("pending maker close output was not found");
+  } finally {
+    await client.close();
+  }
+}
+
+export async function markMakerCloseOutputSettled(commitment: string, settlementTxHash: string): Promise<void> {
+  const config = requiredMongoConfig();
+  const client = new MongoClient(config.uri);
+  try {
+    await client.connect();
+    const collection = client.db(config.database).collection<MakerNoteDocument>(config.collection);
+    const result = await collection.updateOne(
+      { _id: makerNoteDocumentId(config.namespace, commitment), namespace: config.namespace,
+        status: "spent", recoveredAmount: { $type: "string" },
+        vaultSettlementTxHash: { $exists: false } },
+      { $set: { vaultSettlementTxHash: settlementTxHash, updatedAt: Date.now() } },
+    );
+    if (result.modifiedCount === 1) return;
+    const existing = await collection.findOne({ _id: makerNoteDocumentId(config.namespace, commitment) });
+    if (existing?.vaultSettlementTxHash !== settlementTxHash) {
+      throw new Error("maker close output was not recovered for this vault settlement");
+    }
+  } finally {
+    await client.close();
+  }
+}
+
 export async function recordMakerNoteRecovery(commitment: string, amount: string): Promise<void> {
   if (!/^[1-9][0-9]*$/.test(amount)) throw new Error("recovered amount must be positive");
   const config = requiredMongoConfig();

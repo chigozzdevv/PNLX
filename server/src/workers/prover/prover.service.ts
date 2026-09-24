@@ -557,7 +557,7 @@ export class ProverService implements Prover {
     this.validatePositionOpening(input);
     if (input.size <= 0n) throw new Error("position size must be positive");
     if (input.closeSize <= 0n) throw new Error("close size must be positive");
-    if (input.closeSize > input.size) throw new Error("close size exceeds position");
+    if (input.closeSize !== input.size) throw new Error("position close must cover the full position");
     if (input.entryPrice <= 0n) throw new Error("entry price must be positive");
     if (input.markPrice <= 0n) throw new Error("mark price must be positive");
     if (input.fee < 0n) throw new Error("fee cannot be negative");
@@ -581,11 +581,8 @@ export class ProverService implements Prover {
       throw new Error("invalid close margin split");
     }
     const remainingSize = input.size - input.closeSize;
-    if (remainingSize === 0n && input.remainingMargin !== 0n) {
+    if (input.remainingMargin !== 0n) {
       throw new Error("closed position cannot retain margin");
-    }
-    if (remainingSize > 0n && input.remainingMargin <= 0n) {
-      throw new Error("residual position margin must be positive");
     }
     const expectedNewPositionCommitment = circuitPositionCommitment({
       blinding: input.newPositionBlinding,

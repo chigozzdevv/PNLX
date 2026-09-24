@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { makerTopUpAmount, planIncompleteAllocation, shouldReconcileCompletedMakerAllocation } from "../../scripts/operations/manage-vault-maker-liquidity";
+import { makerTopUpAmount, planIncompleteAllocation } from "../../scripts/operations/manage-vault-maker-liquidity";
 import { localApiOrigin } from "../../scripts/smoke/custody";
 
 const state = {
@@ -50,30 +50,4 @@ describe("vault maker reserve planning", () => {
     expect(() => planIncompleteAllocation({ ...allocation, registeredAmount: "1" }, [])).toThrow(/manual reconciliation/);
   });
 
-  test("reconciles only a completed maker position with its vault-backed output note", () => {
-    const allocation = { amount: "1000000000", id: "allocation-1",
-      registeredAmount: "1000000000", status: "outstanding" as const };
-    const notes = [
-      { commitment: "root", lockedByIntentCommitment: "maker-intent", status: "spent" },
-      { commitment: "change", status: "available" },
-      { commitment: "close-output", status: "available" },
-    ];
-    const positions = [{ sourceIntentCommitment: "maker-intent", status: "closed" as const,
-      marginOutputCommitment: "close-output" as `0x${string}` }];
-    expect(shouldReconcileCompletedMakerAllocation(allocation, notes, positions)).toBe(true);
-    expect(shouldReconcileCompletedMakerAllocation(allocation, notes,
-      [{ ...positions[0], status: "open" }])).toBe(false);
-    expect(shouldReconcileCompletedMakerAllocation(allocation, notes,
-      [{ ...positions[0], status: "liquidated" }])).toBe(false);
-    expect(shouldReconcileCompletedMakerAllocation(allocation, notes.slice(0, 2), positions)).toBe(false);
-    expect(shouldReconcileCompletedMakerAllocation(allocation,
-      [...notes, { commitment: "other", status: "locked" }], positions)).toBe(false);
-    expect(shouldReconcileCompletedMakerAllocation(allocation,
-      [...notes, { commitment: "other", lockedByIntentCommitment: "other-intent", status: "spent" }],
-      positions)).toBe(false);
-    expect(shouldReconcileCompletedMakerAllocation({ ...allocation, registeredAmount: "0" },
-      notes, positions)).toBe(false);
-    expect(shouldReconcileCompletedMakerAllocation({ ...allocation, status: "draining" },
-      notes, positions)).toBe(false);
-  });
 });

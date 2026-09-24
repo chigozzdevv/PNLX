@@ -1,12 +1,14 @@
 import { loadEnv } from "@/config/env";
+import { ownerCommitment } from "@pnlx/crypto";
 import { readMakerNotes, recordMakerNoteRecovery, transitionMakerNoteStatus } from "@/shared/maker-note-store";
 import { allocationId, normalizedHash, readVaultMakerAllocations } from "@/shared/vault-maker-backing";
 import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createProver } from "@/workers/prover/prover.worker";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
+import { createExecutorAsync } from "@/workers/executor/executor.worker";
 import type { Hex } from "@pnlx/protocol-types";
 import { authHeadersFor, get, localApiOrigin, post, type SmokeApp } from "../smoke/custody";
-import { sameHex32 } from "./register-vault-maker-note";
+import { assertSuccessfulTransaction, sameHex32 } from "./register-vault-maker-note";
 
 interface MakerNote {
   amount: string;
@@ -29,6 +31,12 @@ if (import.meta.main) {
 export async function withdrawMakerNotes(argv: string[]): Promise<void> {
   const execute = argv.includes("--execute");
   const draining = argv.includes("--allocation-draining");
+  const closedOutput = argv.includes("--closed-output");
+  const noteFlag = argv.indexOf("--note-commitment");
+  const noteCommitment = noteFlag < 0 ? undefined : argv[noteFlag + 1];
+  if (closedOutput && (!noteCommitment || !/^0x[0-9a-fA-F]{64}$/.test(noteCommitment) || draining)) {
+    throw new Error("closed maker output recovery requires one note commitment without allocation draining");
+  }
   const apiFlag = argv.indexOf("--api-url");
   const apiUrl = apiFlag < 0 ? undefined : localApiOrigin(argv[apiFlag + 1] ?? "");
   const makerSourceFlag = argv.indexOf("--maker-source");
@@ -36,7 +44,7 @@ export async function withdrawMakerNotes(argv: string[]): Promise<void> {
   if (execute && (!apiUrl || !makerSource || makerSource.startsWith("--"))) {
     throw new Error("executing maker note recovery requires --api-url and --maker-source");
   }
-  if (execute && !argv.includes("--matcher-stopped") && !draining) {
+  if (execute && !argv.includes("--matcher-stopped") && !draining && !closedOutput) {
     throw new Error("stop the matcher or drain the allocation before executing maker note withdrawals");
   }
   const env = loadEnv();
@@ -62,10 +70,13 @@ export async function withdrawMakerNotes(argv: string[]): Promise<void> {
   const scopedAllocationId = allocationTx
     ? allocationId(deployment.contracts["liquidity-vault"], normalizedHash(allocationTx))
     : undefined;
-  if (draining && !scopedAllocationId) throw new Error("a draining withdrawal requires --allocation-tx");
+  if ((draining || closedOutput) && !scopedAllocationId) {
+    throw new Error("scoped maker recovery requires --allocation-tx");
+  }
   if (scopedAllocationId) {
     const allocation = (await readVaultMakerAllocations()).find((item) => item.id === scopedAllocationId);
-    if (!allocation || (draining ? allocation.status !== "draining" : allocation.status === "closed") ||
+    if (!allocation || (draining ? allocation.status !== "draining" :
+      closedOutput ? allocation.status !== "outstanding" : allocation.status === "closed") ||
       allocation.maker !== maker ||
       allocation.asset !== env.collateralTokenContract) {
       throw new Error("outstanding allocation for configured maker and asset was not found");
@@ -83,11 +94,36 @@ export async function withdrawMakerNotes(argv: string[]): Promise<void> {
   });
   const prover = createProver();
   const notes = (await readMakerNotes()) as MakerNote[];
-  const owned = notesForMakerRecovery(notes, maker, scopedAllocationId);
+  const owned = notesForMakerRecovery(notes, maker, scopedAllocationId)
+    .filter((note) => !noteCommitment || note.commitment === noteCommitment);
+  if (closedOutput) {
+    if (owned.length !== 1 || owned[0]?.status !== "draining" && owned[0]?.status !== "withdrawing" ||
+      !owned[0]?.vaultParentCommitment || !owned[0]?.closePositionCommitment || !owned[0]?.closeTxHash) {
+      throw new Error("closed maker output is not reserved for recovery");
+    }
+    const executor = await createExecutorAsync({ mongo: {
+      collection: env.mongodbCollection, database: env.mongodbDatabase,
+      documentId: env.stellarNetwork, ensureIndexes: false, uri: env.mongodbUri!,
+    }, privateMatchingRequired: env.privateMatchingRequired });
+    try {
+      const position = executor.store.positionsFor(ownerCommitment(maker)).find(
+        (item) => item.positionCommitment === owned[0]!.closePositionCommitment,
+      );
+      const close = position?.closeCommitment
+        ? executor.store.positionCloses.get(position.closeCommitment) : undefined;
+      if (position?.status !== "closed" || position.marginOutputCommitment !== noteCommitment ||
+        !close || close.settlementTxHash !== owned[0]!.closeTxHash) {
+        throw new Error("maker close output does not match a confirmed position close");
+      }
+      await assertSuccessfulTransaction(env.stellarRpcUrl, close.settlementTxHash);
+    } finally {
+      await (executor.store as { close?: () => Promise<void> }).close?.();
+    }
+  }
   const available = owned.filter((note) => note.status === "available" || note.status === "draining" ||
     note.status === "withdrawing");
   const locked = owned.filter((note) => note.status === "locked");
-  if (locked.length > 0 && !draining) throw new Error(`${locked.length} maker notes remain locked`);
+  if (locked.length > 0 && !draining && !closedOutput) throw new Error(`${locked.length} maker notes remain locked`);
   if (draining && owned.some((note) => note.status === "pending" || note.status === "available")) {
     throw new Error("allocation drain has not claimed every unspent maker note");
   }

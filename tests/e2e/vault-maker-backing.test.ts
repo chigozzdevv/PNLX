@@ -4,6 +4,7 @@ import { notesForMakerRecovery } from "../../scripts/operations/withdraw-maker-n
 import {
   allocationId,
   eligibleVaultMakerNotes,
+  remainingVaultMakerPrincipal,
   type VaultMakerAllocation,
 } from "@/shared/vault-maker-backing";
 
@@ -76,6 +77,20 @@ describe("vault maker note eligibility", () => {
     const spentRoot = { ...root, status: "spent" };
     expect(eligibleVaultMakerNotes([spentRoot, change], [allocation], scope)).toEqual([change]);
     expect(eligibleVaultMakerNotes([spentRoot, { ...change, amount: "90000000" }], [allocation], scope)).toEqual([]);
+  });
+
+  test("keeps unspent change eligible after one maker trade is reconciled", () => {
+    const spentRoot = { ...root, status: "spent" };
+    const change = { ...root, amount: "70000000", commitment: `0x${"3".repeat(64)}`,
+      vaultParentCommitment: root.commitment };
+    const partial = { ...allocation, remainingPrincipal: "70000000" };
+    const chain = { ...scope, deployedPrincipal: 70_000_000n,
+      seriesPrincipals: new Map([[0, 70_000_000n]]) };
+    expect(remainingVaultMakerPrincipal(partial)).toBe(70_000_000n);
+    expect(eligibleVaultMakerNotes([spentRoot, change], [partial], chain)).toEqual([change]);
+    expect(eligibleVaultMakerNotes([spentRoot, change],
+      [{ ...partial, remainingPrincipal: "60000000" }], chain)).toEqual([]);
+    expect(() => remainingVaultMakerPrincipal({ ...partial, remainingPrincipal: "90000000" })).toThrow();
   });
 
   test("fails closed if available notes exceed their allocation", () => {

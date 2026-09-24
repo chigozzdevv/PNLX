@@ -9,6 +9,7 @@ export interface VaultMakerAllocation {
   asset: string;
   maker: string;
   noteCommitments: string[];
+  remainingPrincipal?: string;
   registeredAmount: string;
   series: number;
   status: "outstanding" | "draining" | "closed";
@@ -24,6 +25,14 @@ export function allocationId(vault: string, txHash: string): string {
   if (!/^C[A-Z2-7]{55}$/.test(vault)) throw new Error("invalid vault contract address");
   const hash = normalizedHash(txHash);
   return `${vault}:${hash}`;
+}
+
+export function remainingVaultMakerPrincipal(allocation: Pick<VaultMakerAllocation, "amount" | "remainingPrincipal">): bigint {
+  const remaining = BigInt(allocation.remainingPrincipal ?? allocation.amount);
+  if (remaining < 0n || remaining > BigInt(allocation.amount)) {
+    throw new Error("vault maker allocation has invalid remaining principal");
+  }
+  return remaining;
 }
 
 export function normalizedHash(value: string): string {
@@ -72,6 +81,7 @@ export async function recordVaultMakerAllocation(input: {
     asset: input.asset,
     maker: input.maker,
     noteCommitments: [],
+    remainingPrincipal: amount.toString(),
     registeredAmount: "0",
     series: input.series,
     status: "outstanding",
@@ -100,7 +110,7 @@ export async function closeVaultMakerAllocation(id: string): Promise<void> {
     if (activeNotes !== 0) throw new Error(`${activeNotes} maker notes still belong to the vault allocation`);
     const result = await database.collection<AllocationDocument>("vault_maker_allocations").updateOne(
       { _id: `${config.namespace}:${id}`, status: { $in: ["outstanding", "draining"] } },
-      { $set: { status: "closed" } },
+      { $set: { status: "closed", remainingPrincipal: "0" } },
     );
     if (result.matchedCount !== 1) throw new Error("outstanding vault allocation was not found");
   } finally {
@@ -219,16 +229,16 @@ export function eligibleVaultMakerNotes<T extends StoredMakerNoteRecord & {
     .filter((allocation) => allocation.status === "outstanding" && allocation.vault === input.vault &&
       allocation.maker === input.maker && allocation.asset === input.asset &&
       Number.isSafeInteger(allocation.series) && allocation.series >= 0 &&
-      (input.seriesPrincipals.get(allocation.series) ?? 0n) >= BigInt(allocation.amount) &&
-      BigInt(allocation.amount) > 0n && BigInt(allocation.registeredAmount) <= BigInt(allocation.amount));
+      (input.seriesPrincipals.get(allocation.series) ?? 0n) >= remainingVaultMakerPrincipal(allocation) &&
+      remainingVaultMakerPrincipal(allocation) > 0n && BigInt(allocation.registeredAmount) <= BigInt(allocation.amount));
   const bySeries = new Map<number, bigint>();
   for (const allocation of candidates) {
-    bySeries.set(allocation.series, (bySeries.get(allocation.series) ?? 0n) + BigInt(allocation.amount));
+    bySeries.set(allocation.series, (bySeries.get(allocation.series) ?? 0n) + remainingVaultMakerPrincipal(allocation));
   }
   const active = new Map(candidates
     .filter((allocation) => bySeries.get(allocation.series)! <= input.seriesPrincipals.get(allocation.series)!)
     .map((allocation) => [allocation.id, allocation]));
-  const totalOutstanding = [...active.values()].reduce((sum, allocation) => sum + BigInt(allocation.amount), 0n);
+  const totalOutstanding = [...active.values()].reduce((sum, allocation) => sum + remainingVaultMakerPrincipal(allocation), 0n);
   if (totalOutstanding === 0n || totalOutstanding > input.deployedPrincipal) return [];
 
   const byCommitment = new Map(notes.map((note) => [note.commitment, note]));
@@ -256,7 +266,7 @@ export function eligibleVaultMakerNotes<T extends StoredMakerNoteRecord & {
     availableByAllocation.set(id, (availableByAllocation.get(id) ?? 0n) + BigInt(String(note.amount)));
   }
   const overloaded = new Set([...availableByAllocation]
-    .filter(([id, amount]) => amount > BigInt(active.get(id)!.amount))
+    .filter(([id, amount]) => amount > remainingVaultMakerPrincipal(active.get(id)!))
     .map(([id]) => id));
   return eligible.filter((note) => !overloaded.has(String(note.vaultAllocationId)));
 }

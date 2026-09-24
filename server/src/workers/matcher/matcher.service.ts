@@ -126,7 +126,7 @@ class EmbeddedMatcherProviderGateway implements MatcherProviderGateway {
       ? proofs.createSettlementAsync(settlementInput)
       : Promise.resolve(proofs.createSettlement(settlementInput));
     return proofTask.then((settlement) => {
-      const positionOpenings = createPositionOpenings(settlement, match.fills);
+      const positionOpenings = createPositionOpenings(settlement, match.fills, input.market.fundingIndex);
       return {
         positionEvents: createPositionEvents(match.fills, input.market.fundingIndex, match.executions),
         positionOpenings,
@@ -293,10 +293,12 @@ function createPositionOpenings(
     positionCommitment: `0x${string}`;
     positionNullifier: `0x${string}`;
   }>,
+  fundingIndex: bigint,
 ): PositionLifecycleRecord[] {
   const now = Date.now();
   return fills.map((fill) => ({
     batchId: settlement.batchId,
+    ...(fundingIndex !== 0n ? { fundingIndex } : {}),
     marketId: fill.marketId,
     openedAt: now,
     ownerCommitment: fill.ownerCommitment,

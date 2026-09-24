@@ -120,6 +120,7 @@ export type PositionStatus = "open" | "closed" | "liquidated";
 export interface PositionLifecycleRecord {
   batchId: string;
   closeCommitment?: Hex;
+  fundingIndex?: bigint;
   liquidationRewardCommitment?: Hex;
   marginOutputCommitment?: Hex;
   marketId: string;

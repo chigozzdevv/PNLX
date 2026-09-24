@@ -36,6 +36,21 @@ export interface AccountKeyRecovery {
   skipped: AccountKeyRecoverySkip[];
 }
 
+export function reconstructPositionOpening(
+  store: ProtocolStore,
+  position: PositionLifecycleRecord,
+): PositionOpeningPayload | undefined {
+  const settlement = [...store.settlements.values()].find(
+    (item) => item.settlementDigest === position.settlementDigest,
+  );
+  if (!settlement) return undefined;
+  return reconstructSettlementOpenings(
+    settlement,
+    store.positionLifecycle,
+    store.privateMatchIntents,
+  ).get(position.positionCommitment);
+}
+
 export function recoverPositionOpeningEventsForOwner(
   store: ProtocolStore,
   ownerCommitment: Hex,
@@ -122,7 +137,7 @@ function reconstructSettlementOpenings(
     addIfValid(out, left, {
       ...(fees ? { entryFee: leftEntryFee } : {}),
       entryPrice: price,
-      fundingIndex: 0n,
+      fundingIndex: left.fundingIndex ?? 0n,
       margin: leftMargin,
       marketId: left.marketId,
       positionCommitment: left.positionCommitment,
@@ -134,7 +149,7 @@ function reconstructSettlementOpenings(
     addIfValid(out, right, {
       ...(fees ? { entryFee: rightEntryFee } : {}),
       entryPrice: price,
-      fundingIndex: 0n,
+      fundingIndex: right.fundingIndex ?? 0n,
       margin: rightMargin,
       marketId: right.marketId,
       positionCommitment: right.positionCommitment,
