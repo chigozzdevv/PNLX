@@ -3305,6 +3305,17 @@ button:disabled {
   padding: 0 14px;
 }
 
+.liquidity-series-select {
+  width: 100%;
+  margin-top: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-panel);
+  color: var(--text-primary);
+  padding: 13px 14px;
+  font: inherit;
+}
+
 .liquidity-dialog-input-wrap input {
   width: 100%;
   min-width: 0;
@@ -3363,6 +3374,7 @@ button:disabled {
 
 .liquidity-dialog-done {
   width: 100%;
+  margin-top: 20px;
 }
 
 @media (max-width: 640px) {

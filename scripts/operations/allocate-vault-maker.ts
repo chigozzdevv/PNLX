@@ -1,6 +1,6 @@
 import { loadEnv } from "@/config/env";
 import { LiquidityVaultService } from "@/features/liquidity-vault/liquidity-vault.service";
-import { recordVaultMakerAllocation } from "@/shared/vault-maker-backing";
+import { readVaultMakerAllocations, recordVaultMakerAllocation } from "@/shared/vault-maker-backing";
 import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
 import { assertSuccessfulTransaction } from "./register-vault-maker-note";
@@ -35,18 +35,22 @@ export async function allocate(argv: string[]): Promise<void> {
   const vaultService = new LiquidityVaultService(relayer, deployment);
   const before = await vaultService.status();
   const maker = env.makerWalletAddress.trim().toUpperCase();
+  const series = before.currentSeries;
+  const outstanding = (await readVaultMakerAllocations()).some((record) =>
+    record.vault === vaultId && record.series === series && record.status === "outstanding");
   if (before.contractId !== vaultId || before.asset !== env.collateralTokenContract ||
-    before.maker !== maker || !before.paused || BigInt(before.totalShares) === 0n ||
-    BigInt(before.liquidAssets) < value ||
+    before.maker !== maker || outstanding || BigInt(before.currentSeriesPrincipal) !== 0n ||
+    BigInt(before.currentSeriesLiquid) < value ||
     BigInt(before.deployedPrincipal) + value >
-      BigInt(before.totalAssetsAtCost) * BigInt(before.allocationLimitBps) / 10_000n) {
+      BigInt(before.totalAssetsAtCost) * BigInt(before.allocationLimitBps) / 10_000n ||
+    value > BigInt(before.currentSeriesAssets) * BigInt(before.allocationLimitBps) / 10_000n) {
     throw new Error("vault is not ready to allocate this amount to its configured maker");
   }
   const balanceBefore = await tokenBalance();
   const tx = await relayer.relayAsync({
     kind: "contract-invoke",
     payload: {
-      args: ["--amount", amount],
+      args: ["--series", String(series), "--amount", amount],
       contractId: vaultId,
       functionName: "allocate",
       send: "yes",
@@ -59,7 +63,7 @@ export async function allocate(argv: string[]): Promise<void> {
   const allocationLedger = await assertSuccessfulTransaction(env.stellarRpcUrl, tx.txHash);
   const after = await vaultService.status();
   const balanceAfter = await tokenBalance();
-  if (after.asset !== before.asset || after.maker !== before.maker || !after.paused ||
+  if (after.asset !== before.asset || after.maker !== before.maker ||
     BigInt(after.deployedPrincipal) - BigInt(before.deployedPrincipal) !== value ||
     BigInt(before.liquidAssets) - BigInt(after.liquidAssets) !== value ||
     balanceAfter - balanceBefore !== value) {
@@ -72,6 +76,7 @@ export async function allocate(argv: string[]): Promise<void> {
     amount,
     asset: before.asset,
     maker,
+    series,
     vault: vaultId,
   });
   process.stdout.write(`${JSON.stringify({ allocationId: allocation.id, allocationTxHash: tx.txHash,

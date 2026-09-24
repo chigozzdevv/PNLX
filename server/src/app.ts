@@ -149,6 +149,17 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
             if (!/^[0-9]+$/.test(String(value))) throw new Error("invalid vault deployed principal");
             return BigInt(value);
           },
+          readSeriesPrincipal: async (series) => {
+            const result = await relayer.readAsync({
+              kind: "contract-invoke",
+              payload: { args: ["--series", String(series)], contractId: vaultContractId,
+                functionName: "series_principal", send: "no" },
+            });
+            const raw = result.output.trim();
+            const value = raw.startsWith('"') ? JSON.parse(raw) : raw;
+            if (!/^[0-9]+$/.test(String(value))) throw new Error("invalid vault series principal");
+            return BigInt(value);
+          },
           vault: vaultContractId,
         }
       : undefined,

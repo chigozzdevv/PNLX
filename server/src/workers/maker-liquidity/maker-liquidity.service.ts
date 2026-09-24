@@ -70,6 +70,7 @@ export class MakerLiquidityService {
     private readonly vaultBacking?: {
       asset: string;
       readDeployedPrincipal: () => Promise<bigint>;
+      readSeriesPrincipal: (series: number) => Promise<bigint>;
       vault: string;
     },
   ) {}
@@ -128,6 +129,7 @@ export class MakerLiquidityService {
           ? eligibleVaultMakerNotes(currentNotes, backing!.allocations, {
               asset: backing!.asset,
               deployedPrincipal: backing!.deployedPrincipal,
+              seriesPrincipals: backing!.seriesPrincipals,
               maker: this.env.makerWalletAddress.trim().toUpperCase(),
               vault: backing!.vault,
             })
@@ -167,6 +169,7 @@ export class MakerLiquidityService {
     allocations: Awaited<ReturnType<typeof readVaultMakerAllocations>>;
     asset: string;
     deployedPrincipal: bigint;
+    seriesPrincipals: Map<number, bigint>;
     vault: string;
   }> {
     if (!this.vaultBacking) throw new Error("vault maker backing is not configured");
@@ -174,8 +177,12 @@ export class MakerLiquidityService {
       readVaultMakerAllocations(),
       this.vaultBacking.readDeployedPrincipal(),
     ]);
+    const ids = [...new Set(allocations.filter((item) => item.status === "outstanding" &&
+      Number.isSafeInteger(item.series) && item.series >= 0).map((item) => item.series))];
+    const seriesPrincipals = new Map(await Promise.all(ids.map(async (series) =>
+      [series, await this.vaultBacking!.readSeriesPrincipal(series)] as const)));
     return { allocations, asset: this.vaultBacking.asset,
-      deployedPrincipal, vault: this.vaultBacking.vault };
+      deployedPrincipal, seriesPrincipals, vault: this.vaultBacking.vault };
   }
 
   async finalizeSettlement(settlement: BatchSettlement): Promise<void> {

@@ -10,6 +10,7 @@ export interface VaultMakerAllocation {
   maker: string;
   noteCommitments: string[];
   registeredAmount: string;
+  series: number;
   status: "outstanding" | "closed";
   vault: string;
 }
@@ -51,6 +52,7 @@ export async function recordVaultMakerAllocation(input: {
   amount: string;
   asset: string;
   maker: string;
+  series: number;
   vault: string;
 }): Promise<VaultMakerAllocation> {
   const config = mongoConfig();
@@ -58,6 +60,9 @@ export async function recordVaultMakerAllocation(input: {
   const amount = positiveAmount(input.amount).toString();
   if (!Number.isSafeInteger(input.allocationLedger) || input.allocationLedger <= 0) {
     throw new Error("allocation ledger must be confirmed");
+  }
+  if (!Number.isSafeInteger(input.series) || input.series < 0 || input.series > 0xffffffff) {
+    throw new Error("invalid vault series");
   }
   const allocation: VaultMakerAllocation = {
     id,
@@ -68,6 +73,7 @@ export async function recordVaultMakerAllocation(input: {
     maker: input.maker,
     noteCommitments: [],
     registeredAmount: "0",
+    series: input.series,
     status: "outstanding",
     vault: input.vault,
   };
@@ -139,6 +145,7 @@ export async function registerVaultMakerNote(input: {
       const current = await allocations.findOne({ _id: `${config.namespace}:${id}` });
       if (!current || current.vault !== input.vault || current.asset !== input.asset ||
         current.maker !== input.maker ||
+        !Number.isSafeInteger(current.series) || current.series < 0 ||
         current.status !== "outstanding") {
         throw new Error("recorded vault allocation was not found for registration");
       }
@@ -182,12 +189,20 @@ export function eligibleVaultMakerNotes<T extends StoredMakerNoteRecord & {
 }>(
   notes: T[],
   allocations: VaultMakerAllocation[],
-  input: { asset: string; deployedPrincipal: bigint; maker: string; vault: string },
+  input: { asset: string; deployedPrincipal: bigint; maker: string; seriesPrincipals: Map<number, bigint>; vault: string },
 ): T[] {
-  const active = new Map(allocations
+  const candidates = allocations
     .filter((allocation) => allocation.status === "outstanding" && allocation.vault === input.vault &&
       allocation.maker === input.maker && allocation.asset === input.asset &&
-      BigInt(allocation.amount) > 0n && BigInt(allocation.registeredAmount) <= BigInt(allocation.amount))
+      Number.isSafeInteger(allocation.series) && allocation.series >= 0 &&
+      (input.seriesPrincipals.get(allocation.series) ?? 0n) >= BigInt(allocation.amount) &&
+      BigInt(allocation.amount) > 0n && BigInt(allocation.registeredAmount) <= BigInt(allocation.amount));
+  const bySeries = new Map<number, bigint>();
+  for (const allocation of candidates) {
+    bySeries.set(allocation.series, (bySeries.get(allocation.series) ?? 0n) + BigInt(allocation.amount));
+  }
+  const active = new Map(candidates
+    .filter((allocation) => bySeries.get(allocation.series)! <= input.seriesPrincipals.get(allocation.series)!)
     .map((allocation) => [allocation.id, allocation]));
   const totalOutstanding = [...active.values()].reduce((sum, allocation) => sum + BigInt(allocation.amount), 0n);
   if (totalOutstanding === 0n || totalOutstanding > input.deployedPrincipal) return [];

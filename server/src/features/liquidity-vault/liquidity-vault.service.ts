@@ -4,6 +4,7 @@ import type {
   PreparedVaultTransaction,
   VaultAccount,
   VaultAction,
+  VaultPosition,
   VaultStatus,
 } from "@/features/liquidity-vault/liquidity-vault.model";
 
@@ -17,7 +18,7 @@ export class LiquidityVaultService {
 
   async status(): Promise<VaultStatus> {
     const contractId = this.contractId();
-    const [asset, operator, maker, paused, liquidAssets, deployedPrincipal, totalShares, allocationLimitBps] =
+    const [asset, operator, maker, paused, liquidAssets, deployedPrincipal, totalShares, allocationLimitBps, currentSeries, depositSeries] =
       await Promise.all([
         this.read("asset", [], parseAddress),
         this.read("operator", [], parseAddress),
@@ -27,11 +28,28 @@ export class LiquidityVaultService {
         this.read("deployed_principal", [], parseInteger),
         this.read("total_shares", [], parseInteger),
         this.read("allocation_limit_bps", [], parseInteger),
+        this.read("current_series", [], parseSeries),
+        this.read("deposit_series", [], parseSeries),
       ]);
+    const [currentSeriesAssets, currentSeriesLiquid, currentSeriesPrincipal] = await Promise.all([
+      this.read("series_assets", ["--series", String(currentSeries)], parseInteger),
+      this.read("series_liquid", ["--series", String(currentSeries)], parseInteger),
+      this.read("series_principal", ["--series", String(currentSeries)], parseInteger),
+    ]);
+    const [depositSeriesAssets, depositSeriesShares] = depositSeries > currentSeries
+      ? ["0", "0"]
+      : [currentSeriesAssets, await this.read("series_total_shares", ["--series", String(currentSeries)], parseInteger)];
     return {
       allocationLimitBps,
       asset,
       contractId,
+      currentSeries,
+      currentSeriesAssets,
+      currentSeriesLiquid,
+      currentSeriesPrincipal,
+      depositSeries,
+      depositSeriesAssets,
+      depositSeriesShares,
       deployedPrincipal,
       liquidAssets,
       maker,
@@ -47,18 +65,35 @@ export class LiquidityVaultService {
   async account(owner: string): Promise<VaultAccount> {
     const address = parseAddress(owner);
     const args = ["--owner", address];
-    const [shares, pendingShares, availableShares, deposited, withdrawn, deployedPrincipal] = await Promise.all([
+    const [shares, pendingShares, availableShares, deposited, withdrawn, seriesIds] = await Promise.all([
       this.read("shares", args, parseInteger),
       this.read("pending_shares", args, parseInteger),
       this.read("available_shares", args, parseInteger),
       this.read("deposited", args, parseInteger),
       this.read("withdrawn", args, parseInteger),
-      this.read("deployed_principal", [], parseInteger),
+      this.read("owner_series", args, parseSeriesIds),
     ]);
-    const equity = deployedPrincipal === "0"
-      ? await this.read("equity", args, parseInteger)
+    const positions = await Promise.all(seriesIds.map(async (series): Promise<VaultPosition> => {
+      const raw = await this.read("series_position", ["--series", String(series), "--owner", address], parsePosition);
+      if (raw.series !== series || BigInt(raw.pendingShares) > BigInt(raw.shares)) {
+        throw new Error("invalid vault position response");
+      }
+      return {
+        series: raw.series,
+        seriesAssets: raw.seriesAssets,
+        seriesTotalShares: raw.seriesTotalShares,
+        shares: raw.shares,
+        pendingShares: raw.pendingShares,
+        assetsAtCost: raw.assetsAtCost,
+        availableShares: (BigInt(raw.shares) - BigInt(raw.pendingShares)).toString(),
+        equity: raw.deployedPrincipal === "0" ? raw.assetsAtCost : null,
+        withdrawalsOpen: raw.deployedPrincipal === "0",
+      };
+    }));
+    const equity = positions.every((position) => position.equity !== null)
+      ? positions.reduce((sum, position) => sum + BigInt(position.equity!), 0n).toString()
       : null;
-    return { address, availableShares, deposited, equity, pendingShares, shares, withdrawn };
+    return { address, availableShares, deposited, equity, pendingShares, positions, shares, withdrawn };
   }
 
   prepare(owner: string, action: VaultAction): PreparedVaultTransaction {
@@ -109,31 +144,31 @@ function actionInvocation(owner: string, action: VaultAction): { method: string;
     case "deposit":
       return {
         method: "deposit",
-        args: ["--from", owner, "--amount", positiveInteger(action.amount), "--min_shares", nonnegativeInteger(action.minShares)],
+        args: ["--from", owner, "--series", seriesArg(action.series), "--amount", positiveInteger(action.amount), "--min_shares", nonnegativeInteger(action.minShares)],
       };
     case "withdraw":
       return {
         method: "withdraw",
-        args: ["--owner", owner, "--shares", positiveInteger(action.shares), "--min_assets", nonnegativeInteger(action.minAssets)],
+        args: ["--owner", owner, "--series", seriesArg(action.series), "--shares", positiveInteger(action.shares), "--min_assets", nonnegativeInteger(action.minAssets)],
       };
     case "request-withdraw":
-      return { method: "request_withdraw", args: ["--owner", owner, "--shares", positiveInteger(action.shares)] };
+      return { method: "request_withdraw", args: ["--owner", owner, "--series", seriesArg(action.series), "--shares", positiveInteger(action.shares)] };
     case "cancel-withdraw-request":
-      return { method: "cancel_withdraw_request", args: ["--owner", owner, "--shares", positiveInteger(action.shares)] };
+      return { method: "cancel_withdraw_request", args: ["--owner", owner, "--series", seriesArg(action.series), "--shares", positiveInteger(action.shares)] };
     case "claim-withdrawal":
-      return { method: "claim_withdrawal", args: ["--owner", owner, "--min_assets", nonnegativeInteger(action.minAssets)] };
+      return { method: "claim_withdrawal", args: ["--owner", owner, "--series", seriesArg(action.series), "--min_assets", nonnegativeInteger(action.minAssets)] };
     case "set-paused":
       if (typeof action.paused !== "boolean") throw new Error("paused must be a boolean");
       return { method: "set_paused", args: ["--paused", String(action.paused)] };
     case "allocate":
-      return { method: "allocate", args: ["--amount", positiveInteger(action.amount)] };
+      return { method: "allocate", args: ["--series", seriesArg(action.series), "--amount", positiveInteger(action.amount)] };
     case "settle":
       return {
         method: "settle",
-        args: ["--principal", positiveInteger(action.principal), "--returned", positiveInteger(action.returned)],
+        args: ["--series", seriesArg(action.series), "--principal", positiveInteger(action.principal), "--returned", positiveInteger(action.returned)],
       };
     case "record-loss":
-      return { method: "record_loss", args: ["--principal", positiveInteger(action.principal)] };
+      return { method: "record_loss", args: ["--series", seriesArg(action.series), "--principal", positiveInteger(action.principal)] };
     case "set-allocation-limit":
       if (!Number.isInteger(action.allocationLimitBps) || action.allocationLimitBps < 1 || action.allocationLimitBps > 8000) {
         throw new Error("allocation limit must be 1..8000 basis points");
@@ -155,6 +190,64 @@ function nonnegativeInteger(value: string): string {
   const parsed = BigInt(value);
   if (parsed > (1n << 127n) - 1n) throw new Error("amount exceeds i128");
   return value;
+}
+
+function seriesArg(value: number): string {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 0xffffffff) {
+    throw new Error("series must be a nonnegative u32");
+  }
+  return String(value);
+}
+
+function parseSeries(value: string): number {
+  const parsed = Number(parseInteger(value));
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 0xffffffff) {
+    throw new Error("invalid vault series response");
+  }
+  return parsed;
+}
+
+function parseSeriesIds(value: string): number[] {
+  const parsed: unknown = JSON.parse(value.trim());
+  if (!Array.isArray(parsed)) throw new Error("invalid vault series list");
+  const ids = parsed.map((item) => parseSeries(String(item)));
+  if (new Set(ids).size !== ids.length) throw new Error("duplicate vault series");
+  return ids;
+}
+
+function parsePosition(value: string): {
+  series: number;
+  shares: string;
+  pendingShares: string;
+  assetsAtCost: string;
+  deployedPrincipal: string;
+  seriesAssets: string;
+  seriesTotalShares: string;
+} {
+  const parsed: unknown = JSON.parse(value.trim());
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("invalid vault position response");
+  }
+  const fields = parsed as Record<string, unknown>;
+  return {
+    series: parseSeries(String(fields.series)),
+    shares: parsePositionAmount(fields.shares),
+    pendingShares: parsePositionAmount(fields.pending_shares),
+    assetsAtCost: parsePositionAmount(fields.assets_at_cost),
+    deployedPrincipal: parsePositionAmount(fields.deployed_principal),
+    seriesAssets: parsePositionAmount(fields.series_assets),
+    seriesTotalShares: parsePositionAmount(fields.series_total_shares),
+  };
+}
+
+function parsePositionAmount(value: unknown): string {
+  if (typeof value === "number" && !Number.isSafeInteger(value)) {
+    throw new Error("unsafe numeric vault position response");
+  }
+  if (typeof value !== "string" && typeof value !== "number") {
+    throw new Error("invalid vault position response");
+  }
+  return parseInteger(String(value));
 }
 
 function parseInteger(value: string): string {

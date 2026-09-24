@@ -321,9 +321,13 @@ async function runVaultMarketSmoke(
     throw new Error("exact available vault-maker and independent taker notes are required");
   }
   const deployedPrincipal = BigInt(JSON.parse(invoke(vault, "deployed_principal", [])));
-  const eligible = eligibleVaultMakerNotes(notes, await readVaultMakerAllocations(), {
+  const allocations = await readVaultMakerAllocations();
+  const seriesPrincipals = new Map(allocations.map((item) => [item.series,
+    BigInt(JSON.parse(invoke(vault, "series_principal", ["--series", String(item.series)])))]));
+  const eligible = eligibleVaultMakerNotes(notes, allocations, {
     asset: env.collateralTokenContract,
     deployedPrincipal,
+    seriesPrincipals,
     maker: makerSession.address,
     vault,
   });
@@ -424,7 +428,7 @@ async function resumeVaultMarketSmoke(
     throw new Error("resume requires the exact locked vault-maker and independent taker notes");
   }
   const allocation = (await readVaultMakerAllocations()).find((item) => item.id === vaultAllocationId);
-  const principal = BigInt(JSON.parse(invoke(vault, "deployed_principal", [])));
+  const principal = allocation ? BigInt(JSON.parse(invoke(vault, "series_principal", ["--series", String(allocation.series)]))) : 0n;
   if (!allocation || allocation.status !== "outstanding" ||
     allocation.maker !== makerSession.address || allocation.asset !== env.collateralTokenContract ||
     !allocation.noteCommitments.includes(longNote.commitment) ||

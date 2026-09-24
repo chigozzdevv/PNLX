@@ -12,33 +12,36 @@ function parseVaultAction(input: Record<string, unknown>): VaultAction {
     case "deposit":
       return {
         action,
+        series: requiredSeries(input.series),
         amount: requiredString(input.amount, "amount"),
         minShares: requiredString(input.minShares, "minShares"),
       };
     case "withdraw":
       return {
         action,
+        series: requiredSeries(input.series),
         shares: requiredString(input.shares, "shares"),
         minAssets: requiredString(input.minAssets, "minAssets"),
       };
     case "request-withdraw":
     case "cancel-withdraw-request":
-      return { action, shares: requiredString(input.shares, "shares") };
+      return { action, series: requiredSeries(input.series), shares: requiredString(input.shares, "shares") };
     case "claim-withdrawal":
-      return { action, minAssets: requiredString(input.minAssets, "minAssets") };
+      return { action, series: requiredSeries(input.series), minAssets: requiredString(input.minAssets, "minAssets") };
     case "set-paused":
       if (typeof input.paused !== "boolean") throw new Error("paused must be a boolean");
       return { action, paused: input.paused };
     case "allocate":
-      return { action, amount: requiredString(input.amount, "amount") };
+      return { action, series: requiredSeries(input.series), amount: requiredString(input.amount, "amount") };
     case "settle":
       return {
         action,
+        series: requiredSeries(input.series),
         principal: requiredString(input.principal, "principal"),
         returned: requiredString(input.returned, "returned"),
       };
     case "record-loss":
-      return { action, principal: requiredString(input.principal, "principal") };
+      return { action, series: requiredSeries(input.series), principal: requiredString(input.principal, "principal") };
     case "set-allocation-limit":
       if (!Number.isInteger(input.allocationLimitBps)) {
         throw new Error("allocationLimitBps must be an integer");
@@ -47,6 +50,13 @@ function parseVaultAction(input: Record<string, unknown>): VaultAction {
     default:
       throw new Error("unsupported liquidity vault action");
   }
+}
+
+function requiredSeries(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > 0xffffffff) {
+    throw new Error("series must be a nonnegative u32");
+  }
+  return value as number;
 }
 
 function requiredString(value: unknown, field: string): string {

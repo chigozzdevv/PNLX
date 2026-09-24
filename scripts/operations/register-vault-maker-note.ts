@@ -62,9 +62,10 @@ export async function register(argv: string[]): Promise<void> {
     },
   });
   const vault = await new LiquidityVaultService(relayer, deployment).status();
+  const seriesPrincipal = await contractRead(relayer, vaultId, "series_principal", ["--series", String(allocation.series)]);
   if (vault.contractId !== vaultId || vault.asset !== env.collateralTokenContract ||
-    vault.maker !== maker || !vault.paused ||
-    BigInt(vault.deployedPrincipal) < BigInt(allocation.amount)) {
+    vault.maker !== maker ||
+    BigInt(String(seriesPrincipal)) !== BigInt(allocation.amount)) {
     throw new Error("vault allocation is not outstanding for this maker and asset");
   }
 

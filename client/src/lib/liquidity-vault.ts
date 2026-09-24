@@ -8,6 +8,13 @@ export interface VaultStatus {
   allocationLimitBps: string;
   asset: string;
   contractId: string;
+  currentSeries: number;
+  currentSeriesAssets: string;
+  currentSeriesLiquid: string;
+  currentSeriesPrincipal: string;
+  depositSeries: number;
+  depositSeriesAssets: string;
+  depositSeriesShares: string;
   deployedPrincipal: string;
   liquidAssets: string;
   maker: string;
@@ -26,7 +33,20 @@ export interface VaultAccount {
   equity: string | null;
   pendingShares: string;
   shares: string;
+  positions: VaultPosition[];
   withdrawn: string;
+}
+
+export interface VaultPosition {
+  series: number;
+  seriesAssets: string;
+  seriesTotalShares: string;
+  shares: string;
+  pendingShares: string;
+  availableShares: string;
+  assetsAtCost: string;
+  equity: string | null;
+  withdrawalsOpen: boolean;
 }
 
 interface PreparedVaultTransaction {
@@ -38,8 +58,8 @@ interface PreparedVaultTransaction {
 }
 
 type VaultAction =
-  | { action: "deposit"; amount: string; minShares: string }
-  | { action: "withdraw"; shares: string; minAssets: string };
+  | { action: "deposit"; series: number; amount: string; minShares: string }
+  | { action: "withdraw"; series: number; shares: string; minAssets: string };
 
 export async function getVaultStatus(): Promise<VaultStatus> {
   const response = await pnlxGet<{ vault: VaultStatus }>("/liquidity-vault");
@@ -81,31 +101,32 @@ export function quoteVaultAction(
   amount: bigint,
   status: VaultStatus,
   account?: VaultAccount | null,
+  selectedSeries?: number,
 ): { action: VaultAction; estimated: bigint; minimum: bigint } {
-  const totalShares = BigInt(status.totalShares);
-  const liquidAssets = BigInt(status.liquidAssets);
   if (mode === "deposit") {
-    if (status.paused || BigInt(status.deployedPrincipal) !== 0n) {
+    if (status.paused) {
       throw new Error("Deposits are not open right now");
     }
-    const totalAssets = BigInt(status.totalAssetsAtCost);
+    const totalShares = BigInt(status.depositSeriesShares);
+    const totalAssets = BigInt(status.depositSeriesAssets);
     if (totalShares === 0n && totalAssets !== 0n) throw new Error("Pool deposits are unavailable");
     if (totalShares > 0n && totalAssets <= 0n) throw new Error("Pool assets are unavailable");
     const estimated = totalShares === 0n ? amount : amount * totalShares / totalAssets;
     if (estimated <= 0n) throw new Error("Amount is too small to mint shares");
     const minimum = maxOne(estimated * 995n / 1000n);
-    return { action: { action: "deposit", amount: amount.toString(), minShares: minimum.toString() }, estimated, minimum };
+    return { action: { action: "deposit", series: status.depositSeries, amount: amount.toString(), minShares: minimum.toString() }, estimated, minimum };
   }
 
-  if (!account || BigInt(status.deployedPrincipal) !== 0n || !status.withdrawalsOpen) {
-    throw new Error("Withdrawals are available after the pool is settled");
-  }
-  if (amount > BigInt(account.availableShares)) throw new Error("Amount exceeds available shares");
+  const position = account?.positions.find((item) => item.series === selectedSeries);
+  if (!position || !position.withdrawalsOpen) throw new Error("Select a settled liquidity position");
+  if (amount > BigInt(position.availableShares)) throw new Error("Amount exceeds available shares");
+  const totalShares = BigInt(position.seriesTotalShares);
+  const liquidAssets = BigInt(position.seriesAssets);
   if (totalShares <= 0n) throw new Error("Pool has no shares");
   const estimated = amount === totalShares ? liquidAssets : amount * liquidAssets / totalShares;
   if (estimated <= 0n) throw new Error("Amount is too small to withdraw USDC");
   const minimum = maxOne(estimated * 995n / 1000n);
-  return { action: { action: "withdraw", shares: amount.toString(), minAssets: minimum.toString() }, estimated, minimum };
+  return { action: { action: "withdraw", series: position.series, shares: amount.toString(), minAssets: minimum.toString() }, estimated, minimum };
 }
 
 export async function submitVaultAction(session: WalletSession, action: VaultAction): Promise<string> {

@@ -35,7 +35,7 @@ export function LiquidityPoolsPage() {
               <span>Operator</span>
               <span>APY</span>
               <span>Total assets</span>
-              <span>Your shares</span>
+              <span>Your positions</span>
             </div>
             <span>Actions</span>
           </div>
@@ -48,9 +48,9 @@ export function LiquidityPoolsPage() {
                 <span className="liquidity-pool-cell"><small>APY</small><strong className="liquidity-pool-muted">—</strong></span>
                 <span className="liquidity-pool-cell"><small>Total assets</small><strong>${formatVaultUnits(status.totalAssetsAtCost)}</strong></span>
                 <span className="liquidity-pool-cell">
-                  <small>Your shares</small>
+                  <small>Your positions</small>
                   <strong className={vault.account ? "" : "liquidity-pool-muted"}>
-                    {!connected ? "Connect to view" : vault.loading ? "Loading…" : vault.account ? formatVaultUnits(vault.account.shares) : "Unavailable"}
+                    {!connected ? "Connect to view" : vault.loading ? "Loading…" : vault.account ? vault.account.positions.length : "Unavailable"}
                   </strong>
                 </span>
               </Link>

@@ -3,6 +3,7 @@ import { LiquidityVaultService } from "@/features/liquidity-vault/liquidity-vaul
 import {
   allocationId,
   closeVaultMakerAllocation,
+  readVaultMakerAllocations,
 } from "@/shared/vault-maker-backing";
 import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
@@ -28,9 +29,20 @@ if (import.meta.main) {
       source: env.stellarSource,
     },
   });
-  const vault = await new LiquidityVaultService(relayer, deployment).status();
-  if (vault.deployedPrincipal !== "0") throw new Error("vault allocation is still deployed");
   const id = allocationId(vaultId, txHash);
+  const allocation = (await readVaultMakerAllocations()).find((item) => item.id === id);
+  if (!allocation || allocation.status !== "outstanding") throw new Error("allocation was not found");
+  const vault = await new LiquidityVaultService(relayer, deployment).status();
+  if (vault.contractId !== allocation.vault || vault.asset !== allocation.asset || vault.maker !== allocation.maker) {
+    throw new Error("vault allocation does not match the configured contract");
+  }
+  const result = await relayer.readAsync({
+    kind: "contract-invoke",
+    payload: { args: ["--series", String(allocation.series)], contractId: vaultId,
+      functionName: "series_principal", send: "no" },
+  });
+  const principal = String(JSON.parse(result.output.trim()));
+  if (principal !== "0") throw new Error("vault allocation is still deployed");
   await closeVaultMakerAllocation(id);
   process.stdout.write(`${JSON.stringify({ allocationId: id, status: "closed" })}\n`);
 }

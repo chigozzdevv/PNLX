@@ -99,7 +99,6 @@ export async function withdrawMakerNotes(argv: string[]): Promise<void> {
   for (const [method, expected] of [
     ["asset", env.collateralTokenContract],
     ["maker", maker],
-    ["paused", "true"],
   ]) {
     const result = await relayer.readAsync({
       kind: "contract-invoke",

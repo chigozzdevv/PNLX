@@ -29,10 +29,11 @@ const allocation: VaultMakerAllocation = {
   maker,
   noteCommitments: [root.commitment],
   registeredAmount: "80000000",
+  series: 0,
   status: "outstanding",
   vault,
 };
-const scope = { asset, deployedPrincipal: 80_000_000n, maker, vault };
+const scope = { asset, deployedPrincipal: 80_000_000n, maker, seriesPrincipals: new Map([[0, 80_000_000n]]), vault };
 
 describe("vault maker note eligibility", () => {
   test("does not match legacy notes merely because they are available in the maker wallet", () => {
@@ -44,6 +45,7 @@ describe("vault maker note eligibility", () => {
     expect(eligibleVaultMakerNotes([root], [], scope)).toEqual([]);
     expect(eligibleVaultMakerNotes([root], [{ ...allocation, status: "closed" }], scope)).toEqual([]);
     expect(eligibleVaultMakerNotes([root], [allocation], { ...scope, deployedPrincipal: 0n })).toEqual([]);
+    expect(eligibleVaultMakerNotes([root], [allocation], { ...scope, seriesPrincipals: new Map([[0, 0n]]) })).toEqual([]);
     expect(eligibleVaultMakerNotes([root], [allocation], { ...scope, asset: vault })).toEqual([]);
     expect(eligibleVaultMakerNotes([root], [{ ...allocation, noteCommitments: [] }], scope)).toEqual([]);
   });
@@ -65,6 +67,13 @@ describe("vault maker note eligibility", () => {
     const second = { ...root, amount: "10000000", commitment: `0x${"4".repeat(64)}` };
     const sharedAllocation = { ...allocation, noteCommitments: [root.commitment, second.commitment] };
     expect(eligibleVaultMakerNotes([root, second], [sharedAllocation], scope)).toEqual([]);
+  });
+
+  test("does not borrow principal from another LP series", () => {
+    const second = { ...allocation, id: `${vault}:${"b".repeat(64)}`, allocationTxHash: "b".repeat(64) };
+    expect(eligibleVaultMakerNotes([root], [allocation, second],
+      { ...scope, deployedPrincipal: 160_000_000n, seriesPrincipals: new Map([[0, 80_000_000n], [1, 80_000_000n]]) }))
+      .toEqual([]);
   });
 });
 

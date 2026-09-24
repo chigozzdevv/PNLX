@@ -34,9 +34,9 @@ export function LiquidityPoolDetails() {
   const dialog = manualDialog ?? (dismissedAction === requestedAction ? null : queryDialog);
   const status = vault.status;
   const account = vault.account;
-  const sharePrice = status?.reconciledAssets && BigInt(status.totalShares) > 0n
-    ? BigInt(status.reconciledAssets) * 10_000_000n / BigInt(status.totalShares)
-    : null;
+  const supplySharePrice = status && BigInt(status.depositSeriesShares) > 0n
+    ? BigInt(status.depositSeriesAssets) * 10_000_000n / BigInt(status.depositSeriesShares)
+    : status ? 10_000_000n : null;
 
   function closeDialog() {
     setManualDialog(null);
@@ -77,7 +77,7 @@ export function LiquidityPoolDetails() {
           <div className="liquidity-supporting-values">
             <div className="portfolio-supporting-value"><span>Pool APY</span><strong>—</strong></div>
             <div className="portfolio-supporting-value"><span>Total assets</span><strong>{status ? `$${formatVaultUnits(status.totalAssetsAtCost)}` : "—"}</strong></div>
-            <div className="portfolio-supporting-value"><span>Your shares</span><strong>{account ? formatVaultUnits(account.shares) : "—"}</strong></div>
+            <div className="portfolio-supporting-value"><span>Your positions</span><strong>{account ? account.positions.length : "—"}</strong></div>
           </div>
           {vault.statusError ? <p className="liquidity-data-error" role="alert">{vault.statusError} <button onClick={vault.refresh} type="button">Retry</button></p> : null}
         </section>
@@ -85,12 +85,12 @@ export function LiquidityPoolDetails() {
         <section aria-label="Pool details" className="liquidity-performance">
           <div className="liquidity-section-heading"><h2>Pool details</h2></div>
           <div className="liquidity-detail-grid">
-            <div><span>Share value</span><strong>{sharePrice !== null ? `$${formatVaultUnits(sharePrice, 4)}` : "—"}</strong></div>
+            <div><span>New supply price</span><strong>{supplySharePrice !== null ? `$${formatVaultUnits(supplySharePrice, 4)}` : "—"}</strong></div>
             <div><span>Liquid USDC</span><strong>{status ? `$${formatVaultUnits(status.liquidAssets)}` : "—"}</strong></div>
             <div><span>Deployed principal</span><strong>{status ? `$${formatVaultUnits(status.deployedPrincipal)}` : "—"}</strong></div>
-            <div><span>Total shares</span><strong>{status ? formatVaultUnits(status.totalShares) : "—"}</strong></div>
+            <div><span>Supply</span><strong>{status ? status.paused ? "Paused" : "Open" : "—"}</strong></div>
           </div>
-          {status ? <p className="liquidity-pool-note">{status.paused ? "Deposits are currently paused." : "Deposits are open."} {status.withdrawalsOpen ? "Withdrawals are available." : "Withdrawals open after settlement."}</p> : null}
+          {status ? <p className="liquidity-pool-note">{status.paused ? "Deposits are currently paused." : "Deposits are open."} You can withdraw a position whenever it has no active maker allocation.</p> : null}
         </section>
 
         <section aria-label="Recent liquidity activity" className="liquidity-activity">
@@ -133,15 +133,18 @@ function LiquidityActionDialog({ account, accountError, error, mode, onClose, on
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [transactionHash, setTransactionHash] = useState<string | null>(null);
+  const [requestedSeries, setRequestedSeries] = useState<number | null>(null);
   const deposit = mode === "deposit";
+  const withdrawablePositions = account?.positions.filter((position) => position.withdrawalsOpen && BigInt(position.availableShares) > 0n) ?? [];
+  const selectedPosition = withdrawablePositions.find((position) => position.series === requestedSeries) ?? withdrawablePositions[0];
   const unavailable = statusError || (!status ? "Loading pool…" : deposit
-    ? status.paused || BigInt(status.deployedPrincipal) !== 0n ? "Deposits are currently paused." : null
-    : BigInt(status.deployedPrincipal) !== 0n || !status.withdrawalsOpen ? "Withdrawals open after settlement." : accountError);
+    ? status.paused ? "Deposits are currently paused." : null
+    : accountError || (withdrawablePositions.length === 0 ? "No settled position is ready to withdraw." : null));
   let quote: ReturnType<typeof quoteVaultAction> | null = null;
   let quoteError: string | null = null;
   if (status && amount.trim()) {
     try {
-      quote = quoteVaultAction(mode, parseVaultUnits(amount), status, account);
+      quote = quoteVaultAction(mode, parseVaultUnits(amount), status, account, selectedPosition?.series);
     } catch (caught) {
       quoteError = caught instanceof Error ? caught.message : "Invalid amount";
     }
@@ -188,6 +191,14 @@ function LiquidityActionDialog({ account, accountError, error, mode, onClose, on
         ) : (
           <>
             {unavailable ? <p className="liquidity-dialog-note" role="status">{unavailable}</p> : null}
+            {!deposit && withdrawablePositions.length > 1 ? (
+              <>
+                <label className="liquidity-dialog-input-label" htmlFor="liquidity-series">Position</label>
+                <select className="liquidity-series-select" id="liquidity-series" onChange={(event) => { setRequestedSeries(Number(event.target.value)); setAmount(""); }} value={selectedPosition?.series}>
+                  {withdrawablePositions.map((position) => <option key={position.series} value={position.series}>Position {position.series + 1} · {formatVaultUnits(position.availableShares, 4)} shares</option>)}
+                </select>
+              </>
+            ) : null}
             <label className="liquidity-dialog-input-label" htmlFor="liquidity-amount">{deposit ? "Amount" : "Shares"}</label>
             <div className="liquidity-dialog-input-wrap">
               <input disabled={Boolean(unavailable) || busy} id="liquidity-amount" inputMode="decimal" onChange={(event) => { setAmount(event.target.value); setTransactionHash(null); }} placeholder="0.00" type="text" value={amount} />
@@ -199,7 +210,7 @@ function LiquidityActionDialog({ account, accountError, error, mode, onClose, on
                 <div className="liquidity-dialog-detail"><span>Minimum received</span><strong>{formatVaultUnits(quote.minimum, 4)}</strong></div>
               </>
             ) : null}
-            {!deposit && account ? <div className="liquidity-dialog-detail"><span>Available shares</span><strong>{formatVaultUnits(account.availableShares, 4)}</strong></div> : null}
+            {!deposit && selectedPosition ? <div className="liquidity-dialog-detail"><span>Available shares</span><strong>{formatVaultUnits(selectedPosition.availableShares, 4)}</strong></div> : null}
             {quoteError && !unavailable ? <p className="liquidity-dialog-error" role="alert">{quoteError}</p> : null}
             {actionError ? <p className="liquidity-dialog-error" role="alert">{actionError}</p> : null}
             {transactionHash ? (

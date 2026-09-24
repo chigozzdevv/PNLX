@@ -26,6 +26,11 @@ describe("liquidity vault backend", () => {
       deployed_principal: "80000000",
       total_shares: "9007199254740993",
       allocation_limit_bps: "8000",
+      current_series: "0",
+      deposit_series: "1",
+      series_assets: "100000000",
+      series_liquid: "20000000",
+      series_principal: "80000000",
     };
     const relayer = {
       readAsync: async (request: { payload: { functionName: string } }) => ({
@@ -37,29 +42,37 @@ describe("liquidity vault backend", () => {
     expect(status.deployedPrincipal).toBe("80000000");
     expect(status.totalAssetsAtCost).toBe("100000000");
     expect(status.totalShares).toBe("9007199254740993");
+    expect(status.depositSeries).toBe(1);
+    expect(status.depositSeriesAssets).toBe("0");
     expect(status.reconciledAssets).toBeNull();
     expect(status.withdrawalsOpen).toBe(false);
   });
 
-  test("only reports redeemable equity after all allocations settle", async () => {
+  test("reports each owner's settled position separately from an open one", async () => {
     const outputs: Record<string, string> = {
-      shares: "1000",
+      shares: "1500",
       pending_shares: "500",
-      available_shares: "500",
+      available_shares: "1000",
       deposited: "1000",
       withdrawn: "0",
-      deployed_principal: "0",
-      equity: "1100",
+      owner_series: "[0,1]",
     };
     const relayer = {
-      readAsync: async (request: { payload: { functionName: string } }) => ({
-        output: outputs[request.payload.functionName],
+      readAsync: async (request: { payload: { functionName: string; args: string[] } }) => ({
+        output: request.payload.functionName === "series_position"
+          ? request.payload.args.includes("0")
+            ? JSON.stringify({ series: 0, shares: "1000", pending_shares: "500", assets_at_cost: "1100",
+              deployed_principal: "0", series_assets: "1100", series_total_shares: "1000" })
+            : JSON.stringify({ series: 1, shares: "500", pending_shares: "0", assets_at_cost: "500",
+              deployed_principal: "400", series_assets: "500", series_total_shares: "500" })
+          : outputs[request.payload.functionName],
       }),
     } as unknown as Pick<RelayerService, "readAsync" | "prepareXdr">;
     const vault = new LiquidityVaultService(relayer, deployment);
-    expect((await vault.account(OWNER)).equity).toBe("1100");
-    outputs.deployed_principal = "100";
-    expect((await vault.account(OWNER)).equity).toBeNull();
+    const account = await vault.account(OWNER);
+    expect(account.equity).toBeNull();
+    expect(account.positions[0]?.equity).toBe("1100");
+    expect(account.positions[1]?.equity).toBeNull();
   });
 
   test("prepares owner-signed deposits and withdrawals without submitting them", () => {
@@ -71,13 +84,13 @@ describe("liquidity vault backend", () => {
       },
     } as unknown as Pick<RelayerService, "readAsync" | "prepareXdr">;
     const vault = new LiquidityVaultService(relayer, deployment);
-    vault.prepare(OWNER, { action: "deposit", amount: "10000000", minShares: "10000000" });
-    vault.prepare(OWNER, { action: "request-withdraw", shares: "5000000" });
+    vault.prepare(OWNER, { action: "deposit", series: 1, amount: "10000000", minShares: "10000000" });
+    vault.prepare(OWNER, { action: "request-withdraw", series: 0, shares: "5000000" });
     expect(requests).toEqual([
       {
         kind: "contract-invoke",
         payload: {
-          args: ["--from", OWNER, "--amount", "10000000", "--min_shares", "10000000"],
+          args: ["--from", OWNER, "--series", "1", "--amount", "10000000", "--min_shares", "10000000"],
           buildOnly: true,
           contractId: VAULT,
           functionName: "deposit",
@@ -88,7 +101,7 @@ describe("liquidity vault backend", () => {
       {
         kind: "contract-invoke",
         payload: {
-          args: ["--owner", OWNER, "--shares", "5000000"],
+          args: ["--owner", OWNER, "--series", "0", "--shares", "5000000"],
           buildOnly: true,
           contractId: VAULT,
           functionName: "request_withdraw",
@@ -109,12 +122,12 @@ describe("liquidity vault backend", () => {
     } as unknown as Pick<RelayerService, "readAsync" | "prepareXdr">;
     const vault = new LiquidityVaultService(relayer, deployment);
     vault.prepare(OWNER, { action: "set-paused", paused: true });
-    vault.prepare(OWNER, { action: "allocate", amount: "80000000" });
-    vault.prepare(OWNER, { action: "settle", principal: "80000000", returned: "81000000" });
+    vault.prepare(OWNER, { action: "allocate", series: 1, amount: "80000000" });
+    vault.prepare(OWNER, { action: "settle", series: 1, principal: "80000000", returned: "81000000" });
     expect(requests.map((request) => (request as { payload: { functionName: string } }).payload.functionName))
       .toEqual(["set_paused", "allocate", "settle"]);
     expect((requests[2] as { payload: { args: string[] } }).payload.args).toEqual([
-      "--principal", "80000000", "--returned", "81000000",
+      "--series", "1", "--principal", "80000000", "--returned", "81000000",
     ]);
     expect(() => vault.prepare(OWNER, { action: "set-allocation-limit", allocationLimitBps: 8001 })).toThrow();
   });
@@ -124,10 +137,10 @@ describe("liquidity vault backend", () => {
       prepareXdr: () => { throw new Error("must not prepare"); },
     } as unknown as Pick<RelayerService, "readAsync" | "prepareXdr">;
     const vault = new LiquidityVaultService(relayer, deployment);
-    expect(() => vault.prepare(OWNER, { action: "deposit", amount: "-1", minShares: "0" })).toThrow();
-    expect(() => vault.prepare(OWNER, { action: "deposit", amount: "1.5", minShares: "0" })).toThrow();
-    expect(() => vault.prepare(OWNER, { action: "deposit", amount: "0", minShares: "0" })).toThrow();
-    expect(() => vault.prepare(OWNER, { action: "deposit", amount: (1n << 127n).toString(), minShares: "0" })).toThrow();
-    expect(() => new LiquidityVaultService(relayer).prepare(OWNER, { action: "claim-withdrawal", minAssets: "0" })).toThrow("not deployed");
+    expect(() => vault.prepare(OWNER, { action: "deposit", series: 0, amount: "-1", minShares: "0" })).toThrow();
+    expect(() => vault.prepare(OWNER, { action: "deposit", series: 0, amount: "1.5", minShares: "0" })).toThrow();
+    expect(() => vault.prepare(OWNER, { action: "deposit", series: 0, amount: "0", minShares: "0" })).toThrow();
+    expect(() => vault.prepare(OWNER, { action: "deposit", series: 0, amount: (1n << 127n).toString(), minShares: "0" })).toThrow();
+    expect(() => new LiquidityVaultService(relayer).prepare(OWNER, { action: "claim-withdrawal", series: 0, minAssets: "0" })).toThrow("not deployed");
   });
 });
