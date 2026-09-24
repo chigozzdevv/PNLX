@@ -11,7 +11,7 @@ export interface VaultMakerAllocation {
   noteCommitments: string[];
   registeredAmount: string;
   series: number;
-  status: "outstanding" | "closed";
+  status: "outstanding" | "draining" | "closed";
   vault: string;
 }
 
@@ -96,13 +96,37 @@ export async function closeVaultMakerAllocation(id: string): Promise<void> {
     const database = client.db(config.database);
     const activeNotes = await database.collection<StoredMakerNoteRecord & { namespace: string }>("maker_notes")
       .countDocuments({ namespace: config.namespace, vaultAllocationId: id,
-        status: { $in: ["available", "locked", "withdrawing"] } });
+        status: { $in: ["pending", "available", "locked", "draining", "withdrawing"] } });
     if (activeNotes !== 0) throw new Error(`${activeNotes} maker notes still belong to the vault allocation`);
     const result = await database.collection<AllocationDocument>("vault_maker_allocations").updateOne(
-      { _id: `${config.namespace}:${id}`, status: "outstanding" },
+      { _id: `${config.namespace}:${id}`, status: { $in: ["outstanding", "draining"] } },
       { $set: { status: "closed" } },
     );
     if (result.matchedCount !== 1) throw new Error("outstanding vault allocation was not found");
+  } finally {
+    await client.close();
+  }
+}
+
+export async function beginVaultMakerDrain(id: string): Promise<void> {
+  const config = mongoConfig();
+  const client = new MongoClient(config.uri);
+  try {
+    await client.connect();
+    const database = client.db(config.database);
+    const allocations = database.collection<AllocationDocument>("vault_maker_allocations");
+    const allocation = await allocations.findOne({ _id: `${config.namespace}:${id}`, namespace: config.namespace });
+    if (!allocation || (allocation.status !== "outstanding" && allocation.status !== "draining")) {
+      throw new Error("outstanding vault allocation was not found for draining");
+    }
+    await allocations.updateOne(
+      { _id: `${config.namespace}:${id}`, namespace: config.namespace, status: "outstanding" },
+      { $set: { status: "draining" } },
+    );
+    await database.collection<StoredMakerNoteRecord & { namespace: string }>("maker_notes").updateMany(
+      { namespace: config.namespace, vaultAllocationId: id, status: "available" },
+      { $set: { status: "draining", updatedAt: Date.now() } },
+    );
   } finally {
     await client.close();
   }

@@ -44,10 +44,25 @@ describe("vault maker note eligibility", () => {
   test("requires a matching outstanding allocation and current vault principal", () => {
     expect(eligibleVaultMakerNotes([root], [], scope)).toEqual([]);
     expect(eligibleVaultMakerNotes([root], [{ ...allocation, status: "closed" }], scope)).toEqual([]);
+    expect(eligibleVaultMakerNotes([root], [{ ...allocation, status: "draining" }], scope)).toEqual([]);
     expect(eligibleVaultMakerNotes([root], [allocation], { ...scope, deployedPrincipal: 0n })).toEqual([]);
     expect(eligibleVaultMakerNotes([root], [allocation], { ...scope, seriesPrincipals: new Map([[0, 0n]]) })).toEqual([]);
     expect(eligibleVaultMakerNotes([root], [allocation], { ...scope, asset: vault })).toEqual([]);
     expect(eligibleVaultMakerNotes([root], [{ ...allocation, noteCommitments: [] }], scope)).toEqual([]);
+  });
+
+  test("keeps incremental allocations in one series independently eligible", () => {
+    const secondId = allocationId(vault, "b".repeat(64));
+    const secondNote = { ...root, amount: "20000000", commitment: `0x${"5".repeat(64)}`,
+      vaultAllocationId: secondId };
+    const secondAllocation = { ...allocation, id: secondId, allocationTxHash: "b".repeat(64),
+      amount: "20000000", registeredAmount: "20000000", noteCommitments: [secondNote.commitment] };
+    const both = { ...scope, deployedPrincipal: 100_000_000n,
+      seriesPrincipals: new Map([[0, 100_000_000n]]) };
+    expect(eligibleVaultMakerNotes([root, secondNote], [allocation, secondAllocation], both))
+      .toEqual([root, secondNote]);
+    expect(eligibleVaultMakerNotes([root, secondNote], [{ ...allocation, status: "draining" }, secondAllocation], both))
+      .toEqual([secondNote]);
   });
 
   test("accepts change only after its registered parent is spent", () => {

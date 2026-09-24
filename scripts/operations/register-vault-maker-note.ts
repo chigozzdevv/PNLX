@@ -6,6 +6,7 @@ import {
   normalizedHash,
   readVaultMakerAllocations,
   registerVaultMakerNote,
+  type VaultMakerAllocation,
 } from "@/shared/vault-maker-backing";
 import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
@@ -14,7 +15,7 @@ if (import.meta.main) {
   await register(process.argv.slice(2));
 }
 
-export async function register(argv: string[]): Promise<void> {
+export async function register(argv: string[]): Promise<VaultMakerAllocation> {
   const commitment = requiredArg(argv, "--commitment");
   const allocationTxHash = normalizedHash(requiredArg(argv, "--allocation-tx"));
 
@@ -29,7 +30,8 @@ export async function register(argv: string[]): Promise<void> {
   if (!vaultId || !poolId) throw new Error("vault and shielded pool deployments are required");
 
   const maker = env.makerWalletAddress.trim().toUpperCase();
-  const allocation = (await readVaultMakerAllocations())
+  const allocations = await readVaultMakerAllocations();
+  const allocation = allocations
     .find((record) => record.id === allocationId(vaultId, allocationTxHash));
   if (!allocation || allocation.status !== "outstanding" ||
     allocation.asset !== env.collateralTokenContract || allocation.maker !== maker) {
@@ -63,9 +65,12 @@ export async function register(argv: string[]): Promise<void> {
   });
   const vault = await new LiquidityVaultService(relayer, deployment).status();
   const seriesPrincipal = await contractRead(relayer, vaultId, "series_principal", ["--series", String(allocation.series)]);
+  const recordedPrincipal = allocations
+    .filter((item) => item.vault === vaultId && item.series === allocation.series && item.status === "outstanding")
+    .reduce((sum, item) => sum + BigInt(item.amount), 0n);
   if (vault.contractId !== vaultId || vault.asset !== env.collateralTokenContract ||
     vault.maker !== maker ||
-    BigInt(String(seriesPrincipal)) !== BigInt(allocation.amount)) {
+    BigInt(String(seriesPrincipal)) !== recordedPrincipal) {
     throw new Error("vault allocation is not outstanding for this maker and asset");
   }
 
@@ -89,6 +94,7 @@ export async function register(argv: string[]): Promise<void> {
     vault: vaultId,
   });
   process.stdout.write(`${JSON.stringify({ allocationId: registered.id, commitment, status: "registered" })}\n`);
+  return registered;
 }
 
 export async function assertSuccessfulTransaction(

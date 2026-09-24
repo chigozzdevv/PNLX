@@ -1,16 +1,19 @@
+import { ownerCommitment } from "@pnlx/crypto";
 import { loadEnv } from "@/config/env";
 import { LiquidityVaultService } from "@/features/liquidity-vault/liquidity-vault.service";
 import { readMakerNotes } from "@/shared/maker-note-store";
 import { allocationId, closeVaultMakerAllocation, normalizedHash, readVaultMakerAllocations } from "@/shared/vault-maker-backing";
 import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
+import { createExecutorAsync } from "@/workers/executor/executor.worker";
 import { assertSuccessfulTransaction } from "./register-vault-maker-note";
 
 if (import.meta.main) await settleVaultMaker(process.argv.slice(2));
 
 export async function settleVaultMaker(argv: string[]): Promise<void> {
-  if (!argv.includes("--matcher-stopped")) {
-    throw new Error("stop the matcher before settling a vault maker allocation");
+  const draining = argv.includes("--allocation-draining");
+  if (!argv.includes("--matcher-stopped") && !draining) {
+    throw new Error("stop the matcher or drain the allocation before vault settlement");
   }
   const allocationTx = normalizedHash(requiredArg(argv, "--allocation-tx"));
   const returnedText = requiredArg(argv, "--returned");
@@ -26,17 +29,57 @@ export async function settleVaultMaker(argv: string[]): Promise<void> {
   const vaultId = deployment?.contracts["liquidity-vault"];
   if (!vaultId) throw new Error("liquidity vault deployment is required");
   const id = allocationId(vaultId, allocationTx);
-  const allocation = (await readVaultMakerAllocations()).find((item) => item.id === id);
-  if (!allocation || allocation.status !== "outstanding" || !Number.isSafeInteger(allocation.series) ||
+  const allocations = await readVaultMakerAllocations();
+  const allocation = allocations.find((item) => item.id === id);
+  if (!allocation || (allocation.status !== "outstanding" && allocation.status !== "draining") ||
+    !Number.isSafeInteger(allocation.series) ||
     allocation.series < 0 || allocation.asset !== env.collateralTokenContract ||
     allocation.maker !== env.makerWalletAddress.trim().toUpperCase()) {
     throw new Error("outstanding vault allocation does not match this maker and asset");
   }
+  if (draining && allocation.status !== "draining") {
+    throw new Error("allocation must be drained before settling while matching runs");
+  }
   const notes = (await readMakerNotes()).filter((note) => note.vaultAllocationId === id);
-  if (notes.some((note) => ["available", "locked", "withdrawing"].includes(String(note.status)))) {
+  if (notes.some((note) => ["pending", "available", "locked", "draining", "withdrawing"].includes(String(note.status)))) {
     throw new Error("maker notes must be recovered before vault settlement");
   }
+  if (allocation.status === "draining") {
+    const recovered = notes.reduce((sum, note) => sum + BigInt(String(note.recoveredAmount ?? "0")), 0n);
+    if (returned !== recovered) throw new Error("returned USDC does not equal verified maker-note recoveries");
+  }
+  const makerIntents = new Set(notes.map((note) => String(note.lockedByIntentCommitment ?? "")).filter(Boolean));
+  const executor = await createExecutorAsync({
+    mongo: {
+      collection: env.mongodbCollection,
+      database: env.mongodbDatabase,
+      documentId: env.stellarNetwork,
+      ensureIndexes: true,
+      uri: env.mongodbUri!,
+    },
+    privateMatchingRequired: env.privateMatchingRequired,
+  });
+  try {
+    const makerPositions = executor.store.positionsFor(ownerCommitment(allocation.maker))
+      .filter((position) => makerIntents.has(position.sourceIntentCommitment));
+    if (makerPositions.some((position) => position.status === "open")) {
+      throw new Error("maker position from this allocation is still open");
+    }
+    for (const intent of makerIntents) {
+      const position = makerPositions.find((item) => item.sourceIntentCommitment === intent);
+      if (!position || (position.status === "closed" &&
+        (!position.marginOutputCommitment ||
+          !notes.some((note) => note.commitment === position.marginOutputCommitment)))) {
+        throw new Error("settled maker position has no reconciled vault-backed margin output");
+      }
+    }
+  } finally {
+    await (executor.store as { close?: () => Promise<void> }).close?.();
+  }
   const principal = BigInt(allocation.amount);
+  const recordedPrincipal = allocations
+    .filter((item) => item.vault === vaultId && item.series === allocation.series && item.status !== "closed")
+    .reduce((sum, item) => sum + BigInt(item.amount), 0n);
   const relayer = createRelayer({ config: {
     commandTimeoutMs: env.stellarCommandTimeoutMs,
     mode: "stellar-cli",
@@ -47,8 +90,9 @@ export async function settleVaultMaker(argv: string[]): Promise<void> {
   } });
   const vault = new LiquidityVaultService(relayer, deployment);
   const before = await vault.status();
+  const seriesPrincipalBefore = await seriesPrincipal();
   if (before.asset !== allocation.asset || before.maker !== allocation.maker ||
-    await seriesPrincipal() !== principal) {
+    seriesPrincipalBefore !== recordedPrincipal || seriesPrincipalBefore < principal) {
     throw new Error("vault series principal does not equal the recorded allocation");
   }
   const makerBefore = await makerBalance();
@@ -69,7 +113,7 @@ export async function settleVaultMaker(argv: string[]): Promise<void> {
   await assertSuccessfulTransaction(env.stellarRpcUrl, tx.txHash);
   const after = await vault.status();
   const makerAfter = await makerBalance();
-  if (await seriesPrincipal() !== 0n ||
+  if (await seriesPrincipal() !== seriesPrincipalBefore - principal ||
     BigInt(before.deployedPrincipal) - BigInt(after.deployedPrincipal) !== principal ||
     BigInt(after.liquidAssets) - BigInt(before.liquidAssets) !== returned ||
     makerBefore - makerAfter !== returned) {

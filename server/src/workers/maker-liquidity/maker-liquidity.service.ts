@@ -15,6 +15,7 @@ import type {
 } from "@pnlx/protocol-types";
 import { assertSubmittedRelay } from "@/shared/protocol/onchain-submission";
 import {
+  claimMakerNote,
   readMakerNotes,
   saveMakerNotes,
   type StoredMakerNoteRecord,
@@ -41,7 +42,7 @@ type StoredMakerNote = StoredMakerNoteRecord & {
   ownerDigest: Hex;
   rhoDigest: Hex;
   spendSecretDigest: Hex;
-  status: "available" | "locked" | "withdrawing" | "spent";
+  status: "pending" | "available" | "locked" | "draining" | "withdrawing" | "spent";
   walletAddress: string;
   lockedByIntentCommitment?: Hex;
   sourceIntentCommitment?: Hex;
@@ -85,13 +86,13 @@ export class MakerLiquidityService {
     let notes = normalizeMakerNotes(await readMakerNotes());
     const unlocked = unlockStaleMakerLocks(notes, this.executor.store.intents);
     if (unlocked.changed) {
+      await saveMakerNotes(unlocked.notes.filter((note, index) => note !== notes[index]));
       notes = unlocked.notes;
-      await saveMakerNotes(notes);
     }
     const reaped = this.reapOrphanedMakerIntents(notes);
     if (reaped.changed) {
+      await saveMakerNotes(reaped.notes.filter((note, index) => note !== notes[index]));
       notes = reaped.notes;
-      await saveMakerNotes(notes);
       await this.flushStore();
     }
     this.indexMakerMarginCommitments(notes);
@@ -150,6 +151,10 @@ export class MakerLiquidityService {
           payload,
           size: allocation.size,
         });
+        if (!record) {
+          skipped += 1;
+          continue;
+        }
         await this.flushStore();
         currentNotes = lockMakerNote(
           currentNotes,
@@ -157,7 +162,7 @@ export class MakerLiquidityService {
           record.intentCommitment,
           clientIntent.intentCommitment,
         );
-        await saveMakerNotes(currentNotes);
+        await saveMakerNotes(currentNotes.filter((note) => note.commitment === allocation.note.commitment));
         created += 1;
       }
     }
@@ -219,7 +224,8 @@ export class MakerLiquidityService {
         next.push(change);
       }
     }
-    await saveMakerNotes(next);
+    const previous = new Map(notes.map((note) => [note.commitment, note]));
+    await saveMakerNotes(next.filter((note) => previous.get(note.commitment) !== note));
   }
 
   private async submitMakerIntent(input: {
@@ -229,7 +235,7 @@ export class MakerLiquidityService {
     note: StoredMakerNote;
     payload: PrivateMatchIntent;
     size: bigint;
-  }): Promise<IntentRecord> {
+  }): Promise<IntentRecord | undefined> {
     const size = input.size;
     const side = input.payload.signedSize >= 0n ? "short" : "long";
     const noteAmount = BigInt(input.note.amount);
@@ -273,6 +279,12 @@ export class MakerLiquidityService {
 
     this.executor.store.recordProof(validity.proof);
     const prepared = this.executor.prepareIntent({ intent, validity });
+    if (!await claimMakerNote(
+      input.note.commitment,
+      prepared.record.intentCommitment,
+      input.clientIntent.intentCommitment,
+      input.note.vaultAllocationId,
+    )) return undefined;
     const { alreadyRegistered, relay } = await this.submitIntentOnchain(prepared.record);
     if (this.env.intentRegistryOnchainRequired) {
       if (!this.onchain?.enabled) throw new Error("intent registry requires on-chain relay");
@@ -349,7 +361,7 @@ export class MakerLiquidityService {
 
   private indexMakerMarginCommitments(notes: StoredMakerNote[]): void {
     for (const note of notes) {
-      if (note.status === "spent") continue;
+      if (note.status === "spent" || note.status === "pending") continue;
       if (this.executor.store.marginCommitments.has(note.commitment)) continue;
       this.executor.store.addMarginCommitment(note.commitment);
     }
@@ -580,6 +592,7 @@ function unlockStaleMakerLocks(
     if (
       note.status !== "locked" ||
       !note.lockedByIntentCommitment ||
+      note.vaultAllocationId ||
       intents.has(note.lockedByIntentCommitment)
     ) {
       return note;

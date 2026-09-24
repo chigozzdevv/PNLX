@@ -1,13 +1,11 @@
 import { loadEnv } from "@/config/env";
-import { NotesService } from "@/features/notes/notes.service";
-import { readMakerNotes, transitionMakerNoteStatus } from "@/shared/maker-note-store";
+import { readMakerNotes, recordMakerNoteRecovery, transitionMakerNoteStatus } from "@/shared/maker-note-store";
 import { allocationId, normalizedHash, readVaultMakerAllocations } from "@/shared/vault-maker-backing";
-import { createExecutorAsync } from "@/workers/executor/executor.worker";
 import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
-import { createOnchainRelay } from "@/workers/onchain/onchain.worker";
 import { createProver } from "@/workers/prover/prover.worker";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
 import type { Hex } from "@pnlx/protocol-types";
+import { authHeadersFor, get, localApiOrigin, post, type SmokeApp } from "../smoke/custody";
 import { sameHex32 } from "./register-vault-maker-note";
 
 interface MakerNote {
@@ -30,8 +28,16 @@ if (import.meta.main) {
 
 export async function withdrawMakerNotes(argv: string[]): Promise<void> {
   const execute = argv.includes("--execute");
-  if (execute && !argv.includes("--matcher-stopped")) {
-    throw new Error("stop the matcher before executing maker note withdrawals");
+  const draining = argv.includes("--allocation-draining");
+  const apiFlag = argv.indexOf("--api-url");
+  const apiUrl = apiFlag < 0 ? undefined : localApiOrigin(argv[apiFlag + 1] ?? "");
+  const makerSourceFlag = argv.indexOf("--maker-source");
+  const makerSource = makerSourceFlag < 0 ? undefined : argv[makerSourceFlag + 1];
+  if (execute && (!apiUrl || !makerSource || makerSource.startsWith("--"))) {
+    throw new Error("executing maker note recovery requires --api-url and --maker-source");
+  }
+  if (execute && !argv.includes("--matcher-stopped") && !draining) {
+    throw new Error("stop the matcher or drain the allocation before executing maker note withdrawals");
   }
   const env = loadEnv();
   const maker = env.makerWalletAddress?.trim().toUpperCase();
@@ -56,9 +62,11 @@ export async function withdrawMakerNotes(argv: string[]): Promise<void> {
   const scopedAllocationId = allocationTx
     ? allocationId(deployment.contracts["liquidity-vault"], normalizedHash(allocationTx))
     : undefined;
+  if (draining && !scopedAllocationId) throw new Error("a draining withdrawal requires --allocation-tx");
   if (scopedAllocationId) {
     const allocation = (await readVaultMakerAllocations()).find((item) => item.id === scopedAllocationId);
-    if (!allocation || allocation.status !== "outstanding" || allocation.maker !== maker ||
+    if (!allocation || (draining ? allocation.status !== "draining" : allocation.status === "closed") ||
+      allocation.maker !== maker ||
       allocation.asset !== env.collateralTokenContract) {
       throw new Error("outstanding allocation for configured maker and asset was not found");
     }
@@ -74,19 +82,19 @@ export async function withdrawMakerNotes(argv: string[]): Promise<void> {
     },
   });
   const prover = createProver();
-  const onchain = createOnchainRelay(relayer, {
-    deployment,
-    enabled: true,
-    resolveProofArtifact: (proof) => prover.artifactFor(proof),
-  });
   const notes = (await readMakerNotes()) as MakerNote[];
   const owned = notesForMakerRecovery(notes, maker, scopedAllocationId);
-  const available = owned.filter((note) => note.status === "available" || note.status === "withdrawing");
+  const available = owned.filter((note) => note.status === "available" || note.status === "draining" ||
+    note.status === "withdrawing");
   const locked = owned.filter((note) => note.status === "locked");
-  if (locked.length > 0) throw new Error(`${locked.length} maker notes remain locked`);
+  if (locked.length > 0 && !draining) throw new Error(`${locked.length} maker notes remain locked`);
+  if (draining && owned.some((note) => note.status === "pending" || note.status === "available")) {
+    throw new Error("allocation drain has not claimed every unspent maker note");
+  }
   const summary = {
     availableAmount: available.reduce((sum, note) => sum + BigInt(note.amount), 0n).toString(),
     availableNotes: available.length,
+    lockedNotes: locked.length,
     recoveringNotes: available.filter((note) => note.status === "withdrawing").length,
     maker,
     mode: execute ? "execute" : "inspect",
@@ -108,19 +116,12 @@ export async function withdrawMakerNotes(argv: string[]): Promise<void> {
     if (actual !== expected) throw new Error(`vault ${method} does not match maker withdrawal configuration`);
   }
 
-  const assetDigest = onchain.tokenDigest(env.collateralTokenContract);
-  const recipientDigest = onchain.tokenDigest(maker);
-  const executor = await createExecutorAsync({
-    mongo: {
-      collection: env.mongodbCollection,
-      database: env.mongodbDatabase,
-      documentId: env.stellarNetwork,
-      ensureIndexes: true,
-      uri: env.mongodbUri,
-    },
-    privateMatchingRequired: env.privateMatchingRequired,
-  });
-  const service = new NotesService(executor, prover, env, onchain, relayer);
+  const app: SmokeApp = { origin: apiUrl!, handle: (request) => fetch(request) };
+  const authHeaders = await authHeadersFor(app, makerSource!, maker, env);
+  const assetDigest = String((await get(app,
+    `/notes/address-digest?address=${encodeURIComponent(env.collateralTokenContract)}`, authHeaders)).digest) as Hex;
+  const recipientDigest = String((await get(app,
+    `/notes/address-digest?address=${encodeURIComponent(maker)}`, authHeaders)).digest) as Hex;
   let recovered = 0n;
   for (const note of available) {
     if (!note.commitment || !note.noteNullifier || !note.assetDigest || !note.blinding ||
@@ -130,8 +131,8 @@ export async function withdrawMakerNotes(argv: string[]): Promise<void> {
     if (!sameHex32(note.assetDigest, assetDigest)) {
       throw new Error(`maker note asset mismatch: ${note.commitment}`);
     }
-    if (note.status === "available") {
-      const claimed = await transitionMakerNoteStatus(note.commitment, "available", "withdrawing");
+    if (note.status === "available" || note.status === "draining") {
+      const claimed = await transitionMakerNoteStatus(note.commitment, note.status, "withdrawing");
       if (!claimed) throw new Error(`maker note changed before withdrawal: ${note.commitment}`);
     }
     const isSpent = await relayer.readAsync({
@@ -146,12 +147,17 @@ export async function withdrawMakerNotes(argv: string[]): Promise<void> {
     const spent = parseOutput(isSpent.output);
     if (spent !== true && spent !== false) throw new Error("invalid shielded pool spent response");
     if (spent) {
-      await transitionMakerNoteStatus(note.commitment, "withdrawing", "spent");
-      throw new Error(`maker note was already spent on-chain: ${note.commitment}`);
+      throw new Error(`maker note ${note.commitment} was spent before recovery could be verified`);
     }
-    const membership = executor.store.marginMembershipProof(note.commitment);
+    const balanceBefore = await makerBalance();
+    const membershipResponse = await get(app,
+      `/notes/membership?commitment=${encodeURIComponent(note.commitment)}`, authHeaders);
+    const membership = membershipResponse.note as { membershipProof?: {
+      indices: boolean[]; root: Hex; siblings: Hex[];
+    } };
+    if (!membership?.membershipProof) throw new Error(`maker note ${note.commitment} has no membership proof`);
     const amount = BigInt(note.amount);
-    const withdrawal = service.withdrawAsset({
+    const withdrawal = prover.proveWithdrawal({
       assetDigest: note.assetDigest,
       blinding: note.blinding,
       changeBlinding: "0x0",
@@ -160,26 +166,48 @@ export async function withdrawMakerNotes(argv: string[]): Promise<void> {
       noteCommitment: note.commitment,
       nullifier: note.noteNullifier,
       ownerDigest: note.ownerDigest,
-      pathIndices: membership.indices,
-      pathSiblings: membership.siblings,
+      pathIndices: membership.membershipProof.indices,
+      pathSiblings: membership.membershipProof.siblings,
       recipient: recipientDigest,
-      recipientAddress: maker,
-      recipientDigest,
       rhoDigest: note.rhoDigest,
-      root: membership.root,
+      root: membership.membershipProof.root,
       spendSecretDigest: note.spendSecretDigest,
-      token: env.collateralTokenContract,
       tokenDigest: assetDigest,
       withdrawAmount: amount,
     });
-    const store = executor.store as typeof executor.store & { flush?: () => Promise<void> };
-    await store.flush?.();
-    const recorded = await transitionMakerNoteStatus(note.commitment, "withdrawing", "spent");
-    if (!recorded) throw new Error(`maker note status changed after withdrawal: ${note.commitment}`);
+    await post(app, "/notes/withdraw-asset/proven", {
+      ...withdrawal,
+      recipientAddress: maker,
+      token: env.collateralTokenContract,
+    }, authHeaders);
+    let confirmed = false;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const state = await relayer.readAsync({ kind: "contract-invoke", payload: {
+        args: ["--nullifier", note.noteNullifier.replace(/^0x/, "")],
+        contractId: deployment.contracts["shielded-pool"], functionName: "is_spent", send: "no",
+      } });
+      if (parseOutput(state.output) === true && await makerBalance() - balanceBefore === amount) {
+        confirmed = true;
+        break;
+      }
+      await Bun.sleep(1_000);
+    }
+    if (!confirmed) throw new Error(`maker note ${note.commitment} withdrawal did not reconcile on-chain`);
+    await recordMakerNoteRecovery(note.commitment, note.amount);
     recovered += amount;
     process.stdout.write(`${JSON.stringify({ amount: note.amount, commitment: note.commitment, nullifier: withdrawal.nullifier })}\n`);
   }
   process.stdout.write(`${JSON.stringify({ recoveredAmount: recovered.toString(), maker })}\n`);
+
+  async function makerBalance(): Promise<bigint> {
+    const result = await relayer.readAsync({ kind: "contract-invoke", payload: {
+      args: ["--id", maker!], contractId: env.collateralTokenContract!,
+      functionName: "balance", send: "no",
+    } });
+    const amount = parseOutput(result.output);
+    if (typeof amount !== "string" && typeof amount !== "number") throw new Error("invalid maker balance");
+    return BigInt(amount);
+  }
 }
 
 export function notesForMakerRecovery<T extends { walletAddress: string; vaultAllocationId?: string }>(

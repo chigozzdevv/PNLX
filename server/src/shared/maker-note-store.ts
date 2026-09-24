@@ -40,7 +40,6 @@ export async function saveMakerNotes(notes: StoredMakerNoteRecord[]): Promise<vo
     await client.connect();
     const collection = client.db(config.database).collection<MakerNoteDocument>(config.collection);
     if (commitments.length === 0) {
-      await collection.deleteMany({ namespace: config.namespace });
       return;
     }
     await collection.bulkWrite(
@@ -63,10 +62,59 @@ export async function saveMakerNotes(notes: StoredMakerNoteRecord[]): Promise<vo
         };
       }),
     );
-    await collection.deleteMany({
-      namespace: config.namespace,
-      commitment: { $nin: commitments },
-    });
+  } finally {
+    await client.close();
+  }
+}
+
+export async function insertPendingMakerNote(note: StoredMakerNoteRecord & { commitment: string }): Promise<void> {
+  const config = requiredMongoConfig();
+  const client = new MongoClient(config.uri);
+  try {
+    await client.connect();
+    const result = await client.db(config.database).collection<MakerNoteDocument>(config.collection).updateOne(
+      { _id: makerNoteDocumentId(config.namespace, note.commitment) },
+      { $setOnInsert: {
+        ...note,
+        namespace: config.namespace,
+        status: "pending",
+        updatedAt: Date.now(),
+      } },
+      { upsert: true },
+    );
+    if (result.upsertedCount !== 1) throw new Error("maker note commitment already exists");
+  } finally {
+    await client.close();
+  }
+}
+
+export async function finalizePendingMakerNote(commitment: string, depositTxHash: string): Promise<void> {
+  const config = requiredMongoConfig();
+  const client = new MongoClient(config.uri);
+  try {
+    await client.connect();
+    const result = await client.db(config.database).collection<MakerNoteDocument>(config.collection).updateOne(
+      { _id: makerNoteDocumentId(config.namespace, commitment), namespace: config.namespace, status: "pending" },
+      { $set: { depositTxHash, status: "available", updatedAt: Date.now() } },
+    );
+    if (result.modifiedCount !== 1) throw new Error("pending maker note was not found for finalized deposit");
+  } finally {
+    await client.close();
+  }
+}
+
+export async function recordMakerNoteRecovery(commitment: string, amount: string): Promise<void> {
+  if (!/^[1-9][0-9]*$/.test(amount)) throw new Error("recovered amount must be positive");
+  const config = requiredMongoConfig();
+  const client = new MongoClient(config.uri);
+  try {
+    await client.connect();
+    const result = await client.db(config.database).collection<MakerNoteDocument>(config.collection).updateOne(
+      { _id: makerNoteDocumentId(config.namespace, commitment), namespace: config.namespace,
+        status: "withdrawing", amount },
+      { $set: { status: "spent", recoveredAmount: amount, updatedAt: Date.now() } },
+    );
+    if (result.modifiedCount !== 1) throw new Error("maker note changed before recovery could be recorded");
   } finally {
     await client.close();
   }
@@ -88,6 +136,37 @@ export async function transitionMakerNoteStatus(
         status: from,
       },
       { $set: { status: to, updatedAt: Date.now() } },
+    );
+    return result.modifiedCount === 1;
+  } finally {
+    await client.close();
+  }
+}
+
+export async function claimMakerNote(
+  commitment: string,
+  intentCommitment: string,
+  sourceIntentCommitment: string,
+  vaultAllocationId?: string,
+): Promise<boolean> {
+  const config = requiredMongoConfig();
+  const client = new MongoClient(config.uri);
+  try {
+    await client.connect();
+    const database = client.db(config.database);
+    if (vaultAllocationId) {
+      const allocation = await database.collection<{ _id: string; namespace: string; status: string }>("vault_maker_allocations").findOne({
+        _id: `${config.namespace}:${vaultAllocationId}`,
+        namespace: config.namespace,
+        status: "outstanding",
+      });
+      if (!allocation) return false;
+    }
+    const result = await database.collection<MakerNoteDocument>(config.collection).updateOne(
+      { _id: makerNoteDocumentId(config.namespace, commitment), namespace: config.namespace, status: "available",
+        ...(vaultAllocationId ? { vaultAllocationId } : {}) },
+      { $set: { status: "locked", lockedByIntentCommitment: intentCommitment,
+        sourceIntentCommitment, updatedAt: Date.now() } },
     );
     return result.modifiedCount === 1;
   } finally {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { formatVaultUnits, parseVaultUnits, quoteVaultAction, type VaultAccount, type VaultStatus } from "@/lib/liquidity-vault";
+import { formatVaultUnits, parseVaultUnits, quoteVaultAction, quoteVaultWithdrawalClaim,
+  quoteVaultWithdrawalRequest, type VaultAccount, type VaultStatus } from "@/lib/liquidity-vault";
 
 const status: VaultStatus = {
   allocationLimitBps: "8000",
@@ -62,6 +63,17 @@ describe("vault amount and action quotes", () => {
     const quote = quoteVaultAction("deposit", parseVaultUnits("11"), trading);
     expect(quote.estimated).toBe(110000000n);
     expect(quote.action).toEqual({ action: "deposit", series: 1, amount: "110000000", minShares: "109450000" });
+  });
+
+  test("requests an exit during active allocation and claims the settled shares", () => {
+    const active = { ...account.positions[0]!, withdrawalsOpen: false };
+    expect(quoteVaultWithdrawalRequest(50_000_000n, active).action)
+      .toEqual({ action: "request-withdraw", series: 0, shares: "50000000" });
+    expect(() => quoteVaultWithdrawalClaim({ ...active, pendingShares: "50000000" }))
+      .toThrow("not ready");
+    const claim = quoteVaultWithdrawalClaim({ ...account.positions[0]!, pendingShares: "50000000" });
+    expect(claim.action).toEqual({ action: "claim-withdrawal", series: 0, minAssets: "54725000" });
+    expect(claim.estimated).toBe(55_000_000n);
   });
 
   test("does not quote actions outside vault availability", () => {

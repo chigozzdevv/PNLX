@@ -33,6 +33,7 @@ enum DataKey {
     SeriesShares(u32, Address),
     SeriesPendingShares(u32, Address),
     OwnerSeries(Address),
+    SeriesPendingTotal(u32),
 }
 
 #[derive(Clone)]
@@ -204,6 +205,11 @@ impl LiquidityVault {
         }
     }
 
+    pub fn series_pending_total(env: Env, series: u32) -> i128 {
+        check_series(&env, series);
+        instance_amount(&env, DataKey::SeriesPendingTotal(series))
+    }
+
     pub fn series_assets(env: Env, series: u32) -> i128 {
         checked_add(
             Self::series_liquid(env.clone(), series),
@@ -303,16 +309,14 @@ impl LiquidityVault {
 
     pub fn allocate(env: Env, series: u32, amount: i128) {
         Self::operator(env.clone()).require_auth();
-        if series != Self::current_series(env.clone())
+        if series > Self::current_series(env.clone())
             || amount <= 0
             || Self::series_total_shares(env.clone(), series) == 0
+            || Self::series_pending_total(env.clone(), series) != 0
         {
             panic!("allocation unavailable");
         }
         let deployed = Self::series_principal(env.clone(), series);
-        if deployed != 0 {
-            panic!("series allocation outstanding");
-        }
         let next = checked_add(deployed, amount);
         let cap = mul_div_floor(
             Self::total_assets(env.clone()),
@@ -572,6 +576,10 @@ impl LiquidityVault {
             &series_pending_key(series, owner.clone()),
             &checked_add(pending, shares),
         );
+        env.storage().instance().set(
+            &DataKey::SeriesPendingTotal(series),
+            &checked_add(Self::series_pending_total(env.clone(), series), shares),
+        );
         extend_instance(&env);
         extend_owner(&env, &owner);
     }
@@ -586,6 +594,10 @@ impl LiquidityVault {
             &series_pending_key(series, owner.clone()),
             &(pending - shares),
         );
+        env.storage().instance().set(
+            &DataKey::SeriesPendingTotal(series),
+            &checked_sub(Self::series_pending_total(env.clone(), series), shares),
+        );
         extend_instance(&env);
         extend_owner(&env, &owner);
     }
@@ -597,6 +609,10 @@ impl LiquidityVault {
         env.storage()
             .persistent()
             .set(&series_pending_key(series, owner.clone()), &0_i128);
+        env.storage().instance().set(
+            &DataKey::SeriesPendingTotal(series),
+            &checked_sub(Self::series_pending_total(env.clone(), series), shares),
+        );
         prune_owner_series(&env, &owner, series);
         extend_instance(&env);
         extend_owner(&env, &owner);
@@ -1045,6 +1061,38 @@ mod tests {
         assert_eq!(vault.total_assets(), 800);
         assert_eq!(vault.withdraw(&alice, &0, &1_000, &700), 700);
         assert_eq!(vault.withdraw(&bob, &1, &100, &100), 100);
+    }
+
+    #[test]
+    fn series_can_be_refilled_without_mixing_later_deposits() {
+        let (_, vault, _, token, operator, alice, bob) = setup();
+        vault.set_paused(&false);
+        vault.deposit(&alice, &0, &1_000, &1_000);
+        vault.allocate(&0, &200);
+        vault.deposit(&bob, &1, &500, &500);
+
+        vault.allocate(&0, &300);
+        vault.allocate(&1, &200);
+        assert_eq!(vault.series_principal(&0), 500);
+        assert_eq!(vault.series_principal(&1), 200);
+        assert_eq!(vault.series_assets(&0), 1_000);
+        assert_eq!(vault.series_assets(&1), 500);
+        assert_eq!(token.balance(&operator), 700);
+
+        assert!(vault.try_allocate(&0, &301).is_err());
+        vault.request_withdraw(&alice, &0, &400);
+        assert_eq!(vault.series_pending_total(&0), 400);
+        assert!(vault.try_allocate(&0, &1).is_err());
+        vault.cancel_withdraw_request(&alice, &0, &100);
+        assert_eq!(vault.series_pending_total(&0), 300);
+        assert!(vault.try_allocate(&0, &1).is_err());
+
+        vault.settle(&0, &500, &500);
+        assert_eq!(vault.claim_withdrawal(&alice, &0, &300), 300);
+        assert_eq!(vault.series_pending_total(&0), 0);
+        vault.allocate(&0, &100);
+        assert_eq!(vault.series_principal(&0), 100);
+        assert_eq!(vault.series_principal(&1), 200);
     }
 
     #[test]

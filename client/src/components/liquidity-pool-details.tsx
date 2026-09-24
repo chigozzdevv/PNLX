@@ -11,6 +11,8 @@ import {
   formatVaultUnits,
   parseVaultUnits,
   quoteVaultAction,
+  quoteVaultWithdrawalClaim,
+  quoteVaultWithdrawalRequest,
   submitVaultAction,
   type VaultAccount,
   type VaultStatus,
@@ -90,7 +92,7 @@ export function LiquidityPoolDetails() {
             <div><span>Deployed principal</span><strong>{status ? `$${formatVaultUnits(status.deployedPrincipal)}` : "—"}</strong></div>
             <div><span>Supply</span><strong>{status ? status.paused ? "Paused" : "Open" : "—"}</strong></div>
           </div>
-          {status ? <p className="liquidity-pool-note">{status.paused ? "Deposits are currently paused." : "Deposits are open."} You can withdraw a position whenever it has no active maker allocation.</p> : null}
+          {status ? <p className="liquidity-pool-note">{status.paused ? "Deposits are currently paused." : "Deposits are open."} Withdrawals can be requested while trading continues; claims open after that position is reconciled.</p> : null}
         </section>
 
         <section aria-label="Recent liquidity activity" className="liquidity-activity">
@@ -135,16 +137,29 @@ function LiquidityActionDialog({ account, accountError, error, mode, onClose, on
   const [transactionHash, setTransactionHash] = useState<string | null>(null);
   const [requestedSeries, setRequestedSeries] = useState<number | null>(null);
   const deposit = mode === "deposit";
-  const withdrawablePositions = account?.positions.filter((position) => position.withdrawalsOpen && BigInt(position.availableShares) > 0n) ?? [];
-  const selectedPosition = withdrawablePositions.find((position) => position.series === requestedSeries) ?? withdrawablePositions[0];
+  const positions = account?.positions.filter((position) => BigInt(position.shares) > 0n) ?? [];
+  const selectedPosition = positions.find((position) => position.series === requestedSeries) ?? positions[0];
+  const withdrawalStep = selectedPosition && BigInt(selectedPosition.pendingShares) > 0n
+    ? selectedPosition.withdrawalsOpen ? "claim" : "waiting"
+    : selectedPosition?.withdrawalsOpen ? "withdraw" : "request";
   const unavailable = statusError || (!status ? "Loading pool…" : deposit
     ? status.paused ? "Deposits are currently paused." : null
-    : accountError || (withdrawablePositions.length === 0 ? "No settled position is ready to withdraw." : null));
+    : accountError || (positions.length === 0 ? "No liquidity position to withdraw." :
+      withdrawalStep === "waiting" ? "Withdrawal requested. Claim after the active maker allocation settles." : null));
   let quote: ReturnType<typeof quoteVaultAction> | null = null;
   let quoteError: string | null = null;
-  if (status && amount.trim()) {
+  if (status && !deposit && withdrawalStep === "claim" && selectedPosition) {
     try {
-      quote = quoteVaultAction(mode, parseVaultUnits(amount), status, account, selectedPosition?.series);
+      quote = quoteVaultWithdrawalClaim(selectedPosition);
+    } catch (caught) {
+      quoteError = caught instanceof Error ? caught.message : "Withdrawal is unavailable";
+    }
+  } else if (status && amount.trim()) {
+    try {
+      const units = parseVaultUnits(amount);
+      quote = !deposit && withdrawalStep === "request" && selectedPosition
+        ? quoteVaultWithdrawalRequest(units, selectedPosition)
+        : quoteVaultAction(mode, units, status, account, selectedPosition?.series);
     } catch (caught) {
       quoteError = caught instanceof Error ? caught.message : "Invalid amount";
     }
@@ -191,26 +206,30 @@ function LiquidityActionDialog({ account, accountError, error, mode, onClose, on
         ) : (
           <>
             {unavailable ? <p className="liquidity-dialog-note" role="status">{unavailable}</p> : null}
-            {!deposit && withdrawablePositions.length > 1 ? (
+            {!deposit && positions.length > 1 ? (
               <>
                 <label className="liquidity-dialog-input-label" htmlFor="liquidity-series">Position</label>
                 <select className="liquidity-series-select" id="liquidity-series" onChange={(event) => { setRequestedSeries(Number(event.target.value)); setAmount(""); }} value={selectedPosition?.series}>
-                  {withdrawablePositions.map((position) => <option key={position.series} value={position.series}>Position {position.series + 1} · {formatVaultUnits(position.availableShares, 4)} shares</option>)}
+                  {positions.map((position) => <option key={position.series} value={position.series}>Position {position.series + 1} · {formatVaultUnits(position.shares, 4)} shares</option>)}
                 </select>
               </>
             ) : null}
-            <label className="liquidity-dialog-input-label" htmlFor="liquidity-amount">{deposit ? "Amount" : "Shares"}</label>
-            <div className="liquidity-dialog-input-wrap">
-              <input disabled={Boolean(unavailable) || busy} id="liquidity-amount" inputMode="decimal" onChange={(event) => { setAmount(event.target.value); setTransactionHash(null); }} placeholder="0.00" type="text" value={amount} />
-              <span>{deposit ? "USDC" : "SHARES"}</span>
-            </div>
-            {quote ? (
+            {deposit || withdrawalStep === "withdraw" || withdrawalStep === "request" ? (
+              <>
+                <label className="liquidity-dialog-input-label" htmlFor="liquidity-amount">{deposit ? "Amount" : "Shares"}</label>
+                <div className="liquidity-dialog-input-wrap">
+                  <input disabled={Boolean(unavailable) || busy} id="liquidity-amount" inputMode="decimal" onChange={(event) => { setAmount(event.target.value); setTransactionHash(null); }} placeholder="0.00" type="text" value={amount} />
+                  <span>{deposit ? "USDC" : "SHARES"}</span>
+                </div>
+              </>
+            ) : null}
+            {quote && withdrawalStep !== "request" ? (
               <>
                 <div className="liquidity-dialog-detail"><span>Estimated {deposit ? "shares" : "USDC"}</span><strong>{formatVaultUnits(quote.estimated, 4)}</strong></div>
                 <div className="liquidity-dialog-detail"><span>Minimum received</span><strong>{formatVaultUnits(quote.minimum, 4)}</strong></div>
               </>
             ) : null}
-            {!deposit && selectedPosition ? <div className="liquidity-dialog-detail"><span>Available shares</span><strong>{formatVaultUnits(selectedPosition.availableShares, 4)}</strong></div> : null}
+            {!deposit && selectedPosition ? <div className="liquidity-dialog-detail"><span>{withdrawalStep === "claim" || withdrawalStep === "waiting" ? "Requested shares" : "Available shares"}</span><strong>{formatVaultUnits(withdrawalStep === "claim" || withdrawalStep === "waiting" ? selectedPosition.pendingShares : selectedPosition.availableShares, 4)}</strong></div> : null}
             {quoteError && !unavailable ? <p className="liquidity-dialog-error" role="alert">{quoteError}</p> : null}
             {actionError ? <p className="liquidity-dialog-error" role="alert">{actionError}</p> : null}
             {transactionHash ? (
@@ -219,7 +238,7 @@ function LiquidityActionDialog({ account, accountError, error, mode, onClose, on
               </p>
             ) : null}
             <button className="portfolio-primary-action liquidity-dialog-done" disabled={!quote || Boolean(unavailable) || busy} onClick={() => void submit()} type="button">
-              {busy ? "Confirming…" : deposit ? "Supply USDC" : "Withdraw USDC"}
+              {busy ? "Confirming…" : deposit ? "Supply USDC" : withdrawalStep === "request" ? "Request withdrawal" : withdrawalStep === "claim" ? "Claim USDC" : "Withdraw USDC"}
             </button>
           </>
         )}

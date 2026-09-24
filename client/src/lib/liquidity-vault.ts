@@ -50,7 +50,7 @@ export interface VaultPosition {
 }
 
 interface PreparedVaultTransaction {
-  action: "deposit" | "withdraw";
+  action: VaultAction["action"];
   contractId: string;
   owner: string;
   txHash?: string;
@@ -59,7 +59,9 @@ interface PreparedVaultTransaction {
 
 type VaultAction =
   | { action: "deposit"; series: number; amount: string; minShares: string }
-  | { action: "withdraw"; series: number; shares: string; minAssets: string };
+  | { action: "withdraw"; series: number; shares: string; minAssets: string }
+  | { action: "request-withdraw"; series: number; shares: string }
+  | { action: "claim-withdrawal"; series: number; minAssets: string };
 
 export async function getVaultStatus(): Promise<VaultStatus> {
   const response = await pnlxGet<{ vault: VaultStatus }>("/liquidity-vault");
@@ -127,6 +129,33 @@ export function quoteVaultAction(
   if (estimated <= 0n) throw new Error("Amount is too small to withdraw USDC");
   const minimum = maxOne(estimated * 995n / 1000n);
   return { action: { action: "withdraw", series: position.series, shares: amount.toString(), minAssets: minimum.toString() }, estimated, minimum };
+}
+
+export function quoteVaultWithdrawalRequest(amount: bigint, position: VaultPosition): {
+  action: VaultAction; estimated: bigint; minimum: bigint;
+} {
+  if (amount <= 0n || amount > BigInt(position.availableShares)) {
+    throw new Error("Amount exceeds available shares");
+  }
+  return {
+    action: { action: "request-withdraw", series: position.series, shares: amount.toString() },
+    estimated: 0n,
+    minimum: 0n,
+  };
+}
+
+export function quoteVaultWithdrawalClaim(position: VaultPosition): {
+  action: VaultAction; estimated: bigint; minimum: bigint;
+} {
+  if (!position.withdrawalsOpen || BigInt(position.pendingShares) <= 0n) {
+    throw new Error("Withdrawal is not ready to claim");
+  }
+  const totalShares = BigInt(position.seriesTotalShares);
+  if (totalShares <= 0n) throw new Error("Pool has no shares");
+  const estimated = BigInt(position.pendingShares) * BigInt(position.seriesAssets) / totalShares;
+  const minimum = estimated > 0n ? estimated * 995n / 1000n : 0n;
+  return { action: { action: "claim-withdrawal", series: position.series,
+    minAssets: minimum.toString() }, estimated, minimum };
 }
 
 export async function submitVaultAction(session: WalletSession, action: VaultAction): Promise<string> {

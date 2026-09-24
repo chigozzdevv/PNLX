@@ -42,6 +42,7 @@
     "smoke:trade": "bun scripts/smoke/trade.ts",
     "maker:withdraw-notes": "bun scripts/operations/withdraw-maker-notes.ts",
     "maker:allocate-vault": "bun scripts/operations/allocate-vault-maker.ts",
+    "maker:manage-vault-liquidity": "bun scripts/operations/manage-vault-maker-liquidity.ts",
     "maker:register-vault-note": "bun scripts/operations/register-vault-maker-note.ts",
     "maker:close-vault-allocation": "bun scripts/operations/close-vault-maker-allocation.ts",
     "maker:settle-vault-allocation": "bun scripts/operations/settle-vault-maker.ts",
