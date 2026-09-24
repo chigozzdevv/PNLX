@@ -29,7 +29,7 @@ import { createRelayer } from "@/workers/relayer/relayer.worker";
 import { assertSuccessfulTransaction } from "./register-vault-maker-note";
 import { settleVaultMakerPosition } from "./settle-vault-maker-position";
 import { withdrawMakerNotes } from "./withdraw-maker-notes";
-import { localApiOrigin } from "../smoke/custody";
+import { authHeadersFor, localApiOrigin, type SmokeApp } from "../smoke/custody";
 
 const ZERO_HEX = "0x0" as Hex;
 
@@ -300,6 +300,8 @@ async function closeMakerPosition(
     pathSiblings: context.membershipProof.siblings,
   });
   input.assertLease?.();
+  const app: SmokeApp = { origin: input.apiUrl, handle: (request) => fetch(request) };
+  const authHeaders = await authHeadersFor(app, input.makerSource, candidate.allocation.maker, env);
   const now = Date.now();
   await insertPendingMakerNote({
     amount: amount.toString(), assetDigest: candidate.makerNote.assetDigest,
@@ -315,7 +317,7 @@ async function closeMakerPosition(
     closePositionCommitment: position.positionCommitment, closeCommitment,
   });
   const response = await fetch(`${input.apiUrl}/position-closes/manual-proven`, {
-    method: "POST", headers: { "content-type": "application/json" },
+    method: "POST", headers: authHeaders,
     body: JSON.stringify(proven, (_key, value) => typeof value === "bigint" ? value.toString() : value),
   });
   if (!response.ok) throw new Error(`maker position close rejected (${response.status}): ${await response.text()}`);
