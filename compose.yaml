@@ -92,7 +92,7 @@ services:
       prover:
         condition: service_started
     environment:
-      PNLX_API_URL: http://api:4000
+      NEXT_PUBLIC_PNLX_API_URL: http://localhost:4000
       PNLX_PROVER_URL: http://prover:4101
       NEXT_PUBLIC_PNLX_PROVER_URL: /api/prover
     command: ["bun", "run", "--filter", "@pnlx/client", "dev", "--hostname", "0.0.0.0"]
