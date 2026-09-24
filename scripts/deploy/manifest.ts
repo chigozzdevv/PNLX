@@ -134,6 +134,11 @@ export function createDeployManifest(root = process.cwd(), options: ManifestOpti
         args: ["governance", "proof-ledger", circuitKey("deposit-note"), circuitKey("withdraw")],
       },
       {
+        contract: "shielded-pool",
+        method: "configure_fee_destinations",
+        args: ["insuranceFundAddress", "treasuryAddress"],
+      },
+      {
         contract: "market",
         method: "init",
         args: ["governance"],

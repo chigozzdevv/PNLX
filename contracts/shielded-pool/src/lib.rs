@@ -3,8 +3,8 @@
 use governance_interface::GovernanceClient;
 use proof_ledger_interface::ProofLedgerClient;
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token::Client as TokenClient, xdr::ToXdr, Address, Bytes,
-    BytesN, Env, U256,
+    contract, contractevent, contractimpl, contracttype, token::Client as TokenClient, xdr::ToXdr,
+    Address, Bytes, BytesN, Env, U256,
 };
 
 const BN254_SCALAR_MODULUS_BE: [u8; 32] = [
@@ -35,6 +35,8 @@ pub enum DataKey {
     WithdrawCircuit,
     Writer(Address),
     FeeReserve(Address),
+    FeePaid(Address),
+    FeeDestinations,
 }
 
 #[derive(Clone)]
@@ -42,6 +44,23 @@ pub enum DataKey {
 pub struct FeeReserve {
     pub insurance: i128,
     pub treasury: i128,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct FeeDestinations {
+    pub insurance: Address,
+    pub treasury: Address,
+}
+
+#[contractevent]
+pub struct FeePaidEvent {
+    #[topic]
+    pub token: Address,
+    #[topic]
+    pub insurance: bool,
+    pub recipient: Address,
+    pub amount: i128,
 }
 
 #[contract]
@@ -84,6 +103,27 @@ impl ShieldedPool {
         env.storage()
             .persistent()
             .set(&DataKey::Writer(writer), &enabled);
+    }
+
+    pub fn configure_fee_destinations(env: Env, insurance: Address, treasury: Address) {
+        require_admin(&env);
+        if env.storage().persistent().has(&DataKey::FeeDestinations) {
+            panic!("fee destinations already configured");
+        }
+        if insurance == treasury
+            || insurance == env.current_contract_address()
+            || treasury == env.current_contract_address()
+        {
+            panic!("invalid fee destinations");
+        }
+        env.storage().persistent().set(
+            &DataKey::FeeDestinations,
+            &FeeDestinations { insurance, treasury },
+        );
+    }
+
+    pub fn fee_destinations(env: Env) -> Option<FeeDestinations> {
+        env.storage().persistent().get(&DataKey::FeeDestinations)
     }
 
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
@@ -160,6 +200,9 @@ impl ShieldedPool {
         if insurance < 0 || treasury < 0 {
             panic!("negative fee reserve");
         }
+        if (insurance > 0 || treasury > 0) && Self::fee_destinations(env.clone()).is_none() {
+            panic!("fee destinations not configured");
+        }
         let key = DataKey::FeeReserve(token.clone());
         let mut reserve = Self::fee_reserve(env.clone(), token.clone());
         reserve.insurance = reserve
@@ -191,12 +234,19 @@ impl ShieldedPool {
             })
     }
 
-    pub fn withdraw_insurance(env: Env, token: Address, recipient: Address, amount: i128) {
-        release_fee_reserve(&env, token, recipient, amount, true);
+    pub fn fee_paid(env: Env, token: Address) -> FeeReserve {
+        env.storage()
+            .persistent()
+            .get(&DataKey::FeePaid(token))
+            .unwrap_or(FeeReserve { insurance: 0, treasury: 0 })
     }
 
-    pub fn withdraw_treasury(env: Env, token: Address, recipient: Address, amount: i128) {
-        release_fee_reserve(&env, token, recipient, amount, false);
+    pub fn distribute_insurance(env: Env, token: Address) -> i128 {
+        distribute_fee_reserve(&env, token, true)
+    }
+
+    pub fn distribute_treasury(env: Env, token: Address) -> i128 {
+        distribute_fee_reserve(&env, token, false)
     }
 
     pub fn withdraw(
@@ -321,30 +371,36 @@ fn require_admin(env: &Env) {
         .require_auth();
 }
 
-fn release_fee_reserve(
-    env: &Env,
-    token: Address,
-    recipient: Address,
-    amount: i128,
-    insurance: bool,
-) {
-    require_admin(env);
-    if amount <= 0 {
-        panic!("invalid fee withdrawal");
-    }
+fn distribute_fee_reserve(env: &Env, token: Address, insurance: bool) -> i128 {
+    let destinations: FeeDestinations = env
+        .storage()
+        .persistent()
+        .get(&DataKey::FeeDestinations)
+        .unwrap_or_else(|| panic!("fee destinations not configured"));
+    let recipient = if insurance { destinations.insurance } else { destinations.treasury };
     let key = DataKey::FeeReserve(token.clone());
     let mut reserve = ShieldedPool::fee_reserve(env.clone(), token.clone());
-    let balance = if insurance {
-        &mut reserve.insurance
+    let amount = if insurance {
+        let amount = reserve.insurance;
+        reserve.insurance = 0;
+        amount
     } else {
-        &mut reserve.treasury
+        let amount = reserve.treasury;
+        reserve.treasury = 0;
+        amount
     };
-    if *balance < amount {
-        panic!("insufficient fee reserve");
+    if amount == 0 {
+        return 0;
     }
-    *balance -= amount;
     env.storage().persistent().set(&key, &reserve);
+    let paid_key = DataKey::FeePaid(token.clone());
+    let mut paid = ShieldedPool::fee_paid(env.clone(), token.clone());
+    let total = if insurance { &mut paid.insurance } else { &mut paid.treasury };
+    *total = total.checked_add(amount).expect("fee paid overflow");
+    env.storage().persistent().set(&paid_key, &paid);
     TokenClient::new(env, &token).transfer(&env.current_contract_address(), &recipient, &amount);
+    FeePaidEvent { token, insurance, recipient, amount }.publish(env);
+    amount
 }
 
 fn record_commitment(env: &Env, commitment: BytesN<32>) {
@@ -768,6 +824,7 @@ mod tests {
             &deposit_circuit(&env),
             &circuit(&env),
         );
+        client.configure_fee_destinations(&Address::generate(&env), &Address::generate(&env));
         client.set_writer(&writer, &true);
         client.accrue_fees(&writer, &token_id, &400, &600);
         assert_eq!(client.fee_reserve(&token_id).insurance, 400);
@@ -778,7 +835,7 @@ mod tests {
     }
 
     #[test]
-    fn releases_only_the_selected_fee_reserve() {
+    fn distributes_each_fee_reserve_to_its_fixed_destination() {
         let env = Env::default();
         env.mock_all_auths();
         let id = env.register(ShieldedPool, ());
@@ -797,18 +854,63 @@ mod tests {
             &deposit_circuit(&env),
             &circuit(&env),
         );
+        client.configure_fee_destinations(&insurance_recipient, &treasury_recipient);
         client.set_writer(&writer, &true);
         client.accrue_fees(&writer, &token_id, &400, &600);
 
-        client.withdraw_treasury(&token_id, &treasury_recipient, &250);
-        client.withdraw_insurance(&token_id, &insurance_recipient, &100);
+        assert_eq!(client.distribute_treasury(&token_id), 600);
+        assert_eq!(client.fee_reserve(&token_id).insurance, 400);
+        assert_eq!(token.balance(&insurance_recipient), 0);
+        assert_eq!(client.distribute_insurance(&token_id), 400);
+        assert_eq!(client.distribute_treasury(&token_id), 0);
 
         let reserve = client.fee_reserve(&token_id);
-        assert_eq!(reserve.insurance, 300);
-        assert_eq!(reserve.treasury, 350);
-        assert_eq!(token.balance(&treasury_recipient), 250);
-        assert_eq!(token.balance(&insurance_recipient), 100);
-        assert_eq!(token.balance(&id), 3_650);
+        assert_eq!(reserve.insurance, 0);
+        assert_eq!(reserve.treasury, 0);
+        assert_eq!(client.fee_paid(&token_id).insurance, 400);
+        assert_eq!(client.fee_paid(&token_id).treasury, 600);
+        assert_eq!(token.balance(&treasury_recipient), 600);
+        assert_eq!(token.balance(&insurance_recipient), 400);
+        assert_eq!(token.balance(&id), 3_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "fee destinations not configured")]
+    fn rejects_fee_accrual_without_destinations() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register(ShieldedPool, ());
+        let client = ShieldedPoolClient::new(&env, &id);
+        let writer = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(Address::generate(&env))
+            .address();
+        StellarAssetClient::new(&env, &token_id).mint(&id, &100);
+        client.init(
+            &setup_governance(&env),
+            &setup_proof_ledger(&env, None),
+            &deposit_circuit(&env),
+            &circuit(&env),
+        );
+        client.set_writer(&writer, &true);
+        client.accrue_fees(&writer, &token_id, &10, &25);
+    }
+
+    #[test]
+    #[should_panic(expected = "fee destinations already configured")]
+    fn cannot_redirect_fee_destinations() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register(ShieldedPool, ());
+        let client = ShieldedPoolClient::new(&env, &id);
+        client.init(
+            &setup_governance(&env),
+            &setup_proof_ledger(&env, None),
+            &deposit_circuit(&env),
+            &circuit(&env),
+        );
+        client.configure_fee_destinations(&Address::generate(&env), &Address::generate(&env));
+        client.configure_fee_destinations(&Address::generate(&env), &Address::generate(&env));
     }
 
     #[test]

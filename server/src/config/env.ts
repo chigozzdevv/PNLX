@@ -17,6 +17,8 @@ export interface ServerEnv {
   collateralAssetIssuer: string;
   collateralTokenContract: string;
   collateralTokenDigest: string;
+  insuranceFundAddress: string;
+  treasuryAddress: string;
   conditionalOrdersOnchainRequired: boolean;
   fundingEngineEnabled: boolean;
   fundingImpactMargin: bigint;
@@ -124,6 +126,8 @@ export function loadEnv(options: { validateRuntime?: boolean } = {}): ServerEnv 
     collateralAssetIssuer: value("COLLATERAL_ASSET_ISSUER", ""),
     collateralTokenContract: value("COLLATERAL_TOKEN_CONTRACT", ""),
     collateralTokenDigest: value("COLLATERAL_TOKEN_DIGEST", ""),
+    insuranceFundAddress: value("INSURANCE_FUND_ADDRESS", ""),
+    treasuryAddress: value("TREASURY_ADDRESS", ""),
     conditionalOrdersOnchainRequired: booleanValue(
       "CONDITIONAL_ORDERS_ONCHAIN_REQUIRED",
       nodeEnv === "production",

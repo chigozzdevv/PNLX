@@ -1231,6 +1231,10 @@ mod tests {
             .register_stellar_asset_contract_v2(Address::generate(&env))
             .address();
         StellarAssetClient::new(&env, &token).mint(&pool_id, &100);
+        ShieldedPoolClient::new(&env, &pool_id).configure_fee_destinations(
+            &Address::generate(&env),
+            &Address::generate(&env),
+        );
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),

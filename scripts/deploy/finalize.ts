@@ -23,6 +23,13 @@ const env = loadEnv({ validateRuntime: false });
 const root = process.cwd();
 const deployment = readDeployment();
 const manifest = createDeployManifest(root);
+if (env.collateralTokenContract && (
+  !/^[GC][A-Z2-7]{55}$/.test(env.insuranceFundAddress)
+  || !/^[GC][A-Z2-7]{55}$/.test(env.treasuryAddress)
+  || env.insuranceFundAddress === env.treasuryAddress
+)) {
+  throw new Error("distinct INSURANCE_FUND_ADDRESS and TREASURY_ADDRESS are required for fee settlement");
+}
 
 invoke(deployment.contracts.governance, "init", ["--admin", deployment.sourceAddress], true);
 invoke(deployment.contracts["proof-ledger"], "init", [
@@ -68,6 +75,18 @@ invoke(deployment.contracts["shielded-pool"], "init", [
   "--withdraw_circuit_id",
   bytes32(circuitKey("withdraw")),
 ], true);
+if (env.collateralTokenContract) {
+  const configured = JSON.parse(readContract(deployment.contracts["shielded-pool"], "fee_destinations")) as
+    | { insurance: string; treasury: string } | null;
+  if (!configured) {
+    invoke(deployment.contracts["shielded-pool"], "configure_fee_destinations", [
+      "--insurance", env.insuranceFundAddress,
+      "--treasury", env.treasuryAddress,
+    ]);
+  } else if (configured.insurance !== env.insuranceFundAddress || configured.treasury !== env.treasuryAddress) {
+    throw new Error("existing fee destinations do not match the configured accounts");
+  }
+}
 invoke(deployment.contracts.market, "init", [
   "--governance",
   deployment.contracts.governance,
@@ -277,6 +296,18 @@ function invoke(contractId: string, method: string, args: string[], allowFailure
   const output = run(command, allowFailure);
   sleep(3500);
   return output;
+}
+
+function readContract(contractId: string, method: string): string {
+  const command = [
+    "stellar", "contract", "invoke", "--id", contractId, "--source", env.stellarSource,
+    "--network", env.stellarNetwork, "--rpc-url", env.stellarRpcUrl,
+    "--network-passphrase", env.stellarNetworkPassphrase,
+    "--send", "no", "--", method,
+  ];
+  const result = spawnSync(command[0], command.slice(1), { cwd: root, encoding: "utf8" });
+  if (result.status !== 0) throw new Error(`unable to read ${method}: ${result.stderr || result.stdout}`);
+  return result.stdout.trim();
 }
 
 function run(command: string[], allowFailure: boolean): string {

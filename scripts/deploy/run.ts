@@ -34,6 +34,7 @@ interface Deployment {
   upgradeAuthority: string;
   verifiers: Record<string, string>;
   wasmHashes: Record<string, string>;
+  feeDestinations?: { insurance: string; treasury: string };
 }
 
 interface Risc0VerifierStackDeployment {
@@ -69,6 +70,9 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
     requireVerifierKeys: false,
   });
   const env = loadEnv({ validateRuntime: false });
+  const feeDestinations = env.collateralTokenContract
+    ? requireFeeDestinations(env.insuranceFundAddress, env.treasuryAddress)
+    : undefined;
   const sourceAddress = sourceAddressCommand(options.source);
   const upgradeAuthority = options.upgradeAuthority && /^G[A-Z2-7]{55}$/.test(options.upgradeAuthority)
     ? options.upgradeAuthority
@@ -266,6 +270,10 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
     ]),
   );
   if (env.collateralTokenContract) {
+    commands.push(invokeCommand(options, "shielded-pool", "configure_fee_destinations", [
+      "--insurance", feeDestinations!.insurance,
+      "--treasury", feeDestinations!.treasury,
+    ]));
     commands.push(invokeCommand(options, "batch-settlement", "configure_fee_token", [
       "--token", env.collateralTokenContract,
     ]));
@@ -310,6 +318,9 @@ export function deploy(options: Options, root = process.cwd()): Deployment {
   }
 
   const env = loadEnv({ validateRuntime: false });
+  const feeDestinations = env.collateralTokenContract
+    ? requireFeeDestinations(env.insuranceFundAddress, env.treasuryAddress)
+    : undefined;
   if (reusedVault) {
     if (!env.collateralTokenContract || !env.makerWalletAddress) {
       throw new Error("reusing the vault requires COLLATERAL_TOKEN_CONTRACT and MAKER_WALLET_ADDRESS");
@@ -349,6 +360,7 @@ export function deploy(options: Options, root = process.cwd()): Deployment {
       contracts: Object.fromEntries(contracts),
       verifiers: Object.fromEntries(verifiers),
       wasmHashes,
+      feeDestinations,
       risc0BatchMatchImageId: RISC0_BATCH_MATCH_IMAGE_ID,
     };
     mkdirSync(dirname(progressPath), { recursive: true });
@@ -432,6 +444,7 @@ export function deploy(options: Options, root = process.cwd()): Deployment {
     upgradeAuthority,
     verifiers: Object.fromEntries(verifiers),
     wasmHashes,
+    feeDestinations,
   };
   if (options.out) writeJson(resolve(root, options.out), deployment);
   if (progressPath) unlinkSync(progressPath);
@@ -487,6 +500,13 @@ function verifyUpgradeAuthority(options: Options, id: string, expected: string):
   if (actual !== expected) throw new Error(`contract ${id} upgrade authority mismatch`);
 }
 
+function requireFeeDestinations(insurance: string, treasury: string): { insurance: string; treasury: string } {
+  if (!/^[GC][A-Z2-7]{55}$/.test(insurance) || !/^[GC][A-Z2-7]{55}$/.test(treasury) || insurance === treasury) {
+    throw new Error("distinct INSURANCE_FUND_ADDRESS and TREASURY_ADDRESS are required for fee settlement");
+  }
+  return { insurance, treasury };
+}
+
 function initProofConsumers(options: Options, contracts: Map<string, string>, sourceAddress: string): void {
   const env = loadEnv({ validateRuntime: false });
   const governance = contracts.get("governance")!;
@@ -502,6 +522,13 @@ function initProofConsumers(options: Options, contracts: Map<string, string>, so
     "--withdraw_circuit_id",
     bytes32(circuitKey("withdraw")),
   ]);
+  if (env.collateralTokenContract) {
+    const destinations = requireFeeDestinations(env.insuranceFundAddress, env.treasuryAddress);
+    invoke(options, contracts.get("shielded-pool")!, "configure_fee_destinations", [
+      "--insurance", destinations.insurance,
+      "--treasury", destinations.treasury,
+    ]);
+  }
   invoke(options, contracts.get("market")!, "init", ["--governance", governance]);
   invoke(options, contracts.get("funding-settlement")!, "init", [
     "--governance",

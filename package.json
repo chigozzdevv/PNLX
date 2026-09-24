@@ -44,6 +44,7 @@
     "maker:allocate-vault": "bun scripts/operations/allocate-vault-maker.ts",
     "maker:register-vault-note": "bun scripts/operations/register-vault-maker-note.ts",
     "maker:close-vault-allocation": "bun scripts/operations/close-vault-maker-allocation.ts",
+    "fees:distribute": "bun scripts/operations/distribute-fees.ts",
     "state:migrate-mongo": "bun scripts/operations/migrate-protocol-state.ts",
     "test": "bun test",
     "test:circuits": "bash scripts/ci/test-noir.sh",
