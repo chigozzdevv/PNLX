@@ -29,6 +29,10 @@
   "risc0BatchMatchImageId": "0x9728e76d3e1c725f104a98b97dae63718553f869660868faa9dd8c751fb60de9",
   "source": "pnlx-admin",
   "sourceAddress": "GDNHJPGBEPMMAINDMU3TN6V6PCDQKXWVY4FWHLMBJXPCBSCKLUYIESOC",
+  "feeDestinations": {
+    "insurance": "GC5HQAVTBS7R77ZT4COG6LMQ6ZSSR7AS4EW3QZMUPSNZQCTR4NS4G3OD",
+    "treasury": "GBYSI3TGYUERHKZTHQ7Q4AOYOM4X2BXWCQLWEOF3ZMCUE7YXYF7XG2PY"
+  },
   "upgradeAuthority": "GB62B4CBS3RGOOYLUJQRL6OGBAEMBB6KD45XKGOC7J5546A2MEC6CURQ",
   "verifiers": {
     "conditional-close-proof-verifier": "CDJIBSMUZULF6Q4QJD6IPKTFHBVZ5TRZWCUIWQOFOKBDM54563XWZDPV",
@@ -48,7 +52,7 @@
     "proof-ledger": "0x6c675704c737e1fb89067e6ed50d09352927db945de02546c1d87c27542e1d4d",
     "price-oracle": "0x5c0a5fa1bc5a393d1717b3a5cafb7cb5841592c458163763e5de8ceb673d7d12",
     "position-state": "0x313e46d6c6498668356dbbb5ea0f091e9745f7682b32988ae657345481f3a528",
-    "shielded-pool": "0xd0f7307bbacf22925cfecdd175e33b346f52fa557a9e4c24a9fd024e6740dfba",
+    "shielded-pool": "0x7171fc3e7c340ec906c7b5fd5fcb717829d8fa0e2a880e7909816b0edd6557c4",
     "intent-registry": "0x79b0e8993db1fb57e8a8479fa649779179e6e8275763a1e8e9e8cefb751659a8",
     "conditional-order": "0xa1fa962060aac4c5362b2bde3a55e7889f10c6d979e9ff312933b9da4ee34a88",
     "market": "0xfceb80ce0f591f1abcdf0905b7b06f4a7db3f0153833ea4dd1e412dd942d45d1",
