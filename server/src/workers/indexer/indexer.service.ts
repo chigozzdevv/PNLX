@@ -79,6 +79,31 @@ export class IndexerService {
       };
     }
 
+    // Keep the last confirmed no-liquidity outcome while an identical batch retries.
+    // The matcher has not found a fill merely because a new run reached "proving".
+    if (latestRun.status === "running" &&
+      (latestRun.phase === "matcher" || latestRun.phase === "proving")) {
+      const previousRun = [...this.store.batchExecutionRuns.values()].reverse().find((run) =>
+        run.batchId === latestRun.batchId &&
+        run.marketId === latestRun.marketId &&
+        run.runId !== latestRun.runId &&
+        run.status !== "running"
+      );
+      if (previousRun?.status === "skipped" &&
+        previousRun.reason?.includes("batch has no crossed liquidity")) {
+        return {
+          batchId: previousRun.batchId,
+          completedAt: previousRun.completedAt,
+          message: skippedMessage(previousRun.reason),
+          phase: previousRun.phase,
+          reason: previousRun.reason,
+          runId: previousRun.runId,
+          state: "waiting-liquidity",
+          status: "skipped",
+        };
+      }
+    }
+
     const base = {
       batchId: latestRun.batchId,
       completedAt: latestRun.completedAt,

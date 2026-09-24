@@ -1803,9 +1803,16 @@ describe("support workers", () => {
       publicKey: rawP256PublicKey(),
       updatedAt: 1,
     });
+    const matcher = createProoflessMatcher(executor);
+    let matcherCalls = 0;
     const batchExecutor = createBatchExecutor(
       executor,
-      createProoflessMatcher(executor),
+      {
+        async createSettlementTranscript(input) {
+          matcherCalls += 1;
+          return matcher.createSettlementTranscript(input);
+        },
+      },
       {
         batchIdPrefix: "runner",
         intervalMs: 1000,
@@ -1813,7 +1820,7 @@ describe("support workers", () => {
       },
     );
 
-    const result = await batchExecutor.runOnce({ now: 5678 });
+    const result = await batchExecutor.runOnce();
 
     expect(result.results).toHaveLength(1);
     expect(result.results[0].record.status).toBe("skipped");
@@ -1821,6 +1828,8 @@ describe("support workers", () => {
     expect(executor.store.settlements.size).toBe(0);
     expect(executor.store.batchExecutionRuns.size).toBe(1);
     expect(executor.store.orderLifecycle.get(long.intentCommitment)?.status).toBe("open");
+    expect(matcherCalls).toBe(0);
+    expect((await batchExecutor.runOnce()).results).toHaveLength(0);
   });
 
   test("batch executor throttles oracle refresh across fast active-order loops", async () => {

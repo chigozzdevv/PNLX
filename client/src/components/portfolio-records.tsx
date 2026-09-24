@@ -374,10 +374,9 @@ function OrdersLedger({
 
 function OrderDetails({ order }: { order: OwnerOrderGroup }) {
   return (
-    <div className="portfolio-detail-panel" id={`order-details-${order.id}`}>
+    <div className="portfolio-detail-panel portfolio-order-details" id={`order-details-${order.id}`}>
       <div className="portfolio-detail-heading">
         <strong>Order details</strong>
-        <span>{statusLabel(order.status)}</span>
       </div>
       {order.orders.length > 1 ? (
         <DetailItem label="Private balance inputs"><strong>{order.orders.length}</strong></DetailItem>
@@ -396,7 +395,6 @@ function OrderDetails({ order }: { order: OwnerOrderGroup }) {
       {order.matching.batchId ? (
         <DetailItem label="Latest matching batch"><strong>{order.matching.batchId}</strong></DetailItem>
       ) : null}
-      <DetailItem label="Matching status"><strong>{matcherLabel(order.matching)}</strong></DetailItem>
       {order.matching.runId ? (
         <DetailItem label="Matching run"><CopyValue value={order.matching.runId} /></DetailItem>
       ) : null}

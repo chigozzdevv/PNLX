@@ -416,10 +416,9 @@ function OrdersView({
 
 function OrderDetails({ order }: { order: OwnerOrderGroup }) {
   return (
-    <div className="trade-records-details" id={`trade-order-details-${order.id}`}>
+    <div className="trade-records-details trade-order-details" id={`trade-order-details-${order.id}`}>
       <div className="trade-records-details-heading">
         <strong>Order details</strong>
-        <span>{statusLabel(order.status)}</span>
       </div>
       {order.orders.length > 1 ? (
         <DetailItem label="Private balance inputs"><strong>{order.orders.length}</strong></DetailItem>
@@ -438,7 +437,6 @@ function OrderDetails({ order }: { order: OwnerOrderGroup }) {
       {order.matching.batchId ? (
         <DetailItem label="Latest matching batch"><strong>{order.matching.batchId}</strong></DetailItem>
       ) : null}
-      <DetailItem label="Matching status"><strong>{matcherLabel(order.matching)}</strong></DetailItem>
       {order.matching.runId ? (
         <DetailItem label="Matching run"><CopyValue value={order.matching.runId} /></DetailItem>
       ) : null}

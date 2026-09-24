@@ -17,6 +17,45 @@ import { createIndexer } from "@/workers/indexer/indexer.worker";
 import { assertBatchSettlementCapacity } from "@/shared/protocol/batch-settlement-proof";
 
 describe("public and owner indexer", () => {
+  test("keeps an order waiting during a retry until a match is confirmed", () => {
+    const storePath = join(mkdtempSync(join(tmpdir(), "pnlx-waiting-indexer-")), "protocol-store.json");
+    const store = new FileProtocolStore(storePath);
+    const owner = ownerCommitment("GWAITING");
+    const record = intentRecord("waiting", "xlm-usd-perp", owner, store.marginMembershipRoot(), proofMeta("waiting"));
+    store.recordProof(record.proof);
+    store.addIntent(record);
+    const batchId = "auto-xlm-usd-perp-same-orders";
+    const skippedRun = {
+      batchId,
+      completedAt: 200,
+      marketId: record.marketId,
+      reason: "proving: batch has no crossed liquidity",
+      runId: hashFields("batch-run", ["waiting-skip"]),
+      startedAt: 100,
+      status: "skipped" as const,
+    };
+    store.addBatchExecutionRun(skippedRun, [record.intentCommitment]);
+    const retryRun = {
+      batchId,
+      marketId: record.marketId,
+      phase: "proving" as const,
+      runId: hashFields("batch-run", ["waiting-retry"]),
+      startedAt: 300,
+      status: "running" as const,
+    };
+    store.addBatchExecutionRun(retryRun, [record.intentCommitment]);
+    const indexer = createIndexer(store);
+
+    expect(indexer.ordersFor(owner)[0].matching).toMatchObject({
+      reason: skippedRun.reason,
+      runId: skippedRun.runId,
+      state: "waiting-liquidity",
+      status: "skipped",
+    });
+    store.upsertBatchExecutionRun({ ...retryRun, phase: "batch-settlement" }, [record.intentCommitment]);
+    expect(indexer.ordersFor(owner)[0].matching.state).toBe("settling");
+  });
+
   test("returns recorded capacity counts only for the owner's failed batch", () => {
     const storePath = join(mkdtempSync(join(tmpdir(), "pnlx-capacity-indexer-")), "protocol-store.json");
     const store = new FileProtocolStore(storePath);

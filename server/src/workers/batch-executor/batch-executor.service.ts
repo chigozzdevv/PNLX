@@ -18,6 +18,7 @@ type BatchExecutionRunUpdate = BatchExecutionRunRecord & {
 const DEFAULT_BATCH_INTERVAL_MS = 5_000;
 const DEFAULT_BATCH_PREFIX = "auto";
 const FAILED_BATCH_RETRY_COOLDOWN_MS = 60_000;
+const MISSING_LIQUIDITY_RETRY_COOLDOWN_MS = 30_000;
 const DEFAULT_ORACLE_REFRESH_INTERVAL_MS = 60_000;
 
 class BatchPhaseError extends Error {
@@ -31,7 +32,7 @@ class BatchPhaseError extends Error {
 }
 
 export class BatchExecutorService {
-  private failedBatchRetryAfter = new Map<string, number>();
+  private batchRetryAfter = new Map<string, number>();
   private oracleRefreshAfter = new Map<string, number>();
   private oracleRefreshInFlight = new Map<string, Promise<void>>();
   private oracleRefreshQueue: Promise<void> = Promise.resolve();
@@ -136,6 +137,11 @@ export class BatchExecutorService {
       await runPhase("maker-liquidity", () => flushStore(this.executor.store));
       await runPhase("oracle", () => this.config.sampleFundingPremium?.(marketId, startedAt));
       intentCommitments = this.activeIntentCommitments(marketId);
+      if (intentCommitments.length < 2) {
+        throw new Error(intentCommitments.length === 0
+          ? "batch has no active intents"
+          : "batch has no crossed liquidity");
+      }
       await this.progress({
         batchId,
         intentCommitments,
@@ -224,8 +230,10 @@ export class BatchExecutorService {
     } catch (error) {
       const phase = error instanceof BatchPhaseError ? error.phase : undefined;
       const reason = error instanceof Error ? error.message : "batch execution failed";
-      if (!shouldSkip(reason)) {
-        this.failedBatchRetryAfter.set(batchId, Date.now() + FAILED_BATCH_RETRY_COOLDOWN_MS);
+      if (reason.includes("batch has no crossed liquidity")) {
+        this.batchRetryAfter.set(batchId, Date.now() + MISSING_LIQUIDITY_RETRY_COOLDOWN_MS);
+      } else if (!shouldSkip(reason)) {
+        this.batchRetryAfter.set(batchId, Date.now() + FAILED_BATCH_RETRY_COOLDOWN_MS);
       }
       return this.record({
         batchId,
@@ -397,10 +405,10 @@ export class BatchExecutorService {
     input: RunBatchExecutorInput,
   ): boolean {
     const batchId = this.batchIdForMarket(marketId, startedAt, input);
-    const retryAfter = this.failedBatchRetryAfter.get(batchId);
+    const retryAfter = this.batchRetryAfter.get(batchId);
     if (!retryAfter) return false;
     if (retryAfter <= Date.now()) {
-      this.failedBatchRetryAfter.delete(batchId);
+      this.batchRetryAfter.delete(batchId);
       return false;
     }
     return true;

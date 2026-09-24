@@ -4113,6 +4113,10 @@ button:disabled {
   font-size: 12px;
 }
 
+.portfolio-order-details {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .portfolio-detail-heading {
   grid-column: 1 / -1;
   display: flex;
@@ -6056,6 +6060,10 @@ button:disabled {
   font-size: 11px;
 }
 
+.trade-order-details {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .trade-records-details-heading {
   grid-column: 1 / -1;
   display: flex;
@@ -6280,7 +6288,8 @@ button:disabled {
     justify-content: flex-start;
   }
 
-  .trade-records-details {
+  .trade-records-details,
+  .trade-order-details {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -6289,7 +6298,8 @@ button:disabled {
   .trade-position-grid,
   .trade-order-grid,
   .trade-activity-grid,
-  .trade-records-details {
+  .trade-records-details,
+  .trade-order-details {
     grid-template-columns: minmax(0, 1fr);
   }
 
