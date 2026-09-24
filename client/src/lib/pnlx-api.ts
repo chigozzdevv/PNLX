@@ -1,3 +1,5 @@
+import { apiPath } from "@/lib/api-stack";
+
 export async function pnlxPost<T>(
   path: string,
   data: unknown,
@@ -24,7 +26,7 @@ async function pnlxRequest<T>(
   let response: Response;
   let text: string;
   try {
-    response = await fetch(`/api/pnlx/${path.replace(/^\/+/, "")}`, {
+    response = await fetch(apiPath(path), {
       body: requestBody,
       cache: "no-store",
       headers: {

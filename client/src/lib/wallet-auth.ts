@@ -1,7 +1,10 @@
 import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
+import { activeApiStack } from "@/lib/api-stack";
 import { ensureAccountEncryptionKey } from "@/lib/account-encryption";
 
-const STORAGE_KEY = "pnlx.wallet.session";
+function storageKey(): string {
+  return activeApiStack() === "legacy" ? "pnlx.wallet.session.legacy" : "pnlx.wallet.session";
+}
 const FREIGHTER_DETECTION_TIMEOUT_MS = 3_000;
 const FREIGHTER_APPROVAL_TIMEOUT_MS = 120_000;
 let freighterApiPromise: Promise<typeof import("@stellar/freighter-api")> | undefined;
@@ -55,7 +58,7 @@ export async function connectWalletSession(): Promise<WalletSession> {
 
 export function readWalletSession(): WalletSession | null {
   if (typeof window === "undefined") return null;
-  const raw = window.localStorage.getItem(STORAGE_KEY);
+  const raw = window.localStorage.getItem(storageKey());
   if (!raw) return null;
 
   try {
@@ -104,7 +107,7 @@ export async function validateWalletSession(): Promise<WalletSession | null> {
 
 export function clearWalletSession(): void {
   if (typeof window === "undefined") return;
-  window.localStorage.removeItem(STORAGE_KEY);
+  window.localStorage.removeItem(storageKey());
 }
 
 export async function signWalletTransaction(
@@ -132,7 +135,7 @@ export async function signWalletTransaction(
 
 function storeWalletSession(session: WalletSession): void {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+  window.localStorage.setItem(storageKey(), JSON.stringify(session));
 }
 
 async function requestWalletAddress(): Promise<string> {

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { pnlxGet } from "@/lib/pnlx-api";
+import { apiPath } from "@/lib/api-stack";
 import type { ChartCandle } from "@/types/trading";
 
 export type CandleInterval = "1m" | "5m" | "15m" | "1h" | "1d";
@@ -260,7 +261,7 @@ export function useMarketCandles(
       scheduleFallback();
     } else {
       eventSource = new EventSource(
-        `/api/pnlx/markets/prices/stream?marketId=${encodeURIComponent(activeMarketId)}`,
+        `${apiPath("markets/prices/stream")}?marketId=${encodeURIComponent(activeMarketId)}`,
       );
       eventSource.addEventListener("open", () => {
         if (!active) return;

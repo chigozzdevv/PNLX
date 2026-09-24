@@ -24,7 +24,7 @@ import { useTradingData } from "@/lib/use-trading-data";
 import { useWalletSession } from "@/lib/use-wallet-session";
 import type { PositionRow } from "@/types/trading";
 
-export function PortfolioRoute() {
+export function PortfolioRoute({ legacy = false }: { legacy?: boolean }) {
   const wallet = useWalletSession();
   const [refreshKey, setRefreshKey] = useState(0);
   const [cancellingOrderId, setCancellingOrderId] = useState<string | undefined>();
@@ -230,7 +230,7 @@ export function PortfolioRoute() {
   }, [wallet.session]);
 
   return (
-    <AppShell account={trading.data.account} activeView="portfolio" wallet={wallet}>
+    <AppShell account={trading.data.account} activeView={legacy ? "previous" : "portfolio"} wallet={wallet}>
       <PortfolioPage
         actionMessage={positionActionMessage?.tone === "error" ? positionActionMessage : undefined}
         cancellingOrderId={cancellingOrderId}

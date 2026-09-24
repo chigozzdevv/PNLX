@@ -1,14 +1,8 @@
 import type { NextRequest } from "next/server";
 import { proxyPnlx, type PnlxRouteContext } from "@/lib/pnlx-proxy";
 
-const DEFAULT_PNLX_API_URL = "http://127.0.0.1:4000";
-
-function currentApiBase(): string {
-  return process.env.PNLX_API_URL ?? process.env.NEXT_PUBLIC_PNLX_API_URL ?? DEFAULT_PNLX_API_URL;
-}
-
 export async function GET(request: NextRequest, context: PnlxRouteContext) {
-  return proxyPnlx(request, context, currentApiBase());
+  return proxyPnlx(request, context, process.env.PNLX_LEGACY_API_URL);
 }
 
 export const POST = GET;
