@@ -3125,6 +3125,20 @@ button:disabled {
   line-height: 1;
 }
 
+.liquidity-account-value sup {
+  margin-left: 3px;
+  color: #e26f62;
+  font-size: 0.38em;
+  vertical-align: top;
+}
+
+.liquidity-value-note {
+  display: block;
+  margin-top: 9px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .liquidity-actions {
   display: flex;
   align-items: center;
@@ -3172,6 +3186,44 @@ button:disabled {
 .liquidity-performance {
   padding: 27px 0 31px;
 }
+
+.liquidity-chart {
+  margin-top: 26px;
+}
+
+.liquidity-chart-dates {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.liquidity-chart-plot {
+  display: block;
+  width: 100%;
+  height: 116px;
+  margin-top: 18px;
+}
+
+.liquidity-chart-guide,
+.liquidity-chart-line {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.liquidity-chart-guide { stroke: rgba(255, 255, 255, 0.1); stroke-width: 1; }
+.liquidity-chart-line { stroke: var(--accent-orange); stroke-width: 2; }
+.liquidity-chart-point {
+  fill: none;
+  stroke: var(--accent-orange);
+  stroke-width: 4;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.liquidity-chart-loading { border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
+
+.liquidity-chart-dates { margin-top: 7px; }
 
 .liquidity-detail-grid {
   display: grid;
@@ -3234,6 +3286,33 @@ button:disabled {
   letter-spacing: -0.015em;
 }
 
+.liquidity-chart-ranges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.liquidity-chart-ranges button {
+  border: 0;
+  border-radius: 4px;
+  padding: 5px 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.liquidity-chart-ranges button:hover,
+.liquidity-chart-ranges button.active {
+  color: var(--text-primary);
+}
+
+.liquidity-chart-ranges button.active {
+  background: rgba(255, 255, 255, 0.07);
+}
+
 .liquidity-activity {
   padding: 27px 0 32px;
 }
@@ -3245,6 +3324,45 @@ button:disabled {
 .liquidity-activity-heading {
   padding-bottom: 14px;
 }
+
+.liquidity-activity-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.liquidity-activity-item > div {
+  display: grid;
+  gap: 5px;
+}
+
+.liquidity-activity-item > div:last-child { text-align: right; }
+
+.liquidity-activity-item strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.liquidity-activity-item span,
+.liquidity-activity-item a {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.liquidity-activity-item a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  color: var(--accent-orange);
+  text-decoration: none;
+}
+
+.liquidity-activity-item a:hover { text-decoration: underline; }
 
 .liquidity-dialog-backdrop {
   position: fixed;

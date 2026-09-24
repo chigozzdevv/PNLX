@@ -49,6 +49,32 @@ export interface VaultPosition {
   withdrawalsOpen: boolean;
 }
 
+export interface VaultHistory {
+  stale: boolean;
+  observedAt: string | null;
+  activity: Array<{ id: string; kind: "supply" | "allocation" | "return" | "withdrawal";
+    amount: string; at: string; ledger: number; txHash: string }>;
+  assets: Array<{ at: string; assets: string }>;
+}
+
+export type VaultChartRange = "1D" | "7D" | "30D";
+
+const CHART_RANGE_DAYS: Record<VaultChartRange, number> = { "1D": 1, "7D": 7, "30D": 30 };
+
+export function selectVaultAssetPoints(
+  points: VaultHistory["assets"], range: VaultChartRange, now = Date.now(), observedAt?: string | null,
+): VaultHistory["assets"] {
+  const cutoff = now - CHART_RANGE_DAYS[range] * 86_400_000;
+  const last = points.at(-1);
+  const observed = observedAt ? Date.parse(observedAt) : NaN;
+  const timeline = last && observed > Date.parse(last.at) && observed <= now
+    ? [...points, { at: observedAt!, assets: last.assets }] : points;
+  const recent = timeline.filter((point) => Date.parse(point.at) >= cutoff && Date.parse(point.at) <= now);
+  if (!recent.length) return [];
+  const previous = timeline.filter((point) => Date.parse(point.at) < cutoff).at(-1);
+  return previous ? [{ at: new Date(cutoff).toISOString(), assets: previous.assets }, ...recent] : recent;
+}
+
 interface PreparedVaultTransaction {
   action: VaultAction["action"];
   contractId: string;
@@ -72,6 +98,10 @@ export async function getVaultAccount(session: WalletSession): Promise<VaultAcco
   const owner = encodeURIComponent(session.address);
   const response = await pnlxGet<{ account: VaultAccount }>(`/liquidity-vault/account?owner=${owner}`, session.token);
   return response.account;
+}
+
+export async function getVaultHistory(): Promise<VaultHistory> {
+  return pnlxGet<VaultHistory>("/liquidity-vault/history");
 }
 
 export function parseVaultUnits(value: string): bigint {

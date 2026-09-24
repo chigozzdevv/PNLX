@@ -10,6 +10,8 @@ import { registerIntentsRoute } from "@/features/intents/intents.route";
 import { registerLiquidationAutomationRoute } from "@/features/liquidation-automation/liquidation-automation.route";
 import { registerLiquidationsRoute } from "@/features/liquidations/liquidations.route";
 import { registerLiquidityVaultRoute } from "@/features/liquidity-vault/liquidity-vault.route";
+import { LiquidityVaultHistory } from "@/features/liquidity-vault/liquidity-vault.history";
+import { LiquidityVaultService } from "@/features/liquidity-vault/liquidity-vault.service";
 import { registerMarketsRoute } from "@/features/markets/markets.route";
 import { MarketsService } from "@/features/markets/markets.service";
 import { registerNotesRoute } from "@/features/notes/notes.route";
@@ -43,6 +45,7 @@ export interface AppRuntime {
   executor: ExecutorService;
   fundingEngine: FundingEngineService;
   liquidationAutomation: LiquidationAutomationService;
+  liquidityHistory?: LiquidityVaultHistory;
   router: Router;
 }
 
@@ -210,9 +213,13 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
     witnessRoutesEnabled: env.serverWitnessRoutesEnabled,
   });
   registerRelaysRoute(router, relayer, env, executor);
-  if (deployment?.contracts["liquidity-vault"]) {
-    registerLiquidityVaultRoute(router, relayer, deployment);
-  }
+  const vaultId = deployment?.contracts["liquidity-vault"];
+  const liquidityHistory = vaultId && env.mongodbUri ? new LiquidityVaultHistory(
+    new LiquidityVaultService(relayer, deployment),
+    { uri: env.mongodbUri, database: env.mongodbDatabase, network: env.stellarNetwork,
+      rpcUrl: env.stellarRpcUrl, vaultId },
+  ) : undefined;
+  if (vaultId) registerLiquidityVaultRoute(router, relayer, deployment, liquidityHistory);
   registerLiquidationsRoute(router, executor, prover, env, onchain, {
     witnessRoutesEnabled: env.serverWitnessRoutesEnabled,
   });
@@ -237,7 +244,7 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
     liquidationAutomation.start();
   }
 
-  return { batchExecutor, executor, fundingEngine, liquidationAutomation, router };
+  return { batchExecutor, executor, fundingEngine, liquidationAutomation, liquidityHistory, router };
 }
 
 function createExecutorForEnv(env: ReturnType<typeof loadEnv>): ExecutorService {

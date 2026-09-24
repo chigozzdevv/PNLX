@@ -9,13 +9,17 @@ import { BottomTicker } from "@/components/bottom-ticker";
 import { emptyLiquidityAccount } from "@/lib/liquidity-account";
 import {
   formatVaultUnits,
+  getVaultHistory,
   parseVaultUnits,
   quoteVaultAction,
   quoteVaultWithdrawalClaim,
   quoteVaultWithdrawalRequest,
+  selectVaultAssetPoints,
   submitVaultAction,
   type VaultAccount,
   type VaultStatus,
+  type VaultHistory,
+  type VaultChartRange,
 } from "@/lib/liquidity-vault";
 import { useLiquidityVault } from "@/lib/use-liquidity-vault";
 import { useMarketTicker } from "@/lib/use-market-ticker";
@@ -23,6 +27,44 @@ import { useWalletSession } from "@/lib/use-wallet-session";
 import type { WalletSession } from "@/lib/wallet-auth";
 
 type DialogMode = "deposit" | "withdraw";
+
+function activityLabel(kind: VaultHistory["activity"][number]["kind"]): string {
+  return { supply: "Added liquidity", allocation: "Allocated to maker",
+    return: "Returned to pool", withdrawal: "Withdrew liquidity" }[kind];
+}
+
+function shortHash(hash: string): string {
+  return `${hash.slice(0, 6)}…${hash.slice(-4)}`;
+}
+
+function PoolAssetsChart({ points }: { points: VaultHistory["assets"] }) {
+  const values = points.map((point) => BigInt(point.assets));
+  const times = points.map((point) => Date.parse(point.at));
+  const firstTime = times[0] ?? 0;
+  const timeSpan = (times.at(-1) ?? firstTime) - firstTime;
+  const high = values.length ? values.reduce((max, value) => value > max ? value : max) : 0n;
+  const coords = values.map((value, index) => ({
+    x: values.length === 1 ? 50 : 1 + (timeSpan > 0 ? (times[index] - firstTime) * 98 / timeSpan : index * 98 / (values.length - 1)),
+    y: high === 0n ? 88 : 88 - Number(value * 76_000n / high) / 1_000,
+  }));
+  const path = coords.map((point, index) => index === 0 ? `M ${point.x} ${point.y}` :
+    `H ${point.x} V ${point.y}`).join(" ");
+
+  return (
+    <div className="liquidity-chart">
+      {points.length ? (
+        <>
+          <svg aria-label="Total liquidity over time" className="liquidity-chart-plot" preserveAspectRatio="none" role="img" viewBox="0 0 100 100">
+            <path className="liquidity-chart-guide" d="M 0 88 H 100" />
+            {coords.length > 1 ? <path className="liquidity-chart-line" d={path} /> : null}
+            <path className="liquidity-chart-point" d={`M ${coords.at(-1)!.x} ${coords.at(-1)!.y} h 0.001`} />
+          </svg>
+          <div className="liquidity-chart-dates"><span>{new Date(points[0].at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span><span>{points.length > 1 ? new Date(points.at(-1)!.at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : null}</span></div>
+        </>
+      ) : <div className="liquidity-chart-plot liquidity-chart-loading" />}
+    </div>
+  );
+}
 
 export function LiquidityPoolDetails() {
   const wallet = useWalletSession();
@@ -33,12 +75,28 @@ export function LiquidityPoolDetails() {
   const queryDialog: DialogMode | null = requestedAction === "supply" ? "deposit" : requestedAction === "withdraw" ? "withdraw" : null;
   const [dismissedAction, setDismissedAction] = useState<string | null>(null);
   const [manualDialog, setManualDialog] = useState<DialogMode | null>(null);
+  const [history, setHistory] = useState<VaultHistory | null>(null);
+  const [historyError, setHistoryError] = useState(false);
+  const [historyKey, setHistoryKey] = useState(0);
+  const [chartRange, setChartRange] = useState<VaultChartRange>("7D");
+  const [chartNow, setChartNow] = useState(0);
   const dialog = manualDialog ?? (dismissedAction === requestedAction ? null : queryDialog);
   const status = vault.status;
   const account = vault.account;
   const supplySharePrice = status && BigInt(status.depositSeriesShares) > 0n
     ? BigInt(status.depositSeriesAssets) * 10_000_000n / BigInt(status.depositSeriesShares)
     : status ? 10_000_000n : null;
+  const recordedValue = account?.positions.reduce((sum, position) => sum + BigInt(position.assetsAtCost), 0n);
+
+  useEffect(() => {
+    let active = true;
+    const load = () => void getVaultHistory().then((result) => {
+      if (active) { setHistory(result); setHistoryError(false); setChartNow(Date.now()); }
+    }).catch(() => { if (active) setHistoryError(true); });
+    load();
+    const timer = window.setInterval(load, 30_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [historyKey]);
 
   function closeDialog() {
     setManualDialog(null);
@@ -64,8 +122,11 @@ export function LiquidityPoolDetails() {
                 <p className="liquidity-wallet-hint">Loading your position…</p>
               ) : vault.accountError ? (
                 <p className="liquidity-wallet-hint" role="alert">{vault.accountError}</p>
-              ) : account?.equity !== null && account?.equity !== undefined ? (
-                <strong className="liquidity-account-value">${formatVaultUnits(account.equity)}</strong>
+              ) : account && recordedValue !== undefined ? (
+                <>
+                  <strong className="liquidity-account-value">${formatVaultUnits(account.equity ?? recordedValue)}{account.equity === null ? <sup>*</sup> : null}</strong>
+                  <span className="liquidity-value-note">{formatVaultUnits(account.shares, 4)} shares{account.equity === null ? " · *Unsettled P&L excluded" : null}</span>
+                </>
               ) : (
                 <p className="liquidity-wallet-hint">—</p>
               )}
@@ -78,13 +139,23 @@ export function LiquidityPoolDetails() {
 
           <div className="liquidity-supporting-values">
             <div className="portfolio-supporting-value"><span>Pool APY</span><strong aria-label="0 percent placeholder; APY is not calculated yet" className="liquidity-apy-placeholder" title="APY is not calculated yet">0%<sup>*</sup></strong></div>
-            <div className="portfolio-supporting-value"><span>Total assets</span><strong>{status ? `$${formatVaultUnits(status.totalAssetsAtCost)}` : "—"}</strong></div>
+            <div className="portfolio-supporting-value"><span>Assets at cost</span><strong>{status ? `$${formatVaultUnits(status.totalAssetsAtCost)}` : "—"}</strong></div>
           </div>
           {vault.statusError ? <p className="liquidity-data-error" role="alert">{vault.statusError} <button onClick={vault.refresh} type="button">Retry</button></p> : null}
         </section>
 
-        <section aria-label="Pool details" className="liquidity-performance">
-          <div className="liquidity-section-heading"><h2>Pool details</h2></div>
+        <section aria-label="Total liquidity" className="liquidity-performance">
+          <div className="liquidity-section-heading">
+            <h2>Total liquidity</h2>
+            <div aria-label="Chart range" className="liquidity-chart-ranges" role="group">
+              {(["1D", "7D", "30D"] as const).map((range) => (
+                <button aria-pressed={chartRange === range} className={chartRange === range ? "active" : ""} key={range}
+                  onClick={() => setChartRange(range)} type="button">{range}</button>
+              ))}
+            </div>
+          </div>
+          <PoolAssetsChart points={selectVaultAssetPoints(history?.assets ?? [], chartRange,
+            chartNow, history?.stale ? null : history?.observedAt)} />
           <div className="liquidity-detail-grid">
             <div><span>Share price</span><strong>{supplySharePrice !== null ? `$${formatVaultUnits(supplySharePrice, 4)}` : "—"}</strong></div>
             <div><span>Liquid USDC</span><strong>{status ? `$${formatVaultUnits(status.liquidAssets)}` : "—"}</strong></div>
@@ -95,7 +166,16 @@ export function LiquidityPoolDetails() {
 
         <section aria-label="Recent liquidity activity" className="liquidity-activity">
           <div className="liquidity-section-heading liquidity-activity-heading"><h2>Recent activity</h2></div>
-          <p className="liquidity-activity-empty">Activity history isn’t available yet.</p>
+          {history?.activity.length ? (
+            <div className="liquidity-activity-list">
+              {history.activity.slice(0, 6).map((item) => (
+                <div className="liquidity-activity-item" key={item.id}>
+                  <div><strong>{activityLabel(item.kind)}</strong><span>{new Date(item.at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span></div>
+                  <div><strong>${formatVaultUnits(item.amount)}</strong><a href={`https://stellar.expert/explorer/testnet/tx/${item.txHash}`} rel="noopener noreferrer" target="_blank">{shortHash(item.txHash)} <ExternalLink aria-hidden="true" size={12} /></a></div>
+                </div>
+              ))}
+            </div>
+          ) : <p className="liquidity-activity-empty">{historyError || history?.stale ? "Activity unavailable." : history ? "No recent pool activity." : "Loading activity…"}</p>}
         </section>
       </main>
       <BottomTicker ticker={ticker.ticker} updatedAt={ticker.updatedAt} />
@@ -106,7 +186,7 @@ export function LiquidityPoolDetails() {
           error={wallet.error}
           mode={dialog}
           onClose={closeDialog}
-          onComplete={vault.refresh}
+          onComplete={() => { vault.refresh(); setHistoryKey((current) => current + 1); }}
           onConnect={wallet.connect}
           session={wallet.session}
           status={status}
@@ -230,7 +310,7 @@ function LiquidityActionDialog({ account, accountError, error, mode, onClose, on
                 <div className="liquidity-dialog-detail"><span>Minimum received</span><strong>{formatVaultUnits(quote.minimum, 4)}</strong></div>
               </>
             ) : null}
-            {!deposit && selectedPosition ? <div className="liquidity-dialog-detail"><span>{withdrawalStep === "claim" || withdrawalStep === "waiting" ? "Requested shares" : "Available shares"}</span><strong>{formatVaultUnits(withdrawalStep === "claim" || withdrawalStep === "waiting" ? selectedPosition.pendingShares : selectedPosition.availableShares, 4)}</strong></div> : null}
+            {!deposit && selectedPosition ? <div className="liquidity-dialog-detail"><span>{withdrawalStep === "claim" || withdrawalStep === "waiting" ? "Requested shares" : "Requestable shares"}</span><strong>{formatVaultUnits(withdrawalStep === "claim" || withdrawalStep === "waiting" ? selectedPosition.pendingShares : selectedPosition.availableShares, 4)}</strong></div> : null}
             {quoteError && !unavailable ? <p className="liquidity-dialog-error" role="alert">{quoteError}</p> : null}
             {actionError ? <p className="liquidity-dialog-error" role="alert">{actionError}</p> : null}
             {transactionHash ? (

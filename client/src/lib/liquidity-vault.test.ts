@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { formatVaultUnits, parseVaultUnits, quoteVaultAction, quoteVaultWithdrawalClaim,
+  selectVaultAssetPoints,
   quoteVaultWithdrawalRequest, type VaultAccount, type VaultStatus } from "@/lib/liquidity-vault";
 
 const status: VaultStatus = {
@@ -36,6 +37,30 @@ const account: VaultAccount = {
     seriesAssets: "1100000000", seriesTotalShares: "1000000000" }],
   withdrawn: "0",
 };
+
+test("liquidity chart ranges use recorded points and the preceding value", () => {
+  const now = Date.parse("2026-09-24T12:00:00Z");
+  const points = [
+    { at: "2026-08-20T12:00:00Z", assets: "10" },
+    { at: "2026-09-14T12:00:00Z", assets: "20" },
+    { at: "2026-09-18T12:00:00Z", assets: "30" },
+    { at: "2026-09-24T00:00:00Z", assets: "40" },
+  ];
+  expect(selectVaultAssetPoints(points, "1D", now)).toEqual([
+    { at: "2026-09-23T12:00:00.000Z", assets: "30" }, points[3],
+  ]);
+  expect(selectVaultAssetPoints(points, "7D", now)).toEqual([
+    { at: "2026-09-17T12:00:00.000Z", assets: "20" }, points[2], points[3],
+  ]);
+  expect(selectVaultAssetPoints(points, "30D", now)).toEqual([
+    { at: "2026-08-25T12:00:00.000Z", assets: "10" }, points[1], points[2], points[3],
+  ]);
+  expect(selectVaultAssetPoints(points.slice(0, 3), "1D", now)).toEqual([]);
+  expect(selectVaultAssetPoints(points.slice(0, 3), "1D", now, "2026-09-24T11:55:00Z")).toEqual([
+    { at: "2026-09-23T12:00:00.000Z", assets: "30" },
+    { at: "2026-09-24T11:55:00Z", assets: "30" },
+  ]);
+});
 
 describe("vault amount and action quotes", () => {
   test("preserves seven-decimal input units", () => {
