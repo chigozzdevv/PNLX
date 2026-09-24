@@ -47,15 +47,9 @@ export function AppShell({
     <div className="min-h-screen bg-[var(--surface-page)] text-[var(--text-primary)]">
       <header className="sticky top-0 z-40 border-b border-white/7 bg-[rgba(12,12,11,0.9)] backdrop-blur-xl">
         <div className="app-header-inner flex min-h-[72px] min-w-0 items-center gap-3 px-3 md:gap-4 md:px-5">
-          {activeView === "previous" ? (
-            <a className="app-brand" href="/" aria-label="PNLX home">
-              <Image alt="PNLX" className="app-brand-logo" height={25} priority src="/pnlx-logo.png" width={138} />
-            </a>
-          ) : (
-            <Link className="app-brand" href="/" aria-label="PNLX home">
-              <Image alt="PNLX" className="app-brand-logo" height={25} priority src="/pnlx-logo.png" width={138} />
-            </Link>
-          )}
+          <Link className="app-brand" href="/" aria-label="PNLX home">
+            <Image alt="PNLX" className="app-brand-logo" height={25} priority src="/pnlx-logo.png" width={138} />
+          </Link>
 
           <nav className="hidden items-center gap-1 lg:flex">
             {navItems.map((item) => item.id === "previous" || activeView === "previous" ? (
