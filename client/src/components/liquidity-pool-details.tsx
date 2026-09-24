@@ -9,6 +9,7 @@ import { BottomTicker } from "@/components/bottom-ticker";
 import { emptyLiquidityAccount } from "@/lib/liquidity-account";
 import {
   formatVaultUnits,
+  formatVaultSharePrice,
   getVaultHistory,
   parseVaultUnits,
   quoteVaultAction,
@@ -16,6 +17,7 @@ import {
   quoteVaultWithdrawalRequest,
   selectVaultAssetPoints,
   submitVaultAction,
+  vaultSharePrice,
   type VaultAccount,
   type VaultStatus,
   type VaultHistory,
@@ -83,10 +85,12 @@ export function LiquidityPoolDetails() {
   const dialog = manualDialog ?? (dismissedAction === requestedAction ? null : queryDialog);
   const status = vault.status;
   const account = vault.account;
-  const supplySharePrice = status && BigInt(status.depositSeriesShares) > 0n
-    ? BigInt(status.depositSeriesAssets) * 10_000_000n / BigInt(status.depositSeriesShares)
-    : status ? 10_000_000n : null;
   const recordedValue = account?.positions.reduce((sum, position) => sum + BigInt(position.assetsAtCost), 0n);
+  const sharePrice = account && BigInt(account.shares) > 0n && recordedValue !== undefined
+    ? vaultSharePrice(recordedValue, BigInt(account.shares))
+    : status?.currentSeriesShares !== undefined
+      ? vaultSharePrice(BigInt(status.currentSeriesAssets), BigInt(status.currentSeriesShares))
+      : null;
 
   useEffect(() => {
     let active = true;
@@ -157,7 +161,7 @@ export function LiquidityPoolDetails() {
           <PoolAssetsChart points={selectVaultAssetPoints(history?.assets ?? [], chartRange,
             chartNow, history?.stale ? null : history?.observedAt)} />
           <div className="liquidity-detail-grid">
-            <div><span>Share price</span><strong>{supplySharePrice !== null ? `$${formatVaultUnits(supplySharePrice, 4)}` : "—"}</strong></div>
+            <div><span>{account && BigInt(account.shares) > 0n ? "Your share price" : "Share price"}</span><strong>{sharePrice !== null ? <>${formatVaultSharePrice(sharePrice)}{account?.equity === null ? <sup>*</sup> : null}</> : "—"}</strong></div>
             <div><span>Liquid USDC</span><strong>{status ? `$${formatVaultUnits(status.liquidAssets)}` : "—"}</strong></div>
             <div><span>Deployed principal</span><strong>{status ? `$${formatVaultUnits(status.deployedPrincipal)}` : "—"}</strong></div>
           </div>

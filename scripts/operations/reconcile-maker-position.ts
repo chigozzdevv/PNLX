@@ -32,6 +32,7 @@ import { withdrawMakerNotes } from "./withdraw-maker-notes";
 import { authHeadersFor, localApiOrigin, type SmokeApp } from "../smoke/custody";
 
 const ZERO_HEX = "0x0" as Hex;
+const warnedMarkMismatch = new Set<Hex>();
 
 if (import.meta.main) {
   const args = process.argv.slice(2);
@@ -51,6 +52,7 @@ if (import.meta.main) {
       const changed = await reconcileOneMakerPosition({
         apiUrl: localApiOrigin(value("--api-url")),
         assertLease,
+        allowIndependentMark: args.includes("--close-at-current-mark"),
         makerSource: value("--maker-source"),
         operatorSource: value("--operator-source"),
         manualMakerPositionCommitment: position,
@@ -140,11 +142,15 @@ export function makerPositionsReadyForReconciliation(
 
 export async function reconcileOneMakerPosition(input: {
   apiUrl: string;
+  allowIndependentMark?: boolean;
   assertLease?: () => void;
   makerSource: string;
   operatorSource: string;
   manualMakerPositionCommitment?: Hex;
 }): Promise<boolean> {
+  if (input.allowIndependentMark && !input.manualMakerPositionCommitment) {
+    throw new Error("independent maker close requires an explicitly selected position");
+  }
   const env = loadEnv();
   if (!env.mongodbUri || !env.makerWalletAddress || !env.collateralTokenContract ||
     env.stellarNetwork !== "testnet" || !env.stellarOnchainRelay) {
@@ -167,49 +173,51 @@ export async function reconcileOneMakerPosition(input: {
       executor.store, notes, allocations, env.makerWalletAddress.trim().toUpperCase(),
       input.manualMakerPositionCommitment ? undefined : loadCircuit(process.cwd(), "position-close").sourceHash,
     );
-    const candidate = input.manualMakerPositionCommitment
-      ? candidates.find((item) => item.makerPosition.positionCommitment === input.manualMakerPositionCommitment)
-      : candidates[0];
-    if (!candidate) return false;
-    const clientClose = executor.store.positionCloses.get(candidate.clientPosition.closeCommitment!);
-    await assertSuccessfulTransaction(env.stellarRpcUrl, clientClose!.settlementTxHash!);
-    const makerPosition = candidate.makerPosition;
-    if (makerPosition.status === "open") {
-      if (candidate.output) {
-        throw new Error(`maker position ${makerPosition.positionCommitment} has an unresolved pending close output`);
+    const selected = input.manualMakerPositionCommitment
+      ? candidates.filter((item) => item.makerPosition.positionCommitment === input.manualMakerPositionCommitment)
+      : candidates;
+    for (const candidate of selected) {
+      const clientClose = executor.store.positionCloses.get(candidate.clientPosition.closeCommitment!);
+      await assertSuccessfulTransaction(env.stellarRpcUrl, clientClose!.settlementTxHash!);
+      const makerPosition = candidate.makerPosition;
+      if (makerPosition.status === "open") {
+        if (candidate.output) {
+          throw new Error(`maker position ${makerPosition.positionCommitment} has an unresolved pending close output`);
+        }
+        input.assertLease?.();
+        if (await closeMakerPosition(candidate, executor, input, env, deployment)) return true;
+        continue;
       }
-      input.assertLease?.();
-      await closeMakerPosition(candidate, executor, input, env, deployment);
-      return true;
+      const output = candidate.output!;
+      const makerClose = executor.store.positionCloses.get(makerPosition.closeCommitment!);
+      if (!makerClose?.settlementTxHash || output.closeTxHash &&
+        output.closeTxHash !== makerClose.settlementTxHash) {
+        throw new Error("maker close transaction does not match its output note");
+      }
+      await assertSuccessfulTransaction(env.stellarRpcUrl, makerClose.settlementTxHash);
+      if (output.status === "pending") {
+        await finalizePendingMakerCloseOutput(String(output.commitment), makerClose.settlementTxHash);
+        return true;
+      }
+      if (candidate.allocation.status === "draining") continue;
+      if (output.status === "draining" || output.status === "withdrawing") {
+        input.assertLease?.();
+        await withdrawMakerNotes(["--allocation-tx", candidate.allocation.allocationTxHash,
+          "--note-commitment", String(output.commitment), "--closed-output", "--execute",
+          "--api-url", input.apiUrl, "--maker-source", input.makerSource]);
+        return true;
+      }
+      if (output.status === "spent" && output.recoveredAmount) {
+        input.assertLease?.();
+        await settleVaultMakerPosition({ allocationId: candidate.allocation.id,
+          closeTxHash: makerClose.settlementTxHash, noteCommitment: String(output.commitment) as Hex,
+          operatorSource: input.operatorSource, positionCommitment: makerPosition.positionCommitment,
+          principal: candidate.principal });
+        return true;
+      }
+      throw new Error("maker close output has not reached a recoverable state");
     }
-    const output = candidate.output!;
-    const makerClose = executor.store.positionCloses.get(makerPosition.closeCommitment!);
-    if (!makerClose?.settlementTxHash || output.closeTxHash &&
-      output.closeTxHash !== makerClose.settlementTxHash) {
-      throw new Error("maker close transaction does not match its output note");
-    }
-    await assertSuccessfulTransaction(env.stellarRpcUrl, makerClose.settlementTxHash);
-    if (output.status === "pending") {
-      await finalizePendingMakerCloseOutput(String(output.commitment), makerClose.settlementTxHash);
-      return true;
-    }
-    if (candidate.allocation.status === "draining") return false;
-    if (output.status === "draining" || output.status === "withdrawing") {
-      input.assertLease?.();
-      await withdrawMakerNotes(["--allocation-tx", candidate.allocation.allocationTxHash,
-        "--note-commitment", String(output.commitment), "--closed-output", "--execute",
-        "--api-url", input.apiUrl, "--maker-source", input.makerSource]);
-      return true;
-    }
-    if (output.status === "spent" && output.recoveredAmount) {
-      input.assertLease?.();
-      await settleVaultMakerPosition({ allocationId: candidate.allocation.id,
-        closeTxHash: makerClose.settlementTxHash, noteCommitment: String(output.commitment) as Hex,
-        operatorSource: input.operatorSource, positionCommitment: makerPosition.positionCommitment,
-        principal: candidate.principal });
-      return true;
-    }
-    throw new Error("maker close output has not reached a recoverable state");
+    return false;
   } finally {
     await (executor.store as { close?: () => Promise<void> }).close?.();
   }
@@ -218,10 +226,11 @@ export async function reconcileOneMakerPosition(input: {
 async function closeMakerPosition(
   candidate: MakerPositionCloseCandidate,
   executor: Awaited<ReturnType<typeof createExecutorAsync>>,
-  input: { apiUrl: string; assertLease?: () => void; makerSource: string; operatorSource: string },
+  input: { apiUrl: string; allowIndependentMark?: boolean; assertLease?: () => void;
+    makerSource: string; operatorSource: string },
   env: ReturnType<typeof loadEnv>,
   deployment: NonNullable<ReturnType<typeof loadDeploymentRegistry>>,
-): Promise<void> {
+): Promise<boolean> {
   const position = candidate.makerPosition;
   const opening = reconstructPositionOpening(executor.store, position);
   if (!opening) throw new Error("maker position opening could not be reconstructed");
@@ -253,6 +262,15 @@ async function closeMakerPosition(
   const context = service.context({ ownerCommitment: owner,
     positionCommitment: position.positionCommitment }, candidate.allocation.maker);
   const markPrice = BigInt(context.market.markPrice);
+  const clientMarkPrice = executor.store.positionCloses.get(candidate.clientPosition.closeCommitment!)?.markPrice;
+  if (clientMarkPrice !== markPrice && !input.allowIndependentMark) {
+    if (!warnedMarkMismatch.has(position.positionCommitment)) {
+      console.error(`[vault-maker] maker close deferred for ${position.positionCommitment}: paired trader closed at a different mark`);
+      warnedMarkMismatch.add(position.positionCommitment);
+    }
+    return false;
+  }
+  warnedMarkMismatch.delete(position.positionCommitment);
   const fundingPayment = opening.size *
     (BigInt(context.market.fundingIndex) - opening.fundingIndex) / PRICE_SCALE *
     (opening.side === "long" ? 1n : -1n);
@@ -331,4 +349,5 @@ async function closeMakerPosition(
   await assertSuccessfulTransaction(env.stellarRpcUrl, txHash);
   process.stdout.write(`${JSON.stringify({ positionCommitment: position.positionCommitment,
     outputCommitment, txHash, status: "maker-closed" })}\n`);
+  return true;
 }

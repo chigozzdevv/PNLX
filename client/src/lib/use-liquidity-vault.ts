@@ -16,15 +16,9 @@ export function useLiquidityVault(session: WalletSession | null) {
   useEffect(() => {
     let active = true;
     const currentSession = session;
-    const load = async () => {
-      await Promise.resolve();
-      if (!active) return;
-      setLoading(Boolean(currentSession));
-      setStatusError(null);
-      setAccountError(null);
-      setAccount(null);
+    const load = () => {
       void getVaultStatus().then((pool) => {
-        if (active) setStatus(pool);
+        if (active) { setStatus(pool); setStatusError(null); }
       }).catch((error) => {
         if (!active) return;
         setStatus(null);
@@ -32,16 +26,27 @@ export function useLiquidityVault(session: WalletSession | null) {
       });
       if (currentSession) {
         void getVaultAccount(currentSession).then((position) => {
-          if (active) setAccount(position);
+          if (active) { setAccount(position); setAccountError(null); }
         }).catch((error) => {
-          if (active) setAccountError(error instanceof Error ? error.message : "Wallet position is unavailable");
+          if (active) {
+            setAccount(null);
+            setAccountError(error instanceof Error ? error.message : "Wallet position is unavailable");
+          }
         }).finally(() => {
           if (active) setLoading(false);
         });
       }
     };
-    void load();
-    return () => { active = false; };
+    void Promise.resolve().then(() => {
+      if (!active) return;
+      setLoading(Boolean(currentSession));
+      setStatusError(null);
+      setAccountError(null);
+      setAccount(null);
+      load();
+    });
+    const timer = window.setInterval(load, 60_000);
+    return () => { active = false; window.clearInterval(timer); };
   }, [session, refreshKey]);
 
   return { account, accountError, loading, refresh, status, statusError };

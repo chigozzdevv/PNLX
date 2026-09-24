@@ -21,6 +21,7 @@ export interface VaultStatus {
   contractId: string;
   currentSeries: number;
   currentSeriesAssets: string;
+  currentSeriesShares: string;
   currentSeriesLiquid: string;
   currentSeriesPrincipal: string;
   depositSeries: number;

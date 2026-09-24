@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { formatVaultUnits, parseVaultUnits, quoteVaultAction, quoteVaultWithdrawalClaim,
+import { formatVaultSharePrice, formatVaultUnits, parseVaultUnits, quoteVaultAction, quoteVaultWithdrawalClaim,
   selectVaultAssetPoints,
-  quoteVaultWithdrawalRequest, type VaultAccount, type VaultStatus } from "@/lib/liquidity-vault";
+  quoteVaultWithdrawalRequest, vaultSharePrice, type VaultAccount, type VaultStatus } from "@/lib/liquidity-vault";
 
 const status: VaultStatus = {
   allocationLimitBps: "8000",
@@ -9,6 +9,7 @@ const status: VaultStatus = {
   contractId: "vault",
   currentSeries: 0,
   currentSeriesAssets: "1100000000",
+  currentSeriesShares: "1000000000",
   currentSeriesLiquid: "1100000000",
   currentSeriesPrincipal: "0",
   depositSeries: 0,
@@ -24,6 +25,14 @@ const status: VaultStatus = {
   totalShares: "1000000000",
   withdrawalsOpen: true,
 };
+
+test("share price uses the held series value and preserves a small loss", () => {
+  const price = vaultSharePrice(499_983_157_353n, 500_000_000_000n);
+  expect(price).toBe(9_999_663n);
+  expect(formatVaultSharePrice(price!)).toBe("0.9999663");
+  expect(formatVaultSharePrice(vaultSharePrice(0n, 0n)!)).toBe("1.0000");
+  expect(vaultSharePrice(1n, 0n)).toBeNull();
+});
 
 const account: VaultAccount = {
   address: "owner",

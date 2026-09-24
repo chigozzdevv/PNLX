@@ -31,6 +31,7 @@ describe("liquidity vault backend", () => {
       series_assets: "100000000",
       series_liquid: "20000000",
       series_principal: "80000000",
+      series_total_shares: "9007199254740993",
     };
     const relayer = {
       readAsync: async (request: { payload: { functionName: string } }) => ({
@@ -44,6 +45,7 @@ describe("liquidity vault backend", () => {
     expect(status.totalShares).toBe("9007199254740993");
     expect(status.depositSeries).toBe(1);
     expect(status.depositSeriesAssets).toBe("0");
+    expect(status.currentSeriesShares).toBe("9007199254740993");
     expect(status.reconciledAssets).toBeNull();
     expect(status.withdrawalsOpen).toBe(false);
   });

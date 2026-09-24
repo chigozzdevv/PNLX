@@ -31,14 +31,15 @@ export class LiquidityVaultService {
         this.read("current_series", [], parseSeries),
         this.read("deposit_series", [], parseSeries),
       ]);
-    const [currentSeriesAssets, currentSeriesLiquid, currentSeriesPrincipal] = await Promise.all([
+    const [currentSeriesAssets, currentSeriesLiquid, currentSeriesPrincipal, currentSeriesShares] = await Promise.all([
       this.read("series_assets", ["--series", String(currentSeries)], parseInteger),
       this.read("series_liquid", ["--series", String(currentSeries)], parseInteger),
       this.read("series_principal", ["--series", String(currentSeries)], parseInteger),
+      this.read("series_total_shares", ["--series", String(currentSeries)], parseInteger),
     ]);
     const [depositSeriesAssets, depositSeriesShares] = depositSeries > currentSeries
       ? ["0", "0"]
-      : [currentSeriesAssets, await this.read("series_total_shares", ["--series", String(currentSeries)], parseInteger)];
+      : [currentSeriesAssets, currentSeriesShares];
     return {
       allocationLimitBps,
       asset,
@@ -47,6 +48,7 @@ export class LiquidityVaultService {
       currentSeriesAssets,
       currentSeriesLiquid,
       currentSeriesPrincipal,
+      currentSeriesShares,
       depositSeries,
       depositSeriesAssets,
       depositSeriesShares,

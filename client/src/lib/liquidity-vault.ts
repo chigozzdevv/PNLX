@@ -10,6 +10,7 @@ export interface VaultStatus {
   contractId: string;
   currentSeries: number;
   currentSeriesAssets: string;
+  currentSeriesShares: string;
   currentSeriesLiquid: string;
   currentSeriesPrincipal: string;
   depositSeries: number;
@@ -126,6 +127,17 @@ export function formatVaultUnits(value: bigint | string, fractionDigits = 2): st
   const whole = rounded / precision;
   const fraction = rounded % precision;
   return `${sign}${new Intl.NumberFormat("en-US").format(whole)}.${fraction.toString().padStart(fractionDigits, "0")}`;
+}
+
+export function vaultSharePrice(assets: bigint, shares: bigint): bigint | null {
+  if (shares === 0n) return assets === 0n ? SCALE : null;
+  return assets * SCALE / shares;
+}
+
+export function formatVaultSharePrice(value: bigint): string {
+  const formatted = formatVaultUnits(value, 7);
+  const [whole, fraction] = formatted.split(".");
+  return `${whole}.${fraction!.replace(/0+$/, "").padEnd(4, "0")}`;
 }
 
 export function quoteVaultAction(
