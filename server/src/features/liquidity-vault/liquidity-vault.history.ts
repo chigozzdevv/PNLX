@@ -41,6 +41,7 @@ export class LiquidityVaultHistory {
   private inFlight: Promise<void> | null = null;
   private lastPoll = 0;
   private lastSnapshot = 0;
+  private syncFailed = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private asset: string | null = null;
   private maker: string | null = null;
@@ -60,7 +61,7 @@ export class LiquidityVaultHistory {
   }
 
   async history(): Promise<{ activity: VaultActivity[]; assets: VaultAssetPoint[]; stale: boolean; observedAt: string | null }> {
-    const stale = await this.sync().then(() => false, () => true);
+    const stale = this.syncFailed || !this.lastPoll || Date.now() - this.lastPoll > 2 * POLL_MS;
     const client = new MongoClient(this.config.uri);
     try {
       await client.connect();
@@ -89,7 +90,8 @@ export class LiquidityVaultHistory {
   sync(): Promise<void> {
     if (this.inFlight) return this.inFlight;
     if (Date.now() - this.lastPoll < POLL_MS) return Promise.resolve();
-    this.inFlight = this.syncOnce().then(() => { this.lastPoll = Date.now(); })
+    this.inFlight = this.syncOnce().then(() => { this.lastPoll = Date.now(); this.syncFailed = false; },
+      (error) => { this.syncFailed = true; throw error; })
       .finally(() => { this.inFlight = null; });
     return this.inFlight;
   }

@@ -65,31 +65,32 @@ export class LiquidityVaultService {
   async account(owner: string): Promise<VaultAccount> {
     const address = parseAddress(owner);
     const args = ["--owner", address];
-    const [shares, pendingShares, availableShares, deposited, withdrawn, seriesIds] = await Promise.all([
-      this.read("shares", args, parseInteger),
-      this.read("pending_shares", args, parseInteger),
-      this.read("available_shares", args, parseInteger),
+    const positionsPromise = this.read("owner_series", args, parseSeriesIds).then((seriesIds) =>
+      Promise.all(seriesIds.map(async (series): Promise<VaultPosition> => {
+        const raw = await this.read("series_position", ["--series", String(series), "--owner", address], parsePosition);
+        if (raw.series !== series || BigInt(raw.pendingShares) > BigInt(raw.shares)) {
+          throw new Error("invalid vault position response");
+        }
+        return {
+          series: raw.series,
+          seriesAssets: raw.seriesAssets,
+          seriesTotalShares: raw.seriesTotalShares,
+          shares: raw.shares,
+          pendingShares: raw.pendingShares,
+          assetsAtCost: raw.assetsAtCost,
+          availableShares: (BigInt(raw.shares) - BigInt(raw.pendingShares)).toString(),
+          equity: raw.deployedPrincipal === "0" ? raw.assetsAtCost : null,
+          withdrawalsOpen: raw.deployedPrincipal === "0",
+        };
+      })));
+    const [deposited, withdrawn, positions] = await Promise.all([
       this.read("deposited", args, parseInteger),
       this.read("withdrawn", args, parseInteger),
-      this.read("owner_series", args, parseSeriesIds),
+      positionsPromise,
     ]);
-    const positions = await Promise.all(seriesIds.map(async (series): Promise<VaultPosition> => {
-      const raw = await this.read("series_position", ["--series", String(series), "--owner", address], parsePosition);
-      if (raw.series !== series || BigInt(raw.pendingShares) > BigInt(raw.shares)) {
-        throw new Error("invalid vault position response");
-      }
-      return {
-        series: raw.series,
-        seriesAssets: raw.seriesAssets,
-        seriesTotalShares: raw.seriesTotalShares,
-        shares: raw.shares,
-        pendingShares: raw.pendingShares,
-        assetsAtCost: raw.assetsAtCost,
-        availableShares: (BigInt(raw.shares) - BigInt(raw.pendingShares)).toString(),
-        equity: raw.deployedPrincipal === "0" ? raw.assetsAtCost : null,
-        withdrawalsOpen: raw.deployedPrincipal === "0",
-      };
-    }));
+    const shares = positions.reduce((sum, position) => sum + BigInt(position.shares), 0n).toString();
+    const pendingShares = positions.reduce((sum, position) => sum + BigInt(position.pendingShares), 0n).toString();
+    const availableShares = (BigInt(shares) - BigInt(pendingShares)).toString();
     const equity = positions.every((position) => position.equity !== null)
       ? positions.reduce((sum, position) => sum + BigInt(position.equity!), 0n).toString()
       : null;

@@ -17,23 +17,28 @@ export function useLiquidityVault(session: WalletSession | null) {
     let active = true;
     const currentSession = session;
     const load = async () => {
-      setLoading(true);
+      await Promise.resolve();
+      if (!active) return;
+      setLoading(Boolean(currentSession));
       setStatusError(null);
       setAccountError(null);
       setAccount(null);
-      const [poolResult, accountResult] = await Promise.allSettled([
-        getVaultStatus(),
-        currentSession ? getVaultAccount(currentSession) : Promise.resolve(null),
-      ]);
-      if (!active) return;
-      if (poolResult.status === "fulfilled") setStatus(poolResult.value);
-      else {
+      void getVaultStatus().then((pool) => {
+        if (active) setStatus(pool);
+      }).catch((error) => {
+        if (!active) return;
         setStatus(null);
-        setStatusError(poolResult.reason instanceof Error ? poolResult.reason.message : "Pool data is unavailable");
+        setStatusError(error instanceof Error ? error.message : "Pool data is unavailable");
+      });
+      if (currentSession) {
+        void getVaultAccount(currentSession).then((position) => {
+          if (active) setAccount(position);
+        }).catch((error) => {
+          if (active) setAccountError(error instanceof Error ? error.message : "Wallet position is unavailable");
+        }).finally(() => {
+          if (active) setLoading(false);
+        });
       }
-      if (accountResult.status === "fulfilled") setAccount(accountResult.value);
-      else setAccountError(accountResult.reason instanceof Error ? accountResult.reason.message : "Wallet position is unavailable");
-      setLoading(false);
     };
     void load();
     return () => { active = false; };
