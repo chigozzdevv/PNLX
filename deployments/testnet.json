@@ -77,6 +77,6 @@
     "position-transition-proof-verifier": "0xbe24718b96844aaf4af5df11d562b80b9bd2eac5dab624f9c7096ab43cfe0d08",
     "withdraw-proof-verifier": "0xbe24718b96844aaf4af5df11d562b80b9bd2eac5dab624f9c7096ab43cfe0d08",
     "batch-match-risc0-verifier": "0xa96c47407222ad66ad50a7ed34fb30bdf2c4baa0c89feb2459841ea1ff27896a",
-    "liquidity-vault": "0x6880901ff07ff1880f795b16bfac8a6285dc8f0503db261ae9c80bedba75d705"
+    "liquidity-vault": "0x5f58cb281a55a31b30af708c6a299e32573099aba9320d5fc5402b09da0d98f6"
   }
 }
