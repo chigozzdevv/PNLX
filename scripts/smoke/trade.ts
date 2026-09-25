@@ -1604,7 +1604,7 @@ function invoke(contractId: string, method: string, args: string[]): string {
 }
 
 function invokeFromSource(source: string, contractId: string, method: string, args: string[]): string {
-  const send = new Set(["current_root", "deployed_principal", "has_proof", "is_settled", "token_digest"]).has(method)
+  const send = new Set(["current_root", "deployed_principal", "series_principal", "has_proof", "is_settled", "token_digest"]).has(method)
     ? "no"
     : "yes";
   const command = [
@@ -1643,7 +1643,7 @@ function invokeFromSource(source: string, contractId: string, method: string, ar
     }
     if (result.status === 0) {
       if (send === "yes") sleep(3500);
-      return last;
+      return result.stdout.trim();
     }
     sleep(6000);
   }
