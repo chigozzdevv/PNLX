@@ -1,17 +1,10 @@
-import {
-  circuitMarginCommitment,
-  circuitNullifier,
-  digestToFieldHex,
-  hashFields,
-  ownerCommitment,
-} from "@pnlx/crypto";
-import { PRICE_SCALE, settleClose } from "@pnlx/market-math";
-import { createCircuitPositionNote } from "@pnlx/sdk";
+import { ownerCommitment } from "@pnlx/crypto";
 import { loadCircuit } from "@pnlx/proof-system";
 import type { Hex, PositionLifecycleRecord } from "@pnlx/protocol-types";
 import { loadEnv } from "@/config/env";
 import { reconstructPositionOpening } from "@/features/account-keys/account-key-recovery";
 import { PositionClosesService } from "@/features/position-closes/position-closes.service";
+import { preparePairedMakerClose } from "@/features/position-closes/vault-maker-pair";
 import {
   finalizePendingMakerCloseOutput,
   insertPendingMakerNote,
@@ -31,7 +24,6 @@ import { settleVaultMakerPosition } from "./settle-vault-maker-position";
 import { withdrawMakerNotes } from "./withdraw-maker-notes";
 import { authHeadersFor, localApiOrigin, type SmokeApp } from "../smoke/custody";
 
-const ZERO_HEX = "0x0" as Hex;
 const warnedMarkMismatch = new Set<Hex>();
 
 if (import.meta.main) {
@@ -181,6 +173,7 @@ export async function reconcileOneMakerPosition(input: {
       await assertSuccessfulTransaction(env.stellarRpcUrl, clientClose!.settlementTxHash!);
       const makerPosition = candidate.makerPosition;
       if (makerPosition.status === "open") {
+        if (!input.allowIndependentMark) continue;
         if (candidate.output) {
           throw new Error(`maker position ${makerPosition.positionCommitment} has an unresolved pending close output`);
         }
@@ -232,25 +225,6 @@ async function closeMakerPosition(
   deployment: NonNullable<ReturnType<typeof loadDeploymentRegistry>>,
 ): Promise<boolean> {
   const position = candidate.makerPosition;
-  const opening = reconstructPositionOpening(executor.store, position);
-  if (!opening) throw new Error("maker position opening could not be reconstructed");
-  const settlement = [...executor.store.settlements.values()].find(
-    (item) => item.settlementDigest === position.settlementDigest,
-  )!;
-  const index = settlement.newCommitments.indexOf(position.positionCommitment);
-  const owner = position.ownerCommitment;
-  const rho = `${position.sourceIntentCommitment}:position:${index}`;
-  const original = createCircuitPositionNote({
-    marketId: position.marketId, side: opening.side, size: opening.size,
-    entryPrice: opening.entryPrice, margin: opening.margin,
-    fundingIndex: opening.fundingIndex, owner,
-    spendSecret: `${owner}:${rho}`, rho,
-    blinding: `${position.sourceIntentCommitment}:blinding:${index}`,
-  });
-  if (original.commitment !== position.positionCommitment ||
-    original.positionNullifier !== position.positionNullifier) {
-    throw new Error("maker position witness does not match its recorded commitment");
-  }
   const relayer = createRelayer({ config: {
     commandTimeoutMs: env.stellarCommandTimeoutMs, mode: "stellar-cli",
     network: env.stellarNetwork, networkPassphrase: env.stellarNetworkPassphrase,
@@ -259,7 +233,7 @@ async function closeMakerPosition(
   const onchain = createOnchainRelay(relayer, { deployment, enabled: true });
   const prover = createProver();
   const service = new PositionClosesService(executor, prover, onchain, env);
-  const context = service.context({ ownerCommitment: owner,
+  const context = service.context({ ownerCommitment: position.ownerCommitment,
     positionCommitment: position.positionCommitment }, candidate.allocation.maker);
   const markPrice = BigInt(context.market.markPrice);
   const clientMarkPrice = executor.store.positionCloses.get(candidate.clientPosition.closeCommitment!)?.markPrice;
@@ -271,68 +245,22 @@ async function closeMakerPosition(
     return false;
   }
   warnedMarkMismatch.delete(position.positionCommitment);
-  const fundingPayment = opening.size *
-    (BigInt(context.market.fundingIndex) - opening.fundingIndex) / PRICE_SCALE *
-    (opening.side === "long" ? 1n : -1n);
-  const close = settleClose({ side: opening.side, closeSize: opening.size,
-    entryPrice: opening.entryPrice, markPrice, margin: opening.margin,
-    fundingPayment, fee: 0n });
-  if (close.newMargin <= 0n) throw new Error("maker position requires liquidation, not a zero-output close");
-  const newPosition = createCircuitPositionNote({
-    marketId: position.marketId, side: opening.side, size: 0n,
-    entryPrice: opening.entryPrice, margin: 0n,
-    fundingIndex: opening.fundingIndex, owner,
-    spendSecret: `${owner}:${position.positionNullifier}:closed-position-spend`,
-    rho: `${position.positionNullifier}:closed-position-rho`,
-    blinding: `${position.positionNullifier}:closed-position-blinding`,
+  const prepared = preparePairedMakerClose({
+    fundingIndex: BigInt(context.market.fundingIndex),
+    makerNote: candidate.makerNote, makerPosition: position, markPrice,
+    prover, store: executor.store,
+    traderCloseCommitment: candidate.clientPosition.closeCommitment!,
   });
-  const rhoDigest = digestToFieldHex(`vault-maker-close-rho:${position.positionNullifier}`);
-  const blinding = digestToFieldHex(`vault-maker-close-blinding:${position.positionNullifier}`);
-  const amount = close.newMargin;
-  const outputCommitment = circuitMarginCommitment({
-    amount, assetDigest: candidate.makerNote.assetDigest,
-    blinding, ownerDigest: original.ownerDigest, rhoDigest,
-    spendSecretDigest: ZERO_HEX,
-  });
-  const closeCommitment = hashFields("vault-maker-close", [
-    position.positionCommitment, candidate.clientPosition.closeCommitment!,
-  ]);
-  const proven = prover.provePositionClose({
-    marketId: position.marketId, positionCommitment: position.positionCommitment,
-    positionRoot: context.positionRoot, positionNullifier: position.positionNullifier,
-    closeCommitment, side: opening.side, size: opening.size,
-    closeSize: opening.size, entryPrice: opening.entryPrice,
-    markPrice, margin: opening.margin, fundingPayment, fee: 0n,
-    newMargin: amount, fundingIndex: opening.fundingIndex,
-    remainingMargin: 0n, marginOutputAmount: amount,
-    newPositionCommitment: newPosition.commitment,
-    marginOutputCommitment: outputCommitment,
-    marketDigest: original.marketDigest, ownerDigest: original.ownerDigest,
-    rhoDigest: original.rhoDigest, blinding: original.blinding,
-    spendSecretDigest: original.spendSecretDigest,
-    newPositionRhoDigest: newPosition.rhoDigest,
-    newPositionBlinding: newPosition.blinding,
-    marginOutputAssetDigest: candidate.makerNote.assetDigest,
-    marginOutputRhoDigest: rhoDigest, marginOutputBlinding: blinding,
-    pathIndices: context.membershipProof.indices,
-    pathSiblings: context.membershipProof.siblings,
-  });
+  const { close: proven, note } = prepared;
   input.assertLease?.();
   const app: SmokeApp = { origin: input.apiUrl, handle: (request) => fetch(request) };
   const authHeaders = await authHeadersFor(app, input.makerSource, candidate.allocation.maker, env);
-  const now = Date.now();
   await insertPendingMakerNote({
-    amount: amount.toString(), assetDigest: candidate.makerNote.assetDigest,
-    blinding, commitment: outputCommitment, createdAt: now,
-    noteNullifier: circuitNullifier({ rhoDigest, spendSecretDigest: ZERO_HEX }),
-    ownerCommitment: owner, ownerDigest: original.ownerDigest,
-    rhoDigest, shieldedPool: deployment.contracts["shielded-pool"],
-    source: input.makerSource, spendSecretDigest: ZERO_HEX,
-    token: env.collateralTokenContract!, updatedAt: now,
+    ...note, shieldedPool: deployment.contracts["shielded-pool"],
+    source: input.makerSource, token: env.collateralTokenContract!, updatedAt: Date.now(),
     walletAddress: candidate.allocation.maker,
     vaultAllocationId: candidate.allocation.id,
     vaultParentCommitment: candidate.makerNote.commitment,
-    closePositionCommitment: position.positionCommitment, closeCommitment,
   });
   const response = await fetch(`${input.apiUrl}/position-closes/manual-proven`, {
     method: "POST", headers: authHeaders,
@@ -342,12 +270,12 @@ async function closeMakerPosition(
   const body = await response.json() as { positionClose?: { settlementTxHash?: string;
     marginOutputCommitment?: Hex; closeCommitment?: Hex } };
   const txHash = body.positionClose?.settlementTxHash;
-  if (!txHash || body.positionClose?.marginOutputCommitment !== outputCommitment ||
-    body.positionClose?.closeCommitment !== closeCommitment) {
+  if (!txHash || body.positionClose?.marginOutputCommitment !== note.commitment ||
+    body.positionClose?.closeCommitment !== proven.closeCommitment) {
     throw new Error("maker position close response does not match the prepared output");
   }
   await assertSuccessfulTransaction(env.stellarRpcUrl, txHash);
   process.stdout.write(`${JSON.stringify({ positionCommitment: position.positionCommitment,
-    outputCommitment, txHash, status: "maker-closed" })}\n`);
+    outputCommitment: note.commitment, txHash, status: "maker-closed" })}\n`);
   return true;
 }

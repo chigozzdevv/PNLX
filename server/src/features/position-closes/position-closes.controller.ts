@@ -31,13 +31,17 @@ export class PositionClosesController {
 
   async createProven(request: Request): Promise<Response> {
     const body = await readJson<Record<string, unknown>>(request);
-    return json({ positionClose: this.positionCloses.createProven(parseProvenPositionClose(body)) }, 201);
+    return json({ positionClose: await this.positionCloses.createProven(
+      parseProvenPositionClose(body), authenticatedAddress(request),
+    ) }, 201);
   }
 
   async createManualProven(request: Request): Promise<Response> {
     const body = await readJson<Record<string, unknown>>(request);
     return json(
-      { positionClose: this.positionCloses.createManualProven(parseProvenPositionClose(body)) },
+      { positionClose: await this.positionCloses.createManualProven(
+        parseProvenPositionClose(body), authenticatedAddress(request),
+      ) },
       201,
     );
   }

@@ -182,6 +182,14 @@ export class FileProtocolStore extends ProtocolStore {
     this.persist(() => super.addManualPositionClose(record));
   }
 
+  override addPairedPositionCloses(
+    trader: PositionCloseRecord,
+    maker: PositionCloseRecord,
+    conditional: boolean,
+  ): void {
+    this.persist(() => super.addPairedPositionCloses(trader, maker, conditional));
+  }
+
   override addDisclosure(record: DisclosureRecord): void {
     this.persist(() => super.addDisclosure(record));
   }

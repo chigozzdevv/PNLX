@@ -72,7 +72,14 @@ export async function insertPendingMakerNote(note: StoredMakerNoteRecord & { com
   const client = new MongoClient(config.uri);
   try {
     await client.connect();
-    const result = await client.db(config.database).collection<MakerNoteDocument>(config.collection).updateOne(
+    const collection = client.db(config.database).collection<MakerNoteDocument>(config.collection);
+    if (typeof note.closePositionCommitment === "string") {
+      await collection.createIndex(
+        { namespace: 1, closePositionCommitment: 1 },
+        { unique: true, partialFilterExpression: { closePositionCommitment: { $type: "string" } } },
+      );
+    }
+    const result = await collection.updateOne(
       { _id: makerNoteDocumentId(config.namespace, note.commitment) },
       { $setOnInsert: {
         ...note,
@@ -83,6 +90,26 @@ export async function insertPendingMakerNote(note: StoredMakerNoteRecord & { com
       { upsert: true },
     );
     if (result.upsertedCount !== 1) throw new Error("maker note commitment already exists");
+  } finally {
+    await client.close();
+  }
+}
+
+export async function deleteUnsettledPendingMakerCloseOutput(
+  commitment: string,
+  closePositionCommitment: string,
+): Promise<void> {
+  const config = requiredMongoConfig();
+  const client = new MongoClient(config.uri);
+  try {
+    await client.connect();
+    await client.db(config.database).collection<MakerNoteDocument>(config.collection).deleteOne({
+      _id: makerNoteDocumentId(config.namespace, commitment),
+      namespace: config.namespace,
+      closePositionCommitment,
+      status: "pending",
+      closeTxHash: { $exists: false },
+    });
   } finally {
     await client.close();
   }

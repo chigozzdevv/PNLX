@@ -10,6 +10,16 @@ import { assertSubmittedRelay } from "@/shared/protocol/onchain-submission";
 import { createPositionCloseAccountEvent } from "@/shared/protocol/account-event-outcomes";
 import { PRICE_SCALE } from "@pnlx/market-math";
 import type { MarketConfig } from "@pnlx/protocol-types";
+import { ownerCommitment } from "@pnlx/crypto";
+import { preparePairedMakerClose, vaultMakerPairForTrader } from "@/features/position-closes/vault-maker-pair";
+import {
+  deleteUnsettledPendingMakerCloseOutput,
+  finalizePendingMakerCloseOutput,
+  insertPendingMakerNote,
+  readMakerNotes,
+} from "@/shared/maker-note-store";
+import { readVaultMakerAllocations } from "@/shared/vault-maker-backing";
+import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import type {
   CreatePositionCloseInput,
   PositionCloseContextInput,
@@ -23,7 +33,9 @@ export class PositionClosesService {
     private readonly executor: ExecutorService,
     private readonly prover: ProverService,
     private readonly onchain?: OnchainRelayService,
-    private readonly env: Pick<ServerEnv, "settlementsOnchainRequired"> = {
+    private readonly env: Pick<ServerEnv, "settlementsOnchainRequired"> &
+      Partial<Pick<ServerEnv, "authRequired" | "makerWalletAddress" | "mongodbUri" |
+        "collateralTokenContract" | "stellarDeploymentFile">> = {
       settlementsOnchainRequired: false,
     },
   ) {}
@@ -54,23 +66,151 @@ export class PositionClosesService {
   }
 
   create(input: CreatePositionCloseInput): CreatePositionCloseResult {
+    if (this.env.makerWalletAddress && this.onchain?.enabled) {
+      throw new Error("vault-backed closes require the proven close route");
+    }
     const record = this.prepare(input);
     return this.commit(record);
   }
 
   createManual(input: CreatePositionCloseInput): CreatePositionCloseResult {
+    if (this.env.makerWalletAddress && this.onchain?.enabled) {
+      throw new Error("vault-backed closes require the proven close route");
+    }
     const record = this.prepare(input);
     return this.commitManual(record);
   }
 
-  createProven(input: CreateProvenPositionCloseInput): CreatePositionCloseResult {
+  async createProven(
+    input: CreateProvenPositionCloseInput,
+    authenticated?: string,
+  ): Promise<CreatePositionCloseResult> {
     this.validateProven(input);
-    return this.commit(input);
+    this.assertCloseOwner(input, authenticated);
+    return (await this.commitPairedVaultMaker(input, true)) ?? this.commit(input);
   }
 
-  createManualProven(input: CreateProvenPositionCloseInput): CreatePositionCloseResult {
+  async createManualProven(
+    input: CreateProvenPositionCloseInput,
+    authenticated?: string,
+  ): Promise<CreatePositionCloseResult> {
     this.validateProven(input, { requireConditionalTrigger: false });
-    return this.commitManual(input);
+    this.assertCloseOwner(input, authenticated);
+    return (await this.commitPairedVaultMaker(input, false)) ?? this.commitManual(input);
+  }
+
+  private assertCloseOwner(record: CreateProvenPositionCloseInput, authenticated?: string): void {
+    const position = this.executor.store.positionFor(record.positionCommitment, record.positionNullifier);
+    if (!position || position.positionCommitment !== record.positionCommitment ||
+      position.positionNullifier !== record.positionNullifier || position.status !== "open") {
+      throw new Error("position is not open");
+    }
+    assertAuthenticatedOwnerCommitment(authenticated, position.ownerCommitment, "position owner");
+  }
+
+  private async commitPairedVaultMaker(
+    trader: CreateProvenPositionCloseInput,
+    conditional: boolean,
+  ): Promise<CreatePositionCloseResult | undefined> {
+    if (!this.env.makerWalletAddress || !this.onchain?.enabled) return undefined;
+    const maker = this.env.makerWalletAddress.trim().toUpperCase();
+    const traderPosition = this.executor.store.positionFor(trader.positionCommitment, trader.positionNullifier);
+    if (!traderPosition) throw new Error("position not found");
+    if (traderPosition.ownerCommitment === ownerCommitment(maker)) {
+      const settlement = [...this.executor.store.settlements.values()].find(
+        (item) => item.settlementDigest === traderPosition.settlementDigest,
+      );
+      const index = settlement?.newCommitments.indexOf(trader.positionCommitment) ?? -1;
+      const paired = index >= 0 ? this.executor.store.positionLifecycle.get(
+        settlement!.newCommitments[index ^ 1]!,
+      ) : undefined;
+      if (index >= 0 && !paired) throw new Error("paired trader position is missing");
+      if (paired?.status === "open") {
+        throw new Error("vault maker position closes with its paired trader");
+      }
+      return undefined;
+    }
+    const settlement = [...this.executor.store.settlements.values()].find(
+      (item) => item.settlementDigest === traderPosition.settlementDigest,
+    );
+    const pairIndex = settlement?.newCommitments.indexOf(trader.positionCommitment) ?? -1;
+    const pairedPosition = pairIndex >= 0 ? this.executor.store.positionLifecycle.get(
+      settlement!.newCommitments[pairIndex ^ 1]!,
+    ) : undefined;
+    if (pairIndex >= 0 && !pairedPosition) throw new Error("paired position is missing");
+    if (pairedPosition?.ownerCommitment !== ownerCommitment(maker)) return undefined;
+    if (!this.env.stellarDeploymentFile) throw new Error("vault maker deployment is unavailable");
+    const deployment = loadDeploymentRegistry(this.env.stellarDeploymentFile);
+    const vault = deployment?.contracts["liquidity-vault"];
+    if (!vault || !this.env.collateralTokenContract || !this.env.mongodbUri) {
+      throw new Error("vault maker close configuration is unavailable");
+    }
+    const [notes, allocations] = await Promise.all([readMakerNotes(), readVaultMakerAllocations()]);
+    const pair = vaultMakerPairForTrader({
+      allocations, asset: this.env.collateralTokenContract, maker, notes,
+      store: this.executor.store, trader: traderPosition, vault,
+    });
+    if (!pair) return undefined;
+    const market = marketConfig(this.executor, trader.marketId);
+    const prepared = preparePairedMakerClose({
+      fundingIndex: market.fundingIndex, makerNote: pair.makerNote,
+      makerPosition: pair.makerPosition, markPrice: trader.markPrice,
+      prover: this.prover, store: this.executor.store,
+      traderCloseCommitment: trader.closeCommitment,
+    });
+    if (notes.some((note) => note.closePositionCommitment === pair.makerPosition.positionCommitment)) {
+      throw new Error("vault maker close output already exists");
+    }
+    const note = {
+      ...prepared.note,
+      token: this.env.collateralTokenContract,
+      shieldedPool: deployment.contracts["shielded-pool"],
+      source: String(pair.makerNote.source ?? ""),
+      vaultAllocationId: pair.allocation.id,
+      vaultParentCommitment: String(pair.makerNote.commitment),
+      updatedAt: Date.now(),
+    };
+    if (!note.shieldedPool) {
+      throw new Error("vault maker close output is missing the shielded pool");
+    }
+    await insertPendingMakerNote(note);
+    let relay: OnchainRelayResult;
+    const settlementFunction = conditional ? "settle_pair_conditional" : "settle_pair_manual";
+    try {
+      relay = this.onchain.settlePairedPositionClose(trader, prepared.close, conditional);
+      this.assertSubmittedSettlementRelay(relay, settlementFunction);
+    } catch (error) {
+      try {
+        if (!this.onchain.isPositionCloseSettled(trader.closeCommitment) &&
+          !this.onchain.isPositionCloseSettled(prepared.close.closeCommitment)) {
+          await deleteUnsettledPendingMakerCloseOutput(
+            note.commitment, pair.makerPosition.positionCommitment,
+          );
+        }
+      } catch {
+        // Preserve the pending note if the on-chain outcome cannot be verified.
+      }
+      throw error;
+    }
+    const committedTrader = withRelayEvidence(trader, relay, settlementFunction);
+    const committedMaker = {
+      ...withRelayEvidence(prepared.close, relay, settlementFunction),
+      proofVerificationTxHash: relay.relays.filter((item) =>
+        item.functionName === "verify_and_record" && item.submitted,
+      )[1]?.txHash,
+    };
+    try {
+      this.executor.store.recordProof(committedTrader.proof);
+      this.executor.store.recordProof(committedMaker.proof);
+      this.executor.store.addPairedPositionCloses(committedTrader, committedMaker, conditional);
+      const accountEvent = this.accountEventFor(committedTrader);
+      if (accountEvent) this.executor.store.addAccountEvent(accountEvent);
+      await (this.executor.store as { flush?: () => Promise<void> }).flush?.();
+      await finalizePendingMakerCloseOutput(note.commitment, committedTrader.settlementTxHash!);
+    } catch (error) {
+      console.error("paired position close settled but reconciliation is pending", error);
+    }
+    return { ...committedTrader, txHash: committedTrader.settlementTxHash };
   }
 
   prepare(input: CreatePositionCloseInput): CreatePositionCloseResult {
@@ -189,7 +329,7 @@ export class PositionClosesService {
 function withRelayEvidence(
   record: CreatePositionCloseResult,
   result: OnchainRelayResult | undefined,
-  settlementFunction: "settle" | "settle_manual",
+  settlementFunction: "settle" | "settle_manual" | "settle_pair_manual" | "settle_pair_conditional",
 ): CreatePositionCloseResult {
   const proofVerificationTxHash = result?.relays.find(
     (relay) => relay.functionName === "verify_and_record" && relay.submitted,

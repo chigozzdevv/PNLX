@@ -127,6 +127,11 @@ export interface OnchainRelay {
   triggerConditionalClose(record: ConditionalOrderRecord): OnchainRelayResult;
   settlePositionClose(record: PositionCloseRecord): OnchainRelayResult;
   settleManualPositionClose(record: PositionCloseRecord): OnchainRelayResult;
+  settlePairedPositionClose(
+    trader: PositionCloseRecord,
+    maker: PositionCloseRecord,
+    conditional: boolean,
+  ): OnchainRelayResult;
   withdraw(record: WithdrawalRecord): OnchainRelayResult;
   withdrawAsset(record: AssetWithdrawalRecord): OnchainRelayResult;
   liquidate(record: LiquidationRecord): OnchainRelayResult;

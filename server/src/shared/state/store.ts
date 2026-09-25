@@ -484,6 +484,36 @@ export class ProtocolStore {
     this.addPositionCloseRecord(record);
   }
 
+  addPairedPositionCloses(
+    trader: PositionCloseRecord,
+    maker: PositionCloseRecord,
+    conditional: boolean,
+  ): void {
+    if (trader.marketId !== maker.marketId || trader.markPrice !== maker.markPrice ||
+      trader.positionNullifier === maker.positionNullifier ||
+      trader.closeCommitment === maker.closeCommitment ||
+      trader.marginOutputCommitment === maker.marginOutputCommitment) {
+      throw new Error("invalid paired position closes");
+    }
+    if (this.positionCloses.has(trader.closeCommitment) ||
+      this.positionCloses.has(maker.closeCommitment) ||
+      this.spentNullifiers.has(trader.positionNullifier) ||
+      this.spentNullifiers.has(maker.positionNullifier)) {
+      throw new Error("paired position already closed");
+    }
+    assertProof(this, trader.proof);
+    assertProof(this, maker.proof);
+    if (conditional) {
+      const trigger = this.conditionalCloses.get(trader.closeCommitment);
+      if (!trigger || trigger.marketId !== trader.marketId ||
+        trigger.positionNullifier !== trader.positionNullifier) {
+        throw new Error("conditional close not triggered");
+      }
+    }
+    this.addPositionCloseRecord(trader);
+    this.addPositionCloseRecord(maker);
+  }
+
   private addPositionCloseRecord(record: PositionCloseRecord): void {
     if (this.positionCloses.has(record.closeCommitment)) {
       throw new Error("position close already exists");

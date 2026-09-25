@@ -736,6 +736,49 @@ export class OnchainRelayService implements OnchainRelay {
     return this.settlePositionCloseWith(record, "settle_manual");
   }
 
+  settlePairedPositionClose(
+    trader: PositionCloseRecord,
+    maker: PositionCloseRecord,
+    conditional: boolean,
+  ): OnchainRelayResult {
+    if (!this.config.enabled) return empty();
+    if (trader.marketId !== maker.marketId || trader.markPrice !== maker.markPrice ||
+      trader.positionCommitment === maker.positionCommitment ||
+      trader.positionNullifier === maker.positionNullifier) {
+      throw new Error("paired position closes must use distinct positions and the same market mark");
+    }
+    this.assertCurrentMarketPrice(trader.marketId, trader.markPrice, "paired position close");
+    const traderProof = this.invokeProofVerifier(trader.proof);
+    const makerProof = this.invokeProofVerifier(maker.proof);
+    this.assertCurrentMarketPrice(trader.marketId, trader.markPrice, "paired position close");
+    return {
+      relays: [traderProof, makerProof,
+        this.invokeWithMarketPriceGuard("position-close", "position-close",
+          conditional ? "settle_pair_conditional" : "settle_pair_manual", [
+            "--trader", positionCloseArg(trader),
+            "--maker", positionCloseArg(maker),
+          ], trader.marketId, trader.markPrice, "paired position close")],
+    };
+  }
+
+  isPositionCloseSettled(closeCommitment: Hex): boolean {
+    if (!this.config.enabled) throw new Error("position close status requires on-chain relay");
+    const result = this.relayer.read({
+      kind: "contract-invoke",
+      payload: {
+        args: ["--close_commitment", bytes32(closeCommitment)],
+        contractId: contractId(this.deployment(), "position-close"),
+        functionName: "is_settled",
+        send: "no",
+      },
+    });
+    const status = result.output.trim().replace(/^"|"$/g, "");
+    if (status !== "true" && status !== "false") {
+      throw new Error("invalid position close settlement status");
+    }
+    return status === "true";
+  }
+
   private settlePositionCloseWith(
     record: PositionCloseRecord,
     functionName: "settle" | "settle_manual",
@@ -1200,6 +1243,20 @@ function proofArg(proof: ProofMeta): string {
     proof_digest: bytes32(proof.proofDigest),
     public_input_hash: bytes32(proof.publicInputHash),
     verifier_hash: bytes32(proof.verifierHash),
+  });
+}
+
+function positionCloseArg(record: PositionCloseRecord): string {
+  return JSON.stringify({
+    market_id: marketKey(record.marketId),
+    position_root: bytes32(record.positionRoot),
+    position_commitment: bytes32(record.positionCommitment),
+    position_nullifier: bytes32(record.positionNullifier),
+    close_commitment: bytes32(record.closeCommitment),
+    mark_price: record.markPrice.toString(),
+    new_position_commitment: bytes32(record.newPositionCommitment),
+    margin_output_commitment: bytes32(record.marginOutputCommitment),
+    proof: JSON.parse(proofArg(record.proof)),
   });
 }
 

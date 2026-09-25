@@ -2699,6 +2699,60 @@ describe("support workers", () => {
     expect(calls[3]).toContain((56_000n * PRICE_SCALE).toString());
   });
 
+  test("relays two proofs but submits both position closes in one contract call", () => {
+    const calls: string[][] = [];
+    const relayer = createRelayer({
+      config: { mode: "stellar-cli", network: "testnet", source: "pnlx-testnet" },
+      runCommand: (command, args) => {
+        calls.push([command, ...args]);
+        return {
+          status: 0, stderr: "",
+          stdout: args.includes("mark_price")
+            ? JSON.stringify({ price: "5600000000000", timestamp: 1_800_000_000 })
+            : "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface",
+        };
+      },
+    });
+    const onchain = createOnchainRelay(relayer, {
+      deployment: {
+        contracts: { market: "market-contract", "position-close": "position-close-contract" },
+        network: "testnet", source: "pnlx-testnet", sourceAddress: "GTEST",
+        verifiers: { "position-close-proof-verifier": "position-close-verifier" },
+      },
+      enabled: true,
+      resolveProofArtifact: () => ({ proofPath: "/tmp/proof", publicInputsPath: "/tmp/public_inputs" }),
+    });
+    const trader = {
+      marketId: "xlm-usd-perp", markPrice: 56_000n * PRICE_SCALE,
+      positionCommitment: hashFields("position", [1]),
+      positionNullifier: hashFields("nullifier", [1]),
+      positionRoot: hashFields("root", [1]),
+      closeCommitment: hashFields("close", [1]),
+      newPositionCommitment: hashFields("new", [1]),
+      marginOutputCommitment: hashFields("output", [1]),
+      proof: proof("position-close"),
+    };
+    const maker = {
+      ...trader,
+      positionCommitment: hashFields("position", [2]),
+      positionNullifier: hashFields("nullifier", [2]),
+      closeCommitment: hashFields("close", [2]),
+      newPositionCommitment: hashFields("new", [2]),
+      marginOutputCommitment: hashFields("output", [2]),
+    };
+    const result = onchain.settlePairedPositionClose(trader, maker, false);
+    expect(result.relays.filter((relay) => relay.functionName === "verify_and_record")).toHaveLength(2);
+    expect(result.relays.filter((relay) => relay.functionName === "settle_pair_manual")).toHaveLength(1);
+    const pairCall = calls.find((call) => call.includes("settle_pair_manual"))!;
+    expect(pairCall).toContain("--trader");
+    expect(pairCall).toContain("--maker");
+    expect(pairCall.some((arg) => arg.includes(trader.closeCommitment.slice(2)))).toBe(true);
+    expect(pairCall.some((arg) => arg.includes(maker.closeCommitment.slice(2)))).toBe(true);
+    expect(() => onchain.settlePairedPositionClose(trader, {
+      ...maker, markPrice: maker.markPrice + 1n,
+    }, false)).toThrow("same market mark");
+  });
+
   test("stops a close after proof verification when the on-chain mark price moved", () => {
     const calls: string[][] = [];
     let priceReads = 0;

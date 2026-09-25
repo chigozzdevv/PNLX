@@ -42,6 +42,20 @@ pub struct ProofMeta {
 
 #[derive(Clone)]
 #[contracttype]
+pub struct CloseArgs {
+    pub market_id: BytesN<32>,
+    pub position_root: BytesN<32>,
+    pub position_commitment: BytesN<32>,
+    pub position_nullifier: BytesN<32>,
+    pub close_commitment: BytesN<32>,
+    pub mark_price: i128,
+    pub new_position_commitment: BytesN<32>,
+    pub margin_output_commitment: BytesN<32>,
+    pub proof: ProofMeta,
+}
+
+#[derive(Clone)]
+#[contracttype]
 pub struct PositionCloseMeta {
     pub market_id: BytesN<32>,
     pub mark_price: i128,
@@ -154,6 +168,14 @@ impl PositionClose {
         );
     }
 
+    pub fn settle_pair_manual(env: Env, trader: CloseArgs, maker: CloseArgs) {
+        settle_pair(env, trader, maker, false);
+    }
+
+    pub fn settle_pair_conditional(env: Env, trader: CloseArgs, maker: CloseArgs) {
+        settle_pair(env, trader, maker, true);
+    }
+
     pub fn is_settled(env: Env, close_commitment: BytesN<32>) -> bool {
         env.storage()
             .persistent()
@@ -165,6 +187,30 @@ impl PositionClose {
             .persistent()
             .has(&DataKey::PositionSpent(position_nullifier))
     }
+}
+
+fn settle_pair(env: Env, trader: CloseArgs, maker: CloseArgs, conditional: bool) {
+    if trader.market_id != maker.market_id || trader.mark_price != maker.mark_price {
+        panic!("paired close market or mark mismatch");
+    }
+    if trader.position_nullifier == maker.position_nullifier ||
+        trader.position_commitment == maker.position_commitment ||
+        trader.close_commitment == maker.close_commitment ||
+        trader.margin_output_commitment == maker.margin_output_commitment {
+        panic!("paired close inputs overlap");
+    }
+    settle_position_close(
+        env.clone(), trader.market_id, trader.position_root,
+        trader.position_commitment, trader.position_nullifier, trader.close_commitment,
+        trader.mark_price, trader.new_position_commitment,
+        trader.margin_output_commitment, trader.proof, conditional,
+    );
+    settle_position_close(
+        env, maker.market_id, maker.position_root,
+        maker.position_commitment, maker.position_nullifier, maker.close_commitment,
+        maker.mark_price, maker.new_position_commitment,
+        maker.margin_output_commitment, maker.proof, false,
+    );
 }
 
 fn settle_position_close(
@@ -458,7 +504,7 @@ fn validate_hash(env: &Env, value: &BytesN<32>) {
 mod tests {
     extern crate std;
 
-    use super::{PositionClose, PositionCloseClient, ProofMeta};
+    use super::{CloseArgs, PositionClose, PositionCloseClient, ProofMeta};
     use conditional_order::{
         ConditionalOrder, ConditionalOrderClient as ConditionalOrderRegistryClient,
         ProofMeta as ConditionalProofMeta,
@@ -573,6 +619,110 @@ mod tests {
         let state = PositionStateClient::new(&env, &setup.position_state);
         assert_eq!(state.leaf_count(), 2);
         assert!(state.has_root(&position_root(&env)));
+    }
+
+    #[test]
+    fn paired_close_spends_both_positions_at_one_mark() {
+        let env = Env::default();
+        let id = env.register(PositionClose, ());
+        let client = PositionCloseClient::new(&env, &id);
+        let first_proof = proof(&env);
+        let setup = setup_protocol(&env, &id, Some(&first_proof), None);
+        let second_position = BytesN::from_array(&env, &[16; 32]);
+        let second_nullifier = BytesN::from_array(&env, &[17; 32]);
+        let second_close = BytesN::from_array(&env, &[18; 32]);
+        let second_output = BytesN::from_array(&env, &[19; 32]);
+        let state = PositionStateClient::new(&env, &setup.position_state);
+        let second_root = state.append(&id, &second_position).root;
+        let second_proof = proof_for_position(
+            &env, &second_root, &second_position, &second_nullifier,
+            &second_close, &BytesN::from_array(&env, &[20; 32]), &second_output,
+        );
+        record_position_proof(&env, &setup, &second_proof);
+        client.init(
+            &setup.governance, &setup.proof_ledger, &setup.conditional_order,
+            &setup.market, &setup.position_state, &circuit(&env),
+        );
+        client.settle_pair_manual(
+            &CloseArgs {
+                market_id: BytesN::from_array(&env, &[1; 32]),
+                position_root: position_root(&env),
+                position_commitment: position_commitment(&env),
+                position_nullifier: BytesN::from_array(&env, &[2; 32]),
+                close_commitment: BytesN::from_array(&env, &[3; 32]),
+                mark_price: mark_price(&env),
+                new_position_commitment: BytesN::from_array(&env, &[4; 32]),
+                margin_output_commitment: BytesN::from_array(&env, &[5; 32]),
+                proof: first_proof,
+            },
+            &CloseArgs {
+                market_id: BytesN::from_array(&env, &[1; 32]),
+                position_root: second_root,
+                position_commitment: second_position,
+                position_nullifier: second_nullifier.clone(),
+                close_commitment: second_close.clone(),
+                mark_price: mark_price(&env),
+                new_position_commitment: BytesN::from_array(&env, &[20; 32]),
+                margin_output_commitment: second_output,
+                proof: second_proof,
+            },
+        );
+        assert!(client.is_settled(&BytesN::from_array(&env, &[3; 32])));
+        assert!(client.is_settled(&second_close));
+        assert!(client.is_position_spent(&second_nullifier));
+        assert_eq!(state.leaf_count(), 4);
+    }
+
+    #[test]
+    fn failed_second_close_rolls_back_first_close() {
+        let env = Env::default();
+        let id = env.register(PositionClose, ());
+        let client = PositionCloseClient::new(&env, &id);
+        let first_proof = proof(&env);
+        let setup = setup_protocol(&env, &id, Some(&first_proof), None);
+        let state = PositionStateClient::new(&env, &setup.position_state);
+        let second_position = BytesN::from_array(&env, &[16; 32]);
+        let second_root = state.append(&id, &second_position).root;
+        client.init(
+            &setup.governance, &setup.proof_ledger, &setup.conditional_order,
+            &setup.market, &setup.position_state, &circuit(&env),
+        );
+        let first_nullifier = BytesN::from_array(&env, &[2; 32]);
+        let first_close = BytesN::from_array(&env, &[3; 32]);
+        let second_nullifier = BytesN::from_array(&env, &[17; 32]);
+        let second_close = BytesN::from_array(&env, &[18; 32]);
+        let failed = client.try_settle_pair_manual(
+            &CloseArgs {
+                market_id: BytesN::from_array(&env, &[1; 32]),
+                position_root: position_root(&env),
+                position_commitment: position_commitment(&env),
+                position_nullifier: first_nullifier.clone(),
+                close_commitment: first_close.clone(),
+                mark_price: mark_price(&env),
+                new_position_commitment: BytesN::from_array(&env, &[4; 32]),
+                margin_output_commitment: BytesN::from_array(&env, &[5; 32]),
+                proof: first_proof,
+            },
+            &CloseArgs {
+                market_id: BytesN::from_array(&env, &[1; 32]),
+                position_root: second_root.clone(),
+                position_commitment: second_position.clone(),
+                position_nullifier: second_nullifier.clone(),
+                close_commitment: second_close.clone(),
+                mark_price: mark_price(&env),
+                new_position_commitment: BytesN::from_array(&env, &[20; 32]),
+                margin_output_commitment: BytesN::from_array(&env, &[19; 32]),
+                proof: proof_for_position(
+                    &env, &second_root, &second_position, &second_nullifier,
+                    &second_close, &BytesN::from_array(&env, &[20; 32]),
+                    &BytesN::from_array(&env, &[19; 32]),
+                ),
+            },
+        );
+        assert!(failed.is_err());
+        assert!(!client.is_settled(&first_close));
+        assert!(!client.is_position_spent(&first_nullifier));
+        assert_eq!(state.leaf_count(), 2);
     }
 
     #[test]
@@ -893,6 +1043,21 @@ mod tests {
         new_position: &BytesN<32>,
         margin_output: &BytesN<32>,
     ) -> ProofMeta {
+        proof_for_position(
+            env, &position_root(env), &position_commitment(env),
+            nullifier, close, new_position, margin_output,
+        )
+    }
+
+    fn proof_for_position(
+        env: &Env,
+        root: &BytesN<32>,
+        position: &BytesN<32>,
+        nullifier: &BytesN<32>,
+        close: &BytesN<32>,
+        new_position: &BytesN<32>,
+        margin_output: &BytesN<32>,
+    ) -> ProofMeta {
         ProofMeta {
             circuit_id: circuit(env),
             circuit_hash: BytesN::from_array(env, &[6; 32]),
@@ -901,8 +1066,8 @@ mod tests {
                 env,
                 mark_price(env) as u128,
                 super::PRICE_SCALE,
-                &position_root(env),
-                &position_commitment(env),
+                root,
+                position,
                 nullifier,
                 close,
                 new_position,

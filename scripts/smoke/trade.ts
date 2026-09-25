@@ -383,15 +383,11 @@ async function runVaultMarketSmoke(
     longRecord.intentCommitment, shortRecord.intentCommitment);
   await spendLockedMakerNotes([longRecord.intentCommitment, shortRecord.intentCommitment]);
   const positionCommitments = parseHexList(settlement.newCommitments, "settlement.newCommitments");
-  const makerClose = await closeManualPosition({
-    batchId, entryPrice, fundingIndex, margin: margin + fees.makerRebate, marketId: asset.marketId,
-    note: longNote, owner: makerSession, positionCommitments, record: longRecord, side: "long", size,
-    vaultAllocationId,
-  });
   const takerClose = await closeManualPosition({
     batchId, entryPrice, fundingIndex, margin: margin - fees.grossTakerFee, marketId: asset.marketId,
     note: shortNote, owner: adminSession, positionCommitments, record: shortRecord, side: "short", size,
   });
+  const makerClose = pairedVaultMakerClose(batchId, longRecord.intentCommitment, takerClose.settlementTxHash);
   return {
     symbol: asset.symbol,
     batchId,
@@ -498,14 +494,11 @@ async function resumeVaultMarketSmoke(
     positionCommitments,
     size: longPayload.signedSize,
   };
-  const makerClose = await closeManualPosition({
-    ...closeInput, margin: longPayload.margin + fees.makerRebate,
-    note: longNote, owner: makerSession, record: longRecord, side: "long", vaultAllocationId,
-  });
   const takerClose = await closeManualPosition({
     ...closeInput, margin: shortPayload.margin - fees.grossTakerFee,
     note: shortNote, owner: adminSession, record: shortRecord, side: "short",
   });
+  const makerClose = pairedVaultMakerClose(batchId, longRecord.intentCommitment, takerClose.settlementTxHash);
   return {
     symbol: asset.symbol,
     batchId,
@@ -519,6 +512,25 @@ async function resumeVaultMarketSmoke(
     takerClose,
     takerNote: shortNote.commitment,
     vaultAllocationId,
+  };
+}
+
+function pairedVaultMakerClose(batchId: string, makerIntent: Hex, settlementTxHash: string) {
+  const makerPosition = [...runtime.executor.store.positionLifecycle.values()].find((position) =>
+    position.batchId === batchId && position.sourceIntentCommitment === makerIntent,
+  );
+  const close = makerPosition?.closeCommitment
+    ? runtime.executor.store.positionCloses.get(makerPosition.closeCommitment)
+    : undefined;
+  if (!close || makerPosition?.status !== "closed" ||
+    !settlementTxHash || close.settlementTxHash !== settlementTxHash) {
+    throw new Error("vault maker did not close in the trader settlement transaction");
+  }
+  return {
+    closeCommitment: close.closeCommitment,
+    marginOutputCommitment: close.marginOutputCommitment,
+    positionCommitment: close.positionCommitment,
+    settlementTxHash: close.settlementTxHash,
   };
 }
 
