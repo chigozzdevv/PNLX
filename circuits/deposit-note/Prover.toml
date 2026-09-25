@@ -1,6 +1,6 @@
 amount = 10000
 token_digest = 2
-commitment = 202573530
+commitment = "0x1cc8f7bd5e865139a4f8b5c40cce7c29ea1c4ae4ecf2cac5267efcecfee38044"
 owner_digest = 3
 rho_digest = 4
 blinding = 5

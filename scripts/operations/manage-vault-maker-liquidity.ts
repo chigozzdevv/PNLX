@@ -1,12 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { ownerCommitment } from "@pnlx/crypto";
 import { loadEnv } from "@/config/env";
 import { LiquidityVaultService } from "@/features/liquidity-vault/liquidity-vault.service";
 import { readMakerNotes } from "@/shared/maker-note-store";
-import { withVaultMakerLease } from "@/shared/vault-maker-lease";
+import { claimVaultMakerFundingEpoch, withVaultMakerLease } from "@/shared/vault-maker-lease";
 import { beginVaultMakerDrain, eligibleVaultMakerNotes, readVaultMakerAllocations,
   remainingVaultMakerPrincipal, type VaultMakerAllocation } from "@/shared/vault-maker-backing";
-import { createExecutorAsync } from "@/workers/executor/executor.worker";
 import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
 import { localApiOrigin, runCustodySmoke } from "../smoke/custody";
@@ -18,16 +16,20 @@ import { reconcileOneMakerPosition } from "./reconcile-maker-position";
 
 const STROOP = 10_000_000n;
 const POLL_MS = 20_000;
+const DEFAULT_FUNDING_INTERVAL_MINUTES = 60;
 
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const readyAmount = positiveAmount(requiredArg(args, "--ready-usdc")) * STROOP;
+  const fundingIntervalMinutes = args.includes("--funding-interval-minutes")
+    ? positiveInterval(requiredArg(args, "--funding-interval-minutes"))
+    : DEFAULT_FUNDING_INTERVAL_MINUTES;
   const operatorSource = requiredArg(args, "--operator-source");
   const makerSource = requiredArg(args, "--maker-source");
   const apiUrl = localApiOrigin(requiredArg(args, "--api-url"));
   do {
     try {
-      await provisionOnce({ apiUrl, makerSource, operatorSource, readyAmount });
+      await provisionOnce({ apiUrl, makerSource, operatorSource, readyAmount, fundingIntervalMinutes });
     } catch (error) {
       console.error(`[vault-maker] ${error instanceof Error ? error.message : String(error)}`);
       if (args.includes("--once")) throw error;
@@ -54,11 +56,28 @@ export function makerTopUpAmount(input: {
     .reduce((smallest, amount) => amount < smallest ? amount : smallest);
 }
 
+export function makerReserveTarget(totalAssets: bigint, allocationLimitBps: bigint, minimum: bigint): bigint {
+  if (totalAssets < 0n || allocationLimitBps < 0n || allocationLimitBps > 10_000n || minimum < 0n) {
+    throw new Error("invalid maker reserve target inputs");
+  }
+  const poolTarget = totalAssets * allocationLimitBps / 10_000n;
+  return poolTarget > minimum ? poolTarget : minimum;
+}
+
+export function fundingEpoch(nowMs: number, intervalMinutes: number): number {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0 || !Number.isSafeInteger(intervalMinutes) ||
+    intervalMinutes <= 0 || !Number.isSafeInteger(intervalMinutes * 60_000)) {
+    throw new Error("invalid maker funding interval");
+  }
+  return Math.floor(nowMs / (intervalMinutes * 60_000));
+}
+
 export async function provisionOnce(input: {
   apiUrl: string;
   makerSource: string;
   operatorSource: string;
   readyAmount: bigint;
+  fundingIntervalMinutes?: number;
 }): Promise<void> {
   const env = loadEnv();
   if (env.stellarNetwork !== "testnet" || env.stellarRelayerMode !== "stellar-cli" ||
@@ -87,6 +106,7 @@ export async function provisionOnce(input: {
   }
 
   await withVaultMakerLease(env.mongodbUri, env.mongodbDatabase, `${env.stellarNetwork}:${vaultId}`, async (assertLease) => {
+    const epoch = fundingEpoch(Date.now(), input.fundingIntervalMinutes ?? DEFAULT_FUNDING_INTERVAL_MINUTES);
     if (await reconcileOneMakerPosition({ apiUrl: input.apiUrl, assertLease,
       makerSource: input.makerSource, operatorSource: input.operatorSource })) return;
     const allocationsBeforeRecovery = (await readVaultMakerAllocations())
@@ -158,12 +178,15 @@ export async function provisionOnce(input: {
       vault: vaultId,
     });
     const ready = backed.reduce((sum, note) => sum + BigInt(String(note.amount)), 0n);
-    const openDemand = await largestOpenClientMargin(current.maker);
-    const target = openDemand > input.readyAmount ? openDemand : input.readyAmount;
-    if (ready >= target) return;
     if (active.some((item) => item.series === current.currentSeries && item.status === "draining")) return;
     const pending = await readAmount("series_pending_total", current.currentSeries);
     if (pending !== 0n) return;
+    await assertLiveApi(current.asset, current.maker);
+    if (fundingEpoch(Date.now(), input.fundingIntervalMinutes ?? DEFAULT_FUNDING_INTERVAL_MINUTES) !== epoch) return;
+    const target = makerReserveTarget(
+      BigInt(current.totalAssetsAtCost), BigInt(current.allocationLimitBps), input.readyAmount,
+    );
+    if (ready >= target) return;
     const amount = makerTopUpAmount({
       currentSeriesAssets: BigInt(current.currentSeriesAssets),
       currentSeriesLiquid: BigInt(current.currentSeriesLiquid),
@@ -176,8 +199,8 @@ export async function provisionOnce(input: {
     });
     if (amount <= 0n) return;
 
-    await assertLiveApi(current.asset, current.maker);
     assertLease();
+    if (!await claimVaultMakerFundingEpoch(env.mongodbUri!, env.mongodbDatabase, vaultId, epoch)) return;
     const allocation = await allocate(["--amount", String(amount), "--series", String(current.currentSeries),
       "--operator-source", input.operatorSource]);
     await depositAllocation(allocation, assertLease);
@@ -233,29 +256,6 @@ export async function provisionOnce(input: {
     return BigInt(parsed);
   }
 
-  async function largestOpenClientMargin(maker: string): Promise<bigint> {
-    const executor = await createExecutorAsync({ mongo: {
-      collection: env.mongodbCollection,
-      database: env.mongodbDatabase,
-      documentId: env.stellarNetwork,
-      ensureIndexes: false,
-      uri: env.mongodbUri!,
-    }, privateMatchingRequired: env.privateMatchingRequired });
-    try {
-      let largest = 0n;
-      const makerOwner = ownerCommitment(maker);
-      for (const intent of executor.store.intents.values()) {
-        if (intent.marketId !== "xlm-usd-perp" || intent.ownerCommitment === makerOwner ||
-          executor.store.orderLifecycle.get(intent.intentCommitment)?.status !== "open") continue;
-        const margin = executor.store.privateMatchIntents.get(intent.intentCommitment)?.margin ?? 0n;
-        if (margin > largest) largest = margin;
-      }
-      return largest;
-    } finally {
-      await (executor.store as { close?: () => Promise<void> }).close?.();
-    }
-  }
-
 }
 
 export function planIncompleteAllocation(
@@ -289,6 +289,15 @@ function sourceAddress(alias: string): string {
 function positiveAmount(value: string): bigint {
   if (!/^[1-9][0-9]*$/.test(value)) throw new Error("ready amount must be whole USDC");
   return BigInt(value);
+}
+
+function positiveInterval(value: string): number {
+  if (!/^[1-9][0-9]*$/.test(value)) throw new Error("funding interval must be whole minutes");
+  const minutes = Number(value);
+  if (!Number.isSafeInteger(minutes) || !Number.isSafeInteger(minutes * 60_000)) {
+    throw new Error("funding interval is too large");
+  }
+  return minutes;
 }
 
 function requiredArg(argv: string[], name: string): string {

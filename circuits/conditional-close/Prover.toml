@@ -6,6 +6,6 @@ trigger_price = 55000000000
 mark_price = 56000000000
 size = 1
 position_nullifier = 12
-close_commitment = "0x00000000000000000000000000000000000000000000000001cb65105310394f"
+close_commitment = "0x10999b37c0b9abfe9ad2c59c288b7a1323b9fd77eac06ada6666c41b9d5eca63"
 salt_digest = 14
 zero_value = 0

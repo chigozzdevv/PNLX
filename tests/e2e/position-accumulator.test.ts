@@ -1,5 +1,6 @@
 import { describe, expect, setSystemTime, test } from "bun:test";
 import {
+  fieldHashPair,
   positionMerkleProof,
   positionMerkleRoot,
 } from "@pnlx/crypto";
@@ -7,13 +8,20 @@ import type { Hex } from "@pnlx/protocol-types";
 import { MatcherJobService } from "@/workers/matcher/matcher-job.service";
 
 describe("canonical position accumulator", () => {
+  test("uses the same binding pair hash as Noir and Soroban", () => {
+    expect(fieldHashPair(1n, 2n)).toBe(
+      "0x038682aa1cb5ae4e0a3f13da432a95c77c5c111f6f030faf9cad641ce1ed7383",
+    );
+    expect(fieldHashPair(1n, 139n)).not.toBe(fieldHashPair(138n, 8n));
+  });
+
   test("matches the on-chain depth-twenty append vector", () => {
     const first = `0x${"09".repeat(32)}` as Hex;
     expect(positionMerkleRoot([])).toBe(
-      "0x00000000000000000000000028beb7912414d9730045896cfebc5404cb44132d",
+      "0x1c8c3ca0b3a3d75850fcd4dc7bf1e3445cd0cfff3ca510630fd90b47e8a24755",
     );
     expect(positionMerkleRoot([first])).toBe(
-      "0x10f0c78e165c675e0f252bbd8415e98c6cd8afe0f0aa485e53648653766cd20b",
+      "0x2db0ec1d700278f1835af5f761506ed127032bc90e0be6fc4e79aa3f185096ee",
     );
     const proof = positionMerkleProof([first], first);
     expect(proof.index).toBe(0);

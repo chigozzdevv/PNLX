@@ -335,7 +335,7 @@ mod tests {
     extern crate std;
 
     use super::{Liquidation, LiquidationClient, ProofMeta};
-    use core::ops::{Add, Mul};
+    use soroban_poseidon::Poseidon2Sponge;
     use governance::{Governance, GovernanceClient};
     use market::{Market, MarketClient};
     use oracle_interface::OracleAsset;
@@ -632,9 +632,10 @@ mod tests {
     fn position_root(env: &Env) -> BytesN<32> {
         let mut node = position_commitment(env);
         let mut empty = BytesN::from_array(env, &[0; 32]);
+        let mut hasher = Poseidon2Sponge::<4, Bn254Fr>::new(env);
         for _ in 0..20 {
-            node = position_hash_pair(env, &node, &empty);
-            empty = position_hash_pair(env, &empty, &empty);
+            node = position_hash_pair(env, &mut hasher, &node, &empty);
+            empty = position_hash_pair(env, &mut hasher, &empty, &empty);
         }
         node
     }
@@ -655,17 +656,18 @@ mod tests {
         setup_governance_with_verifier(env, &verifier(env))
     }
 
-    fn position_hash_pair(env: &Env, left: &BytesN<32>, right: &BytesN<32>) -> BytesN<32> {
-        let left = Bn254Fr::from_bytes(left.clone());
-        let right = Bn254Fr::from_bytes(right.clone());
-        let left_factor = Bn254Fr::from_u256(U256::from_u32(env, 131));
-        let right_factor = Bn254Fr::from_u256(U256::from_u32(env, 137));
-        let domain = Bn254Fr::from_u256(U256::from_u32(env, 17));
-        (left
-            .mul(left_factor)
-            .add(right.mul(right_factor))
-            .add(domain))
-        .to_bytes()
+    fn position_hash_pair(
+        env: &Env,
+        hasher: &mut Poseidon2Sponge<4, Bn254Fr>,
+        left: &BytesN<32>,
+        right: &BytesN<32>,
+    ) -> BytesN<32> {
+        let inputs = soroban_sdk::vec![
+            env,
+            U256::from_be_bytes(env, &left.clone().into()),
+            U256::from_be_bytes(env, &right.clone().into()),
+        ];
+        Bn254Fr::from_u256(hasher.compute_hash(&inputs)).to_bytes()
     }
 
     fn setup_position_state(env: &Env, writer: &Address) -> Address {

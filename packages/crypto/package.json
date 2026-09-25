@@ -4,5 +4,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@zkpassport/poseidon2": "^0.6.2"
   }
 }

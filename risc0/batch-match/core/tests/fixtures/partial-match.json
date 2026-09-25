@@ -33,10 +33,10 @@
       "0"
     ],
     "market_id": "xlm-usd-perp",
-    "match_transcript_digest": "0x1ca46228033fc950e02dc3834bbb1fc52ad7273a1a8b6d72933468bc6bec8bda",
+    "match_transcript_digest": "0xec32da958cb54fb60d309f6a637a0fc30d463a6e2aae4c1d1af9608658fcd412",
     "new_commitments": [
-      "0x1934dbf3f32241f5a64d3aca545c4eea17c3a4f2e310b24e102c48e899e1ecec",
-      "0x037e2a31034e3563efe1f92a6b14eb38be371595f95392d52a8fb54d415b6a5b"
+      "0x1ed366fa30667de89cc2506d9c828f5c583ad4e362460f8aebad6955c9e62f65",
+      "0x0e8d34710e159828678d6657f4f1674efd24771a6366cd981e5ced6d443835b1"
     ],
     "open_interest_delta": "2000000000",
     "order_updates": [
@@ -51,7 +51,7 @@
       }
     ],
     "residual_size": "500000000",
-    "settlement_digest": "0xe4d9f40f442f9d9269bcbbf1c10ed8dd5447d0669dc9982ea5997765252f04d9",
+    "settlement_digest": "0x70112106f273ddc0e0479f5bfed9a45ad93c6309aab68483c10ee6edf964af31",
     "spent_nullifiers": [
       "0x10f562e7c271d6243a44f7deb0443b8506b8e3737f41dbe69b865b228335d108",
       "0xcb72ec372b88d893cc8133edf3050ac0700391eb870b845d0c144f94bc134356"

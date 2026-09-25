@@ -40,3 +40,29 @@ export async function withVaultMakerLease(
     await client.close();
   }
 }
+
+export async function claimVaultMakerFundingEpoch(
+  uri: string,
+  database: string,
+  vault: string,
+  epoch: number,
+): Promise<boolean> {
+  const client = new MongoClient(uri);
+  await client.connect();
+  try {
+    const schedule = client.db(database).collection<{ _id: string; epoch: number }>("vault_maker_funding_epochs");
+    try {
+      const result = await schedule.updateOne(
+        { _id: vault, epoch: { $lt: epoch } },
+        { $set: { epoch } },
+        { upsert: true },
+      );
+      return result.modifiedCount === 1 || result.upsertedCount === 1;
+    } catch (error) {
+      if ((error as { code?: number }).code === 11000) return false;
+      throw error;
+    }
+  } finally {
+    await client.close();
+  }
+}

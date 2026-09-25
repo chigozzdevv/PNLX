@@ -22,3 +22,4 @@ oracle-interface = { path = "../oracle-interface" }
 position-state = { path = "../position-state" }
 proof-ledger = { path = "../proof-ledger" }
 soroban-sdk = { workspace = true, features = ["testutils"] }
+soroban-poseidon = { workspace = true }

@@ -1,13 +1,13 @@
+use ark_bn254::Fr;
+use ark_ff::{BigInteger, PrimeField};
 use num_bigint::{BigInt, BigUint};
 use num_traits::Zero;
+use pso_poseidon::{Poseidon2, PoseidonHasher};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const FIELD_PRIME_DEC: &str =
     "21888242871839275222246405745257275088548364400416034343698204186575808495617";
-const LEFT_FACTOR: u32 = 131;
-const RIGHT_FACTOR: u32 = 137;
-const DOMAIN_FACTOR: u32 = 17;
 const PRICE_SCALE: u128 = 100_000_000;
 const RATE_SCALE: u128 = 1_000_000;
 const TAKER_FEE_PPM: u128 = 500;
@@ -980,7 +980,16 @@ fn fee_config_hash() -> String {
 
 #[cfg(test)]
 mod fee_tests {
-    use super::{fee_config_hash, fill_fees, prove_request, ProofRequest, PRICE_SCALE};
+    use super::{fee_config_hash, field_hash_pair, fill_fees, prove_request, ProofRequest, PRICE_SCALE};
+
+    #[test]
+    fn hash_pair_matches_noir_typescript_and_soroban() {
+        assert_eq!(
+            field_hash_pair("1", "2"),
+            "0x038682aa1cb5ae4e0a3f13da432a95c77c5c111f6f030faf9cad641ce1ed7383",
+        );
+        assert_ne!(field_hash_pair("1", "139"), field_hash_pair("138", "8"));
+    }
 
     #[test]
     fn matches_type_script_fee_configuration_and_base_unit_split() {
@@ -1003,7 +1012,7 @@ mod fee_tests {
         let proved = prove_request(&request);
         assert_eq!(
             proved.journal_digest,
-            "0x454bf8cc942884e428d8fa6f70fca5ca16eb0896da0d77c347c4fd81a769a15f"
+            "0xea0818b3cf26379aeeee205d04799ab63de650e445e7aa028ff544ccbc05e5f6"
         );
         assert_eq!(proved.draft.gross_taker_fee, "500000");
         assert_eq!(proved.draft.maker_rebate, "150000");
@@ -1048,12 +1057,11 @@ fn circuit_position_commitment(
 }
 
 fn field_hash_pair(left: &str, right: &str) -> String {
-    let prime = field_prime();
-    let value = (to_field_biguint(left) * LEFT_FACTOR
-        + to_field_biguint(right) * RIGHT_FACTOR
-        + BigUint::from(DOMAIN_FACTOR))
-        % prime;
-    field_hex(value)
+    let left = Fr::from_be_bytes_mod_order(&to_field_biguint(left).to_bytes_be());
+    let right = Fr::from_be_bytes_mod_order(&to_field_biguint(right).to_bytes_be());
+    let mut hasher = Poseidon2::<Fr>::new();
+    let value = hasher.hash(&[left, right]).expect("two canonical field inputs");
+    field_hex(BigUint::from_bytes_be(&value.into_bigint().to_bytes_be()))
 }
 
 fn digest_to_field_hex(input: &str) -> String {

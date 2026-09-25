@@ -18,13 +18,13 @@ describe("local client prover", () => {
     const directory = join(
       root,
       "risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/" +
-        "riscv32im-risc0-zkvm-elf/release",
+        "riscv32im-risc0-zkvm-elf/docker",
     );
     mkdirSync(directory, { recursive: true });
     const programPath = join(directory, "batch_match.bin");
     writeFileSync(programPath, Buffer.from("pnlx-risc0-elf"));
     const previousProgramPath = process.env.RISC0_BATCH_MATCH_PROGRAM_PATH;
-    process.env.RISC0_BATCH_MATCH_PROGRAM_PATH = programPath;
+    delete process.env.RISC0_BATCH_MATCH_PROGRAM_PATH;
     try {
       const handle = createLocalClientProverHandler(root);
       const response = await handle(

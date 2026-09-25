@@ -17,7 +17,7 @@ use tracing_subscriber::{filter::LevelFilter, prelude::*, EnvFilter};
 use url::Url;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
-const DEFAULT_BATCH_MATCH_CYCLES: u64 = 10_000_000;
+const DEFAULT_BATCH_MATCH_CYCLES: u64 = 100_000_000;
 const DEFAULT_LOCK_COLLATERAL_ZKC_WEI: &str = "20000000000000000000";
 const DEFAULT_MIN_PRICE_USD_MICRO: u64 = 20_000;
 const DEFAULT_MAX_PRICE_USD_MICRO: u64 = 150_000;

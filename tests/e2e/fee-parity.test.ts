@@ -56,7 +56,7 @@ test("partial-fill proof binds the exact residual margin across TypeScript and R
     typeof value === "bigint" ? value.toString() : value))).toEqual(fixture);
   expect(request.expected.residual_margins).toEqual(["100000000", "0"]);
   expect(batchSettlementPublicInputHash(draft as BatchSettlement))
-    .toBe("0xd8c7190d1f2ab9c3cbb4d4ad8c5063c77d9e88f05dc867757e2a0974bdd4f7ad");
+    .toBe("0x197e5489ed23851445e3fcc24d3de7de8dc0ed2ffaa46682db8443535f62fa85");
 });
 
 test("recovered private position openings preserve each side's fee", () => {

@@ -1,5 +1,5 @@
 fn hash_pair(left: Field, right: Field) -> Field {
-    left * 131 + right * 137 + 17
+    std::hash::poseidon2_permutation([left, right, 0, 36893488147419103232], 4)[0]
 }
 
 fn position_commitment(
@@ -172,7 +172,13 @@ fn main(
 }
 
 fn default_siblings() -> [Field; 20] {
-    [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781, 1694400271078593325, 454099272649063011117, 121698605069948886979373, 32615226158746301710471981, 8740880610544008858406490925, 2342556003625794374052939567917, 627805008971712892246187804201773, 168251742404419055121978331526075181, 45091466964384306772690192848988148525, 12084513146454994215080971683528823804717, 3238649523249938449641700411185724779664173, 867958072230983504503975710197774240949998381]
+    let mut siblings = [0; 20];
+    let mut empty: Field = 0;
+    for i in 0..20 {
+        siblings[i] = empty;
+        empty = hash_pair(empty, empty);
+    }
+    siblings
 }
 
 fn default_indices() -> [bool; 20] {
@@ -256,7 +262,7 @@ fn valid_long_profit_close() {
     let indices = default_indices();
     let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, siblings, indices);
-    exercise_close(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, root, commitment, 1351, siblings, indices);
+    exercise_close(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, root, commitment, hash_pair(6, 4), siblings, indices);
 }
 
 #[test]
@@ -265,7 +271,7 @@ fn valid_long_loss_close() {
     let indices = default_indices();
     let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, siblings, indices);
-    exercise_close(true, 1, 1, 5_000_000_000_000, 4_800_000_000_000, 12_000, 0, 0, false, 10, 9_990, 0, 9_990, root, commitment, 1351, siblings, indices);
+    exercise_close(true, 1, 1, 5_000_000_000_000, 4_800_000_000_000, 12_000, 0, 0, false, 10, 9_990, 0, 9_990, root, commitment, hash_pair(6, 4), siblings, indices);
 }
 
 #[test]
@@ -274,7 +280,7 @@ fn valid_short_profit_close() {
     let indices = default_indices();
     let commitment = position_commitment(false, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, siblings, indices);
-    exercise_close(false, 1, 1, 5_000_000_000_000, 4_400_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, root, commitment, 1351, siblings, indices);
+    exercise_close(false, 1, 1, 5_000_000_000_000, 4_400_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, root, commitment, hash_pair(6, 4), siblings, indices);
 }
 
 #[test(should_fail)]
@@ -283,7 +289,7 @@ fn rejects_partial_close() {
     let indices = default_indices();
     let commitment = position_commitment(true, 4, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, siblings, indices);
-    exercise_close(true, 4, 2, 5_000_000_000_000, 5_100_000_000_000, 12_000, 0, 0, false, 10, 13_990, 13_990, 0, root, commitment, 1351, siblings, indices);
+    exercise_close(true, 4, 2, 5_000_000_000_000, 5_100_000_000_000, 12_000, 0, 0, false, 10, 13_990, 13_990, 0, root, commitment, hash_pair(6, 4), siblings, indices);
 }
 
 #[test]
@@ -292,7 +298,7 @@ fn valid_short_funding_credit_close() {
     let indices = default_indices();
     let commitment = position_commitment(false, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, siblings, indices);
-    exercise_close(false, 1, 1, 5_000_000_000_000, 5_000_000_000_000, 12_000, 0, 100, true, 10, 12_090, 0, 12_090, root, commitment, 1351, siblings, indices);
+    exercise_close(false, 1, 1, 5_000_000_000_000, 5_000_000_000_000, 12_000, 0, 100, true, 10, 12_090, 0, 12_090, root, commitment, hash_pair(6, 4), siblings, indices);
 }
 
 #[test(should_fail)]
@@ -301,7 +307,7 @@ fn rejects_bad_pnl() {
     let indices = default_indices();
     let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, siblings, indices);
-    exercise_close(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 18_000, 0, 18_000, root, commitment, 1351, siblings, indices);
+    exercise_close(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 18_000, 0, 18_000, root, commitment, hash_pair(6, 4), siblings, indices);
 }
 
 #[test(should_fail)]
@@ -310,7 +316,7 @@ fn rejects_over_close() {
     let indices = default_indices();
     let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, siblings, indices);
-    exercise_close(true, 1, 2, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 23_990, 0, 23_990, root, commitment, 1351, siblings, indices);
+    exercise_close(true, 1, 2, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 23_990, 0, 23_990, root, commitment, hash_pair(6, 4), siblings, indices);
 }
 
 #[test(should_fail)]
@@ -319,7 +325,7 @@ fn rejects_insolvent_close() {
     let indices = default_indices();
     let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, siblings, indices);
-    exercise_close(true, 1, 1, 5_000_000_000_000, 3_000_000_000_000, 12_000, 0, 0, false, 10, 0, 0, 0, root, commitment, 1351, siblings, indices);
+    exercise_close(true, 1, 1, 5_000_000_000_000, 3_000_000_000_000, 12_000, 0, 0, false, 10, 0, 0, 0, root, commitment, hash_pair(6, 4), siblings, indices);
 }
 
 #[test(should_fail)]
@@ -329,7 +335,7 @@ fn rejects_bad_position_path() {
     let indices = default_indices();
     let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, correct_siblings, indices);
-    exercise_close(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, root, commitment, 1351, siblings, indices);
+    exercise_close(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, root, commitment, hash_pair(6, 4), siblings, indices);
 }
 
 #[test(should_fail)]
@@ -347,5 +353,5 @@ fn rejects_bad_output_commitment() {
     let indices = default_indices();
     let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, siblings, indices);
-    main(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, 100_000_000, root, commitment, 1351, 13, 14, note_commitment(9, 17_990, 3, 10, 11), 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, siblings, indices, 0);
+    main(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, 100_000_000, root, commitment, hash_pair(6, 4), 13, 14, note_commitment(9, 17_990, 3, 10, 11), 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, siblings, indices, 0);
 }

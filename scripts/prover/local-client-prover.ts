@@ -24,7 +24,7 @@ export function createLocalClientProverHandler(root = process.cwd()) {
         const path = process.env.RISC0_BATCH_MATCH_PROGRAM_PATH || join(
           root,
           "risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/" +
-            "riscv32im-risc0-zkvm-elf/release/batch_match.bin",
+            "riscv32im-risc0-zkvm-elf/docker/batch_match.bin",
         );
         if (!existsSync(path)) {
           return cors(Response.json({ error: "RISC0 batch-match program is not built" }, { status: 404 }));

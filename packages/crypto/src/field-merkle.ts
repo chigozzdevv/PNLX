@@ -1,11 +1,9 @@
 import type { Hex } from "@pnlx/protocol-types";
-import { FIELD_PRIME, hashToField, mod } from "./field";
+import { poseidon2Hash } from "@zkpassport/poseidon2";
+import { hashToField, mod } from "./field";
 
 export const FIELD_MERKLE_DEPTH = 8;
 export const POSITION_MERKLE_DEPTH = 20;
-const LEFT_FACTOR = 131n;
-const RIGHT_FACTOR = 137n;
-const DOMAIN_FACTOR = 17n;
 
 export interface CircuitMarginNoteInput {
   amount: bigint;
@@ -53,11 +51,7 @@ export function digestToFieldHex(input: string): Hex {
 }
 
 export function fieldHashPair(left: Hex | bigint, right: Hex | bigint): Hex {
-  return fieldHex(
-    toField(left) * LEFT_FACTOR +
-      toField(right) * RIGHT_FACTOR +
-      DOMAIN_FACTOR,
-  );
+  return fieldHex(poseidon2Hash([toField(left), toField(right)]));
 }
 
 export function circuitMarginCommitment(input: CircuitMarginNoteInput): Hex {

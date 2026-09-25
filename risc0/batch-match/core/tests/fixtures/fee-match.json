@@ -20,14 +20,23 @@
       "0x9de5ba56830534deac6a85f5fd9b0c476eef9e9b401d24f2072c7472ea3eec9a",
       "0xf787ca6ece6eec25335c5e385ba1e3e6043571ded41965d734e0d2cdbdd3a0cf"
     ],
-    "residual_commitments": ["0x0", "0x0"],
-    "residual_margins": ["0", "0"],
-    "residual_payload_commitments": ["0x0", "0x0"],
+    "residual_commitments": [
+      "0x0",
+      "0x0"
+    ],
+    "residual_payload_commitments": [
+      "0x0",
+      "0x0"
+    ],
+    "residual_margins": [
+      "0",
+      "0"
+    ],
     "market_id": "xlm-usd-perp",
-    "match_transcript_digest": "0xc00c20d16d9f1f02927bcb0651920b2db96095b6510435dd1cad60894f7f4aea",
+    "match_transcript_digest": "0x18595e2ec55956d6201c040bca21184077b0dd406dfda1762f6e0a5771c6e45f",
     "new_commitments": [
-      "0x1934dbf3f32241f5a64d3aca545c4eea17c3a4f2e310b24e102c48e899e1ecec",
-      "0x037e2a31034e3563efe1f92a6b14eb38be371595f95392d52a8fb54d415b6a5b"
+      "0x1ed366fa30667de89cc2506d9c828f5c583ad4e362460f8aebad6955c9e62f65",
+      "0x0e8d34710e159828678d6657f4f1674efd24771a6366cd981e5ced6d443835b1"
     ],
     "open_interest_delta": "2000000000",
     "order_updates": [
@@ -41,7 +50,7 @@
       }
     ],
     "residual_size": "0",
-    "settlement_digest": "0x9c0178ed8d5a5a1b121f2e6db87ce656a9e5948fb941388f883bb46c16633b8b",
+    "settlement_digest": "0x2a944e46999d8133e4e2ec8997bc0b72b70a3efa9c0db7c30f604295fcb13f0c",
     "spent_nullifiers": [
       "0x10f562e7c271d6243a44f7deb0443b8506b8e3737f41dbe69b865b228335d108",
       "0xcb72ec372b88d893cc8133edf3050ac0700391eb870b845d0c144f94bc134356"

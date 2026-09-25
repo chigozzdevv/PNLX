@@ -1,5 +1,5 @@
 fn hash_pair(left: Field, right: Field) -> Field {
-    left * 131 + right * 137 + 17
+    std::hash::poseidon2_permutation([left, right, 0, 36893488147419103232], 4)[0]
 }
 
 fn note_commitment(
@@ -24,6 +24,21 @@ fn merkle_root(leaf: Field, path_siblings: [Field; 8], path_indices: [bool; 8]) 
         current = hash_pair(left, right);
     }
     current
+}
+
+fn empty_siblings() -> [Field; 8] {
+    let mut siblings = [0; 8];
+    let mut empty: Field = 0;
+    for i in 0..8 {
+        siblings[i] = empty;
+        empty = hash_pair(empty, empty);
+    }
+    siblings
+}
+
+fn valid_note_root() -> Field {
+    let indices = [false; 8];
+    merkle_root(note_commitment(2, 10_000, 3, 4, 5), empty_siblings(), indices)
 }
 
 fn main(
@@ -82,35 +97,36 @@ fn main(
 
 #[test]
 fn valid_withdrawal_with_change() {
-    let siblings = [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781];
+    let siblings = empty_siblings();
     let indices = [false, false, false, false, false, false, false, false];
-    main(10_000, 4_000, 17569245168735110909994055, 1351, 2, 13, 145875806, 2, 3, 4, 5, 6, siblings, indices, 7, 8, 0);
+    main(10_000, 4_000, valid_note_root(), hash_pair(6, 4), 2, 13, note_commitment(2, 6_000, 3, 7, 8), 2, 3, 4, 5, 6, siblings, indices, 7, 8, 0);
 }
 
 #[test]
 fn valid_full_withdrawal() {
-    let siblings = [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781];
+    let siblings = empty_siblings();
     let indices = [false, false, false, false, false, false, false, false];
-    main(10_000, 10_000, 17569245168735110909994055, 1351, 2, 13, 0, 2, 3, 4, 5, 6, siblings, indices, 0, 0, 0);
+    main(10_000, 10_000, valid_note_root(), hash_pair(6, 4), 2, 13, 0, 2, 3, 4, 5, 6, siblings, indices, 0, 0, 0);
 }
 
 #[test(should_fail)]
 fn rejects_overspend() {
-    let siblings = [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781];
+    let siblings = empty_siblings();
     let indices = [false, false, false, false, false, false, false, false];
-    main(10_000, 12_000, 17569245168735110909994055, 1351, 2, 13, 0, 2, 3, 4, 5, 6, siblings, indices, 0, 0, 0);
+    main(10_000, 12_000, valid_note_root(), hash_pair(6, 4), 2, 13, 0, 2, 3, 4, 5, 6, siblings, indices, 0, 0, 0);
 }
 
 #[test(should_fail)]
 fn rejects_bad_merkle_path() {
-    let siblings = [1, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781];
+    let mut siblings = empty_siblings();
+    siblings[0] = 1;
     let indices = [false, false, false, false, false, false, false, false];
-    main(10_000, 4_000, 17569245168735110909994055, 1351, 2, 13, 145875806, 2, 3, 4, 5, 6, siblings, indices, 7, 8, 0);
+    main(10_000, 4_000, valid_note_root(), hash_pair(6, 4), 2, 13, note_commitment(2, 6_000, 3, 7, 8), 2, 3, 4, 5, 6, siblings, indices, 7, 8, 0);
 }
 
 #[test(should_fail)]
 fn rejects_bad_nullifier() {
-    let siblings = [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781];
+    let siblings = empty_siblings();
     let indices = [false, false, false, false, false, false, false, false];
-    main(10_000, 4_000, 17569245168735110909994055, 999, 2, 13, 145875806, 2, 3, 4, 5, 6, siblings, indices, 7, 8, 0);
+    main(10_000, 4_000, valid_note_root(), 999, 2, 13, note_commitment(2, 6_000, 3, 7, 8), 2, 3, 4, 5, 6, siblings, indices, 7, 8, 0);
 }

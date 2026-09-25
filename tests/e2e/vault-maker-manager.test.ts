@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { makerTopUpAmount, planIncompleteAllocation } from "../../scripts/operations/manage-vault-maker-liquidity";
+import { fundingEpoch, makerReserveTarget, makerTopUpAmount, planIncompleteAllocation } from "../../scripts/operations/manage-vault-maker-liquidity";
 import { localApiOrigin } from "../../scripts/smoke/custody";
 
 const state = {
@@ -14,6 +14,20 @@ const state = {
 };
 
 describe("vault maker reserve planning", () => {
+  test("funding target follows the existing vault cap, not open orders", () => {
+    expect(makerReserveTarget(500_000_000_000n, 8_000n, 10_000_000_000n))
+      .toBe(400_000_000_000n);
+    expect(makerReserveTarget(5_000_000_000n, 8_000n, 10_000_000_000n))
+      .toBe(10_000_000_000n);
+  });
+
+  test("fixed funding epochs do not depend on when an order arrives", () => {
+    expect(fundingEpoch(3_600_000, 60)).toBe(1);
+    expect(fundingEpoch(3_620_000, 60)).toBe(1);
+    expect(fundingEpoch(7_200_000, 60)).toBe(2);
+    expect(() => fundingEpoch(0, 0)).toThrow();
+  });
+
   test("operator deposit and recovery use only the local live API", () => {
     expect(localApiOrigin("http://127.0.0.1:4000")).toBe("http://127.0.0.1:4000");
     expect(() => localApiOrigin("https://pnlx.example")).toThrow();

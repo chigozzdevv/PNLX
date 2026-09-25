@@ -9,16 +9,25 @@ owner_digest = 3
 rho_digest = 4
 blinding = 5
 spend_secret_digest = 6
-path_siblings = [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781]
+path_siblings = [
+  "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "0x0b63a53787021a4a962a452c2921b3663aff1ffd8d5510540f8e659e782956f1",
+  "0x0e34ac2c09f45a503d2908bcb12f1cbae5fa4065759c88d501c097506a8b2290",
+  "0x21f9172d72fdcdafc312eee05cf5092980dda821da5b760a9fb8dbdf607c8a20",
+  "0x2373ea368857ec7af97e7b470d705848e2bf93ed7bef142a490f2119bcf82d8e",
+  "0x120157cfaaa49ce3da30f8b47879114977c24b266d58b0ac18b325d878aafddf",
+  "0x01c28fe1059ae0237b72334700697bdf465e03df03986fe05200cadeda66bd76",
+  "0x2d78ed82f93b61ba718b17c2dfe5b52375b4d37cbbed6f1fc98b47614b0cf21b",
+]
 path_indices = [false, false, false, false, false, false, false, false]
 current_batch = 9
 batch_digest = 20
 market_digest = 21
 owner_commitment_field = 22
-intent_commitment = "0x0000000000000000000000000000000000000000000000590cd03f716c632154"
-margin_root = "0x111ba7d949ec1079df5d37"
-note_commitment_public = 238467530
-note_nullifier = 1351
+intent_commitment = "0x0450e0b82e95f60b10666bb4d13915c4057f8bc2ff1f972823094ab8583c6442"
+margin_root = "0x0c02831d47f2c1fcb8b461ad63f9f4165c7550b226f42e4fb058adc07626f352"
+note_commitment_public = "0x2dd7bb5b7769240cc9aa15a41eb510b5c17661a47e36926fa9fb374f8c74a71f"
+note_nullifier = "0x25f106373d285972efcdfcbc99096a989156495514c4e1bc6cfac2b288ade5e7"
 nonce_digest = 23
 salt_digest = 24
 zero_commitment = 0

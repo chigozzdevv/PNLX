@@ -1,10 +1,8 @@
 import type { Hex } from "@/types/trading";
+import { poseidon2Hash } from "@zkpassport/poseidon2";
 
 const FIELD_PRIME =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
-const LEFT_FACTOR = 131n;
-const RIGHT_FACTOR = 137n;
-const DOMAIN_FACTOR = 17n;
 
 export interface CircuitMarginNote {
   amount: bigint;
@@ -125,11 +123,7 @@ export async function digestToFieldHex(input: string): Promise<Hex> {
 }
 
 export function fieldHashPair(left: Hex | bigint, right: Hex | bigint): Hex {
-  return fieldHex(
-    toField(left) * LEFT_FACTOR +
-      toField(right) * RIGHT_FACTOR +
-      DOMAIN_FACTOR,
-  );
+  return fieldHex(poseidon2Hash([toField(left), toField(right)]));
 }
 
 export function fieldHex(value: bigint): Hex {

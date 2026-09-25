@@ -14,9 +14,12 @@ version = "0.1.0"
 
 [workspace.dependencies]
 anyhow = "1.0"
+ark-bn254 = "0.6"
+ark-ff = "0.6"
 hex = "0.4"
 num-bigint = "0.4"
 num-traits = "0.2"
+pso-poseidon = "0.4.0"
 risc0-build = "3.0.5"
 risc0-ethereum-contracts = "3.0"
 risc0-zkvm = "3.0"

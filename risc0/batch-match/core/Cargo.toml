@@ -5,9 +5,12 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+ark-bn254.workspace = true
+ark-ff.workspace = true
 hex.workspace = true
 num-bigint.workspace = true
 num-traits.workspace = true
+pso-poseidon.workspace = true
 serde.workspace = true
 sha2.workspace = true
 

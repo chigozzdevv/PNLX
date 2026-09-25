@@ -1,5 +1,5 @@
 fn hash_pair(left: Field, right: Field) -> Field {
-    left * 131 + right * 137 + 17
+    std::hash::poseidon2_permutation([left, right, 0, 36893488147419103232], 4)[0]
 }
 
 fn conditional_commitment(

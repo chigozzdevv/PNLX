@@ -1303,7 +1303,7 @@ mod tests {
     }
 
     #[test]
-    fn settles_batch_with_high_byte_public_inputs() {
+    fn settles_batch_with_high_byte_nonfield_inputs() {
         let env = Env::default();
         let id = env.register(BatchSettlement, ());
         let client = BatchSettlementClient::new(&env, &id);
@@ -1311,7 +1311,7 @@ mod tests {
         let market = high_bytes(&env, 1);
         let settlement_digest = high_bytes(&env, 4);
         let filled = filled_intents(&env);
-        let commitments = high_vec(&env, 5, 2);
+        let commitments = new_commitments(&env);
         let margin_changes = margin_change_commitments(&env);
         let spent = high_vec(&env, 7, 2);
         let proof = proof_with_inputs(

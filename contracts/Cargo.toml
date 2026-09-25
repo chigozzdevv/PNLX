@@ -30,6 +30,7 @@ members = [
 
 [workspace.dependencies]
 soroban-sdk = "26.1.0"
+soroban-poseidon = "26.0.0"
 
 [profile.release]
 overflow-checks = true

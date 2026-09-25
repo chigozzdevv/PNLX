@@ -1,26 +1,28 @@
 #![no_std]
 
-use core::ops::{Add, Mul};
 use governance_interface::GovernanceClient;
+use soroban_poseidon::Poseidon2Sponge;
 use soroban_sdk::{
     contract, contractimpl, contracttype, crypto::bn254::Bn254Fr, Address, BytesN, Env, Vec, U256,
 };
 
 const TREE_DEPTH: u32 = 20;
 const MAX_APPEND_ITEMS: u32 = 8;
-const LEFT_FACTOR: u32 = 131;
-const RIGHT_FACTOR: u32 = 137;
-const DOMAIN_FACTOR: u32 = 17;
+const POSEIDON2_TREE_VERSION: u32 = 2;
+type FieldHasher = Poseidon2Sponge<4, Bn254Fr>;
 
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
     CurrentRoot,
+    Empty(u32),
     Frontier(u32),
     Governance,
     LeafCount,
     Root(BytesN<32>),
+    Poseidon2Root(BytesN<32>),
     Spent(BytesN<32>),
+    TreeHashVersion,
     Writer(Address),
 }
 
@@ -48,14 +50,15 @@ impl PositionState {
         if env.storage().instance().has(&DataKey::Governance) {
             panic!("already initialized");
         }
-        let initial_root = empty_root(&env);
+        let initial_root = store_empty_nodes(&env);
         env.storage()
             .instance()
             .set(&DataKey::Governance, &governance);
         env.storage().persistent().set(&DataKey::LeafCount, &0u32);
+        env.storage().persistent().set(&DataKey::TreeHashVersion, &POSEIDON2_TREE_VERSION);
         env.storage()
             .persistent()
-            .set(&DataKey::Root(initial_root.clone()), &true);
+            .set(&DataKey::Poseidon2Root(initial_root.clone()), &true);
         env.storage()
             .persistent()
             .set(&DataKey::CurrentRoot, &initial_root);
@@ -68,7 +71,23 @@ impl PositionState {
             .set(&DataKey::Writer(writer), &enabled);
     }
 
+    pub fn reset_for_poseidon2(env: Env) {
+        require_admin(&env);
+        if env.storage().persistent().has(&DataKey::TreeHashVersion) {
+            panic!("tree already uses Poseidon2");
+        }
+        if !env.storage().instance().has(&DataKey::Governance) {
+            panic!("not initialized");
+        }
+        let initial_root = store_empty_nodes(&env);
+        env.storage().persistent().set(&DataKey::LeafCount, &0u32);
+        env.storage().persistent().set(&DataKey::CurrentRoot, &initial_root);
+        env.storage().persistent().set(&DataKey::Poseidon2Root(initial_root), &true);
+        env.storage().persistent().set(&DataKey::TreeHashVersion, &POSEIDON2_TREE_VERSION);
+    }
+
     pub fn current_root(env: Env) -> BytesN<32> {
+        require_poseidon2_tree(&env);
         env.storage()
             .persistent()
             .get(&DataKey::CurrentRoot)
@@ -76,6 +95,7 @@ impl PositionState {
     }
 
     pub fn leaf_count(env: Env) -> u32 {
+        require_poseidon2_tree(&env);
         env.storage()
             .persistent()
             .get(&DataKey::LeafCount)
@@ -87,7 +107,7 @@ impl PositionState {
     }
 
     pub fn has_root(env: Env, root: BytesN<32>) -> bool {
-        env.storage().persistent().has(&DataKey::Root(root))
+        env.storage().persistent().has(&DataKey::Poseidon2Root(root))
     }
 
     pub fn is_writer(env: Env, writer: Address) -> bool {
@@ -117,14 +137,19 @@ impl PositionState {
             panic!("position tree is full");
         }
 
-        let mut root = Self::current_root(env.clone());
+        let mut hasher = FieldHasher::new(&env);
+        let mut index = first_index;
+        let mut full_root = None;
         for commitment in commitments.iter() {
             validate_commitment(&env, &commitment);
-            root = append_one(&env, commitment);
+            full_root = append_frontier(&env, &mut hasher, index, commitment);
+            index += 1;
         }
+        let root = full_root.unwrap_or_else(|| root_from_frontier(&env, &mut hasher, index));
+        env.storage().persistent().set(&DataKey::LeafCount, &index);
         env.storage()
             .persistent()
-            .set(&DataKey::Root(root.clone()), &true);
+            .set(&DataKey::Poseidon2Root(root.clone()), &true);
         env.storage().persistent().set(&DataKey::CurrentRoot, &root);
 
         AppendReceipt {
@@ -155,59 +180,74 @@ impl PositionState {
     }
 }
 
-fn append_one(env: &Env, commitment: BytesN<32>) -> BytesN<32> {
-    let index: u32 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::LeafCount)
-        .unwrap_or_else(|| panic!("not initialized"));
+fn append_frontier(
+    env: &Env,
+    hasher: &mut FieldHasher,
+    index: u32,
+    commitment: BytesN<32>,
+) -> Option<BytesN<32>> {
     let mut cursor = index;
     let mut node = commitment;
-    let mut empty = zero(env);
 
     for level in 0..TREE_DEPTH {
         if cursor & 1 == 0 {
             env.storage()
                 .persistent()
                 .set(&DataKey::Frontier(level), &node);
-            node = field_hash_pair(env, &node, &empty);
+            return None;
         } else {
             let left: BytesN<32> = env
                 .storage()
                 .persistent()
                 .get(&DataKey::Frontier(level))
                 .unwrap_or_else(|| panic!("missing position frontier"));
-            node = field_hash_pair(env, &left, &node);
+            node = field_hash_pair(env, hasher, &left, &node);
         }
-        empty = field_hash_pair(env, &empty, &empty);
         cursor >>= 1;
     }
+    Some(node)
+}
 
-    env.storage()
-        .persistent()
-        .set(&DataKey::LeafCount, &(index + 1));
+fn root_from_frontier(env: &Env, hasher: &mut FieldHasher, count: u32) -> BytesN<32> {
+    let mut cursor = count;
+    let mut node = zero(env);
+    for level in 0..TREE_DEPTH {
+        let empty: BytesN<32> = env.storage().persistent().get(&DataKey::Empty(level))
+            .unwrap_or_else(|| panic!("missing empty position node"));
+        node = if cursor & 1 == 0 {
+            field_hash_pair(env, hasher, &node, &empty)
+        } else {
+            let left: BytesN<32> = env.storage().persistent().get(&DataKey::Frontier(level))
+                .unwrap_or_else(|| panic!("missing position frontier"));
+            field_hash_pair(env, hasher, &left, &node)
+        };
+        cursor >>= 1;
+    }
     node
 }
 
-fn empty_root(env: &Env) -> BytesN<32> {
+fn store_empty_nodes(env: &Env) -> BytesN<32> {
     let mut root = zero(env);
-    for _ in 0..TREE_DEPTH {
-        root = field_hash_pair(env, &root, &root);
+    let mut hasher = FieldHasher::new(env);
+    for level in 0..TREE_DEPTH {
+        env.storage().persistent().set(&DataKey::Empty(level), &root);
+        root = field_hash_pair(env, &mut hasher, &root, &root);
     }
     root
 }
 
-fn field_hash_pair(env: &Env, left: &BytesN<32>, right: &BytesN<32>) -> BytesN<32> {
-    let left = Bn254Fr::from_bytes(left.clone());
-    let right = Bn254Fr::from_bytes(right.clone());
-    let left_factor = Bn254Fr::from_u256(U256::from_u32(env, LEFT_FACTOR));
-    let right_factor = Bn254Fr::from_u256(U256::from_u32(env, RIGHT_FACTOR));
-    let domain = Bn254Fr::from_u256(U256::from_u32(env, DOMAIN_FACTOR));
-    (left
-        .mul(left_factor)
-        .add(right.mul(right_factor))
-        .add(domain))
-    .to_bytes()
+fn field_hash_pair(
+    env: &Env,
+    hasher: &mut FieldHasher,
+    left: &BytesN<32>,
+    right: &BytesN<32>,
+) -> BytesN<32> {
+    let inputs = soroban_sdk::vec![
+        env,
+        U256::from_be_bytes(env, &left.clone().into()),
+        U256::from_be_bytes(env, &right.clone().into()),
+    ];
+    Bn254Fr::from_u256(hasher.compute_hash(&inputs)).to_bytes()
 }
 
 fn zero(env: &Env) -> BytesN<32> {
@@ -218,6 +258,13 @@ fn require_writer(env: &Env, writer: &Address) {
     writer.require_auth();
     if !PositionState::is_writer(env.clone(), writer.clone()) {
         panic!("unauthorized writer");
+    }
+}
+
+fn require_poseidon2_tree(env: &Env) {
+    let version: Option<u32> = env.storage().persistent().get(&DataKey::TreeHashVersion);
+    if version != Some(POSEIDON2_TREE_VERSION) {
+        panic!("position tree requires Poseidon2 reset");
     }
 }
 
@@ -242,9 +289,26 @@ fn validate_commitment(env: &Env, value: &BytesN<32>) {
 mod tests {
     extern crate std;
 
-    use super::{PositionState, PositionStateClient};
+    use super::{field_hash_pair, DataKey, FieldHasher, PositionState, PositionStateClient};
     use governance::{Governance, GovernanceClient};
     use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, Vec};
+
+    #[test]
+    fn hash_pair_matches_noir_and_typescript() {
+        let env = Env::default();
+        let one = super::Bn254Fr::from_u256(super::U256::from_u32(&env, 1)).to_bytes();
+        let two = super::Bn254Fr::from_u256(super::U256::from_u32(&env, 2)).to_bytes();
+        let mut hasher = FieldHasher::new(&env);
+        assert_eq!(
+            field_hash_pair(&env, &mut hasher, &one, &two),
+            BytesN::from_array(&env, &[
+                0x03, 0x86, 0x82, 0xaa, 0x1c, 0xb5, 0xae, 0x4e,
+                0x0a, 0x3f, 0x13, 0xda, 0x43, 0x2a, 0x95, 0xc7,
+                0x7c, 0x5c, 0x11, 0x1f, 0x6f, 0x03, 0x0f, 0xaf,
+                0x9c, 0xad, 0x64, 0x1c, 0xe1, 0xed, 0x73, 0x83,
+            ]),
+        );
+    }
 
     #[test]
     fn appends_outputs_and_spends_against_historical_roots() {
@@ -279,6 +343,74 @@ mod tests {
     }
 
     #[test]
+    fn legacy_tree_cannot_append_until_one_time_reset() {
+        let env = Env::default();
+        let id = env.register(PositionState, ());
+        let client = PositionStateClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        let writer = Address::generate(&env);
+        let old_root = value(&env, 7);
+        let old_nullifier = value(&env, 8);
+
+        client.init(&setup_governance(&env, &admin));
+        env.mock_all_auths();
+        client.set_writer(&writer, &true);
+        env.as_contract(&id, || {
+            let storage = env.storage().persistent();
+            storage.remove(&DataKey::TreeHashVersion);
+            storage.set(&DataKey::LeafCount, &6u32);
+            storage.set(&DataKey::CurrentRoot, &old_root);
+            storage.set(&DataKey::Root(old_root.clone()), &true);
+            storage.set(&DataKey::Frontier(0), &value(&env, 3));
+            storage.set(&DataKey::Spent(old_nullifier.clone()), &value(&env, 4));
+        });
+
+        assert!(client.try_append(&writer, &value(&env, 9)).is_err());
+        assert!(!client.has_root(&old_root));
+        client.reset_for_poseidon2();
+        assert_eq!(client.leaf_count(), 0);
+        assert_ne!(client.current_root(), old_root);
+        assert!(!client.has_root(&old_root));
+        assert!(client.has_root(&client.current_root()));
+        assert!(client.is_spent(&old_nullifier));
+        assert_eq!(client.append(&writer, &value(&env, 9)).first_index, 0);
+        assert!(client.try_reset_for_poseidon2().is_err());
+    }
+
+    #[test]
+    fn replays_twelve_leaves_across_append_batches() {
+        let env = Env::default();
+        let id = env.register(PositionState, ());
+        let client = PositionStateClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        let writer = Address::generate(&env);
+        client.init(&setup_governance(&env, &admin));
+        env.mock_all_auths();
+        client.set_writer(&writer, &true);
+        env.as_contract(&id, || env.storage().persistent().remove(&DataKey::TreeHashVersion));
+        client.reset_for_poseidon2();
+
+        let first = Vec::from_array(&env, [
+            value(&env, 1), value(&env, 2), value(&env, 3), value(&env, 4),
+            value(&env, 5), value(&env, 6), value(&env, 7), value(&env, 8),
+        ]);
+        let second = Vec::from_array(&env, [
+            value(&env, 9), value(&env, 10), value(&env, 11), value(&env, 12),
+        ]);
+        env.cost_estimate().budget().reset_default();
+        assert_eq!(client.append_many(&writer, &first).first_index, 0);
+        env.cost_estimate().budget().reset_default();
+        assert_eq!(client.append_many(&writer, &second).first_index, 8);
+        assert_eq!(client.leaf_count(), 12);
+        assert_eq!(client.current_root(), BytesN::from_array(&env, &[
+            0x29, 0x9b, 0x9c, 0xf0, 0x7a, 0x4c, 0x0f, 0x75,
+            0x6d, 0x55, 0xf0, 0xec, 0x8c, 0x64, 0x0d, 0x3a,
+            0x0c, 0xac, 0x80, 0xad, 0xc6, 0x39, 0x6a, 0xae,
+            0x30, 0x24, 0xb2, 0x5a, 0x81, 0x45, 0x48, 0xb4,
+        ]));
+    }
+
+    #[test]
     fn matches_the_shared_depth_twenty_accumulator_vector() {
         let env = Env::default();
         let id = env.register(PositionState, ());
@@ -296,9 +428,9 @@ mod tests {
             BytesN::from_array(
                 &env,
                 &[
-                    0x10, 0xf0, 0xc7, 0x8e, 0x16, 0x5c, 0x67, 0x5e, 0x0f, 0x25, 0x2b, 0xbd, 0x84,
-                    0x15, 0xe9, 0x8c, 0x6c, 0xd8, 0xaf, 0xe0, 0xf0, 0xaa, 0x48, 0x5e, 0x53, 0x64,
-                    0x86, 0x53, 0x76, 0x6c, 0xd2, 0x0b,
+                    0x2d, 0xb0, 0xec, 0x1d, 0x70, 0x02, 0x78, 0xf1, 0x83, 0x5a, 0xf5, 0xf7, 0x61,
+                    0x50, 0x6e, 0xd1, 0x27, 0x03, 0x2b, 0xc9, 0x0e, 0x0b, 0xe6, 0xfc, 0x4e, 0x79,
+                    0xaa, 0x3f, 0x18, 0x50, 0x96, 0xee,
                 ],
             ),
         );

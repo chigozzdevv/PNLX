@@ -1,16 +1,25 @@
 note_amount = 10000
 withdraw_amount = 4000
-root = "0xe886eb0652a3330412447"
-nullifier = 1351
+root = "0x1b3a39cc7d28a362471bb4c4fa49ad27d615503edca088427a3cfb30a0f3ad53"
+nullifier = "0x25f106373d285972efcdfcbc99096a989156495514c4e1bc6cfac2b288ade5e7"
 token_digest = 2
 recipient_digest = 13
-change_commitment = 145875806
+change_commitment = "0x016623b6bb6f97214f79e97a68aba36a4a6f9f2f988925d476b41889dbb0211b"
 asset_digest = 2
 owner_digest = 3
 rho_digest = 4
 blinding = 5
 spend_secret_digest = 6
-path_siblings = [0, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781]
+path_siblings = [
+  "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "0x0b63a53787021a4a962a452c2921b3663aff1ffd8d5510540f8e659e782956f1",
+  "0x0e34ac2c09f45a503d2908bcb12f1cbae5fa4065759c88d501c097506a8b2290",
+  "0x21f9172d72fdcdafc312eee05cf5092980dda821da5b760a9fb8dbdf607c8a20",
+  "0x2373ea368857ec7af97e7b470d705848e2bf93ed7bef142a490f2119bcf82d8e",
+  "0x120157cfaaa49ce3da30f8b47879114977c24b266d58b0ac18b325d878aafddf",
+  "0x01c28fe1059ae0237b72334700697bdf465e03df03986fe05200cadeda66bd76",
+  "0x2d78ed82f93b61ba718b17c2dfe5b52375b4d37cbbed6f1fc98b47614b0cf21b",
+]
 path_indices = [false, false, false, false, false, false, false, false]
 change_rho_digest = 7
 change_blinding = 8
