@@ -35,6 +35,15 @@ export function remainingVaultMakerPrincipal(allocation: Pick<VaultMakerAllocati
   return remaining;
 }
 
+export function recordedSeriesPrincipal(
+  allocations: VaultMakerAllocation[], vault: string, series: number,
+): bigint {
+  return allocations
+    .filter((allocation) => allocation.vault === vault && allocation.series === series &&
+      allocation.status !== "closed")
+    .reduce((sum, allocation) => sum + remainingVaultMakerPrincipal(allocation), 0n);
+}
+
 export function normalizedHash(value: string): string {
   const hash = value.replace(/^0x/i, "").toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error("invalid transaction hash");

@@ -5,6 +5,7 @@ import {
   allocationId,
   normalizedHash,
   readVaultMakerAllocations,
+  recordedSeriesPrincipal,
   registerVaultMakerNote,
   type VaultMakerAllocation,
 } from "@/shared/vault-maker-backing";
@@ -65,9 +66,7 @@ export async function register(argv: string[]): Promise<VaultMakerAllocation> {
   });
   const vault = await new LiquidityVaultService(relayer, deployment).status();
   const seriesPrincipal = await contractRead(relayer, vaultId, "series_principal", ["--series", String(allocation.series)]);
-  const recordedPrincipal = allocations
-    .filter((item) => item.vault === vaultId && item.series === allocation.series && item.status === "outstanding")
-    .reduce((sum, item) => sum + BigInt(item.amount), 0n);
+  const recordedPrincipal = recordedSeriesPrincipal(allocations, vaultId, allocation.series);
   if (vault.contractId !== vaultId || vault.asset !== env.collateralTokenContract ||
     vault.maker !== maker ||
     BigInt(String(seriesPrincipal)) !== recordedPrincipal) {

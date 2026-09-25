@@ -4,6 +4,7 @@ import { notesForMakerRecovery } from "../../scripts/operations/withdraw-maker-n
 import {
   allocationId,
   eligibleVaultMakerNotes,
+  recordedSeriesPrincipal,
   remainingVaultMakerPrincipal,
   type VaultMakerAllocation,
 } from "@/shared/vault-maker-backing";
@@ -91,6 +92,16 @@ describe("vault maker note eligibility", () => {
     expect(eligibleVaultMakerNotes([spentRoot, change],
       [{ ...partial, remainingPrincipal: "60000000" }], chain)).toEqual([]);
     expect(() => remainingVaultMakerPrincipal({ ...partial, remainingPrincipal: "90000000" })).toThrow();
+  });
+
+  test("reconciles a series using remaining principal after partial recovery", () => {
+    const partial = { ...allocation, remainingPrincipal: "70000000" };
+    const draining = { ...allocation, id: allocationId(vault, "b".repeat(64)),
+      status: "draining" as const, amount: "20000000", remainingPrincipal: "10000000" };
+    const closed = { ...allocation, id: allocationId(vault, "c".repeat(64)),
+      status: "closed" as const, remainingPrincipal: "0" };
+    expect(recordedSeriesPrincipal([partial, draining, closed], vault, 0)).toBe(80_000_000n);
+    expect(recordedSeriesPrincipal([partial, draining, closed], vault, 1)).toBe(0n);
   });
 
   test("fails closed if available notes exceed their allocation", () => {

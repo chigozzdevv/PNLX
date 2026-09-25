@@ -1,6 +1,6 @@
 import { loadEnv } from "@/config/env";
 import { LiquidityVaultService } from "@/features/liquidity-vault/liquidity-vault.service";
-import { readVaultMakerAllocations, recordVaultMakerAllocation, type VaultMakerAllocation } from "@/shared/vault-maker-backing";
+import { readVaultMakerAllocations, recordedSeriesPrincipal, recordVaultMakerAllocation, type VaultMakerAllocation } from "@/shared/vault-maker-backing";
 import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
 import { assertSuccessfulTransaction } from "./register-vault-maker-note";
@@ -41,9 +41,7 @@ export async function allocate(argv: string[]): Promise<VaultMakerAllocation> {
     throw new Error("series must be an existing vault series");
   }
   const seriesBefore = await readSeries();
-  const outstanding = (await readVaultMakerAllocations())
-    .filter((record) => record.vault === vaultId && record.series === series && record.status === "outstanding")
-    .reduce((sum, record) => sum + BigInt(record.amount), 0n);
+  const outstanding = recordedSeriesPrincipal(await readVaultMakerAllocations(), vaultId, series);
   if (before.contractId !== vaultId || before.asset !== env.collateralTokenContract ||
     before.maker !== maker || outstanding !== seriesBefore.principal ||
     seriesBefore.pending !== 0n || seriesBefore.shares === 0n || seriesBefore.liquid < value ||
