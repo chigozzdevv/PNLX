@@ -2,6 +2,7 @@ import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
 import { ensureAccountEncryptionKey } from "@/lib/account-encryption";
 
 const STORAGE_KEY = "pnlx.wallet.session";
+const BACKUP_WARNING_KEY = "pnlx.private-note-backup.warning";
 const FREIGHTER_DETECTION_TIMEOUT_MS = 3_000;
 const FREIGHTER_APPROVAL_TIMEOUT_MS = 120_000;
 let freighterApiPromise: Promise<typeof import("@stellar/freighter-api")> | undefined;
@@ -50,6 +51,7 @@ export async function connectWalletSession(): Promise<WalletSession> {
   };
   storeWalletSession(stored);
   await ensureAccountEncryptionKey(stored);
+  await syncPrivateData(stored);
   return stored;
 }
 
@@ -95,6 +97,7 @@ export async function validateWalletSession(): Promise<WalletSession | null> {
     };
     storeWalletSession(validated);
     await ensureAccountEncryptionKey(validated);
+    await syncPrivateData(validated);
     return validated;
   } catch {
     clearWalletSession();
@@ -105,6 +108,32 @@ export async function validateWalletSession(): Promise<WalletSession | null> {
 export function clearWalletSession(): void {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(STORAGE_KEY);
+  window.sessionStorage.removeItem(BACKUP_WARNING_KEY);
+}
+
+export function privateNoteBackupWarning(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  return window.sessionStorage.getItem(BACKUP_WARNING_KEY) ?? undefined;
+}
+
+export function clearPrivateNoteBackupWarning(): void {
+  window.sessionStorage.removeItem(BACKUP_WARNING_KEY);
+  window.dispatchEvent(new Event("pnlx:private-note-backup-status"));
+}
+
+export function setPrivateNoteBackupWarning(message: string): void {
+  window.sessionStorage.setItem(BACKUP_WARNING_KEY, message);
+  window.dispatchEvent(new Event("pnlx:private-note-backup-status"));
+}
+
+async function syncPrivateData(session: WalletSession): Promise<void> {
+  try {
+    await import("@/lib/private-note-backup").then(({ syncPrivateMarginNoteBackup }) =>
+      syncPrivateMarginNoteBackup(session));
+    clearPrivateNoteBackupWarning();
+  } catch {
+    setPrivateNoteBackupWarning("Private balance could not sync. Reconnect your wallet.");
+  }
 }
 
 export async function signWalletTransaction(
@@ -128,6 +157,11 @@ export async function signWalletTransaction(
   if (result.error) throw new Error(result.error.message);
   if (!result.signedTxXdr) throw new Error("Freighter did not return a signed transaction XDR");
   return result.signedTxXdr;
+}
+
+export async function signRecoveryMessage(message: string, address: string): Promise<string> {
+  await assertFreighterConnected();
+  return signChallenge(message, address);
 }
 
 function storeWalletSession(session: WalletSession): void {

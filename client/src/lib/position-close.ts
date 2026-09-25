@@ -20,6 +20,7 @@ import {
   savePrivateMarginNote,
   setPrivateMarginNoteRuntimeScope,
 } from "@/lib/private-margin-notes";
+import { backUpExistingPrivateMarginNotes, backUpPrivateMarginNote, unlockPrivateNoteBackup } from "@/lib/private-note-backup";
 import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
 import type { Hex, MarketDisplay, PositionRow, Side } from "@/types/trading";
 import type { WalletSession } from "@/lib/wallet-auth";
@@ -189,6 +190,20 @@ async function closePositionAttempt(input: ClosePositionInput): Promise<ClosePos
     rhoDigest: marginOutputRhoDigest,
     spendSecretDigest: ZERO_HEX,
   });
+
+  if (closeSettlement.newMargin > 0n) {
+    await unlockPrivateNoteBackup(input.session);
+    await backUpExistingPrivateMarginNotes(input.session);
+    const pending = savePrivateMarginNote({
+      amount: closeSettlement.newMargin.toString(), assetDigest: marginOutputAssetDigest,
+      blinding: marginOutputBlinding, commitment: marginOutputCommitment,
+      noteNullifier: fieldHashPair(ZERO_HEX, marginOutputRhoDigest),
+      ownerCommitment: input.session.ownerCommitment, ownerDigest: positionSecrets.ownerDigest,
+      rhoDigest: marginOutputRhoDigest, spendSecretDigest: ZERO_HEX,
+      walletAddress: input.session.address, status: "pending",
+    });
+    await backUpPrivateMarginNote(pending, input.session);
+  }
 
   const proven = await registerProofBundle(
     await proofProvider.positionClose({

@@ -148,6 +148,8 @@ export function AppShell({
         </nav>
       </header>
 
+      {connected && wallet.error ? <p className="private-backup-warning" role="alert">{wallet.error}</p> : null}
+
       <div className="px-2 pb-12 pt-2 md:px-3">{children}</div>
     </div>
   );

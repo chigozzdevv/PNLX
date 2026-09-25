@@ -12,6 +12,7 @@ import type { OnchainMarketConfig, OraclePriceRelayInput } from "@/workers/oncha
 import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
 import type { OracleService } from "@/workers/oracle/oracle.service";
 import { MarketDataService } from "@/features/markets/market-data.service";
+import { OnchainMarkStream } from "@/features/markets/onchain-mark-stream";
 import { applySettlementVolumes } from "@/features/markets/market-volume";
 import { currentFundingPremium } from "@/workers/funding-engine/funding-engine.service";
 import type {
@@ -41,6 +42,7 @@ export interface OracleMarketResult {
 
 export class MarketsService {
   private readonly marketData: MarketDataService;
+  private readonly onchainMarkStream?: OnchainMarkStream;
 
   constructor(
     private readonly executor: ExecutorService,
@@ -50,6 +52,12 @@ export class MarketsService {
     marketData?: MarketDataService,
   ) {
     this.marketData = marketData ?? new MarketDataService(env);
+    if (onchain?.enabled) {
+      this.onchainMarkStream = new OnchainMarkStream(
+        (marketId) => onchain.marketPriceSnapshotAsync(marketId),
+        env.oraclePriceMaxAgeSeconds,
+      );
+    }
   }
 
   create(input: MarketConfig, authenticated?: string): MarketConfig {
@@ -224,6 +232,14 @@ export class MarketsService {
 
   priceStream(marketId: string, signal?: AbortSignal): Response {
     return this.marketData.stream(marketId, signal);
+  }
+
+  onchainPriceStream(marketId: string, signal?: AbortSignal): Response {
+    if (!this.executor.store.markets.has(marketId)) throw new Error("unknown market");
+    if (!this.onchainMarkStream) {
+      return new Response(null, { status: 204 });
+    }
+    return this.onchainMarkStream.stream(marketId, signal);
   }
 
   private assertNewMarket(marketId: string): void {

@@ -189,6 +189,11 @@ export function privateMarginNotes(ownerCommitment?: Hex): StoredPrivateMarginNo
     .filter((note) => !ownerCommitment || note.ownerCommitment === ownerCommitment);
 }
 
+export function hasLocallyStoredPrivateMarginNotes(ownerCommitment: Hex): boolean {
+  return readPrivateMarginNotes().some((note) =>
+    note.ownerCommitment.toLowerCase() === ownerCommitment.toLowerCase() && note.status !== "spent");
+}
+
 export function setPrivateMarginNoteRuntimeScope(scope?: string): void {
   if (typeof window === "undefined") {
     activeRuntimeScope = normalizeRuntimeScope(scope);

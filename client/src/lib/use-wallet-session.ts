@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   clearWalletSession,
   connectWalletSession,
+  privateNoteBackupWarning,
   readWalletSession,
   validateWalletSession,
   type WalletSession,
@@ -35,11 +36,18 @@ export function useWalletSession(): WalletSessionController {
   });
 
   useEffect(() => {
+    const updateBackupWarning = () => setError(privateNoteBackupWarning());
+    window.addEventListener("pnlx:private-note-backup-status", updateBackupWarning);
+    return () => window.removeEventListener("pnlx:private-note-backup-status", updateBackupWarning);
+  }, []);
+
+  useEffect(() => {
     let active = true;
     if (!readWalletSession()) return undefined;
 
     validateWalletSession().then((validated) => {
       if (!active) return;
+      setError(privateNoteBackupWarning());
       setState({
         session: validated,
         status: validated ? "connected" : "idle",
@@ -56,6 +64,7 @@ export function useWalletSession(): WalletSessionController {
     setState((current) => ({ ...current, status: "connecting" }));
     try {
       const nextSession = await connectWalletSession();
+      setError(privateNoteBackupWarning());
       setState({ session: nextSession, status: "connected" });
     } catch (caught) {
       setState({ session: null, status: "error" });

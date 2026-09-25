@@ -1,6 +1,7 @@
 import { defaultClientProofProvider, registerProofBundle, type ClientProofProvider, type DepositNoteProofRecord } from "@/lib/client-proof-provider";
 import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
 import { createCircuitMarginNote, randomLabel } from "@/lib/private-note";
+import { backUpPrivateMarginNote } from "@/lib/private-note-backup";
 import {
   privateMarginNotes,
   finalizePrivateMarginClaim,
@@ -47,6 +48,7 @@ export async function recoverCancelledResiduals(input: {
 }
 
 export async function recoverResidualClaim(input: {
+  backUpNote?: typeof backUpPrivateMarginNote;
   intentCommitment: Hex;
   proofProvider?: ClientProofProvider;
   session: WalletSession;
@@ -77,6 +79,7 @@ export async function recoverResidualClaim(input: {
   }
 
   const note = existing ?? await makeClaimingNote(amount, details.tokenDigest, input);
+  await (input.backUpNote ?? backUpPrivateMarginNote)(note, session);
   const provider = input.proofProvider ?? defaultClientProofProvider();
   if (!provider) throw new Error("Client proof provider is not configured");
   const depositProof = await registerProofBundle(

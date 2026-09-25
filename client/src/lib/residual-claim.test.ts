@@ -34,6 +34,7 @@ test("persists a private residual note before claim and reuses it after a failed
   setPrivateMarginNoteRuntimeScope("test:residual-retry");
 
   let failClaim = true;
+  let backedUpCommitment: Hex | undefined;
   let claimedCommitment: Hex | undefined;
   let proofCommitment: Hex | undefined;
   const provider = {
@@ -53,6 +54,7 @@ test("persists a private residual note before claim and reuses it after a failed
     }
     if (path.endsWith("/proofs/artifacts")) return Response.json({ artifact: {} });
     if (path.endsWith("/orders/claim-residual")) {
+      expect(backedUpCommitment).toBe(proofCommitment);
       if (failClaim) return Response.json({ error: "Relay unavailable" }, { status: 503 });
       const body = JSON.parse(String(init?.body)) as { depositProof: { commitment: Hex } };
       claimedCommitment = body.depositProof.commitment;
@@ -61,7 +63,11 @@ test("persists a private residual note before claim and reuses it after a failed
     throw new Error(`Unexpected request ${path}`);
   }, { preconnect: originalFetch.preconnect });
 
-  await expect(recoverResidualClaim({ intentCommitment, proofProvider: provider, session })).rejects.toThrow("Relay unavailable");
+  const recover = () => recoverResidualClaim({
+    backUpNote: async (note) => { backedUpCommitment = note.commitment; },
+    intentCommitment, proofProvider: provider, session,
+  });
+  await expect(recover()).rejects.toThrow("Relay unavailable");
   const [pending] = privateMarginNotes(session.ownerCommitment);
   expect(pending.status).toBe("claiming");
   expect(pending.commitment).toBe(proofCommitment!);
@@ -69,7 +75,7 @@ test("persists a private residual note before claim and reuses it after a failed
   expect(privateSpendableBalance(session.ownerCommitment)).toBe(0n);
 
   failClaim = false;
-  const recovered = await recoverResidualClaim({ intentCommitment, proofProvider: provider, session });
+  const recovered = await recover();
   expect(recovered?.commitment).toBe(pending.commitment);
   expect(recovered?.status).toBe("available");
   expect(privateSpendableBalance(session.ownerCommitment)).toBe(5_000_000n);
@@ -81,7 +87,7 @@ test("persists a private residual note before claim and reuses it after a failed
     noteNullifier: `0x${"aa".repeat(32)}`,
     status: "claiming",
   });
-  const confirmed = await recoverResidualClaim({ intentCommitment, proofProvider: provider, session });
+  const confirmed = await recover();
   expect(confirmed?.commitment).toBe(pending.commitment);
   expect(privateMarginNotes(session.ownerCommitment).find((note) => note.commitment === unused.commitment)?.status).toBe("spent");
   expect(privatePendingBalance(session.ownerCommitment)).toBe(0n);

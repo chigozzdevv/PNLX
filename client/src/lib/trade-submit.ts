@@ -10,6 +10,7 @@ import {
 } from "@/lib/client-proof-provider";
 import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
 import { createCircuitMarginNote, randomLabel } from "@/lib/private-note";
+import { backUpExistingPrivateMarginNotes, backUpPrivateMarginNote, unlockPrivateNoteBackup } from "@/lib/private-note-backup";
 import {
   lockPrivateMarginNote,
   markPrivateMarginNoteSpent,
@@ -139,6 +140,8 @@ export async function submitTradeIntent(input: SubmitTradeIntentInput): Promise<
 
   const health = await pnlxGet<HealthResponse>("/health", input.session.token);
   setPrivateMarginNoteRuntimeScope(privateMarginNoteRuntimeScopeFromHealth(health));
+  await unlockPrivateNoteBackup(input.session);
+  await backUpExistingPrivateMarginNotes(input.session);
 
   const notes = privateMarginNotes(input.session.ownerCommitment);
   const availableNotes = notes
@@ -408,6 +411,16 @@ async function submitCustodyIntentFragment(
       input.session.token,
     );
     const validityRecord = normalizeIntentValidity(validity);
+    if (changeNote) {
+      const pending = savePendingPrivateMarginChange({
+        amount: changeNote.amount.toString(), assetDigest: changeNote.assetDigest,
+        blinding: changeNote.blinding, commitment: changeNote.commitment,
+        noteNullifier: changeNote.noteNullifier, ownerCommitment: input.session.ownerCommitment,
+        ownerDigest: changeNote.ownerDigest, rhoDigest: changeNote.rhoDigest,
+        spendSecretDigest: changeNote.spendSecretDigest, walletAddress: input.session.address,
+      });
+      await backUpPrivateMarginNote(pending, input.session);
+    }
     markProgress(input, "matching");
     const response = await pnlxPost<IntentSubmitResponse>(
       "/intents",
@@ -460,6 +473,8 @@ export async function depositPrivateMargin(input: DepositPrivateMarginInput): Pr
   markProgress(input, "shielding");
   const health = await pnlxGet<HealthResponse>("/health", input.session.token);
   setPrivateMarginNoteRuntimeScope(privateMarginNoteRuntimeScopeFromHealth(health));
+  await unlockPrivateNoteBackup(input.session);
+  await backUpExistingPrivateMarginNotes(input.session);
   if (!health.custody.required) {
     throw new Error("Asset custody is not enabled");
   }
@@ -480,6 +495,15 @@ export async function depositPrivateMargin(input: DepositPrivateMarginInput): Pr
       session: input.session,
       token: health.custody.collateralAsset.tokenContract,
     });
+    const pending = savePrivateMarginNote({
+      amount: prepared.note.amount.toString(), assetDigest: prepared.note.assetDigest,
+      blinding: prepared.note.blinding, commitment: prepared.note.commitment,
+      noteNullifier: prepared.note.noteNullifier, ownerCommitment: input.session.ownerCommitment,
+      ownerDigest: prepared.note.ownerDigest, rhoDigest: prepared.note.rhoDigest,
+      spendSecretDigest: prepared.note.spendSecretDigest, walletAddress: input.session.address,
+      status: "pending",
+    });
+    await backUpPrivateMarginNote(pending, input.session);
     markProgress(input, "signing");
     const relay = await signAndRelayPreparedDeposit({
       prepared: prepared.prepared,

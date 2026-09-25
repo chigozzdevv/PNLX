@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   decryptAccountEvent,
   ensureAccountEncryptionKey,
@@ -9,7 +9,10 @@ import {
   type PrivateAccountEventPayload,
 } from "@/lib/account-encryption";
 import { protocolBaseToDisplay, protocolUsdcToDisplay } from "@/lib/asset-units";
+import { apiPath } from "@/lib/api-path";
 import { pnlxGet } from "@/lib/pnlx-api";
+import { backUpPrivateOpening, restorePrivateOpenings } from "@/lib/private-note-backup";
+import { setPrivateNoteBackupWarning } from "@/lib/wallet-auth";
 import {
   privatePendingBalance,
   privateReservedBalance,
@@ -70,6 +73,7 @@ interface TradingDataState {
 
 const ZERO_ROOT = `0x${"0".repeat(64)}` as Hex;
 const PRICE_SCALE = 100_000_000;
+const ONCHAIN_MARK_MAX_SILENCE_MS = 10_000;
 const PRIVATE_OPENING_RECOVERY_PREFIX = "pnlx.account-key-opening-recovery.v2";
 const SUPPORTED_MARKET_ORDER = ["btc-usd-perp", "eth-usd-perp", "xlm-usd-perp", "sol-usd-perp", "xrp-usd-perp"];
 const SUPPORTED_MARKET_IDS = new Set(SUPPORTED_MARKET_ORDER);
@@ -77,6 +81,7 @@ const SUPPORTED_MARKET_IDS = new Set(SUPPORTED_MARKET_ORDER);
 export function useTradingData(session: WalletSession | null, refreshKey = 0): TradingDataState {
   const emptyData = useMemo(() => emptyLiveData(session), [session]);
   const [privateNotesVersion, setPrivateNotesVersion] = useState(0);
+  const latestOnchainMarks = useRef(new Map<string, { price?: bigint; receivedAt: number }>());
   const [state, setState] = useState<TradingDataState>({
     data: emptyData,
     loading: true,
@@ -101,7 +106,7 @@ export function useTradingData(session: WalletSession | null, refreshKey = 0): T
     loadTradingData(session)
       .then((data) => {
         if (!active) return;
-        setState({ data, loading: false });
+        setState({ data: applyLatestOnchainMarks(data, latestOnchainMarks.current), loading: false });
       })
       .catch((error) => {
         if (!active) return;
@@ -117,7 +122,146 @@ export function useTradingData(session: WalletSession | null, refreshKey = 0): T
     };
   }, [emptyData, privateNotesVersion, refreshKey, session]);
 
+  const markMarketKey = useMemo(
+    () => [...new Set(
+      state.data.positions
+        .filter((position) => position.status === "open")
+        .map((position) => position.marketId),
+    )].sort().join("|"),
+    [state.data.positions],
+  );
+
+  useEffect(() => {
+    function clearOnchainMark(marketId: string) {
+      latestOnchainMarks.current.set(marketId, { receivedAt: Date.now() });
+      setState((current) => {
+        let changed = false;
+        const positions = current.data.positions.map((position) => {
+          if (
+            position.status !== "open" ||
+            position.marketId !== marketId ||
+            (position.marketPrice === undefined && position.unrealizedPnl === undefined)
+          ) return position;
+          changed = true;
+          return { ...position, marketPrice: undefined, unrealizedPnl: undefined };
+        });
+        return changed ? { ...current, data: { ...current.data, positions } } : current;
+      });
+    }
+
+    if (!markMarketKey || typeof EventSource === "undefined") return;
+    const sources = markMarketKey.split("|").map((marketId) => {
+      const source = new EventSource(
+        `${apiPath("markets/marks/stream")}?marketId=${encodeURIComponent(marketId)}`,
+      );
+      source.addEventListener("mark", (event) => {
+        if (!(event instanceof MessageEvent)) return;
+        try {
+          const update = JSON.parse(event.data) as {
+            marketId: string;
+            price: string;
+            publishedAt: number;
+            source: string;
+          };
+          if (
+            update.marketId !== marketId ||
+            update.source !== "onchain-market" ||
+            !/^\d+$/.test(update.price) ||
+            !Number.isSafeInteger(update.publishedAt) ||
+            update.publishedAt <= 0
+          ) return;
+          const rawMarkPrice = BigInt(update.price);
+          if (rawMarkPrice <= 0n) return;
+          latestOnchainMarks.current.set(marketId, { price: rawMarkPrice, receivedAt: Date.now() });
+          const marketPrice = Number(rawMarkPrice) / PRICE_SCALE;
+          setState((current) => {
+            let changed = false;
+            const positions = current.data.positions.map((position) => {
+              if (position.status !== "open" || position.marketId !== marketId) return position;
+              const unrealizedPnl = unrealizedPnlAtMark(position, rawMarkPrice);
+              if (position.marketPrice === marketPrice && position.unrealizedPnl === unrealizedPnl) {
+                return position;
+              }
+              changed = true;
+              return {
+                ...position,
+                marketPrice,
+                unrealizedPnl,
+              };
+            });
+            return changed
+              ? { ...current, data: { ...current.data, positions } }
+              : current;
+          });
+        } catch {
+          // Ignore malformed mark updates and keep the last verified value.
+        }
+      });
+      source.addEventListener("unavailable", (event) => {
+        if (!(event instanceof MessageEvent)) return;
+        try {
+          const update = JSON.parse(event.data) as { marketId: string; source: string };
+          if (update.marketId !== marketId || update.source !== "onchain-market") return;
+          clearOnchainMark(marketId);
+        } catch {
+          // Ignore malformed mark status updates.
+        }
+      });
+      source.onerror = () => clearOnchainMark(marketId);
+      return source;
+    });
+    const freshnessTimer = window.setInterval(() => {
+      const now = Date.now();
+      for (const [marketId, mark] of latestOnchainMarks.current) {
+        if (mark.price && now - mark.receivedAt > ONCHAIN_MARK_MAX_SILENCE_MS) {
+          clearOnchainMark(marketId);
+        }
+      }
+    }, 2_000);
+
+    return () => {
+      window.clearInterval(freshnessTimer);
+      sources.forEach((source) => source.close());
+    };
+  }, [markMarketKey]);
+
   return state;
+}
+
+function applyLatestOnchainMarks(
+  data: TradingLiveData,
+  marks: Map<string, { price?: bigint; receivedAt: number }>,
+): TradingLiveData {
+  let changed = false;
+  const positions = data.positions.map((position) => {
+    if (position.status !== "open") return position;
+    const mark = marks.get(position.marketId);
+    if (!mark) return position;
+    if (!mark.price || Date.now() - mark.receivedAt > ONCHAIN_MARK_MAX_SILENCE_MS) {
+      if (position.marketPrice === undefined && position.unrealizedPnl === undefined) return position;
+      changed = true;
+      return { ...position, marketPrice: undefined, unrealizedPnl: undefined };
+    }
+    const marketPrice = Number(mark.price) / PRICE_SCALE;
+    const unrealizedPnl = unrealizedPnlAtMark(position, mark.price);
+    if (position.marketPrice === marketPrice && position.unrealizedPnl === unrealizedPnl) return position;
+    changed = true;
+    return { ...position, marketPrice, unrealizedPnl };
+  });
+  return changed ? { ...data, positions } : data;
+}
+
+function unrealizedPnlAtMark(
+  position: TradingLiveData["positions"][number],
+  markPrice: bigint,
+): number | undefined {
+  const opening = position.privateState;
+  if (!opening) return undefined;
+  const entryPrice = BigInt(opening.entryPrice);
+  const size = BigInt(opening.size);
+  const entryFee = BigInt(opening.entryFee ?? "0");
+  const delta = opening.side === "long" ? markPrice - entryPrice : entryPrice - markPrice;
+  return protocolUsdcToDisplay((size * delta) / BigInt(PRICE_SCALE) - entryFee);
 }
 
 async function loadTradingData(session: WalletSession | null): Promise<TradingLiveData> {
@@ -270,18 +414,40 @@ async function decryptRecoverablePrivateOpenings(
 
   let activePortfolio = portfolio;
   let openings = await decryptPrivateOpenings(session, activePortfolio.accountEvents);
-  if (!shouldRecoverPrivateOpenings(session, activePortfolio, openings)) {
-    return openings;
+  if (shouldRecoverPrivateOpenings(session, activePortfolio, openings)) {
+    markPrivateOpeningRecoveryAttempt(session, activePortfolio);
+    try {
+      await recoverAccountEncryptionKey(session);
+      activePortfolio = await fetchPortfolio(session);
+      openings = await decryptPrivateOpenings(session, activePortfolio.accountEvents);
+      if (openings.length > 0) void syncPrivateConditionalOrders(session, activePortfolio.accountEvents);
+    } catch {
+      // Try the encrypted backup if the older key recovery path fails.
+    }
   }
-
-  await recoverAccountEncryptionKey(session);
-  markPrivateOpeningRecoveryAttempt(session, activePortfolio);
-  activePortfolio = await fetchPortfolio(session);
-  openings = await decryptPrivateOpenings(session, activePortfolio.accountEvents);
-
-  if (openings.length > 0) {
-    void syncPrivateConditionalOrders(session, activePortfolio.accountEvents);
+  const recovered = new Set(openings.map((payload) => payload.opening.positionCommitment.toLowerCase()));
+  const missing = activePortfolio.positions
+    .filter((position) => position.status === "open" && !recovered.has(position.positionCommitment.toLowerCase()))
+    .map((position) => position.positionCommitment);
+  if (missing.length) {
+    const restored = await restorePrivateOpenings(session, missing).catch(() => []);
+    openings = [...openings, ...restored];
   }
+  const available = new Set(openings.map((payload) => payload.opening.positionCommitment.toLowerCase()));
+  if (missing.some((commitment) => !available.has(commitment.toLowerCase()))) {
+    setPrivateNoteBackupWarning("Some position details are unavailable. Reconnect your wallet.");
+  }
+  const openCommitments = new Set(activePortfolio.positions
+    .filter((position) => position.status === "open")
+    .map((position) => position.positionCommitment.toLowerCase()));
+  void Promise.allSettled(openings
+    .filter((payload) => openCommitments.has(payload.opening.positionCommitment.toLowerCase()))
+    .map((payload) => backUpPrivateOpening(session, payload)))
+    .then((results) => {
+      if (results.some((result) => result.status === "rejected")) {
+        setPrivateNoteBackupWarning("Position details could not sync. Reconnect your wallet.");
+      }
+    });
   return openings;
 }
 

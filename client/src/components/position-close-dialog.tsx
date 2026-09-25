@@ -25,8 +25,10 @@ export function PositionCloseDialog({ closing = false, onClose, onConfirm, posit
   if (!position) return null;
 
   const asset = position.market.split("/")[0] || "PERP";
-  const unrealizedPnl = position.unrealizedPnl ?? 0;
-  const estimatedReturn = Math.max(0, (position.collateral ?? 0) + unrealizedPnl);
+  const unrealizedPnl = position.unrealizedPnl;
+  const estimatedReturn = typeof position.collateral === "number" && typeof unrealizedPnl === "number"
+    ? Math.max(0, position.collateral + unrealizedPnl)
+    : undefined;
 
   return (
     <div className="portfolio-close-overlay" role="presentation" onMouseDown={closing ? undefined : onClose}>
@@ -53,10 +55,12 @@ export function PositionCloseDialog({ closing = false, onClose, onConfirm, posit
           <CloseRow label="Current mark" value={typeof position.marketPrice === "number" ? formatPrice(position.marketPrice) : "—"} />
           <CloseRow
             label="Estimated PnL"
-            value={signedUsd(position.unrealizedPnl)}
-            valueClass={unrealizedPnl > 0 ? "portfolio-value-positive" : unrealizedPnl < 0 ? "portfolio-value-negative" : undefined}
+            value={signedUsd(unrealizedPnl)}
+            valueClass={typeof unrealizedPnl === "number"
+              ? unrealizedPnl > 0 ? "portfolio-value-positive" : unrealizedPnl < 0 ? "portfolio-value-negative" : undefined
+              : undefined}
           />
-          <CloseRow label="Estimated return" value={portfolioUsd(estimatedReturn)} />
+          <CloseRow label="Estimated return" value={estimatedReturn === undefined ? "—" : portfolioUsd(estimatedReturn)} />
         </div>
         <p className="portfolio-close-note">Final values use the verified mark price and funding state at settlement.</p>
         <div className="portfolio-close-actions">
@@ -80,7 +84,8 @@ function CloseRow({ label, value, valueClass }: { label: string; value: string; 
 }
 
 function signedUsd(value?: number): string {
-  if (typeof value !== "number" || Math.abs(value) < Number.EPSILON) return portfolioUsd(0);
+  if (typeof value !== "number") return "—";
+  if (Math.abs(value) < Number.EPSILON) return portfolioUsd(0);
   return `${value > 0 ? "+" : "−"}${portfolioUsd(Math.abs(value))}`;
 }
 

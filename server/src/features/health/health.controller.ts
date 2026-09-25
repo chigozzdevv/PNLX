@@ -273,7 +273,7 @@ function redactUrl(value: string): string {
   }
 }
 
-function clientStorageScope(env: ServerEnv): string {
+export function clientStorageScope(env: ServerEnv): string {
   return [
     "pnlx",
     env.stellarNetwork,

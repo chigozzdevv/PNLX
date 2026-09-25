@@ -58,6 +58,15 @@ export class OnchainRelayService implements OnchainRelay {
     return this.currentMarketPrice(marketId);
   }
 
+  async marketPriceSnapshotAsync(marketId: string): Promise<{ price: bigint; timestamp: number }> {
+    if (!this.config.enabled) throw new Error("on-chain relay is disabled");
+    const result = await this.relayer.readAsync({
+      kind: "market",
+      payload: this.marketPriceReadPayload(marketId),
+    });
+    return parseOnchainMarketPrice(result.output);
+  }
+
   deposit(commitment: Hex): OnchainRelayResult {
     if (!this.config.enabled) return empty();
     return {
@@ -1073,14 +1082,18 @@ export class OnchainRelayService implements OnchainRelay {
     const deployment = this.deployment();
     const result = this.relayer.read({
       kind: "market",
-      payload: {
-        args: ["--market_id", marketKey(marketId)],
-        contractId: contractId(deployment, "market"),
-        functionName: "mark_price",
-        send: "no",
-      },
+      payload: this.marketPriceReadPayload(marketId),
     });
     return parseOnchainMarketPrice(result.output).price;
+  }
+
+  private marketPriceReadPayload(marketId: string) {
+    return {
+      args: ["--market_id", marketKey(marketId)],
+      contractId: contractId(this.deployment(), "market"),
+      functionName: "mark_price",
+      send: "no" as const,
+    };
   }
 
   private invokePayload(

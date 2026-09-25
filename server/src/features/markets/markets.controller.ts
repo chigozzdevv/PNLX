@@ -33,6 +33,10 @@ export class MarketsController {
     return this.markets.priceStream(parseMarketPriceStream(request), request.signal);
   }
 
+  marks(request: Request): Response {
+    return this.markets.onchainPriceStream(parseMarketPriceStream(request), request.signal);
+  }
+
   async create(request: Request): Promise<Response> {
     const body = await readJson<Record<string, string | number>>(request);
     return json({ market: this.markets.create(parseMarket(body), authenticatedAddress(request)) }, 201);

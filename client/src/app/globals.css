@@ -4433,6 +4433,15 @@ button:disabled {
   font-weight: 650;
 }
 
+.private-backup-warning {
+  margin: 0;
+  padding: 10px 20px;
+  color: #ffb48f;
+  background: #21140e;
+  font-size: 12px;
+  text-align: center;
+}
+
 .portfolio-fund-field {
   display: grid;
   gap: 8px;
