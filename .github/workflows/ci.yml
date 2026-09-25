@@ -40,8 +40,8 @@ jobs:
       - name: Download verifier test proof
         uses: actions/download-artifact@v8
         with:
-          name: withdraw-verifier-proof
-          path: circuits/withdraw/target/bb
+          name: verifier-test-artifacts
+          path: circuits
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -111,8 +111,8 @@ jobs:
       - name: Download verifier test proof
         uses: actions/download-artifact@v8
         with:
-          name: withdraw-verifier-proof
-          path: circuits/withdraw/target/bb
+          name: verifier-test-artifacts
+          path: circuits
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -179,15 +179,16 @@ jobs:
         run: bash scripts/ci/test-noir.sh
 
       - name: Build verifier test proof
-        run: bun scripts/proof/build.ts withdraw
+        run: bun scripts/proof/build.ts withdraw position-close
 
       - name: Upload verifier test proof
         uses: actions/upload-artifact@v7
         with:
-          name: withdraw-verifier-proof
+          name: verifier-test-artifacts
           path: |
             circuits/withdraw/target/bb/vk
             circuits/withdraw/target/bb/proof
             circuits/withdraw/target/bb/public_inputs
+            circuits/position-close/target/bb/vk
           if-no-files-found: error
           retention-days: 1
