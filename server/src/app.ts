@@ -19,6 +19,7 @@ import { registerNoteBackupRoutes } from "@/features/notes/note-backups";
 import { registerOrdersRoute } from "@/features/orders/orders.route";
 import { registerPositionClosesRoute } from "@/features/position-closes/position-closes.route";
 import { registerPortfolioRoute } from "@/features/portfolio/portfolio.route";
+import { registerPointsRoute } from "@/features/points/points.route";
 import { registerProofsRoute } from "@/features/proofs/proofs.route";
 import { registerRelaysRoute } from "@/features/relays/relays.route";
 import { loadEnv } from "@/config/env";
@@ -200,6 +201,7 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
   registerAccountKeysRoute(router, executor);
   registerAccountEventsRoute(router, executor);
   registerPortfolioRoute(router, executor);
+  registerPointsRoute(router, executor.store, env.makerWalletAddress);
   registerNotesRoute(router, executor, prover, env, onchain, relayer);
   registerNoteBackupRoutes(router, executor, env, relayer, deployment?.contracts["shielded-pool"]);
   registerMarketsRoute(router, executor, oracle, env, onchain, markets);
@@ -216,12 +218,13 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
   });
   registerRelaysRoute(router, relayer, env, executor);
   const vaultId = deployment?.contracts["liquidity-vault"];
-  const liquidityHistory = vaultId && env.mongodbUri ? new LiquidityVaultHistory(
-    new LiquidityVaultService(relayer, deployment),
+  const vaultService = vaultId ? new LiquidityVaultService(relayer, deployment) : undefined;
+  const liquidityHistory = vaultId && vaultService && env.mongodbUri ? new LiquidityVaultHistory(
+    vaultService,
     { uri: env.mongodbUri, database: env.mongodbDatabase, network: env.stellarNetwork,
       rpcUrl: env.stellarRpcUrl, vaultId },
   ) : undefined;
-  if (vaultId) registerLiquidityVaultRoute(router, relayer, deployment, liquidityHistory);
+  if (vaultService) registerLiquidityVaultRoute(router, vaultService, liquidityHistory);
   registerLiquidationsRoute(router, executor, prover, env, onchain, {
     witnessRoutesEnabled: env.serverWitnessRoutesEnabled,
   });

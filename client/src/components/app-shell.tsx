@@ -8,12 +8,13 @@ import { formatUsd, shortAddress } from "@/lib/format";
 import type { WalletSessionController } from "@/lib/use-wallet-session";
 import type { AccountSnapshot } from "@/types/trading";
 
-export type AppView = "trade" | "portfolio" | "liquidity";
+export type AppView = "trade" | "portfolio" | "liquidity" | "points";
 
 const navItems: Array<{ href: string; id: AppView; label: string }> = [
   { href: "/trade", id: "trade", label: "Trade" },
   { href: "/portfolio", id: "portfolio", label: "Portfolio" },
   { href: "/liquidity", id: "liquidity", label: "Liquidity" },
+  { href: "/points", id: "points", label: "Points" },
 ];
 
 interface AppShellProps {
