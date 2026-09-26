@@ -25,6 +25,7 @@ interface MarketTickerState {
 
 const HYPERLIQUID_WS_URL = "wss://api.hyperliquid.xyz/ws";
 const TICKER_REFRESH_MS = 15_000;
+const EMPTY_TICKER: TickerItem[] = [];
 const DEFAULT_TICKER: TickerItem[] = [
   { change: 0, pair: "XLM/USD" },
   { change: 0, pair: "BTC/USD" },
@@ -41,7 +42,7 @@ const DEFAULT_TICKER: TickerItem[] = [
 ];
 const PAIR_ORDER = new Map(DEFAULT_TICKER.map((item, index) => [item.pair, index]));
 
-export function useMarketTicker(fallback: TickerItem[]): MarketTickerState {
+export function useMarketTicker(fallback: TickerItem[] = EMPTY_TICKER): MarketTickerState {
   const fallbackKey = useMemo(
     () => fallback.map((item) => `${item.pair}:${item.change}:${item.lastPrice ?? ""}`).join("|"),
     [fallback],

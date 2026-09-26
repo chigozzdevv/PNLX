@@ -71,7 +71,7 @@ function PoolAssetsChart({ points }: { points: VaultHistory["assets"] }) {
 export function LiquidityPoolDetails() {
   const wallet = useWalletSession();
   const vault = useLiquidityVault(wallet.session);
-  const ticker = useMarketTicker([]);
+  const ticker = useMarketTicker();
   const searchParams = useSearchParams();
   const requestedAction = searchParams.get("action");
   const queryDialog: DialogMode | null = requestedAction === "supply" ? "deposit" : requestedAction === "withdraw" ? "withdraw" : null;

@@ -1307,7 +1307,7 @@ button:disabled {
 .ticker-track {
   display: grid;
   width: 100%;
-  grid-auto-columns: minmax(160px, 1fr);
+  grid-auto-columns: 180px;
   grid-auto-flow: column;
   min-width: 0;
   align-items: center;
@@ -3889,7 +3889,7 @@ button:disabled {
   }
 
   .ticker-track {
-    grid-auto-columns: minmax(146px, 1fr);
+    grid-auto-columns: 160px;
     padding: 0 6px;
   }
 }

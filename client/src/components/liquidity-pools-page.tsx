@@ -14,7 +14,7 @@ const detailsHref = "/liquidity/xlm-usd";
 
 export function LiquidityPoolsPage() {
   const wallet = useWalletSession();
-  const ticker = useMarketTicker([]);
+  const ticker = useMarketTicker();
   const vault = useLiquidityVault(wallet.session);
   const connected = Boolean(wallet.session);
   const status = vault.status;

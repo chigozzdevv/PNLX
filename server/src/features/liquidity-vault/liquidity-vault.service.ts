@@ -11,12 +11,29 @@ import type {
 type VaultRelayer = Pick<RelayerService, "readAsync" | "prepareXdr">;
 
 export class LiquidityVaultService {
+  private statusCache: { value: VaultStatus; expiresAt: number } | null = null;
+  private statusInFlight: Promise<VaultStatus> | null = null;
+
   constructor(
     private readonly relayer: VaultRelayer,
     private readonly deployment?: DeploymentRegistry,
   ) {}
 
-  async status(): Promise<VaultStatus> {
+  status(): Promise<VaultStatus> {
+    if (this.statusCache && Date.now() < this.statusCache.expiresAt) {
+      return Promise.resolve(this.statusCache.value);
+    }
+    if (this.statusInFlight) return this.statusInFlight;
+    this.statusInFlight = this.readStatus()
+      .then((value) => {
+        this.statusCache = { value, expiresAt: Date.now() + 5_000 };
+        return value;
+      })
+      .finally(() => { this.statusInFlight = null; });
+    return this.statusInFlight;
+  }
+
+  private async readStatus(): Promise<VaultStatus> {
     const contractId = this.contractId();
     const [asset, operator, maker, paused, liquidAssets, deployedPrincipal, totalShares, allocationLimitBps, currentSeries, depositSeries] =
       await Promise.all([

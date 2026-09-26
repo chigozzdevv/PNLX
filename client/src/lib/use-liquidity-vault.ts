@@ -16,14 +16,26 @@ export function useLiquidityVault(session: WalletSession | null) {
   useEffect(() => {
     let active = true;
     const currentSession = session;
+    const loadStatus = async () => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const pool = await getVaultStatus();
+          if (active) { setStatus(pool); setStatusError(null); }
+          return;
+        } catch (error) {
+          if (!active) return;
+          if (attempt === 0) {
+            await new Promise<void>((resolve) => window.setTimeout(resolve, 1_000));
+            if (!active) return;
+            continue;
+          }
+          setStatus(null);
+          setStatusError(error instanceof Error ? error.message : "Pool data is unavailable");
+        }
+      }
+    };
     const load = () => {
-      void getVaultStatus().then((pool) => {
-        if (active) { setStatus(pool); setStatusError(null); }
-      }).catch((error) => {
-        if (!active) return;
-        setStatus(null);
-        setStatusError(error instanceof Error ? error.message : "Pool data is unavailable");
-      });
+      void loadStatus();
       if (currentSession) {
         void getVaultAccount(currentSession).then((position) => {
           if (active) { setAccount(position); setAccountError(null); }
