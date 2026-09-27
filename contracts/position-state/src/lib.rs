@@ -132,6 +132,9 @@ impl PositionState {
 
     pub fn backfill_spent_commitments(env: Env, commitments: Vec<BytesN<32>>) {
         require_admin(&env);
+        if env.storage().persistent().get(&DataKey::CommitmentGuardReady).unwrap_or(false) {
+            panic!("backfill is closed");
+        }
         if commitments.is_empty() || commitments.len() > MAX_APPEND_ITEMS {
             panic!("invalid backfill count");
         }
@@ -143,6 +146,9 @@ impl PositionState {
 
     pub fn enable_commitment_guard(env: Env) {
         require_admin(&env);
+        if env.storage().persistent().get(&DataKey::CommitmentGuardReady).unwrap_or(false) {
+            panic!("commitment guard already enabled");
+        }
         env.storage().persistent().set(&DataKey::CommitmentGuardReady, &true);
     }
 
@@ -393,6 +399,7 @@ mod tests {
         assert!(client.try_spend_position(&writer, &first.root, &value(&env, 2), &value(&env, 11)).is_err());
         client.enable_commitment_guard();
         assert!(client.try_spend_position(&writer, &first.root, &value(&env, 1), &value(&env, 10)).is_err());
+        assert!(client.try_backfill_spent_commitments(&Vec::from_array(&env, [value(&env, 2)])).is_err());
     }
 
     #[test]
