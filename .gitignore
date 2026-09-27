@@ -1,5 +1,10 @@
 node_modules/
 .env
+**/.env.*
+!**/.env.example
+*.pem
+*.p12
+*.key
 .pnlx/
 .pnlx-*/
 .cache/

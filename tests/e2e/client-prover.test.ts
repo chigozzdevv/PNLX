@@ -137,6 +137,7 @@ describe("local client prover", () => {
       }),
     );
     expect(badResponse.status).toBe(500);
+    expect(await badResponse.json()).toEqual({ error: "Proof generation failed" });
   });
 
   test("generates partial-note intent change commitments from the spent note owner digest", async () => {

@@ -160,9 +160,8 @@ export function createLocalClientProverHandler(root = process.cwd()) {
         return json(proofBundle(prover, record, record.proof));
       }
       return cors(Response.json({ error: "not found" }, { status: 404 }));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "local prover error";
-      return cors(Response.json({ error: message }, { status: 500 }));
+    } catch {
+      return cors(Response.json({ error: "Proof generation failed" }, { status: 500 }));
     }
   };
 }

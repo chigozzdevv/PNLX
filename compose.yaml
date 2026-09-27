@@ -7,8 +7,8 @@ x-pnlx-env: &pnlx-env
   MONGODB_PROTOCOL_COLLECTION: protocol_state
   MATCHER_PROVIDER: risc0
   MATCHER_SERVICE_URL: http://matcher:4102
-  MATCHER_SERVICE_TOKEN: pnlx-matcher-dev-token
-  MATCHER_API_TOKEN: pnlx-matcher-dev-token
+  MATCHER_SERVICE_TOKEN: ${MATCHER_SERVICE_TOKEN:?MATCHER_SERVICE_TOKEN is required}
+  MATCHER_API_TOKEN: ${MATCHER_SERVICE_TOKEN:?MATCHER_SERVICE_TOKEN is required}
   ASSET_CUSTODY_REQUIRED: "true"
   AUTH_REQUIRED: "true"
   PRIVATE_MATCHING_REQUIRED: "true"
@@ -30,7 +30,7 @@ services:
     image: mongo:7
     restart: unless-stopped
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo-data:/data/db
     healthcheck:
@@ -69,7 +69,7 @@ services:
       MATCHER_PORT: "4102"
     command: ["bun", "server/src/matcher-server.ts"]
     ports:
-      - "4102:4102"
+      - "127.0.0.1:4102:4102"
 
   prover:
     build: .
@@ -81,7 +81,7 @@ services:
       PNLX_CLIENT_PROVER_PORT: "4101"
     command: ["bun", "run", "prover:client"]
     ports:
-      - "4101:4101"
+      - "127.0.0.1:4101:4101"
 
   client:
     build: .

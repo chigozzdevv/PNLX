@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter } from "node:path";
 import { join } from "node:path";
@@ -36,7 +36,9 @@ interface ProofArtifactPlan {
   dir: string;
   env: NodeJS.ProcessEnv;
   id: CircuitId;
+  inputs?: ProverInput;
   proofPath: string;
+  proverPath?: string;
   publicInputsPath: string;
   vkPath: string;
   witnessPath: string;
@@ -101,7 +103,7 @@ function writeProverInput(path: string, input: ProverInput): void {
   const body = Object.entries(input)
     .map(([key, value]) => `${key} = ${tomlValue(value)}`)
     .join("\n");
-  writeFileSync(path, `${body}\n`);
+  writeFileSync(path, `${body}\n`, { flag: "wx", mode: 0o600 });
 }
 
 export function buildProofArtifact(
@@ -110,10 +112,15 @@ export function buildProofArtifact(
   options: ProofArtifactOptions = {},
 ): ProofArtifact {
   const plan = prepareProofArtifact(root, id, options);
-  for (const command of plan.commands) {
-    run(command.command, command.args, plan.dir, plan.env);
+  try {
+    preparePrivateWitness(plan);
+    for (const command of plan.commands) {
+      run(command.command, command.args, plan.dir, plan.env);
+    }
+    return completeProofArtifact(plan);
+  } finally {
+    clearPrivateWitness(plan);
   }
-  return completeProofArtifact(plan);
 }
 
 export async function buildProofArtifactAsync(
@@ -122,10 +129,26 @@ export async function buildProofArtifactAsync(
   options: ProofArtifactOptions = {},
 ): Promise<ProofArtifact> {
   const plan = prepareProofArtifact(root, id, options);
-  for (const command of plan.commands) {
-    await runAsync(command.command, command.args, plan.dir, plan.env);
+  try {
+    preparePrivateWitness(plan);
+    for (const command of plan.commands) {
+      await runAsync(command.command, command.args, plan.dir, plan.env);
+    }
+    return completeProofArtifact(plan);
+  } finally {
+    clearPrivateWitness(plan);
   }
-  return completeProofArtifact(plan);
+}
+
+function preparePrivateWitness(plan: ProofArtifactPlan): void {
+  rmSync(plan.bbDir, { recursive: true, force: true });
+  if (plan.proverPath && plan.inputs) writeProverInput(plan.proverPath, plan.inputs);
+}
+
+function clearPrivateWitness(plan: ProofArtifactPlan): void {
+  if (!plan.proverPath) return;
+  rmSync(plan.proverPath, { force: true });
+  rmSync(plan.witnessPath, { force: true });
 }
 
 function prepareProofArtifact(
@@ -136,8 +159,10 @@ function prepareProofArtifact(
   const circuit = loadCircuit(root, id);
   const dir = join(root, circuit.dir);
   const target = join(dir, "target");
-  const name = artifactName(id, options.name);
   const isCustom = Boolean(options.inputs);
+  const name = isCustom
+    ? `${artifactName(id, options.name)}-${randomUUID()}`
+    : artifactName(id, options.name);
   const bbDir = isCustom ? join(target, "bb", name) : join(target, "bb");
   const bytecodePath = join(target, `${circuit.packageName}.json`);
   const witnessPath = join(target, `${isCustom ? name : circuit.packageName}.gz`);
@@ -164,12 +189,7 @@ function prepareProofArtifact(
   if (!options.inputs && !existsSync(join(dir, "Prover.toml"))) {
     throw new Error(`missing prover inputs for ${id}`);
   }
-  if (options.inputs) {
-    mkdirSync(proverDir, { recursive: true });
-    writeProverInput(proverPath, options.inputs);
-  }
-
-  rmSync(bbDir, { recursive: true, force: true });
+  if (options.inputs) mkdirSync(proverDir, { recursive: true, mode: 0o700 });
   return {
     bbDir,
     bytecodePath,
@@ -216,8 +236,10 @@ function prepareProofArtifact(
     dir,
     env: proofEnv,
     id,
+    inputs: options.inputs,
     proofPath,
     publicInputsPath,
+    proverPath: options.inputs ? proverPath : undefined,
     vkPath,
     witnessPath,
   };

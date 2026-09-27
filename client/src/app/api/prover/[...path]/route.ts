@@ -36,12 +36,8 @@ async function proxyProver(request: NextRequest, context: RouteContext): Promise
       headers,
       method: request.method,
     });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "fetch failed";
-    return Response.json(
-      { error: `PNLX prover unavailable at ${target.origin}: ${detail}` },
-      { status: 502 },
-    );
+  } catch {
+    return Response.json({ error: "Proof service temporarily unavailable" }, { status: 502 });
   }
 
   return new Response(response.body, {
