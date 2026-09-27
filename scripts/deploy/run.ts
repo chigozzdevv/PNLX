@@ -163,6 +163,14 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
       "--withdraw_circuit_id",
       bytes32(circuitKey("withdraw")),
     ]),
+    invokeCommand(options, "shielded-pool", "configure_secure_note_circuits", [
+      "--deposit_circuit_id", bytes32(circuitKey("secure-deposit-note")),
+      "--withdraw_circuit_id", bytes32(circuitKey("secure-withdraw")),
+    ]),
+    invokeCommand(options, "shielded-pool", "disable_legacy_notes", []),
+    invokeCommand(options, "intent-registry", "configure_secure_pool", [
+      "--pool", "$shielded-pool",
+    ]),
     invokeCommand(options, "market", "init", ["--governance", "$governance"]),
     invokeCommand(options, "funding-settlement", "init", [
       "--governance",
@@ -230,6 +238,9 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
       "--circuit_id",
       bytes32(circuitKey("position-close")),
     ]),
+    invokeCommand(options, "position-close", "configure_secure_pool", [
+      "--pool", "$shielded-pool",
+    ]),
     invokeCommand(options, "position-state", "set_writer", [
       "--writer",
       "$batch-settlement",
@@ -241,6 +252,9 @@ export function commandPlan(options: Options, root = process.cwd()): string[][] 
       "$batch-settlement",
       "--enabled",
       "true",
+    ]),
+    invokeCommand(options, "shielded-pool", "set_writer", [
+      "--writer", "$position-close", "--enabled", "true",
     ]),
     invokeCommand(options, "position-state", "set_writer", [
       "--writer",
@@ -522,6 +536,11 @@ function initProofConsumers(options: Options, contracts: Map<string, string>, so
     "--withdraw_circuit_id",
     bytes32(circuitKey("withdraw")),
   ]);
+  invoke(options, contracts.get("shielded-pool")!, "configure_secure_note_circuits", [
+    "--deposit_circuit_id", bytes32(circuitKey("secure-deposit-note")),
+    "--withdraw_circuit_id", bytes32(circuitKey("secure-withdraw")),
+  ]);
+  invoke(options, contracts.get("shielded-pool")!, "disable_legacy_notes", []);
   if (env.collateralTokenContract) {
     const destinations = requireFeeDestinations(env.insuranceFundAddress, env.treasuryAddress);
     invoke(options, contracts.get("shielded-pool")!, "configure_fee_destinations", [
@@ -566,6 +585,9 @@ function initProofConsumers(options: Options, contracts: Map<string, string>, so
     "--settler",
     contracts.get("batch-settlement")!,
   ]);
+  invoke(options, contracts.get("intent-registry")!, "configure_secure_pool", [
+    "--pool", contracts.get("shielded-pool")!,
+  ]);
   if (env.collateralTokenContract) {
     invoke(options, contracts.get("batch-settlement")!, "configure_fee_token", [
       "--token", env.collateralTokenContract,
@@ -607,6 +629,9 @@ function initProofConsumers(options: Options, contracts: Map<string, string>, so
     "--circuit_id",
     bytes32(circuitKey("position-close")),
   ]);
+  invoke(options, contracts.get("position-close")!, "configure_secure_pool", [
+    "--pool", contracts.get("shielded-pool")!,
+  ]);
   invoke(options, positionState, "set_writer", [
     "--writer",
     contracts.get("batch-settlement")!,
@@ -618,6 +643,9 @@ function initProofConsumers(options: Options, contracts: Map<string, string>, so
     contracts.get("batch-settlement")!,
     "--enabled",
     "true",
+  ]);
+  invoke(options, contracts.get("shielded-pool")!, "set_writer", [
+    "--writer", contracts.get("position-close")!, "--enabled", "true",
   ]);
   invoke(options, positionState, "set_writer", [
     "--writer",
@@ -648,7 +676,7 @@ function initProofConsumers(options: Options, contracts: Map<string, string>, so
 }
 
 function runSmoke(options: Options, root: string, verifiers: Map<string, string>): void {
-  for (const command of smokeCommands(options, root, verifiers.get("withdraw-proof-verifier"))) {
+  for (const command of smokeCommands(options, root, verifiers.get("secure-withdraw-proof-verifier"))) {
     run(command, options);
   }
 }
@@ -734,8 +762,8 @@ function deployRisc0VerifierStack(
   };
 }
 
-function smokeCommands(options: Options, root: string, verifierId = "$withdraw-proof-verifier"): string[][] {
-  const dir = join(root, "circuits/withdraw/target/bb");
+function smokeCommands(options: Options, root: string, verifierId = "$secure-withdraw-proof-verifier"): string[][] {
+  const dir = join(root, "circuits/secure-withdraw/target/bb");
   const publicInputs = join(dir, "public_inputs");
   const proof = join(dir, "proof");
 
@@ -746,9 +774,9 @@ function smokeCommands(options: Options, root: string, verifierId = "$withdraw-p
       "--proof_bytes-file-path",
       proof,
       "--public_input_hash",
-      fileHashArg(options, publicInputs, "withdraw-public-input-hash"),
+      fileHashArg(options, publicInputs, "secure-withdraw-public-input-hash"),
       "--proof_digest",
-      fileHashArg(options, proof, "withdraw-proof-digest"),
+      fileHashArg(options, proof, "secure-withdraw-proof-digest"),
     ]),
   ];
 }

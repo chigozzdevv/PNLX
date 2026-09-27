@@ -1,4 +1,4 @@
-import { hashFields } from "@pnlx/crypto";
+import { hashFields, secureMarginRoot } from "@pnlx/crypto";
 import type {
   BatchSettlement,
   ConditionalOrderCommitment,
@@ -164,6 +164,35 @@ export class OnchainRelayService implements OnchainRelay {
     }
   }
 
+  secureNoteSnapshot(cached: Hex[] = []): { commitments: Hex[]; root: Hex } {
+    if (!this.config.enabled) throw new Error("secure notes require on-chain relay");
+    const pool = contractId(this.deployment(), "shielded-pool");
+    const read = (functionName: string, args: string[] = []) => this.relayer.read({
+      kind: "contract-invoke",
+      payload: { args, contractId: pool, functionName, send: "no" },
+    }).output;
+    const root = parseHex32(read("secure_note_root"), "secure note root");
+    if (secureMarginRoot(cached) === root) return { commitments: [...cached], root };
+    const count = Number(parseInteger(read("secure_note_count"), "secure note count"));
+    if (!Number.isSafeInteger(count) || count < 0 || count > (1 << 20)) {
+      throw new Error("invalid secure note count");
+    }
+    const appendFrom = (prefix: Hex[]) => {
+      const commitments = [...prefix];
+      for (let index = commitments.length; index < count; index += 1) {
+        commitments.push(parseHex32(read("secure_note_leaf", ["--index", String(index)]),
+          `secure note leaf ${index}`));
+      }
+      return commitments;
+    };
+    let commitments = cached.length <= count ? appendFrom(cached) : [];
+    if (secureMarginRoot(commitments) !== root) commitments = appendFrom([]);
+    if (secureMarginRoot(commitments) !== root) {
+      throw new Error("on-chain secure note tree does not match its leaves");
+    }
+    return { commitments, root };
+  }
+
   submitIntent(record: IntentRecord): OnchainRelayResult {
     if (!this.config.enabled) return empty();
     return {
@@ -177,6 +206,10 @@ export class OnchainRelayService implements OnchainRelay {
           bytes32(record.intentCommitment),
           "--matching_payload_commitment",
           bytes32(record.matchingPayloadCommitment),
+          "--margin_root",
+          bytes32(record.marginRoot),
+          "--note_nullifier",
+          bytes32(record.noteNullifier),
         ]),
       ],
     };
@@ -195,6 +228,10 @@ export class OnchainRelayService implements OnchainRelay {
           bytes32(record.intentCommitment),
           "--matching_payload_commitment",
           bytes32(record.matchingPayloadCommitment),
+          "--margin_root",
+          bytes32(record.marginRoot),
+          "--note_nullifier",
+          bytes32(record.noteNullifier),
         ]),
       ],
     };
@@ -850,10 +887,13 @@ export class OnchainRelayService implements OnchainRelay {
 
   withdrawAsset(record: AssetWithdrawalRecord): OnchainRelayResult {
     if (!this.config.enabled) return empty();
+    if (record.proof.circuitId !== "secure-withdraw") {
+      throw new Error("secure withdrawal proof required");
+    }
     return {
       relays: [
         this.invokeProofVerifier(record.proof),
-        this.invoke("withdraw", "shielded-pool", "withdraw_asset", [
+        this.invoke("withdraw", "shielded-pool", "withdraw_asset_secure", [
           "--token",
           record.token,
           "--root",
@@ -1147,7 +1187,7 @@ export class OnchainRelayService implements OnchainRelay {
       autoSign: input.autoSign,
       buildOnly,
       contractId: contractId(this.deployment(), "shielded-pool"),
-      functionName: "deposit_asset",
+      functionName: "deposit_asset_secure",
       send: (buildOnly ? "no" : "yes") as "no" | "yes",
       source: input.source ?? input.from,
     };

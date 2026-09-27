@@ -2,6 +2,8 @@ fn hash_pair(left: Field, right: Field) -> Field {
     std::hash::poseidon2_permutation([left, right, 0, 36893488147419103232], 4)[0]
 }
 
+global SECURE_MARGIN_DOMAIN: Field = 0x504e4c5844524f504d4152;
+
 fn position_commitment(
     is_long: bool,
     size: u128,
@@ -31,11 +33,13 @@ fn note_commitment(
     owner_digest: Field,
     rho_digest: Field,
     blinding: Field,
+    output_spend_secret_digest: Field,
 ) -> Field {
     let amount_field = note_amount as Field;
     let left = hash_pair(asset_digest, amount_field);
-    let right = hash_pair(owner_digest, hash_pair(rho_digest, blinding));
-    hash_pair(left, right)
+    let right = hash_pair(owner_digest,
+        hash_pair(hash_pair(rho_digest, blinding), output_spend_secret_digest));
+    hash_pair(SECURE_MARGIN_DOMAIN, hash_pair(left, right))
 }
 
 fn merkle_root(leaf: Field, path_siblings: [Field; 20], path_indices: [bool; 20]) -> Field {
@@ -80,6 +84,7 @@ fn main(
     margin_output_asset_digest: Field,
     margin_output_rho_digest: Field,
     margin_output_blinding: Field,
+    margin_output_spend_secret_digest: Field,
     path_siblings: [Field; 20],
     path_indices: [bool; 20],
     zero_value: Field,
@@ -103,6 +108,7 @@ fn main(
     assert(margin_output_asset_digest != zero_value);
     assert(margin_output_rho_digest != zero_value);
     assert(margin_output_blinding != zero_value);
+    assert(margin_output_spend_secret_digest != zero_value);
 
     let computed_position = position_commitment(
         is_long,
@@ -167,6 +173,7 @@ fn main(
         owner_digest,
         margin_output_rho_digest,
         margin_output_blinding,
+        margin_output_spend_secret_digest,
     );
     assert(expected_margin_output == margin_output_commitment);
 }
@@ -218,7 +225,7 @@ fn exercise_close(
         7,
         8,
     );
-    let margin_output = note_commitment(9, margin_output_amount, owner_digest, 10, 11);
+    let margin_output = note_commitment(9, margin_output_amount, owner_digest, 10, 11, 12);
     main(
         is_long,
         size,
@@ -250,6 +257,7 @@ fn exercise_close(
         9,
         10,
         11,
+        12,
         path_siblings,
         path_indices,
         0,
@@ -353,5 +361,5 @@ fn rejects_bad_output_commitment() {
     let indices = default_indices();
     let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
     let root = merkle_root(commitment, siblings, indices);
-    main(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, 100_000_000, root, commitment, hash_pair(6, 4), 13, 14, note_commitment(9, 17_990, 3, 10, 11), 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, siblings, indices, 0);
+    main(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, 100_000_000, root, commitment, hash_pair(6, 4), 13, 14, note_commitment(9, 17_990, 3, 10, 11, 12), 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, siblings, indices, 0);
 }

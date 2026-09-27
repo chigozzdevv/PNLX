@@ -11,6 +11,7 @@ name = "shielded_pool"
 governance-interface = { path = "../governance-interface" }
 proof-ledger-interface = { path = "../proof-ledger-interface" }
 soroban-sdk = { workspace = true }
+soroban-poseidon = { workspace = true }
 
 [dev-dependencies]
 governance = { path = "../governance" }

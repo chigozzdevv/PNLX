@@ -1,6 +1,11 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env};
+use soroban_sdk::{contract, contractclient, contractimpl, contracttype, Address, BytesN, Env};
+
+#[contractclient(name = "SecurePoolClient")]
+pub trait SecurePoolInterface {
+    fn has_secure_note_root(env: &Env, root: &BytesN<32>) -> bool;
+}
 
 #[derive(Clone)]
 #[contracttype]
@@ -13,6 +18,10 @@ pub enum DataKey {
     Settler,
     Operator,
     UpgradeAuthority,
+    SecurePool,
+    NullifierRoot(BytesN<32>),
+    NullifierIntent(BytesN<32>),
+    IntentNullifier(BytesN<32>),
 }
 
 #[derive(Clone)]
@@ -43,19 +52,35 @@ impl IntentRegistry {
         market_id: BytesN<32>,
         intent_commitment: BytesN<32>,
         matching_payload_commitment: BytesN<32>,
+        margin_root: BytesN<32>,
+        note_nullifier: BytesN<32>,
     ) {
         require_operator(&env);
         let intent_key = DataKey::Intent(intent_commitment.clone());
         if env.storage().persistent().has(&intent_key) {
             panic!("duplicate intent");
         }
-
+        let pool_id: Address = env.storage().persistent().get(&DataKey::SecurePool)
+            .unwrap_or_else(|| panic!("secure pool not configured"));
+        if !SecurePoolClient::new(&env, &pool_id).has_secure_note_root(&margin_root) ||
+            note_nullifier == BytesN::from_array(&env, &[0; 32]) {
+            panic!("invalid secure note root or nullifier");
+        }
+        let nullifier_intent = DataKey::NullifierIntent(note_nullifier.clone());
+        if let Some(previous) = env.storage().persistent().get::<_, BytesN<32>>(&nullifier_intent) {
+            if Self::is_active_intent(env.clone(), previous) {
+                panic!("note already committed to an active intent");
+            }
+        }
         let meta = IntentMeta {
             batch_id: batch_id.clone(),
             market_id: market_id.clone(),
             matching_payload_commitment,
         };
         env.storage().persistent().set(&intent_key, &meta);
+        env.storage().persistent().set(&DataKey::NullifierRoot(note_nullifier.clone()), &margin_root);
+        env.storage().persistent().set(&nullifier_intent, &intent_commitment);
+        env.storage().persistent().set(&DataKey::IntentNullifier(intent_commitment.clone()), &note_nullifier);
         let sequence: u64 = env
             .storage()
             .persistent()
@@ -113,6 +138,24 @@ impl IntentRegistry {
             .unwrap_or_else(|| panic!("not initialized"))
     }
 
+    pub fn configure_secure_pool(env: Env, pool: Address) {
+        require_operator(&env);
+        if env.storage().persistent().has(&DataKey::SecurePool) {
+            panic!("secure pool already configured");
+        }
+        env.storage().persistent().set(&DataKey::SecurePool, &pool);
+    }
+
+    pub fn nullifier_root(env: Env, nullifier: BytesN<32>) -> BytesN<32> {
+        env.storage().persistent().get(&DataKey::NullifierRoot(nullifier))
+            .unwrap_or_else(|| panic!("unregistered note nullifier"))
+    }
+
+    pub fn intent_nullifier(env: Env, intent: BytesN<32>) -> BytesN<32> {
+        env.storage().persistent().get(&DataKey::IntentNullifier(intent))
+            .unwrap_or_else(|| panic!("intent note nullifier unavailable"))
+    }
+
     pub fn consume(env: Env, settler: Address, intent_commitment: BytesN<32>) {
         require_settler(&env, &settler);
         mark_cancelled(&env, intent_commitment);
@@ -139,9 +182,15 @@ impl IntentRegistry {
             .get(&DataKey::Intent(source.clone()))
             .unwrap();
         let sequence = Self::submission_sequence(env.clone(), source.clone());
+        let source_nullifier: Option<BytesN<32>> = env.storage().persistent()
+            .get(&DataKey::IntentNullifier(source.clone()));
         env.storage()
             .persistent()
             .set(&DataKey::Cancelled(source), &true);
+        if let Some(nullifier) = source_nullifier {
+            env.storage().persistent().set(&DataKey::IntentNullifier(residual.clone()), &nullifier);
+            env.storage().persistent().set(&DataKey::NullifierIntent(nullifier), &residual);
+        }
         env.storage().persistent().set(
             &residual_key,
             &IntentMeta {
@@ -239,7 +288,27 @@ mod tests {
     extern crate std;
 
     use super::{IntentRegistry, IntentRegistryClient};
-    use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
+    use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, BytesN, Env};
+
+    #[contract]
+    struct RootPool;
+
+    #[contractimpl]
+    impl RootPool {
+        pub fn has_secure_note_root(_env: Env, _root: BytesN<32>) -> bool { true }
+    }
+
+    fn configure_pool(env: &Env, client: &IntentRegistryClient<'_>) {
+        client.configure_secure_pool(&env.register(RootPool, ()));
+    }
+
+    fn submit(
+        env: &Env, client: &IntentRegistryClient<'_>, batch: &BytesN<32>,
+        market: &BytesN<32>, intent: &BytesN<32>, payload: &BytesN<32>,
+    ) {
+        client.submit(batch, market, intent, payload,
+            &BytesN::from_array(env, &[8; 32]), &BytesN::from_array(env, &[9; 32]));
+    }
 
     #[test]
     fn operator_cannot_be_the_upgrade_authority() {
@@ -269,7 +338,8 @@ mod tests {
         let intent = BytesN::from_array(&env, &[3; 32]);
         let shares = BytesN::from_array(&env, &[4; 32]);
 
-        client.submit(&batch, &market, &intent, &shares);
+        configure_pool(&env, &client);
+        submit(&env, &client, &batch, &market, &intent, &shares);
         assert!(client.has_intent(&intent));
         assert!(client.is_active_intent(&intent));
         assert!(!client.is_cancelled(&intent));
@@ -289,7 +359,8 @@ mod tests {
         let source = BytesN::from_array(&env, &[3; 32]);
         let residual = BytesN::from_array(&env, &[4; 32]);
         let payload = BytesN::from_array(&env, &[5; 32]);
-        client.submit(&batch, &market, &source, &payload);
+        configure_pool(&env, &client);
+        submit(&env, &client, &batch, &market, &source, &payload);
         let sequence = client.submission_sequence(&source);
         assert!(client
             .try_rollover(&Address::generate(&env), &source, &residual, &payload)
@@ -322,7 +393,8 @@ mod tests {
         let intent = BytesN::from_array(&env, &[3; 32]);
         let shares = BytesN::from_array(&env, &[4; 32]);
 
-        client.submit(&batch, &market, &intent, &shares);
+        configure_pool(&env, &client);
+        submit(&env, &client, &batch, &market, &intent, &shares);
         client.cancel(&intent);
 
         assert!(client.has_intent(&intent));
@@ -356,7 +428,8 @@ mod tests {
         let intent = BytesN::from_array(&env, &[3; 32]);
         let shares = BytesN::from_array(&env, &[4; 32]);
 
-        client.submit(&batch, &market, &intent, &shares);
+        configure_pool(&env, &client);
+        submit(&env, &client, &batch, &market, &intent, &shares);
         client.cancel(&intent);
         client.cancel(&intent);
     }
@@ -374,7 +447,8 @@ mod tests {
         let intent = BytesN::from_array(&env, &[3; 32]);
         let shares = BytesN::from_array(&env, &[4; 32]);
 
-        client.submit(&batch, &market, &intent, &shares);
-        client.submit(&batch, &market, &intent, &shares);
+        configure_pool(&env, &client);
+        submit(&env, &client, &batch, &market, &intent, &shares);
+        submit(&env, &client, &batch, &market, &intent, &shares);
     }
 }

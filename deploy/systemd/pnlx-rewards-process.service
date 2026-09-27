@@ -1,0 +1,16 @@
+[Unit]
+Description=PNLX reward credit requests
+After=network-online.target pnlx-api.service
+Wants=network-online.target
+Requires=pnlx-api.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PNLX
+EnvironmentFile=/home/ubuntu/PNLX/.env
+Environment=HOME=/home/ubuntu
+Environment=PATH=/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=NODE_ENV=production
+ExecStart=/home/ubuntu/.bun/bin/bun scripts/operations/process-reward-requests.ts --treasury-source pnlx-treasury --execute
+TimeoutStartSec=3600

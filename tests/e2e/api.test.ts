@@ -5,7 +5,7 @@ import {
   commitIntent,
   type FieldMerkleProof,
   fieldMerkleProof,
-  fieldMerkleRoot,
+  secureMarginProof,
   hashFields,
   ownerCommitment,
   positionMerkleProof,
@@ -13,7 +13,7 @@ import {
 import { PRICE_SCALE, fillFees, settleClose } from "@pnlx/market-math";
 import { circuitKey } from "@pnlx/proof-system";
 import type { BatchSettlement, Hex, ProofMeta, TradeIntent } from "@pnlx/protocol-types";
-import { createCircuitMarginNote, createCircuitPositionNote } from "@pnlx/sdk";
+import { createSecureMarginNote, createCircuitPositionNote } from "@pnlx/sdk";
 import { createECDH, generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -53,7 +53,7 @@ process.env.SETTLEMENTS_ONCHAIN_REQUIRED = "false";
 process.env.STELLAR_ONCHAIN_RELAY = "false";
 process.env.STELLAR_RELAYER_MODE = "local";
 
-type CircuitMarginNote = ReturnType<typeof createCircuitMarginNote>;
+type CircuitMarginNote = ReturnType<typeof createSecureMarginNote>;
 type MarginMembershipProof = Pick<FieldMerkleProof, "indices" | "root" | "siblings">;
 type TestKeyPair = {
   privateKey: KeyObject;
@@ -289,10 +289,10 @@ function proofArtifactRegistrationBody(prover: ProverService, proof: ProofMeta) 
 
 async function depositCircuitMarginNote(
   app: ReturnType<typeof createApp>,
-  input: Parameters<typeof createCircuitMarginNote>[0],
+  input: Parameters<typeof createSecureMarginNote>[0],
   headers: Record<string, string> = { "content-type": "application/json" },
 ) {
-  const note = createCircuitMarginNote(input);
+  const note = createSecureMarginNote(input);
   const depositResponse = await app.handle(
     new Request("http://pnlx.local/notes/deposit", {
       method: "POST",
@@ -403,7 +403,7 @@ async function createCloseableLongPositionFixture(
     margin: 12_000n,
     marketId: market.marketId,
     note: longNote.note,
-    membershipProof: fieldMerkleProof(sharedMarginLeaves, longNote.note.commitment as Hex),
+    membershipProof: secureMarginProof(sharedMarginLeaves, longNote.note.commitment as Hex),
     nonce: `${suffix}-long-intent`,
     owner: `${suffix}-long-owner`,
     salt: `${suffix}-long-salt`,
@@ -416,7 +416,7 @@ async function createCloseableLongPositionFixture(
     margin: 12_000n,
     marketId: market.marketId,
     note: shortNote.note,
-    membershipProof: fieldMerkleProof(sharedMarginLeaves, shortNote.note.commitment as Hex),
+    membershipProof: secureMarginProof(sharedMarginLeaves, shortNote.note.commitment as Hex),
     nonce: `${suffix}-short-intent`,
     owner: `${suffix}-short-owner`,
     salt: `${suffix}-short-salt`,
@@ -740,7 +740,7 @@ describe("server api", () => {
     };
     executor.addMarket(market);
 
-    const longNote = createCircuitMarginNote({
+    const longNote = createSecureMarginNote({
       assetId: "usdc",
       amount: 12_000n,
       owner: "matcher-provider-long",
@@ -748,7 +748,7 @@ describe("server api", () => {
       rho: "matcher-provider-long-rho",
       blinding: "matcher-provider-long-blind",
     });
-    const shortNote = createCircuitMarginNote({
+    const shortNote = createSecureMarginNote({
       assetId: "usdc",
       amount: 12_000n,
       owner: "matcher-provider-short",
@@ -764,7 +764,7 @@ describe("server api", () => {
       limitPrice: 51_000n * PRICE_SCALE,
       margin: 12_000n,
       marketId: market.marketId,
-      membershipProof: fieldMerkleProof(leaves, longNote.commitment as Hex),
+      membershipProof: secureMarginProof(leaves, longNote.commitment as Hex),
       nonce: "matcher-provider-long-intent",
       note: longNote,
       owner: "matcher-provider-long",
@@ -777,7 +777,7 @@ describe("server api", () => {
       limitPrice: 49_000n * PRICE_SCALE,
       margin: 12_000n,
       marketId: market.marketId,
-      membershipProof: fieldMerkleProof(leaves, shortNote.commitment as Hex),
+      membershipProof: secureMarginProof(leaves, shortNote.commitment as Hex),
       nonce: "matcher-provider-short-intent",
       note: shortNote,
       owner: "matcher-provider-short",
@@ -970,7 +970,7 @@ describe("server api", () => {
     const verifiers = result.verifiers as Record<string, string>[];
     const batchVerifier = verifiers.find((entry) => entry.circuitId === "batch-match");
 
-    expect(verifiers).toHaveLength(11);
+    expect(verifiers).toHaveLength(14);
     expect(batchVerifier?.circuitKey).toBe(RISC0_BATCH_MATCH_CIRCUIT_KEY);
     expect(batchVerifier?.verifierHash).toBe(RISC0_STELLAR_VERIFIER_HASH);
     expect(batchVerifier?.verifierAuthority).toBe("batch-match-risc0-verifier");
@@ -2004,7 +2004,7 @@ describe("server api", () => {
     });
     intent.noteNullifier = staleNote.note.noteNullifier;
     const staleValidity = await proveIntent(app, intent, staleNote.note, staleNote.membershipProof);
-    const rootChangingNote = createCircuitMarginNote({
+    const rootChangingNote = createSecureMarginNote({
       assetId: "usdc",
       amount: 1n,
       owner: "root-change",
@@ -2274,11 +2274,11 @@ describe("server api", () => {
       longNote.note.commitment as Hex,
       shortNote.note.commitment as Hex,
     ];
-    const longMembershipProof = fieldMerkleProof(
+    const longMembershipProof = secureMarginProof(
       sharedMarginLeaves,
       longNote.note.commitment as Hex,
     );
-    const shortMembershipProof = fieldMerkleProof(
+    const shortMembershipProof = secureMarginProof(
       sharedMarginLeaves,
       shortNote.note.commitment as Hex,
     );
@@ -2425,7 +2425,7 @@ describe("server api", () => {
       rho: "shared-long-closed-position-rho",
       blinding: "shared-long-closed-position-blind",
     });
-    const marginOutput = createCircuitMarginNote({
+    const marginOutput = createSecureMarginNote({
       assetId: "usdc",
       amount: closeSettlement.newMargin,
       owner,
@@ -2462,6 +2462,7 @@ describe("server api", () => {
       newPositionBlinding: closedPosition.blinding,
       marginOutputAssetDigest: marginOutput.assetDigest,
       marginOutputRhoDigest: marginOutput.rhoDigest,
+      marginOutputSpendSecretDigest: marginOutput.spendSecretDigest,
       marginOutputBlinding: marginOutput.blinding,
       pathIndices: longPosition.membershipProof.indices as boolean[],
       pathSiblings: longPosition.membershipProof.siblings as Hex[],
@@ -2520,7 +2521,7 @@ describe("server api", () => {
       rho: `${suffix}-closed-position-rho`,
       blinding: `${suffix}-closed-position-blind`,
     });
-    const marginOutput = createCircuitMarginNote({
+    const marginOutput = createSecureMarginNote({
       assetId: "usdc",
       amount: closeSettlement.newMargin,
       owner,
@@ -2558,6 +2559,7 @@ describe("server api", () => {
       newPositionBlinding: closedPosition.blinding,
       marginOutputAssetDigest: marginOutput.assetDigest,
       marginOutputRhoDigest: marginOutput.rhoDigest,
+      marginOutputSpendSecretDigest: marginOutput.spendSecretDigest,
       marginOutputBlinding: marginOutput.blinding,
       pathIndices: fixture.longPosition.membershipProof.indices as boolean[],
       pathSiblings: fixture.longPosition.membershipProof.siblings as Hex[],
@@ -2803,7 +2805,7 @@ describe("server api", () => {
       rho: "alice-withdraw-rho",
       blinding: "alice-withdraw-blind",
     });
-    const provenWithdrawal = clientProver.proveWithdrawal({
+    const provenWithdrawal = clientProver.proveSecureWithdrawal({
       assetDigest: withdrawalNote.note.assetDigest,
       blinding: withdrawalNote.note.blinding,
       changeBlinding: hashFields("change-blinding", ["alice-exit"]),
@@ -2825,7 +2827,7 @@ describe("server api", () => {
     const withdrawalText = JSON.stringify(withdrawal);
     expect(withdrawalText).toContain("proofDigest");
     expect(withdrawalText).toContain("proofHash");
-    expect(withdrawalText).toContain(circuitKey("withdraw"));
+    expect(withdrawalText).toContain(circuitKey("secure-withdraw"));
     const withdrawalResponseRecord = withdrawal.withdrawal as Record<string, unknown>;
     const withdrawalProof = withdrawalResponseRecord.proof as Record<string, string>;
     expect(withdrawalProof.verifierHash).toBe(withdrawalProof.vkHash);
@@ -3037,7 +3039,7 @@ describe("server api", () => {
       rho: "alice-closed-position-rho",
       blinding: "alice-closed-position-blind",
     });
-    const marginOutput = createCircuitMarginNote({
+    const marginOutput = createSecureMarginNote({
       assetId: "usdc",
       amount: closeSettlement.newMargin,
       owner: aliceOwner,
@@ -3075,6 +3077,7 @@ describe("server api", () => {
       newPositionBlinding: closedPosition.blinding,
       marginOutputAssetDigest: marginOutput.assetDigest,
       marginOutputRhoDigest: marginOutput.rhoDigest,
+      marginOutputSpendSecretDigest: marginOutput.spendSecretDigest,
       marginOutputBlinding: marginOutput.blinding,
       pathIndices: alicePosition.membershipProof.indices,
       pathSiblings: alicePosition.membershipProof.siblings,

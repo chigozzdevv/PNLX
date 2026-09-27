@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { hashFields, ownerCommitment } from "@pnlx/crypto";
+import { digestToFieldHex, hashFields, ownerCommitment } from "@pnlx/crypto";
 import type { BatchSettlement, Hex, PositionLifecycleRecord, PrivateMatchIntent } from "@pnlx/protocol-types";
 import { makerPositionsReadyForReconciliation } from "../../scripts/operations/reconcile-maker-position";
 import { preparePairedMakerClose, vaultMakerPairForTrader } from "@/features/position-closes/vault-maker-pair";
@@ -72,6 +72,7 @@ function matchedTrade() {
     registeredAmount: "1000000000", series: 1, status: "outstanding", vault };
   const note = { amount: "1000000000", assetDigest: hashFields("asset", [1]),
     commitment: allocation.noteCommitments[0] as Hex,
+    spendSecretDigest: digestToFieldHex("private-maker-note-secret"),
     lockedByIntentCommitment: makerIntent, status: "spent", token: asset,
     vaultAllocationId: allocation.id, walletAddress: maker };
   return { allocation, client: closedClient, note, store };
@@ -142,7 +143,14 @@ test("maker close proof uses the trader's mark and produces a recoverable note",
   expect(prepared.close.markPrice).toBe(99_000_000n);
   expect(prepared.note.amount).toBe("209500000");
   expect(prepared.note.commitment).toBe(prepared.close.marginOutputCommitment);
+  expect(prepared.note.spendSecretDigest).not.toBe(
+    digestToFieldHex(`vault-maker-close-spend:${pair.makerPosition.positionNullifier}`));
   expect(prepared.note.closePositionCommitment).toBe(pair.makerPosition.positionCommitment);
+  expect(() => preparePairedMakerClose({
+    fundingIndex: 0n, makerNote: { ...pair.makerNote, spendSecretDigest: undefined },
+    makerPosition: pair.makerPosition, markPrice: 99_000_000n,
+    prover: createProver(), store, traderCloseCommitment: hashFields("trader-close", [1]),
+  })).toThrow("vault maker note spend secret is unavailable");
 });
 
 test("paired close records both lifecycle changes and output indices together", () => {

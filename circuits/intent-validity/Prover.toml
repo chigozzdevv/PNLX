@@ -18,16 +18,28 @@ path_siblings = [
   "0x120157cfaaa49ce3da30f8b47879114977c24b266d58b0ac18b325d878aafddf",
   "0x01c28fe1059ae0237b72334700697bdf465e03df03986fe05200cadeda66bd76",
   "0x2d78ed82f93b61ba718b17c2dfe5b52375b4d37cbbed6f1fc98b47614b0cf21b",
+  "0x067243231eddf4222f3911defbba7705aff06ed45960b27f6f91319196ef97e1",
+  "0x1849b85f3c693693e732dfc4577217acc18295193bede09ce8b97ad910310972",
+  "0x2a775ea761d20435b31fa2c33ff07663e24542ffb9e7b293dfce3042eb104686",
+  "0x0f320b0703439a8114f81593de99cd0b8f3b9bf854601abb5b2ea0e8a3dda4a7",
+  "0x0d07f6e7a8a0e9199d6d92801fff867002ff5b4808962f9da2ba5ce1bdd26a73",
+  "0x1c4954081e324939350febc2b918a293ebcdaead01be95ec02fcbe8d2c1635d1",
+  "0x0197f2171ef99c2d053ee1fb5ff5ab288d56b9b41b4716c9214a4d97facc4c4a",
+  "0x2b9cdd484c5ba1e4d6efcc3f18734b5ac4c4a0b9102e2aeb48521a661d3feee9",
+  "0x14f44d672eb357739e42463497f9fdac46623af863eea4d947ca00a497dcdeb3",
+  "0x071d7627ae3b2eabda8a810227bf04206370ac78dbf6c372380182dbd3711fe3",
+  "0x2fdc08d9fe075ac58cb8c00f98697861a13b3ab6f9d41a4e768f75e477475bf5",
+  "0x20165fe405652104dceaeeca92950aa5adc571b8cafe192878cba58ff1be49c5",
 ]
-path_indices = [false, false, false, false, false, false, false, false]
+path_indices = [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false]
 current_batch = 9
 batch_digest = 20
 market_digest = 21
 owner_commitment_field = 22
-intent_commitment = "0x0450e0b82e95f60b10666bb4d13915c4057f8bc2ff1f972823094ab8583c6442"
-margin_root = "0x0c02831d47f2c1fcb8b461ad63f9f4165c7550b226f42e4fb058adc07626f352"
-note_commitment_public = "0x2dd7bb5b7769240cc9aa15a41eb510b5c17661a47e36926fa9fb374f8c74a71f"
-note_nullifier = "0x25f106373d285972efcdfcbc99096a989156495514c4e1bc6cfac2b288ade5e7"
+intent_commitment = "0x038a5be315094c669af33309a5f1549f0fb27217ad127c080308bce3ed8a14c7"
+margin_root = "0x1e4cda2c6e2c0eb3602a1e4971309af27c37adbe05217bd7628c454c40558c92"
+note_commitment_public = "0x241cb08d66207e7b0b060dc9ccc9f5d0ce57cc06090916cae0d38d693fdd4c05"
+note_nullifier = "0x1e5b6784a0b506d867200787b035615801d32818756b0df4caf2263036ca6f82"
 nonce_digest = 23
 salt_digest = 24
 zero_commitment = 0

@@ -31,6 +31,7 @@ export class IntentsService {
 
   proveAndSubmit(input: ProveAndSubmitIntentInput, authenticated?: string): ProveAndSubmitIntentResult {
     assertAuthenticatedAccount(authenticated, input.intent.owner, "owner");
+    this.syncSecureNotes();
     if (input.marginRoot !== this.executor.store.marginMembershipRoot()) {
       throw new Error("intent margin root is not current");
     }
@@ -42,6 +43,7 @@ export class IntentsService {
   }
 
   validate(input: CreateIntentInput, authenticated?: string): void {
+    this.syncSecureNotes();
     const { intent, validity } = input;
     assertAuthenticatedAccount(authenticated, intent.owner, "owner");
     const expectedCommitment = commitIntent(intent);
@@ -131,5 +133,13 @@ export class IntentsService {
         publicField(validity.noteChangeCommitment),
       ]),
     );
+  }
+
+  private syncSecureNotes(): void {
+    if (!this.onchain?.enabled || !this.env.intentRegistryOnchainRequired) return;
+    const notes = this.onchain.secureNoteSnapshot([...this.executor.store.marginCommitments]);
+    if (notes.root !== this.executor.store.marginMembershipRoot()) {
+      this.executor.store.replaceMarginCommitments(notes.commitments);
+    }
   }
 }

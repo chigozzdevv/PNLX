@@ -72,6 +72,10 @@ export class FileProtocolStore extends ProtocolStore {
     this.persist(() => super.addMarginCommitment(commitment));
   }
 
+  override replaceMarginCommitments(commitments: Hex[]): void {
+    this.persist(() => super.replaceMarginCommitments(commitments));
+  }
+
   override addPendingAssetDeposit(record: PendingAssetDepositRecord): void {
     this.persist(() => super.addPendingAssetDeposit(record));
   }

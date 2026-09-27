@@ -57,17 +57,16 @@ export class OrdersService {
     if (depositProof.tokenDigest.toLowerCase() !== details.tokenDigest.toLowerCase()) {
       throw new Error("residual claim asset mismatch");
     }
-    this.prover.assertBoundProof(depositProof.proof, "deposit-note", contractPublicInputHash([
+    this.prover.assertBoundProof(depositProof.proof, "secure-deposit-note", contractPublicInputHash([
       publicU128(depositProof.amount), publicField(details.tokenDigest), publicField(depositProof.commitment),
     ]));
     if (details.claimedCommitment) {
       if (details.claimedCommitment.toLowerCase() !== depositProof.commitment.toLowerCase()) {
         throw new Error("residual already claimed with another commitment");
       }
+      this.syncSecureNotes();
       if (!this.executor.store.marginCommitments.has(depositProof.commitment)) {
-        if (!this.onchain) throw new Error("residual claim requires on-chain relay");
-        assertSubmittedRelay(this.onchain.verifyProof(depositProof.proof), "verify_and_record");
-        this.executor.deposit(depositProof.commitment);
+        throw new Error("claimed note is not in the on-chain secure tree");
       }
       return { amount: depositProof.amount, commitment: depositProof.commitment };
     }
@@ -78,12 +77,23 @@ export class OrdersService {
     assertSubmittedRelay(this.onchain.verifyProof(depositProof.proof), "verify_and_record");
     const relay = this.onchain.claimResidual(input.intentCommitment, depositProof.commitment, depositProof.proof);
     assertSubmittedRelay(relay, "claim_residual");
-    this.executor.deposit(depositProof.commitment);
+    this.syncSecureNotes();
+    if (!this.executor.store.marginCommitments.has(depositProof.commitment)) {
+      throw new Error("residual claim was not recorded in the on-chain secure tree");
+    }
     return {
       amount: details.amount,
       commitment: depositProof.commitment,
       claimTxHash: relayTxHash(relay, "claim_residual"),
     };
+  }
+
+  private syncSecureNotes(): void {
+    if (!this.onchain?.enabled) throw new Error("secure note reader unavailable");
+    const notes = this.onchain.secureNoteSnapshot([...this.executor.store.marginCommitments]);
+    if (notes.root !== this.executor.store.marginMembershipRoot()) {
+      this.executor.store.replaceMarginCommitments(notes.commitments);
+    }
   }
 
   cancel(input: CancelOrderInput, authenticated?: string): CancelOrderResult {

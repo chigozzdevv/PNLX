@@ -1,9 +1,9 @@
 import {
-  circuitMarginCommitment,
-  circuitNullifier,
   digestToFieldHex,
   hashFields,
   ownerCommitment,
+  secureMarginCommitment,
+  secureMarginNullifier,
 } from "@pnlx/crypto";
 import { PRICE_SCALE, settleClose } from "@pnlx/market-math";
 import { createCircuitPositionNote } from "@pnlx/sdk";
@@ -14,7 +14,6 @@ import type { ProtocolStore } from "@/shared/state/store";
 import type { VaultMakerAllocation } from "@/shared/vault-maker-backing";
 import type { ProverService } from "@/workers/prover/prover.service";
 
-const ZERO_HEX = "0x0" as Hex;
 
 export interface VaultMakerPair {
   allocation: VaultMakerAllocation;
@@ -131,6 +130,11 @@ export function preparePairedMakerClose(input: {
     entryPrice: opening.entryPrice, markPrice: input.markPrice,
     margin: opening.margin, fundingPayment, fee: 0n });
   if (settled.newMargin <= 0n) throw new Error("vault maker position requires liquidation");
+  if (typeof input.makerNote.spendSecretDigest !== "string" ||
+    !/^0x[0-9a-f]{64}$/i.test(input.makerNote.spendSecretDigest) ||
+    BigInt(input.makerNote.spendSecretDigest) === 0n) {
+    throw new Error("vault maker note spend secret is unavailable");
+  }
   const newPosition = createCircuitPositionNote({
     marketId: position.marketId, side: opening.side, size: 0n,
     entryPrice: opening.entryPrice, margin: 0n,
@@ -139,12 +143,16 @@ export function preparePairedMakerClose(input: {
     rho: `${position.positionNullifier}:closed-position-rho`,
     blinding: `${position.positionNullifier}:closed-position-blinding`,
   });
-  const rhoDigest = digestToFieldHex(`vault-maker-close-rho:${position.positionNullifier}`);
-  const blinding = digestToFieldHex(`vault-maker-close-blinding:${position.positionNullifier}`);
+  const privateSeed = `${input.makerNote.spendSecretDigest}:${position.positionNullifier}`;
+  const rhoDigest = digestToFieldHex(`vault-maker-close-rho:${privateSeed}`);
+  const blinding = digestToFieldHex(`vault-maker-close-blinding:${privateSeed}`);
   const assetDigest = input.makerNote.assetDigest as Hex;
-  const outputCommitment = circuitMarginCommitment({
+  const outputSpendSecretDigest = digestToFieldHex(
+    `vault-maker-close-spend:${privateSeed}`);
+  const outputCommitment = secureMarginCommitment({
     amount: settled.newMargin, assetDigest, blinding,
-    ownerDigest: original.ownerDigest, rhoDigest, spendSecretDigest: ZERO_HEX,
+    ownerDigest: original.ownerDigest, rhoDigest,
+    spendSecretDigest: outputSpendSecretDigest,
   });
   const closeCommitment = hashFields("vault-maker-close", [
     position.positionCommitment, input.traderCloseCommitment,
@@ -166,14 +174,17 @@ export function preparePairedMakerClose(input: {
     newPositionBlinding: newPosition.blinding,
     marginOutputAssetDigest: assetDigest,
     marginOutputRhoDigest: rhoDigest, marginOutputBlinding: blinding,
+    marginOutputSpendSecretDigest: outputSpendSecretDigest,
     pathIndices: membership.indices, pathSiblings: membership.siblings,
   });
   return { close, note: {
     amount: settled.newMargin.toString(), assetDigest, blinding,
     commitment: outputCommitment, createdAt: Date.now(),
-    noteNullifier: circuitNullifier({ rhoDigest, spendSecretDigest: ZERO_HEX }),
+    noteNullifier: secureMarginNullifier({ rhoDigest,
+      spendSecretDigest: outputSpendSecretDigest }),
     ownerCommitment: owner, ownerDigest: original.ownerDigest, rhoDigest,
-    spendSecretDigest: ZERO_HEX, walletAddress: String(input.makerNote.walletAddress),
+    spendSecretDigest: outputSpendSecretDigest,
+    walletAddress: String(input.makerNote.walletAddress),
     closePositionCommitment: position.positionCommitment, closeCommitment,
   } };
 }

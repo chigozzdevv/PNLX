@@ -1,0 +1,6 @@
+[package]
+name = "secure_deposit_note"
+type = "bin"
+authors = ["PNLX"]
+
+[dependencies]

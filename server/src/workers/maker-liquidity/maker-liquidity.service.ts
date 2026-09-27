@@ -1,9 +1,9 @@
 import { createECDH, createHash } from "node:crypto";
 import {
-  circuitMarginCommitment,
-  circuitNullifier,
   digestToFieldHex,
   ownerCommitment,
+  secureMarginCommitment,
+  secureMarginNullifier,
 } from "@pnlx/crypto";
 import type {
   BatchSettlement,
@@ -125,16 +125,17 @@ export class MakerLiquidityService {
         skipped += 1;
         continue;
       }
+      const makerNotes = this.env.makerWalletAddress
+        ? eligibleVaultMakerNotes(currentNotes, backing!.allocations, {
+            asset: backing!.asset,
+            deployedPrincipal: backing!.deployedPrincipal,
+            seriesPrincipals: backing!.seriesPrincipals,
+            maker: this.env.makerWalletAddress.trim().toUpperCase(),
+            vault: backing!.vault,
+          })
+        : eligibleMakerNotes(currentNotes);
       const allocations = selectMakerNoteAllocations(
-        this.env.makerWalletAddress
-          ? eligibleVaultMakerNotes(currentNotes, backing!.allocations, {
-              asset: backing!.asset,
-              deployedPrincipal: backing!.deployedPrincipal,
-              seriesPrincipals: backing!.seriesPrincipals,
-              maker: this.env.makerWalletAddress.trim().toUpperCase(),
-              vault: backing!.vault,
-            })
-          : eligibleMakerNotes(currentNotes),
+        makerNotes.filter((note) => this.executor.store.marginCommitments.has(note.commitment)),
         payload,
       );
       if (allocations.length === 0) {
@@ -245,6 +246,14 @@ export class MakerLiquidityService {
       input.margin,
       input.clientIntent.intentCommitment,
     );
+    if (this.onchain?.enabled && this.env.intentRegistryOnchainRequired) {
+      if (!this.onchain.secureNoteSnapshot) throw new Error("secure note reader unavailable");
+      const snapshot = this.onchain.secureNoteSnapshot(
+        [...this.executor.store.marginCommitments]);
+      if (snapshot.root !== this.executor.store.marginMembershipRoot()) {
+        this.executor.store.replaceMarginCommitments(snapshot.commitments);
+      }
+    }
     const membershipProof = this.executor.store.marginMembershipProof(input.note.commitment);
     const intent: TradeIntent = {
       batchId: input.batchId,
@@ -514,8 +523,8 @@ export function buildMakerChangeNote(
   ].join(":");
   const rhoDigest = digestToFieldHex(`maker-change-rho-v1:${scope}`);
   const blinding = digestToFieldHex(`maker-change-blinding-v1:${scope}`);
-  const spendSecretDigest = digestToFieldHex(`maker-change-spend-v1:${scope}`);
-  const commitment = circuitMarginCommitment({
+  const spendSecretDigest = note.spendSecretDigest as Hex;
+  const commitment = secureMarginCommitment({
     amount,
     assetDigest: note.assetDigest,
     blinding,
@@ -530,7 +539,7 @@ export function buildMakerChangeNote(
     blinding,
     commitment,
     createdAt: Date.now(),
-    noteNullifier: circuitNullifier({ rhoDigest, spendSecretDigest }),
+    noteNullifier: secureMarginNullifier({ rhoDigest, spendSecretDigest }),
     ownerCommitment: noteOwnerCommitment(note),
     ownerDigest: note.ownerDigest,
     rhoDigest,

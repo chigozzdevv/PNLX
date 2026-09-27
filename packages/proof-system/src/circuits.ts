@@ -5,6 +5,9 @@ import { hashFields } from "@pnlx/crypto";
 import type { Hex } from "@pnlx/protocol-types";
 
 export type CircuitId =
+  | "credit-drop-close"
+  | "secure-deposit-note"
+  | "secure-withdraw"
   | "conditional-close"
   | "deposit-note"
   | "disclosure"
@@ -29,6 +32,9 @@ export interface CircuitMeta extends CircuitDef {
 }
 
 export const CIRCUITS: CircuitDef[] = [
+  { id: "credit-drop-close", packageName: "credit_drop_close", dir: "circuits/credit-drop-close" },
+  { id: "secure-deposit-note", packageName: "secure_deposit_note", dir: "circuits/secure-deposit-note" },
+  { id: "secure-withdraw", packageName: "secure_withdraw", dir: "circuits/secure-withdraw" },
   { id: "conditional-close", packageName: "conditional_close", dir: "circuits/conditional-close" },
   { id: "deposit-note", packageName: "deposit_note", dir: "circuits/deposit-note" },
   { id: "disclosure", packageName: "disclosure", dir: "circuits/disclosure" },

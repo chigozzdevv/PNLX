@@ -37,6 +37,7 @@ export interface PrivateMarginNoteRuntimeHealth {
 }
 
 export interface StoredPrivateMarginNote {
+  noteFormat?: "secure";
   amount: string;
   assetDigest: Hex;
   blinding: Hex;
@@ -186,11 +187,13 @@ export function privateMarginNotes(ownerCommitment?: Hex): StoredPrivateMarginNo
   if (!scope) return [];
   return readPrivateMarginNotes()
     .filter((note) => note.runtimeScope === scope)
+    .filter((note) => note.noteFormat === "secure")
     .filter((note) => !ownerCommitment || note.ownerCommitment === ownerCommitment);
 }
 
 export function hasLocallyStoredPrivateMarginNotes(ownerCommitment: Hex): boolean {
   return readPrivateMarginNotes().some((note) =>
+    note.noteFormat === "secure" &&
     note.ownerCommitment.toLowerCase() === ownerCommitment.toLowerCase() && note.status !== "spent");
 }
 
@@ -566,6 +569,7 @@ function normalizeNote(value: unknown): StoredPrivateMarginNote | undefined {
     lockedByIntentCommitment: note.lockedByIntentCommitment,
     claimSourceIntentCommitment: note.claimSourceIntentCommitment,
     noteNullifier: note.noteNullifier,
+    noteFormat: note.noteFormat === "secure" ? "secure" : undefined,
     ownerCommitment: note.ownerCommitment,
     ownerDigest: note.ownerDigest,
     rhoDigest: note.rhoDigest,

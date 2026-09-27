@@ -92,7 +92,7 @@ export async function withdrawPrivateMarginNote(
   const membership = await marginMembership(note.commitment, session.token);
   const recipient = await addressDigest(session.address, session.token);
   const withdrawal = await registerProofBundle(
-    await proofProvider.withdraw({
+    await proofProvider.secureWithdraw({
       assetDigest: note.assetDigest,
       blinding: note.blinding,
       changeBlinding: "0x0",

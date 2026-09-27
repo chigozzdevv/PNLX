@@ -1,4 +1,5 @@
 import { createCircuitMarginCommitment, fieldHashPair } from "@/lib/private-note";
+import { secureMarginCommitment, secureMarginNullifier } from "@pnlx/crypto/secure-margin-commitment";
 import type { PrivateAccountEventPayload } from "@/lib/account-encryption";
 import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
 import {
@@ -282,12 +283,18 @@ export async function decryptNoteBackup(
       note.commitment.toLowerCase() !== backup.commitment.toLowerCase() || !/^\d+$/.test(note.amount)) {
     throw new Error("Private note backup does not match this account");
   }
-  const commitment = createCircuitMarginCommitment({
+  const opening = {
     amount: BigInt(note.amount), assetDigest: note.assetDigest, blinding: note.blinding,
     ownerDigest: note.ownerDigest, rhoDigest: note.rhoDigest, spendSecretDigest: note.spendSecretDigest,
-  });
+  };
+  const commitment = note.noteFormat === "secure"
+    ? secureMarginCommitment(opening)
+    : createCircuitMarginCommitment(opening);
+  const nullifier = note.noteFormat === "secure"
+    ? secureMarginNullifier(opening)
+    : fieldHashPair(note.spendSecretDigest, note.rhoDigest);
   if (commitment.toLowerCase() !== note.commitment.toLowerCase() ||
-      fieldHashPair(note.spendSecretDigest, note.rhoDigest).toLowerCase() !== note.noteNullifier.toLowerCase()) {
+      nullifier.toLowerCase() !== note.noteNullifier.toLowerCase()) {
     throw new Error("Private note backup failed integrity checks");
   }
   return note;

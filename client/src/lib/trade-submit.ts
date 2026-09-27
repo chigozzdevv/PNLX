@@ -9,7 +9,7 @@ import {
   type ClientProofProvider,
 } from "@/lib/client-proof-provider";
 import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
-import { createCircuitMarginNote, randomLabel } from "@/lib/private-note";
+import { createSecureMarginNote, randomLabel } from "@/lib/private-note";
 import { backUpExistingPrivateMarginNotes, backUpPrivateMarginNote, unlockPrivateNoteBackup } from "@/lib/private-note-backup";
 import {
   lockPrivateMarginNote,
@@ -189,7 +189,7 @@ async function submitDevWitnessTradeIntent(
   },
 ): Promise<SubmitTradeIntentResult> {
   markProgress(input, "shielding");
-  const note = await createCircuitMarginNote({
+  const note = await createSecureMarginNote({
     amount: input.marginProtocol,
     assetId: input.collateralAsset.toLowerCase(),
     blinding: randomLabel("blind"),
@@ -357,7 +357,7 @@ async function submitCustodyIntentFragment(
     const noteAmount = BigInt(note.amount);
     const changeAmount = noteAmount - margin;
     const changeNote = changeAmount > 0n
-      ? await createCircuitMarginNote({
+      ? await createSecureMarginNote({
           amount: changeAmount,
           assetDigest: note.assetDigest,
           blinding: randomLabel("change-blind"),
@@ -365,6 +365,7 @@ async function submitCustodyIntentFragment(
           ownerDigest: note.ownerDigest,
           rho: randomLabel("change-rho"),
           spendSecret: randomLabel("change-spend"),
+          spendSecretDigest: note.spendSecretDigest,
         })
       : undefined;
     markProgress(input, "proving");
@@ -416,6 +417,7 @@ async function submitCustodyIntentFragment(
         amount: changeNote.amount.toString(), assetDigest: changeNote.assetDigest,
         blinding: changeNote.blinding, commitment: changeNote.commitment,
         noteNullifier: changeNote.noteNullifier, ownerCommitment: input.session.ownerCommitment,
+        noteFormat: "secure",
         ownerDigest: changeNote.ownerDigest, rhoDigest: changeNote.rhoDigest,
         spendSecretDigest: changeNote.spendSecretDigest, walletAddress: input.session.address,
       });
@@ -499,6 +501,7 @@ export async function depositPrivateMargin(input: DepositPrivateMarginInput): Pr
       amount: prepared.note.amount.toString(), assetDigest: prepared.note.assetDigest,
       blinding: prepared.note.blinding, commitment: prepared.note.commitment,
       noteNullifier: prepared.note.noteNullifier, ownerCommitment: input.session.ownerCommitment,
+      noteFormat: "secure",
       ownerDigest: prepared.note.ownerDigest, rhoDigest: prepared.note.rhoDigest,
       spendSecretDigest: prepared.note.spendSecretDigest, walletAddress: input.session.address,
       status: "pending",
@@ -520,6 +523,7 @@ export async function depositPrivateMargin(input: DepositPrivateMarginInput): Pr
       blinding: prepared.note.blinding,
       commitment: prepared.note.commitment,
       noteNullifier: prepared.note.noteNullifier,
+      noteFormat: "secure",
       ownerCommitment: input.session.ownerCommitment,
       ownerDigest: prepared.note.ownerDigest,
       rhoDigest: prepared.note.rhoDigest,

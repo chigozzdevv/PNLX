@@ -11,6 +11,8 @@ pub trait IntentRegistryInterface {
     fn is_active_intent(env: Env, intent_commitment: BytesN<32>) -> bool;
     fn submission_sequence(env: Env, intent_commitment: BytesN<32>) -> u64;
     fn matching_payload_commitment(env: Env, intent_commitment: BytesN<32>) -> BytesN<32>;
+    fn nullifier_root(env: Env, nullifier: BytesN<32>) -> BytesN<32>;
+    fn intent_nullifier(env: Env, intent: BytesN<32>) -> BytesN<32>;
     fn rollover(
         env: Env,
         settler: Address,

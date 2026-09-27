@@ -17,7 +17,7 @@ position_commitment_public = "0x123d1003ec70142cfc0fd118a7a77fbf295d4b2ce3f453c8
 position_nullifier = "0x25f106373d285972efcdfcbc99096a989156495514c4e1bc6cfac2b288ade5e7"
 close_commitment = 13
 new_position_commitment = "0x226a1192fb0e04ae88b104ca5079f4a0cb0bf9bf3590496e95b2725c1fc3af50"
-margin_output_commitment = "0x218b9329310adef603cbd871a257659c0d60b1c0bb9beb7510bc0049ac00177c"
+margin_output_commitment = "0x2b1559a644027158d31cbc519b77642a40fb5a66452e0827607289c0ae0d6479"
 market_digest = 2
 owner_digest = 3
 rho_digest = 4
@@ -28,6 +28,7 @@ new_position_blinding = 8
 margin_output_asset_digest = 9
 margin_output_rho_digest = 10
 margin_output_blinding = 11
+margin_output_spend_secret_digest = 12
 path_siblings = [
   "0x0000000000000000000000000000000000000000000000000000000000000000",
   "0x0b63a53787021a4a962a452c2921b3663aff1ffd8d5510540f8e659e782956f1",

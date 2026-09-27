@@ -6,7 +6,6 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { BottomTicker } from "@/components/bottom-ticker";
-import { emptyLiquidityAccount } from "@/lib/liquidity-account";
 import {
   formatVaultUnits,
   formatVaultSharePrice,
@@ -108,7 +107,7 @@ export function LiquidityPoolDetails() {
   }
 
   return (
-    <AppShell account={emptyLiquidityAccount} activeView="liquidity" wallet={wallet}>
+    <AppShell activeView="liquidity" wallet={wallet}>
       <main className="liquidity-page">
         <div className="liquidity-heading">
           <Link className="liquidity-back-link" href="/liquidity">← Liquidity</Link>

@@ -1,0 +1,6 @@
+[package]
+name = "credit_drop_close"
+type = "bin"
+authors = ["PNLX"]
+
+[dependencies]

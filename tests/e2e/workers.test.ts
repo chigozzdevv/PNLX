@@ -6,6 +6,7 @@ import {
   intentBindingFields,
   intentOwnerCommitmentField,
   ownerCommitment,
+  secureMarginRoot,
 } from "@pnlx/crypto";
 import { createECDH } from "node:crypto";
 import { mkdtempSync } from "node:fs";
@@ -720,6 +721,8 @@ describe("support workers", () => {
     const validity = intentValidity(executor, intent);
     const onchain = {
       enabled: true,
+      secureNoteSnapshot: (commitments: Hex[]) => ({ commitments,
+        root: executor.store.marginMembershipRoot() }),
       submitIntent() {
         return { relays: [unsubmittedRelay("intent", "submit")] };
       },
@@ -816,6 +819,11 @@ describe("support workers", () => {
     let claimCalls = 0;
     const onchain = {
       enabled: true,
+      secureNoteSnapshot: (commitments: Hex[]) => {
+        const next = claimed && !commitments.includes(commitment)
+          ? [...commitments, commitment] : commitments;
+        return { commitments: next, root: secureMarginRoot(next) };
+      },
       residualMargin: () => claimed ? 0n : 100n,
       claimedResidual: () => claimed,
       verifyProof: () => ({ relays: [{ functionName: "verify_and_record", submitted: true, txHash: hashFields("tx", ["claim-proof"]) }] }),
@@ -832,7 +840,7 @@ describe("support workers", () => {
       { intentRegistryOnchainRequired: true, collateralTokenDigest: tokenDigest },
     );
     const input = { intentCommitment, depositProof: {
-      amount: 100n, commitment, tokenDigest, proof: proof("deposit-note"),
+      amount: 100n, commitment, tokenDigest, proof: proof("secure-deposit-note"),
     } };
     expect(() => orders.claimResidual(input, "other-owner")).toThrow("order does not match authenticated account");
     expect(() => orders.claimResidual({ ...input, depositProof: { ...input.depositProof, amount: 99n } }, owner))
@@ -3598,7 +3606,7 @@ describe("support workers", () => {
         source: "pnlx-testnet",
         sourceAddress: "GTEST",
         verifiers: {
-          "deposit-note-proof-verifier": "deposit-note-verifier-contract",
+          "secure-deposit-note-proof-verifier": "deposit-note-verifier-contract",
         },
       },
       enabled: true,
@@ -3626,7 +3634,7 @@ describe("support workers", () => {
       token: "usdc-token-contract",
     });
 
-    expect(prepared.functionName).toBe("deposit_asset");
+    expect(prepared.functionName).toBe("deposit_asset_secure");
     expect(prepared.command).toContain("--build-only");
     expect(prepared.command).toContain("GTRADER");
     expect(prepared.command).toContain("--proof");
@@ -3634,13 +3642,13 @@ describe("support workers", () => {
     expect(prepared.xdr).toBe("facefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeed");
     expect(calls).toHaveLength(5);
     expect(calls[0]).toContain("--build-only");
-    expect(calls[0]).toContain("deposit_asset");
+    expect(calls[0]).toContain("deposit_asset_secure");
     expect(calls[1]).toContain("simulate");
     expect(calls[2]).toContain("hash");
     expect(calls[3]).toContain("deposit-note-verifier-contract");
     expect(calls[3]).toContain("verify_and_record");
     expect(calls[4]).toContain("shielded-pool-contract");
-    expect(calls[4]).toContain("deposit_asset");
+    expect(calls[4]).toContain("deposit_asset_secure");
     expect(calls[4]).toContain("--source");
     expect(calls[4]).toContain("trader-alias");
     expect(calls[4]).toContain("--token");
@@ -3673,7 +3681,7 @@ describe("support workers", () => {
         source: "pnlx-testnet",
         sourceAddress: "GTEST",
         verifiers: {
-          "deposit-note-proof-verifier": "deposit-note-verifier-contract",
+          "secure-deposit-note-proof-verifier": "deposit-note-verifier-contract",
         },
       },
       enabled: true,
@@ -3696,7 +3704,7 @@ describe("support workers", () => {
     executor.deposit(commitment);
 
     expect(relay.relays[0].functionName).toBe("verify_and_record");
-    expect(relay.relays[1].functionName).toBe("deposit_asset");
+    expect(relay.relays[1].functionName).toBe("deposit_asset_secure");
     expect(executor.store.marginCommitments.has(commitment)).toBe(true);
     expect(executor.store.marginMembershipProof(commitment).root).toBe(
       executor.store.marginMembershipRoot(),
@@ -3716,7 +3724,7 @@ describe("support workers", () => {
     const service = new NotesService(
       executor,
       {
-        proveDepositNote() {
+        proveSecureDepositNote() {
           events.push("prove");
           return depositProof;
         },
@@ -3733,11 +3741,11 @@ describe("support workers", () => {
           return {
             command: ["stellar", "contract", "invoke", "--build-only"],
             contractId: "shielded-pool-contract",
-            functionName: "deposit_asset",
+            functionName: "deposit_asset_secure",
             kind: "deposit",
             payload: {
               contractId: "shielded-pool-contract",
-              functionName: "deposit_asset",
+              functionName: "deposit_asset_secure",
             },
             xdr: "assetpreparedxdr",
           };
@@ -3769,6 +3777,7 @@ describe("support workers", () => {
       from: "GTRADER",
       ownerDigest: hashFields("owner", ["custody-prepare-proof"]),
       rhoDigest: hashFields("rho", ["custody-prepare-proof"]),
+      spendSecretDigest: hashFields("spend", ["custody-prepare-proof"]),
       token: "CUSDC",
       tokenDigest: hashFields("token-digest", ["asset-deposit"]),
     });
@@ -3777,7 +3786,7 @@ describe("support workers", () => {
     expect(result.depositProof).toBe(depositProof);
     expect(result.proofVerification.relays[0].functionName).toBe("verify_and_record");
     expect(result.proofVerification.relays[0].submitted).toBe(true);
-    expect(result.action.functionName).toBe("deposit_asset");
+    expect(result.action.functionName).toBe("deposit_asset_secure");
     expect(result.pendingDeposit.commitment).toBe(commitment);
     expect(result.pendingDeposit.preparedXdrDigest).toBe(
       hashFields("prepared-asset-deposit-xdr", ["assetpreparedxdr"]),
@@ -3797,7 +3806,7 @@ describe("support workers", () => {
     const service = new NotesService(
       executor,
       {
-        proveDepositNote() {
+        proveSecureDepositNote() {
           events.push("prove");
           return depositProofRecord(25_000_000n, commitment);
         },
@@ -3828,6 +3837,7 @@ describe("support workers", () => {
         from: "GTRADER",
         ownerDigest: hashFields("owner", ["custody-missing-trustline"]),
         rhoDigest: hashFields("rho", ["custody-missing-trustline"]),
+        spendSecretDigest: hashFields("spend", ["custody-missing-trustline"]),
         token: "CUSDC",
         tokenDigest: hashFields("token-digest", ["custody-missing-trustline"]),
       }),
@@ -3847,7 +3857,7 @@ describe("support workers", () => {
     const service = new NotesService(
       executor,
       {
-        proveDepositNote() {
+        proveSecureDepositNote() {
           return depositProof;
         },
         assertBoundProof() {},
@@ -3862,7 +3872,7 @@ describe("support workers", () => {
           return {
             command: ["stellar", "contract", "invoke", "--build-only"],
             contractId: "shielded-pool-contract",
-            functionName: "deposit_asset",
+            functionName: "deposit_asset_secure",
             kind: "deposit",
             payload: {},
             xdr: "walletfinalizexdr",
@@ -3909,6 +3919,7 @@ describe("support workers", () => {
       from: "GTRADER",
       ownerDigest: hashFields("owner", ["wallet-finalize-required"]),
       rhoDigest: hashFields("rho", ["wallet-finalize-required"]),
+      spendSecretDigest: hashFields("spend", ["wallet-finalize-required"]),
       token: "CUSDC",
       tokenDigest: hashFields("token-digest", ["asset-deposit"]),
     });
@@ -3922,7 +3933,7 @@ describe("support workers", () => {
         relayId: hashFields("relay", ["wallet-finalize-missing"]),
         token: "CUSDC",
       }),
-    ).toThrow("deposit_asset transaction was not submitted");
+    ).toThrow("deposit_asset_secure transaction was not submitted");
     expect(executor.store.marginCommitments.has(commitment)).toBe(false);
   });
 
@@ -3939,7 +3950,7 @@ describe("support workers", () => {
     const service = new NotesService(
       executor,
       {
-        proveDepositNote() {
+        proveSecureDepositNote() {
           return depositProof;
         },
         assertBoundProof() {},
@@ -3947,6 +3958,10 @@ describe("support workers", () => {
       env,
       {
         enabled: true,
+        secureNoteSnapshot: (cached: Hex[]) => {
+          const commitments = cached.includes(commitment) ? cached : [...cached, commitment];
+          return { commitments, root: secureMarginRoot(commitments) };
+        },
         assetBalance() {
           return 25_000_000n;
         },
@@ -3954,7 +3969,7 @@ describe("support workers", () => {
           return {
             command: ["stellar", "contract", "invoke", "--build-only"],
             contractId: "shielded-pool-contract",
-            functionName: "deposit_asset",
+            functionName: "deposit_asset_secure",
             kind: "deposit",
             payload: {},
             xdr: "walletfinalizeokxdr",
@@ -4002,6 +4017,7 @@ describe("support workers", () => {
       from: "GTRADER",
       ownerDigest: hashFields("owner", ["wallet-finalize-ok"]),
       rhoDigest: hashFields("rho", ["wallet-finalize-ok"]),
+      spendSecretDigest: hashFields("spend", ["wallet-finalize-ok"]),
       token: "CUSDC",
       tokenDigest: hashFields("token-digest", ["asset-deposit"]),
     });
@@ -4020,7 +4036,7 @@ describe("support workers", () => {
     expect(typeof executor.store.pendingAssetDeposits.get(commitment)?.finalizedAt).toBe("number");
   });
 
-  test("custody-required deposits need a submitted deposit_asset transaction before local credit", () => {
+  test("custody-required deposits need a submitted deposit_asset_secure transaction before local credit", () => {
     const executor = createExecutor();
     const env = {
       ...loadEnv(),
@@ -4031,7 +4047,7 @@ describe("support workers", () => {
     const service = new NotesService(
       executor,
       {
-        proveDepositNote() {
+        proveSecureDepositNote() {
           return depositProofRecord(25_000_000n, commitment);
         },
       } as never,
@@ -4054,7 +4070,7 @@ describe("support workers", () => {
                 submittedAt: Date.now(),
               },
               {
-                functionName: "deposit_asset",
+                functionName: "deposit_asset_secure",
                 kind: "deposit",
                 mode: "local",
                 payloadDigest: hashFields("payload", ["custody-deposit-local"]),
@@ -4076,14 +4092,15 @@ describe("support workers", () => {
         from: "GTRADER",
         ownerDigest: hashFields("owner", ["custody-submit-required"]),
         rhoDigest: hashFields("rho", ["custody-submit-required"]),
+        spendSecretDigest: hashFields("spend", ["custody-submit-required"]),
         token: "CUSDC",
         tokenDigest: hashFields("token-digest", ["custody-submit-required"]),
       }),
-    ).toThrow("deposit_asset transaction was not submitted");
+    ).toThrow("deposit_asset_secure transaction was not submitted");
     expect(executor.store.marginCommitments.has(commitment)).toBe(false);
   });
 
-  test("custody-required deposits credit private margin after a submitted deposit_asset transaction", () => {
+  test("custody-required deposits credit private margin after a submitted deposit_asset_secure transaction", () => {
     const executor = createExecutor();
     const env = {
       ...loadEnv(),
@@ -4094,13 +4111,17 @@ describe("support workers", () => {
     const service = new NotesService(
       executor,
       {
-        proveDepositNote() {
+        proveSecureDepositNote() {
           return depositProofRecord(25_000_000n, commitment);
         },
       } as never,
       env,
       {
         enabled: true,
+        secureNoteSnapshot: (cached: Hex[]) => {
+          const commitments = cached.includes(commitment) ? cached : [...cached, commitment];
+          return { commitments, root: secureMarginRoot(commitments) };
+        },
         assetBalance() {
           return 25_000_000n;
         },
@@ -4118,7 +4139,7 @@ describe("support workers", () => {
                 txHash: hashFields("tx", ["custody-verify-ok"]),
               },
               {
-                functionName: "deposit_asset",
+                functionName: "deposit_asset_secure",
                 kind: "deposit",
                 mode: "stellar-cli",
                 payloadDigest: hashFields("payload", ["custody-deposit-ok"]),
@@ -4140,6 +4161,7 @@ describe("support workers", () => {
       from: "GTRADER",
       ownerDigest: hashFields("owner", ["custody-submit-ok"]),
       rhoDigest: hashFields("rho", ["custody-submit-ok"]),
+      spendSecretDigest: hashFields("spend", ["custody-submit-ok"]),
       token: "CUSDC",
       tokenDigest: hashFields("token-digest", ["custody-submit-ok"]),
     });
@@ -4148,7 +4170,7 @@ describe("support workers", () => {
     expect(executor.store.marginCommitments.has(commitment)).toBe(true);
   });
 
-  test("custody-required withdrawals need a submitted withdraw_asset transaction before local spend", () => {
+  test("custody-required withdrawals need a submitted withdraw_asset_secure transaction before local spend", () => {
     const executor = createExecutor();
     const env = {
       ...loadEnv(),
@@ -4166,6 +4188,8 @@ describe("support workers", () => {
       env,
       {
         enabled: true,
+        secureNoteSnapshot: (commitments: Hex[]) => ({ commitments,
+          root: executor.store.marginMembershipRoot() }),
         withdrawAsset() {
           return {
             relays: [
@@ -4179,7 +4203,7 @@ describe("support workers", () => {
                 submittedAt: Date.now(),
               },
               {
-                functionName: "withdraw_asset",
+                functionName: "withdraw_asset_secure",
                 kind: "withdraw",
                 mode: "local",
                 payloadDigest: hashFields("payload", ["custody-withdraw-local"]),
@@ -4197,7 +4221,7 @@ describe("support workers", () => {
       service.withdrawAssetProven({
         changeCommitment: "0x0",
         nullifier,
-        proof: proof("withdraw"),
+        proof: proof("secure-withdraw"),
         recipient: hashFields("recipient", ["custody-withdraw-submit-required"]),
         recipientAddress: "GRECIPIENT",
         root: executor.store.marginMembershipRoot(),
@@ -4205,11 +4229,11 @@ describe("support workers", () => {
         tokenDigest: hashFields("token-digest", ["custody-withdraw-submit-required"]),
         withdrawAmount: 1_000_000n,
       }),
-    ).toThrow("withdraw_asset transaction was not submitted");
+    ).toThrow("withdraw_asset_secure transaction was not submitted");
     expect(executor.store.spentNullifiers.has(nullifier)).toBe(false);
   });
 
-  test("custody-required withdrawals spend locally after a submitted withdraw_asset transaction", () => {
+  test("custody-required withdrawals spend locally after a submitted withdraw_asset_secure transaction", () => {
     const executor = createExecutor();
     const env = {
       ...loadEnv(),
@@ -4227,6 +4251,8 @@ describe("support workers", () => {
       env,
       {
         enabled: true,
+        secureNoteSnapshot: (commitments: Hex[]) => ({ commitments,
+          root: executor.store.marginMembershipRoot() }),
         withdrawAsset() {
           return {
             relays: [
@@ -4241,7 +4267,7 @@ describe("support workers", () => {
                 txHash: hashFields("tx", ["custody-withdraw-verify-ok"]),
               },
               {
-                functionName: "withdraw_asset",
+                functionName: "withdraw_asset_secure",
                 kind: "withdraw",
                 mode: "stellar-cli",
                 payloadDigest: hashFields("payload", ["custody-withdraw-ok"]),
@@ -4259,7 +4285,7 @@ describe("support workers", () => {
     const result = service.withdrawAssetProven({
       changeCommitment: "0x0",
       nullifier,
-      proof: proof("withdraw"),
+      proof: proof("secure-withdraw"),
       recipient: hashFields("recipient", ["custody-withdraw-submit-ok"]),
       recipientAddress: "GRECIPIENT",
       root: executor.store.marginMembershipRoot(),
@@ -4283,7 +4309,7 @@ describe("support workers", () => {
         source: "pnlx-testnet",
         sourceAddress: "GTEST",
         verifiers: {
-          "deposit-note-proof-verifier": "deposit-note-verifier-contract",
+          "secure-deposit-note-proof-verifier": "deposit-note-verifier-contract",
         },
       },
       enabled: true,
@@ -4331,7 +4357,7 @@ describe("support workers", () => {
         source: "pnlx-testnet",
         sourceAddress: "GTEST",
         verifiers: {
-          "withdraw-proof-verifier": "withdraw-verifier-contract",
+          "secure-withdraw-proof-verifier": "withdraw-verifier-contract",
         },
       },
       enabled: true,
@@ -4340,7 +4366,7 @@ describe("support workers", () => {
         publicInputsPath: `/tmp/${proof.circuitId}/public_inputs`,
       }),
     });
-    const withdrawProof = proof("withdraw");
+    const withdrawProof = proof("secure-withdraw");
     const root = hashFields("root", ["asset-withdraw"]);
     const nullifier = hashFields("nullifier", ["asset-withdraw"]);
     const changeCommitment = hashFields("change", ["asset-withdraw"]);
@@ -4361,7 +4387,7 @@ describe("support workers", () => {
     expect(calls[0]).toContain("withdraw-verifier-contract");
     expect(calls[0]).toContain("verify_and_record");
     expect(calls[1]).toContain("shielded-pool-contract");
-    expect(calls[1]).toContain("withdraw_asset");
+    expect(calls[1]).toContain("withdraw_asset_secure");
     expect(calls[1]).toContain("usdc-token-contract");
     expect(calls[1]).toContain(root.slice(2));
     expect(calls[1]).toContain(nullifier.slice(2));
@@ -4709,7 +4735,7 @@ function depositProofRecord(amount: bigint, commitment: `0x${string}`) {
     amount,
     commitment,
     tokenDigest: hashFields("token-digest", ["asset-deposit"]),
-    proof: proof("deposit-note"),
+    proof: proof("secure-deposit-note"),
   };
 }
 

@@ -2,10 +2,14 @@
 
 use governance_interface::GovernanceClient;
 use proof_ledger_interface::ProofLedgerClient;
+use soroban_poseidon::Poseidon2Sponge;
 use soroban_sdk::{
     contract, contractevent, contractimpl, contracttype, token::Client as TokenClient, xdr::ToXdr,
-    Address, Bytes, BytesN, Env, U256,
+    crypto::bn254::Bn254Fr, Address, Bytes, BytesN, Env, U256, Vec,
 };
+
+const SECURE_TREE_DEPTH: u32 = 20;
+type FieldHasher = Poseidon2Sponge<4, Bn254Fr>;
 
 const BN254_SCALAR_MODULUS_BE: [u8; 32] = [
     0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
@@ -37,6 +41,15 @@ pub enum DataKey {
     FeeReserve(Address),
     FeePaid(Address),
     FeeDestinations,
+    SecureDepositCircuit,
+    SecureWithdrawCircuit,
+    SecureTreeRoot,
+    SecureTreeCount,
+    SecureTreeEmpty,
+    SecureTreeFrontier,
+    SecureTreeLeaf(u32),
+    SecureTreeKnownRoot(BytesN<32>),
+    LegacyNotesDisabled,
 }
 
 #[derive(Clone)]
@@ -98,6 +111,62 @@ impl ShieldedPool {
         record_commitment(&env, commitment);
     }
 
+    pub fn configure_secure_note_circuits(
+        env: Env,
+        deposit_circuit_id: BytesN<32>,
+        withdraw_circuit_id: BytesN<32>,
+    ) {
+        require_admin(&env);
+        validate_hash(&env, &deposit_circuit_id);
+        validate_hash(&env, &withdraw_circuit_id);
+        if env.storage().persistent().has(&DataKey::SecureTreeCount) {
+            panic!("secure note tree already configured");
+        }
+        let (root, empty_nodes) = secure_empty_nodes(&env);
+        let store = env.storage().persistent();
+        let mut frontier = Vec::new(&env);
+        for _ in 0..SECURE_TREE_DEPTH {
+            frontier.push_back(BytesN::from_array(&env, &[0; 32]));
+        }
+        store.set(&DataKey::SecureTreeEmpty, &empty_nodes);
+        store.set(&DataKey::SecureTreeFrontier, &frontier);
+        store.set(&DataKey::SecureDepositCircuit, &deposit_circuit_id);
+        store.set(&DataKey::SecureWithdrawCircuit, &withdraw_circuit_id);
+        store.set(&DataKey::SecureTreeCount, &0u32);
+        store.set(&DataKey::SecureTreeRoot, &root);
+        store.set(&DataKey::SecureTreeKnownRoot(root), &true);
+    }
+
+    pub fn secure_note_root(env: Env) -> BytesN<32> {
+        env.storage().persistent().get(&DataKey::SecureTreeRoot)
+            .unwrap_or_else(|| panic!("secure note tree not configured"))
+    }
+
+    pub fn secure_note_count(env: Env) -> u32 {
+        env.storage().persistent().get(&DataKey::SecureTreeCount)
+            .unwrap_or_else(|| panic!("secure note tree not configured"))
+    }
+
+    pub fn secure_note_leaf(env: Env, index: u32) -> Option<BytesN<32>> {
+        env.storage().persistent().get(&DataKey::SecureTreeLeaf(index))
+    }
+
+    pub fn has_secure_note_root(env: Env, root: BytesN<32>) -> bool {
+        env.storage().persistent().has(&DataKey::SecureTreeKnownRoot(root))
+    }
+
+    pub fn disable_legacy_notes(env: Env) {
+        require_admin(&env);
+        if !env.storage().persistent().has(&DataKey::SecureTreeCount) {
+            panic!("secure note tree not configured");
+        }
+        env.storage().persistent().set(&DataKey::LegacyNotesDisabled, &true);
+    }
+
+    pub fn legacy_notes_disabled(env: Env) -> bool {
+        env.storage().persistent().get(&DataKey::LegacyNotesDisabled).unwrap_or(false)
+    }
+
     pub fn set_writer(env: Env, writer: Address, enabled: bool) {
         require_admin(&env);
         env.storage()
@@ -141,6 +210,7 @@ impl ShieldedPool {
         commitment: BytesN<32>,
         proof: ProofMeta,
     ) {
+        assert_legacy_notes_open(&env);
         if amount <= 0 {
             panic!("invalid amount");
         }
@@ -153,6 +223,27 @@ impl ShieldedPool {
         record_commitment(&env, commitment);
     }
 
+    pub fn deposit_asset_secure(
+        env: Env,
+        token: Address,
+        from: Address,
+        amount: i128,
+        commitment: BytesN<32>,
+        proof: ProofMeta,
+    ) {
+        assert_secure_notes_active(&env);
+        if amount <= 0 {
+            panic!("invalid amount");
+        }
+        validate_hash(&env, &commitment);
+        validate_proof(&env, &proof, DataKey::SecureDepositCircuit);
+        validate_deposit_public_inputs(&env, amount, &address_digest(&env, &token), &commitment, &proof);
+        from.require_auth();
+        TokenClient::new(&env, &token).transfer(&from, &env.current_contract_address(), &amount);
+        record_commitment(&env, commitment.clone());
+        append_secure_commitment(&env, commitment);
+    }
+
     pub fn deposit_claim(
         env: Env,
         writer: Address,
@@ -161,6 +252,7 @@ impl ShieldedPool {
         commitment: BytesN<32>,
         proof: ProofMeta,
     ) {
+        assert_legacy_notes_open(&env);
         require_writer(&env, writer);
         if amount <= 0 {
             panic!("invalid amount");
@@ -170,6 +262,33 @@ impl ShieldedPool {
         let token_digest = address_digest(&env, &token);
         validate_deposit_public_inputs(&env, amount, &token_digest, &commitment, &proof);
         record_commitment(&env, commitment);
+    }
+
+    pub fn deposit_claim_secure(
+        env: Env,
+        writer: Address,
+        token: Address,
+        amount: i128,
+        commitment: BytesN<32>,
+        proof: ProofMeta,
+    ) {
+        assert_secure_notes_active(&env);
+        require_writer(&env, writer);
+        if amount <= 0 { panic!("invalid amount"); }
+        validate_hash(&env, &commitment);
+        validate_proof(&env, &proof, DataKey::SecureDepositCircuit);
+        validate_deposit_public_inputs(&env, amount, &address_digest(&env, &token),
+            &commitment, &proof);
+        record_commitment(&env, commitment.clone());
+        append_secure_commitment(&env, commitment);
+    }
+
+    pub fn append_secure_note(env: Env, writer: Address, commitment: BytesN<32>) {
+        assert_secure_notes_active(&env);
+        require_writer(&env, writer);
+        validate_hash(&env, &commitment);
+        record_commitment(&env, commitment.clone());
+        append_secure_commitment(&env, commitment);
     }
 
     pub fn token_digest(env: Env, token: Address) -> BytesN<32> {
@@ -183,7 +302,22 @@ impl ShieldedPool {
     }
 
     pub fn spend(env: Env, writer: Address, nullifier: BytesN<32>) {
+        assert_legacy_notes_open(&env);
         require_writer(&env, writer);
+        record_nullifier(&env, nullifier);
+    }
+
+    pub fn spend_secure(
+        env: Env,
+        writer: Address,
+        root: BytesN<32>,
+        nullifier: BytesN<32>,
+    ) {
+        assert_secure_notes_active(&env);
+        require_writer(&env, writer);
+        if !Self::has_secure_note_root(env.clone(), root) {
+            panic!("invalid secure note spend");
+        }
         record_nullifier(&env, nullifier);
     }
 
@@ -259,6 +393,7 @@ impl ShieldedPool {
         proof: ProofMeta,
         change_commitment: BytesN<32>,
     ) {
+        assert_legacy_notes_open(&env);
         if amount <= 0 {
             panic!("invalid amount");
         }
@@ -291,6 +426,7 @@ impl ShieldedPool {
         proof: ProofMeta,
         change_commitment: BytesN<32>,
     ) {
+        assert_legacy_notes_open(&env);
         if amount <= 0 {
             panic!("invalid amount");
         }
@@ -327,6 +463,42 @@ impl ShieldedPool {
             &(token, root, recipient, amount, proof),
         );
         record_change_commitment(&env, change_commitment);
+    }
+
+    pub fn withdraw_asset_secure(
+        env: Env,
+        token: Address,
+        root: BytesN<32>,
+        nullifier: BytesN<32>,
+        recipient: Address,
+        amount: i128,
+        proof: ProofMeta,
+        change_commitment: BytesN<32>,
+    ) {
+        assert_secure_notes_active(&env);
+        if amount <= 0 || !Self::has_secure_note_root(env.clone(), root.clone()) {
+            panic!("invalid withdrawal or unknown note root");
+        }
+        validate_proof(&env, &proof, DataKey::SecureWithdrawCircuit);
+        let token_digest = address_digest(&env, &token);
+        let recipient_digest = address_digest(&env, &recipient);
+        validate_public_inputs(&env, amount, &root, &nullifier, &token_digest,
+            &recipient_digest, &change_commitment, &proof);
+        record_nullifier(&env, nullifier.clone());
+        let reserve = Self::fee_reserve(env.clone(), token.clone());
+        let reserved = reserve.insurance.checked_add(reserve.treasury)
+            .expect("fee reserve overflow");
+        let balance = TokenClient::new(&env, &token).balance(&env.current_contract_address());
+        if balance.checked_sub(amount).unwrap_or(-1) < reserved {
+            panic!("withdrawal would consume fee reserve");
+        }
+        TokenClient::new(&env, &token).transfer(&env.current_contract_address(), &recipient, &amount);
+        env.storage().persistent().set(&DataKey::AssetWithdrawal(nullifier),
+            &(token, root, recipient, amount, proof));
+        if change_commitment != BytesN::from_array(&env, &[0; 32]) {
+            record_commitment(&env, change_commitment.clone());
+            append_secure_commitment(&env, change_commitment);
+        }
     }
 
     pub fn is_spent(env: Env, nullifier: BytesN<32>) -> bool {
@@ -403,6 +575,19 @@ fn distribute_fee_reserve(env: &Env, token: Address, insurance: bool) -> i128 {
     amount
 }
 
+fn assert_legacy_notes_open(env: &Env) {
+    if ShieldedPool::legacy_notes_disabled(env.clone()) {
+        panic!("legacy note path disabled");
+    }
+}
+
+fn assert_secure_notes_active(env: &Env) {
+    if !ShieldedPool::legacy_notes_disabled(env.clone()) ||
+        !env.storage().persistent().has(&DataKey::SecureTreeCount) {
+        panic!("secure note path inactive");
+    }
+}
+
 fn record_commitment(env: &Env, commitment: BytesN<32>) {
     let key = DataKey::Commitment(commitment.clone());
     if env.storage().persistent().has(&key) {
@@ -423,6 +608,81 @@ fn record_change_commitment(env: &Env, change_commitment: BytesN<32>) {
     if change_commitment != BytesN::from_array(env, &[0; 32]) {
         record_commitment(env, change_commitment);
     }
+}
+
+fn append_secure_commitment(env: &Env, commitment: BytesN<32>) {
+    let count: u32 = env.storage().persistent().get(&DataKey::SecureTreeCount)
+        .unwrap_or_else(|| panic!("secure note tree not configured"));
+    if count >= 1u32 << SECURE_TREE_DEPTH {
+        panic!("secure note tree is full");
+    }
+    env.storage().persistent().set(&DataKey::SecureTreeLeaf(count), &commitment);
+    let store = env.storage().persistent();
+    let mut frontier: Vec<BytesN<32>> = store.get(&DataKey::SecureTreeFrontier)
+        .unwrap_or_else(|| panic!("missing secure note frontier"));
+    let empty_nodes: Vec<BytesN<32>> = store.get(&DataKey::SecureTreeEmpty)
+        .unwrap_or_else(|| panic!("missing empty secure note nodes"));
+    let mut hasher = FieldHasher::new(env);
+    let mut cursor = count;
+    let mut node = commitment;
+    let mut full_root = None;
+    for level in 0..SECURE_TREE_DEPTH {
+        if cursor & 1 == 0 {
+            frontier.set(level, node.clone());
+            break;
+        }
+        let left = frontier.get(level).unwrap();
+        node = secure_hash_pair(env, &mut hasher, &left, &node);
+        cursor >>= 1;
+        if level + 1 == SECURE_TREE_DEPTH {
+            full_root = Some(node.clone());
+        }
+    }
+    let next = count + 1;
+    let root = full_root.unwrap_or_else(|| secure_root_from_frontier(env, &mut hasher, next,
+        &frontier, &empty_nodes));
+    store.set(&DataKey::SecureTreeFrontier, &frontier);
+    store.set(&DataKey::SecureTreeCount, &next);
+    store.set(&DataKey::SecureTreeRoot, &root);
+    store.set(&DataKey::SecureTreeKnownRoot(root), &true);
+}
+
+fn secure_root_from_frontier(env: &Env, hasher: &mut FieldHasher, count: u32,
+    frontier: &Vec<BytesN<32>>, empty_nodes: &Vec<BytesN<32>>) -> BytesN<32> {
+    let mut cursor = count;
+    let mut node = BytesN::from_array(env, &[0; 32]);
+    for level in 0..SECURE_TREE_DEPTH {
+        let empty = empty_nodes.get(level).unwrap();
+        node = if cursor & 1 == 0 {
+            secure_hash_pair(env, hasher, &node, &empty)
+        } else {
+            let left = frontier.get(level).unwrap();
+            secure_hash_pair(env, hasher, &left, &node)
+        };
+        cursor >>= 1;
+    }
+    node
+}
+
+fn secure_empty_nodes(env: &Env) -> (BytesN<32>, Vec<BytesN<32>>) {
+    let mut root = BytesN::from_array(env, &[0; 32]);
+    let mut nodes = Vec::new(env);
+    let mut hasher = FieldHasher::new(env);
+    for _ in 0..SECURE_TREE_DEPTH {
+        nodes.push_back(root.clone());
+        root = secure_hash_pair(env, &mut hasher, &root, &root);
+    }
+    (root, nodes)
+}
+
+fn secure_hash_pair(
+    env: &Env, hasher: &mut FieldHasher, left: &BytesN<32>, right: &BytesN<32>,
+) -> BytesN<32> {
+    let inputs = soroban_sdk::vec![env,
+        U256::from_be_bytes(env, &left.clone().into()),
+        U256::from_be_bytes(env, &right.clone().into()),
+    ];
+    Bn254Fr::from_u256(hasher.compute_hash(&inputs)).to_bytes()
 }
 
 fn validate_proof(env: &Env, proof: &ProofMeta, circuit_key: DataKey) {
@@ -573,7 +833,8 @@ mod tests {
     extern crate std;
 
     use super::{
-        address_digest, deposit_public_input_hash, withdraw_public_input_hash, ProofMeta,
+        address_digest, deposit_public_input_hash, secure_hash_pair, withdraw_public_input_hash,
+        FieldHasher, ProofMeta,
         ShieldedPool, ShieldedPoolClient,
     };
     use governance::{Governance, GovernanceClient};
@@ -583,6 +844,161 @@ mod tests {
         token::{Client as TokenClient, StellarAssetClient},
         Address, BytesN, Env,
     };
+
+    #[test]
+    fn secure_tree_roots_match_client_for_multiple_leaves() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register(ShieldedPool, ());
+        let client = ShieldedPoolClient::new(&env, &id);
+        client.init(&setup_governance(&env), &setup_proof_ledger(&env, None),
+            &deposit_circuit(&env), &circuit(&env));
+        client.configure_secure_note_circuits(&secure_deposit_circuit(&env),
+            &secure_withdraw_circuit(&env));
+        client.disable_legacy_notes();
+        let writer = Address::generate(&env);
+        client.set_writer(&writer, &true);
+        let expected = [
+            [0x17, 0xad, 0x0e, 0x9c, 0xbd, 0x9b, 0x8a, 0x59, 0xe1, 0x60, 0x17, 0xb2, 0x44, 0x19, 0x39, 0xf5, 0xb5, 0xb3, 0x44, 0x81, 0x98, 0xe8, 0x66, 0xc2, 0x11, 0x21, 0xbe, 0x92, 0x0d, 0xa0, 0x1c, 0x58],
+            [0x2e, 0xbd, 0xc7, 0xd3, 0x3e, 0xe3, 0x29, 0x71, 0x21, 0x05, 0x51, 0x54, 0xc4, 0xf7, 0x34, 0xa6, 0xa5, 0xda, 0x38, 0x3c, 0xdc, 0x18, 0xb0, 0x8f, 0x5a, 0x79, 0xa3, 0xa3, 0x52, 0xf6, 0x71, 0xc7],
+            [0x21, 0xfc, 0x35, 0xa3, 0x70, 0x21, 0x65, 0xae, 0xf4, 0x31, 0x73, 0x92, 0xcc, 0x08, 0x67, 0xb8, 0xc2, 0x39, 0xdd, 0x3b, 0x04, 0x37, 0x8a, 0x72, 0x3c, 0x1a, 0x27, 0xca, 0xcc, 0xa2, 0xdd, 0xcd],
+            [0x1f, 0x51, 0x24, 0xe9, 0x04, 0x52, 0x93, 0x16, 0x1f, 0xba, 0x4e, 0x01, 0x10, 0x3a, 0x3e, 0xfd, 0xac, 0xa6, 0xc0, 0x8a, 0x53, 0xbf, 0x6e, 0xb1, 0x37, 0xb0, 0x5d, 0x2c, 0xb4, 0xcf, 0xfd, 0x52],
+            [0x14, 0x83, 0x46, 0x0a, 0x7a, 0x26, 0x79, 0xd7, 0x9e, 0xe6, 0x1d, 0x48, 0x1b, 0xce, 0xf5, 0x99, 0x4c, 0x8e, 0xcd, 0x87, 0xf1, 0x4a, 0xd0, 0xeb, 0x81, 0x2c, 0x10, 0x50, 0xb8, 0x83, 0x9e, 0x12],
+        ];
+        for (index, expected_root) in expected.iter().enumerate() {
+            let mut leaf = [0u8; 32];
+            leaf[31] = index as u8 + 7;
+            client.append_secure_note(&writer, &BytesN::from_array(&env, &leaf));
+            assert_eq!(client.secure_note_root(), BytesN::from_array(&env, expected_root));
+        }
+    }
+
+    #[test]
+    fn secure_note_tree_accepts_only_its_roots_and_tracks_change() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register(ShieldedPool, ());
+        let client = ShieldedPoolClient::new(&env, &id);
+        let trader = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token_id = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
+        let token = TokenClient::new(&env, &token_id);
+        StellarAssetClient::new(&env, &token_id).mint(&trader, &10_000);
+        let mut bytes = [0u8; 32];
+        bytes[31] = 7;
+        let commitment = BytesN::from_array(&env, &bytes);
+        bytes[31] = 8;
+        let change = BytesN::from_array(&env, &bytes);
+        bytes[31] = 9;
+        let nullifier = BytesN::from_array(&env, &bytes);
+        let mut hasher = FieldHasher::new(&env);
+        let mut expected_root = commitment.clone();
+        let mut empty = BytesN::from_array(&env, &[0; 32]);
+        for _ in 0..super::SECURE_TREE_DEPTH {
+            expected_root = secure_hash_pair(&env, &mut hasher, &expected_root, &empty);
+            empty = secure_hash_pair(&env, &mut hasher, &empty, &empty);
+        }
+        assert_eq!(expected_root, BytesN::from_array(&env, &[
+            0x17, 0xad, 0x0e, 0x9c, 0xbd, 0x9b, 0x8a, 0x59,
+            0xe1, 0x60, 0x17, 0xb2, 0x44, 0x19, 0x39, 0xf5,
+            0xb5, 0xb3, 0x44, 0x81, 0x98, 0xe8, 0x66, 0xc2,
+            0x11, 0x21, 0xbe, 0x92, 0x0d, 0xa0, 0x1c, 0x58,
+        ]));
+        let token_digest = address_digest(&env, &token_id);
+        let recipient_digest = address_digest(&env, &recipient);
+        let mut deposit = deposit_proof(&env, 4_000, &token_digest, &commitment);
+        deposit.circuit_id = secure_deposit_circuit(&env);
+        let mut withdrawal = proof(&env, 1_500, &expected_root, &nullifier,
+            &token_digest, &recipient_digest, &change);
+        withdrawal.circuit_id = secure_withdraw_circuit(&env);
+
+        client.init(&setup_governance(&env),
+            &setup_proof_ledger_many(&env, &[&deposit, &withdrawal]),
+            &deposit_circuit(&env), &circuit(&env));
+        client.configure_secure_note_circuits(&secure_deposit_circuit(&env), &secure_withdraw_circuit(&env));
+        client.disable_legacy_notes();
+        assert!(client.legacy_notes_disabled());
+        assert!(client.try_deposit_asset(&token_id, &trader, &4_000, &commitment, &deposit).is_err());
+        let empty_root = client.secure_note_root();
+        client.deposit_asset_secure(&token_id, &trader, &4_000, &commitment, &deposit);
+        assert_eq!(client.secure_note_count(), 1);
+        assert_eq!(client.secure_note_leaf(&0), Some(commitment.clone()));
+        assert_eq!(client.secure_note_leaf(&1), None);
+        assert_eq!(client.secure_note_root(), expected_root);
+        assert!(client.has_secure_note_root(&empty_root));
+        assert!(client.try_withdraw_asset_secure(&token_id, &root(&env), &nullifier,
+            &recipient, &1_500, &withdrawal, &change).is_err());
+        client.withdraw_asset_secure(&token_id, &expected_root, &nullifier,
+            &recipient, &1_500, &withdrawal, &change);
+        assert_eq!(token.balance(&recipient), 1_500);
+        assert_eq!(token.balance(&id), 2_500);
+        assert_eq!(client.secure_note_count(), 2);
+        assert_eq!(client.secure_note_leaf(&1), Some(change.clone()));
+        assert!(client.has_secure_note_root(&expected_root));
+        assert!(client.is_spent(&nullifier));
+        assert!(client.try_withdraw_asset(&token_id, &expected_root, &nullifier,
+            &recipient, &1_500, &withdrawal, &change).is_err());
+        assert!(client.try_withdraw_asset_secure(&token_id, &expected_root, &nullifier,
+            &recipient, &1_500, &withdrawal, &change).is_err());
+        let writer = Address::generate(&env);
+        client.set_writer(&writer, &true);
+        bytes[31] = 10;
+        let next_nullifier = BytesN::from_array(&env, &bytes);
+        let current_root = client.secure_note_root();
+        assert!(client.try_spend_secure(&writer, &root(&env), &next_nullifier).is_err());
+        client.spend_secure(&writer, &current_root, &next_nullifier);
+        assert!(client.try_spend_secure(&writer, &current_root, &next_nullifier).is_err());
+    }
+
+    #[test]
+    fn legacy_withdrawal_is_blocked_when_secure_notes_are_active() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register(ShieldedPool, ());
+        let client = ShieldedPoolClient::new(&env, &id);
+        let trader = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token_id = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
+        StellarAssetClient::new(&env, &token_id).mint(&trader, &4_000);
+        let commitment = BytesN::from_array(&env, &[7; 32]);
+        let nullifier = BytesN::from_array(&env, &[8; 32]);
+        let change = BytesN::from_array(&env, &[5; 32]);
+        let token_digest = address_digest(&env, &token_id);
+        let mut secure = deposit_proof(&env, 4_000, &token_digest, &commitment);
+        secure.circuit_id = secure_deposit_circuit(&env);
+        let legacy = proof(&env, 1, &root(&env), &nullifier,
+            &token_digest, &address_digest(&env, &recipient), &change);
+        client.init(&setup_governance(&env),
+            &setup_proof_ledger_many(&env, &[&secure, &legacy]),
+            &deposit_circuit(&env), &circuit(&env));
+        client.configure_secure_note_circuits(&secure_deposit_circuit(&env), &secure_withdraw_circuit(&env));
+        client.disable_legacy_notes();
+        client.deposit_asset_secure(&token_id, &trader, &4_000, &commitment, &secure);
+        assert!(client.try_withdraw_asset(&token_id, &root(&env), &nullifier,
+            &recipient, &1, &legacy, &change).is_err());
+    }
+
+    #[test]
+    fn secure_claim_requires_authorized_writer_and_unique_commitment() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register(ShieldedPool, ());
+        let client = ShieldedPoolClient::new(&env, &id);
+        let writer = Address::generate(&env);
+        let mut bytes = [0u8; 32];
+        bytes[31] = 61;
+        let commitment = BytesN::from_array(&env, &bytes);
+        client.init(&setup_governance(&env), &Address::generate(&env),
+            &deposit_circuit(&env), &circuit(&env));
+        client.configure_secure_note_circuits(&secure_deposit_circuit(&env), &secure_withdraw_circuit(&env));
+        client.disable_legacy_notes();
+        assert!(client.try_append_secure_note(&writer, &commitment).is_err());
+        assert!(!client.has_commitment(&commitment));
+        client.set_writer(&writer, &true);
+        client.append_secure_note(&writer, &commitment);
+        assert!(client.has_commitment(&commitment));
+        assert!(client.try_append_secure_note(&writer, &commitment).is_err());
+    }
 
     #[test]
     fn deposit_and_spend() {
@@ -1226,6 +1642,14 @@ mod tests {
         BytesN::from_array(env, &[5; 32])
     }
 
+    fn secure_deposit_circuit(env: &Env) -> BytesN<32> {
+        BytesN::from_array(env, &[13; 32])
+    }
+
+    fn secure_withdraw_circuit(env: &Env) -> BytesN<32> {
+        BytesN::from_array(env, &[14; 32])
+    }
+
     fn verifier(env: &Env) -> BytesN<32> {
         BytesN::from_array(env, &[8; 32])
     }
@@ -1244,6 +1668,8 @@ mod tests {
         governance.init(&admin);
         governance.set_verifier(&deposit_circuit(env), verifier_hash, &authority);
         governance.set_verifier(&circuit(env), verifier_hash, &authority);
+        governance.set_verifier(&secure_deposit_circuit(env), verifier_hash, &authority);
+        governance.set_verifier(&secure_withdraw_circuit(env), verifier_hash, &authority);
         governance_id
     }
 
@@ -1305,6 +1731,8 @@ mod tests {
         governance.init(&admin);
         governance.set_verifier(&deposit_circuit(env), verifier_hash, authority);
         governance.set_verifier(&circuit(env), verifier_hash, authority);
+        governance.set_verifier(&secure_deposit_circuit(env), verifier_hash, authority);
+        governance.set_verifier(&secure_withdraw_circuit(env), verifier_hash, authority);
         governance_id
     }
 

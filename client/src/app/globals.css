@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 :root {
+  color-scheme: dark;
   --surface-page: #0c0c0b;
   --surface-panel: #171613;
   --surface-raised: #1e1d1a;
@@ -16,6 +17,24 @@
   --accent-orange: #ff6b22;
   --accent-blue: #3b8cff;
   --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI";
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --surface-page: #f6f5f2;
+  --surface-panel: #ffffff;
+  --surface-raised: #f1f0ec;
+  --surface-soft: #e9e7e2;
+  --surface-hover: #e2dfd8;
+  --line: rgba(28, 27, 24, 0.11);
+  --line-strong: rgba(28, 27, 24, 0.19);
+  --text-primary: #201f1c;
+  --text-muted: #625f58;
+  --text-faint: #77736b;
+  --accent-green: #087b52;
+  --accent-red: #bd2947;
+  --accent-orange: #d45018;
+  --accent-blue: #2368c3;
 }
 
 * {
@@ -38,6 +57,10 @@ body {
   color: var(--text-primary);
   font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
+}
+
+:root[data-theme="light"] body {
+  background: var(--surface-page);
 }
 
 button,
@@ -113,6 +136,15 @@ button:disabled {
   scrollbar-width: none;
 }
 
+.app-header {
+  border-bottom: 1px solid var(--line);
+  background: rgba(12, 12, 11, 0.9);
+}
+
+:root[data-theme="light"] .app-header {
+  background: rgba(255, 255, 255, 0.92);
+}
+
 .app-mobile-nav a {
   position: relative;
   display: inline-flex;
@@ -166,15 +198,271 @@ button:disabled {
   min-width: 0;
   flex-shrink: 1;
   align-items: center;
-  gap: 16px;
+  gap: 2px;
   justify-content: flex-end;
+}
+
+.header-rewards-link {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  transition: color 140ms ease;
+}
+
+.header-rewards-link:hover,
+.header-rewards-link-active {
+  color: var(--text-primary);
+}
+
+.header-rewards-link:focus-visible {
+  border-radius: 4px;
+  outline: 1px solid var(--line-strong);
+}
+
+.rewards-page {
+  width: min(1100px, 100%);
+  min-height: calc(100vh - 124px);
+  margin: 0 auto;
+  padding: 38px 22px 80px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rewards-page h1 {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -0.035em;
+}
+
+.rewards-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 34px;
+}
+
+.rewards-card {
+  --reward-glow: rgba(255, 107, 34, 0.44);
+  --reward-glow-soft: rgba(146, 56, 19, 0.20);
+  position: relative;
+  display: flex;
+  min-height: 208px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 14px;
+  background: linear-gradient(145deg, #17120f 0%, #0e0d0c 56%, #0b0b0a 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 16px 36px rgba(0, 0, 0, 0.12);
+}
+
+.rewards-card::before {
+  position: absolute;
+  top: -105px;
+  right: -90px;
+  width: 310px;
+  height: 270px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--reward-glow) 0%, var(--reward-glow-soft) 44%, transparent 73%);
+  filter: blur(20px);
+  content: "";
+}
+
+.rewards-card::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.035), transparent 38%, rgba(0, 0, 0, 0.10));
+  pointer-events: none;
+  content: "";
+}
+
+.rewards-card-referral {
+  --reward-glow: rgba(233, 97, 32, 0.36);
+  --reward-glow-soft: rgba(116, 53, 26, 0.18);
+}
+
+.rewards-card-credit {
+  --reward-glow: rgba(255, 131, 51, 0.50);
+  --reward-glow-soft: rgba(172, 57, 17, 0.22);
+}
+
+.rewards-card-art {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  z-index: 1;
+  width: 44px;
+  height: 44px;
+  color: rgba(255, 196, 147, 0.58);
+}
+
+.rewards-card-content {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 208px;
+  padding: 24px;
+}
+
+.rewards-card-title {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.rewards-card-balance {
+  display: grid;
+  gap: 5px;
+}
+
+.rewards-card-balance strong {
+  font-size: 30px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.rewards-card-balance small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.rewards-history {
+  margin-top: 56px;
+}
+
+.rewards-referral-link {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.rewards-referral-link button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent-orange);
+  font: inherit;
+  cursor: pointer;
+}
+
+.rewards-history h2 {
+  margin: 0 0 18px;
+  font-size: 19px;
+  font-weight: 650;
+}
+
+.rewards-table-scroll {
+  overflow-x: auto;
+}
+
+.rewards-table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  text-align: left;
+}
+
+.rewards-table th:nth-child(1) {
+  width: 32%;
+}
+
+.rewards-table th:nth-child(2) {
+  width: 22%;
+}
+
+.rewards-table th:nth-child(3) {
+  width: 24%;
+}
+
+.rewards-table th:nth-child(4) {
+  width: 22%;
+}
+
+.rewards-table th {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 15px 12px 15px 0;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.rewards-table th:nth-child(3) {
+  padding-right: 22px;
+  text-align: right;
+}
+
+.rewards-table th:last-child {
+  padding-right: 0;
+  text-align: right;
+}
+
+.rewards-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 26px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.rewards-table td:nth-child(3),
+.rewards-table td:last-child {
+  text-align: right;
+}
+
+.rewards-table td:last-child button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 16px;
+  background: var(--surface-panel);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.rewards-table td:last-child button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+@media (max-width: 620px) {
+  .rewards-page {
+    padding: 28px 14px 70px;
+  }
+
+  .rewards-cards {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .rewards-card {
+    min-height: 154px;
+  }
+
+  .rewards-card-art {
+    width: 40px;
+    height: 40px;
+  }
+
+  .rewards-card-content {
+    min-height: 154px;
+    padding: 20px;
+  }
 }
 
 .wallet-area {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 7px;
+  gap: 10px;
 }
 
 .balance-menu {
@@ -283,10 +571,40 @@ button:disabled {
   font-weight: 750;
 }
 
+.balance-popover-unavailable {
+  margin: 0;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .balance-popover-action {
   margin-top: 9px;
   border-top: 1px solid var(--line);
   padding-top: 9px;
+}
+
+.balance-popover-action > button + button {
+  margin-top: 8px;
+}
+
+.balance-deposit-action {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.balance-deposit-action:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .balance-repair-action {
@@ -365,7 +683,7 @@ button:disabled {
   gap: 5px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #121312;
+  background: var(--surface-panel);
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.34);
   padding: 11px;
 }
@@ -382,12 +700,164 @@ button:disabled {
   font-weight: 750;
 }
 
-.account-popover button {
+.header-settings {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.header-settings > summary {
+  display: flex;
+  min-height: 34px;
+  min-width: 34px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.header-settings > summary::-webkit-details-marker {
+  display: none;
+}
+
+.header-settings > summary:hover,
+.header-settings[open] > summary {
+  color: var(--text-primary);
+}
+
+.header-settings > summary:focus-visible {
+  border-radius: 4px;
+  outline: 1px solid var(--line-strong);
+}
+
+.header-settings-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 50;
+  width: 232px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-panel);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.34);
+  padding: 11px;
+}
+
+.header-settings-heading {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.header-settings-panel {
+  display: grid;
+  gap: 11px;
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 11px;
+}
+
+.account-theme-setting,
+.account-slippage-setting,
+.account-network-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.account-theme-select,
+.account-slippage-input,
+.account-network-select {
+  width: 78px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.account-slippage-input {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 7px;
+}
+
+.account-slippage-input:focus-within,
+.account-theme-select:focus-within,
+.account-network-select:focus-within {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.account-slippage-input input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  outline: 0;
+}
+
+.account-slippage-input input::-webkit-inner-spin-button,
+.account-slippage-input input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.account-theme-select,
+.account-network-select {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.account-theme-select select,
+.account-network-select select {
+  width: 100%;
+  height: 100%;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0 23px 0 7px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 700;
+  outline: 0;
+  cursor: pointer;
+}
+
+.account-theme-select select {
+  padding-right: 17px;
+  padding-left: 23px;
+}
+
+.account-theme-select option,
+.account-network-select option {
+  background: var(--surface-panel);
+}
+
+.account-theme-select svg,
+.account-network-select svg {
+  position: absolute;
+  right: 7px;
+  pointer-events: none;
+}
+
+.account-theme-select svg:first-child {
+  right: auto;
+  left: 6px;
+}
+
+.account-disconnect {
   display: flex;
   min-height: 34px;
   align-items: center;
   gap: 7px;
-  margin-top: 5px;
+  margin-top: 2px;
   border-top: 1px solid var(--line);
   color: var(--text-muted);
   font-size: 12px;
@@ -395,7 +865,7 @@ button:disabled {
   text-align: left;
 }
 
-.account-popover button:hover {
+.account-disconnect:hover {
   color: #f18a98;
 }
 
@@ -408,23 +878,6 @@ button:disabled {
 
 .wallet-address-compact {
   display: none;
-}
-
-.wallet-network-label {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 650;
-}
-
-.wallet-network-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: rgba(226, 139, 72, 0.85);
 }
 
 .trade-grid {
@@ -3564,11 +4017,11 @@ button:disabled {
   .header-controls {
     position: static;
     flex: 1 1 auto;
-    gap: 8px;
+    gap: 0;
   }
 
   .wallet-area {
-    gap: 6px;
+    gap: 8px;
   }
 
   .balance-menu {
@@ -3855,6 +4308,10 @@ button:disabled {
   }
 
   .header-controls {
+    gap: 0;
+  }
+
+  .wallet-area {
     gap: 6px;
   }
 
@@ -3868,11 +4325,6 @@ button:disabled {
   .balance-trigger strong,
   .wallet-button {
     font-size: 12px;
-  }
-
-  .wallet-network-label {
-    gap: 4px;
-    font-size: 9px;
   }
 
   .account-trigger,
@@ -3900,7 +4352,10 @@ button:disabled {
     padding-inline: 8px;
   }
 
-  .header-controls,
+  .header-controls {
+    gap: 0;
+  }
+
   .wallet-area {
     gap: 4px;
   }
@@ -6672,4 +7127,178 @@ button:disabled {
   .liquidity-pool-actions {
     margin-top: 22px;
   }
+}
+
+:root[data-theme="light"] .panel {
+  border-color: var(--line);
+  background: var(--surface-panel);
+}
+
+:root[data-theme="light"] .trade-grid .panel,
+:root[data-theme="light"] .market-card,
+:root[data-theme="light"] .market-summary {
+  background: transparent;
+}
+
+:root[data-theme="light"] .nav-item:hover,
+:root[data-theme="light"] .nav-item-active,
+:root[data-theme="light"] .market-dropdown-item:hover,
+:root[data-theme="light"] .market-dropdown-item-active,
+:root[data-theme="light"] .balance-deposit-action:hover,
+:root[data-theme="light"] .indicator-popover > button:hover,
+:root[data-theme="light"] .liquidity-pool-row:hover {
+  background: rgba(28, 27, 24, 0.05);
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .app-mobile-nav,
+:root[data-theme="light"] .trade-grid,
+:root[data-theme="light"] .market-header,
+:root[data-theme="light"] .market-identity,
+:root[data-theme="light"] .market-price-block,
+:root[data-theme="light"] .order-column,
+:root[data-theme="light"] .positions-workspace,
+:root[data-theme="light"] .execution-selector > div,
+:root[data-theme="light"] .ticket-field {
+  border-color: var(--line);
+}
+
+:root[data-theme="light"] .wallet-button,
+:root[data-theme="light"] .positions-tabs,
+:root[data-theme="light"] .side-button,
+:root[data-theme="light"] .leverage-input,
+:root[data-theme="light"] .condition-mode-control,
+:root[data-theme="light"] .condition-input,
+:root[data-theme="light"] .condition-input-shell,
+:root[data-theme="light"] .condition-preview,
+:root[data-theme="light"] .ticket-message,
+:root[data-theme="light"] .liquidity-dialog-input-wrap {
+  background: rgba(28, 27, 24, 0.035);
+}
+
+:root[data-theme="light"] .market-dropdown,
+:root[data-theme="light"] .indicator-popover,
+:root[data-theme="light"] .chart-drawing-toolbar,
+:root[data-theme="light"] .chart-drawing-instruction,
+:root[data-theme="light"] .chart-drawing-context-actions,
+:root[data-theme="light"] .chart-drawing-appearance,
+:root[data-theme="light"] .chart-data-status,
+:root[data-theme="light"] .action-toast {
+  border-color: var(--line);
+  background: var(--surface-panel);
+}
+
+:root[data-theme="light"] .nav-item-active,
+:root[data-theme="light"] .market-select-button strong,
+:root[data-theme="light"] .market-price-block > strong,
+:root[data-theme="light"] .market-dropdown-item strong,
+:root[data-theme="light"] .ticket-heading p,
+:root[data-theme="light"] .field-label strong,
+:root[data-theme="light"] .field-control input,
+:root[data-theme="light"] .leverage-input input,
+:root[data-theme="light"] .condition-label,
+:root[data-theme="light"] .condition-input-shell input,
+:root[data-theme="light"] .time-chip-active,
+:root[data-theme="light"] .time-chip:hover,
+:root[data-theme="light"] .indicator-popover-heading strong,
+:root[data-theme="light"] .positions-workspace .positions-tab-active,
+:root[data-theme="light"] .order-ticket .leverage-button-active {
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .positions-workspace .positions-tab-active::after,
+:root[data-theme="light"] .execution-selector button.text-white::after,
+:root[data-theme="light"] .time-chip-active::after,
+:root[data-theme="light"] .portfolio-record-tab[aria-selected="true"]::after,
+:root[data-theme="light"] .portfolio-dialog-tabs button[aria-selected="true"]::after {
+  background: var(--text-primary);
+}
+
+:root[data-theme="light"] .order-ticket .grid button.text-white,
+:root[data-theme="light"] .execution-selector button.text-white {
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .chart-icon-button,
+:root[data-theme="light"] .chart-loading-axis,
+:root[data-theme="light"] .trade-loading-block,
+:root[data-theme="light"] .trade-records-details,
+:root[data-theme="light"] .liquidity-chart-ranges button.active,
+:root[data-theme="light"] .liquidity-secondary-action:hover,
+:root[data-theme="light"] .liquidity-pool-withdraw:hover {
+  background: rgba(28, 27, 24, 0.06);
+}
+
+:root[data-theme="light"] .order-ticket {
+  scrollbar-color: rgba(28, 27, 24, 0.18) transparent;
+}
+
+:root[data-theme="light"] .chart-measure-label rect {
+  fill: var(--surface-panel);
+}
+
+:root[data-theme="light"] .liquidity-chart-guide {
+  stroke: var(--line);
+}
+
+:root[data-theme="light"] .liquidity-chart-loading {
+  border-color: var(--line);
+}
+
+:root[data-theme="light"] .liquidity-heading h1,
+:root[data-theme="light"] .liquidity-account-value,
+:root[data-theme="light"] .liquidity-section-heading h2,
+:root[data-theme="light"] .liquidity-pool-name strong,
+:root[data-theme="light"] .portfolio-account-value,
+:root[data-theme="light"] .portfolio-record-tab[aria-selected="true"],
+:root[data-theme="light"] .portfolio-market-cell strong,
+:root[data-theme="light"] .portfolio-details-button[aria-expanded="true"],
+:root[data-theme="light"] .portfolio-details-button:hover,
+:root[data-theme="light"] .portfolio-detail-heading strong,
+:root[data-theme="light"] .portfolio-detail-item > strong,
+:root[data-theme="light"] .portfolio-copy-value,
+:root[data-theme="light"] .portfolio-dialog-header h2,
+:root[data-theme="light"] .portfolio-dialog-tabs button[aria-selected="true"],
+:root[data-theme="light"] .portfolio-fund-balance strong,
+:root[data-theme="light"] .portfolio-fund-field select,
+:root[data-theme="light"] .portfolio-fund-destination strong,
+:root[data-theme="light"] .portfolio-close-market strong,
+:root[data-theme="light"] .portfolio-close-summary strong,
+:root[data-theme="light"] .trade-records-primary strong,
+:root[data-theme="light"] .trade-records-secondary-action,
+:root[data-theme="light"] .trade-records-details-button[aria-expanded="true"],
+:root[data-theme="light"] .trade-records-details-heading strong,
+:root[data-theme="light"] .trade-records-detail-item > strong,
+:root[data-theme="light"] .trade-records-copy {
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .portfolio-secondary-action,
+:root[data-theme="light"] .portfolio-activity-filter,
+:root[data-theme="light"] .portfolio-funds-drawer,
+:root[data-theme="light"] .portfolio-close-dialog,
+:root[data-theme="light"] .portfolio-amount-input,
+:root[data-theme="light"] .portfolio-fund-field select {
+  background: var(--surface-panel);
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .private-backup-warning {
+  background: #fff0e7;
+  color: #a94216;
+}
+
+:root[data-theme="light"] .pnl-modal-container {
+  color: #ebe6dc;
+}
+
+:root[data-theme="light"] .rewards-card {
+  border-color: rgba(82, 54, 39, 0.35);
+  background: linear-gradient(145deg, #211711 0%, #14110f 56%, #0e0d0c 100%);
+  box-shadow: 0 14px 30px rgba(42, 27, 17, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  color: #ebe6dc;
+}
+
+:root[data-theme="light"] .rewards-card-balance small {
+  color: #b6aba0;
 }

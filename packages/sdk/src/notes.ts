@@ -8,6 +8,8 @@ import {
   commitPosition,
   digestToFieldHex,
   nullifier,
+  secureMarginCommitment,
+  secureMarginNullifier,
 } from "@pnlx/crypto";
 
 export function createMarginNote(input: {
@@ -67,6 +69,29 @@ export function createCircuitMarginNote(input: {
     rhoDigest,
     spendSecretDigest,
   };
+}
+
+export function createSecureMarginNote(input: {
+  assetDigest?: Hex;
+  assetId: string;
+  amount: bigint;
+  owner: string;
+  ownerDigest?: Hex;
+  spendSecret: string;
+  spendSecretDigest?: Hex;
+  rho: string;
+  blinding: string;
+}) {
+  const assetDigest = input.assetDigest ?? digestToFieldHex(`asset:${input.assetId}`);
+  const ownerDigest = input.ownerDigest ?? digestToFieldHex(`owner:${input.owner}`);
+  const rhoDigest = digestToFieldHex(`rho:${input.rho}`);
+  const blinding = digestToFieldHex(`blinding:${input.blinding}`);
+  const spendSecretDigest = input.spendSecretDigest ??
+    digestToFieldHex(`spend:${input.spendSecret}`);
+  const note = { amount: input.amount, assetDigest, blinding, ownerDigest,
+    rhoDigest, spendSecretDigest };
+  return { ...note, commitment: secureMarginCommitment(note),
+    noteNullifier: secureMarginNullifier(note) };
 }
 
 export function createPositionNote(input: {

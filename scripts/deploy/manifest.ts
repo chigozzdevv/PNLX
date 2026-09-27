@@ -135,6 +135,12 @@ export function createDeployManifest(root = process.cwd(), options: ManifestOpti
       },
       {
         contract: "shielded-pool",
+        method: "configure_secure_note_circuits",
+        args: [circuitKey("secure-deposit-note"), circuitKey("secure-withdraw")],
+      },
+      { contract: "shielded-pool", method: "disable_legacy_notes", args: [] },
+      {
+        contract: "shielded-pool",
         method: "configure_fee_destinations",
         args: ["insuranceFundAddress", "treasuryAddress"],
       },
@@ -188,6 +194,8 @@ export function createDeployManifest(root = process.cwd(), options: ManifestOpti
           circuitKey("position-close"),
         ],
       },
+      { contract: "intent-registry", method: "configure_secure_pool", args: ["shielded-pool"] },
+      { contract: "position-close", method: "configure_secure_pool", args: ["shielded-pool"] },
       {
         contract: "position-state",
         method: "set_writer",
@@ -198,6 +206,7 @@ export function createDeployManifest(root = process.cwd(), options: ManifestOpti
         method: "set_writer",
         args: ["batch-settlement", true],
       },
+      { contract: "shielded-pool", method: "set_writer", args: ["position-close", true] },
       {
         contract: "position-state",
         method: "set_writer",

@@ -46,6 +46,7 @@ export function parsePositionClose(input: PositionCloseBody): CreatePositionClos
     marginOutputAssetDigest: String(input.marginOutputAssetDigest) as `0x${string}`,
     marginOutputRhoDigest: String(input.marginOutputRhoDigest) as `0x${string}`,
     marginOutputBlinding: String(input.marginOutputBlinding) as `0x${string}`,
+    marginOutputSpendSecretDigest: String(input.marginOutputSpendSecretDigest) as `0x${string}`,
     pathIndices: parseBooleanArray(input.pathIndices),
     pathSiblings: parseHexArray(input.pathSiblings),
   };

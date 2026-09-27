@@ -67,9 +67,9 @@ pub struct SettlementMeta {
 
 #[contractclient(name = "ShieldedPoolClient")]
 pub trait ShieldedPoolInterface {
-    fn spend(env: &Env, writer: &Address, nullifier: &BytesN<32>);
-    fn deposit(env: &Env, commitment: &BytesN<32>);
-    fn deposit_claim(
+    fn spend_secure(env: &Env, writer: &Address, root: &BytesN<32>, nullifier: &BytesN<32>);
+    fn append_secure_note(env: &Env, writer: &Address, commitment: &BytesN<32>);
+    fn deposit_claim_secure(
         env: &Env,
         writer: &Address,
         token: &Address,
@@ -247,7 +247,8 @@ impl BatchSettlement {
         if env.storage().persistent().has(&batch_key) {
             panic!("batch settled");
         }
-        validate_active_intents(&env, &filled_intents, &matching_payload_commitments);
+        validate_active_intents(&env, &filled_intents, &matching_payload_commitments,
+            &spent_nullifiers);
         validate_execution_priority(&env, &filled_intents, &maker_intents, &taker_intents);
         spend_margin_nullifiers(&env, &spent_nullifiers);
         record_margin_changes(&env, &margin_change_commitments);
@@ -343,7 +344,7 @@ impl BatchSettlement {
         authorize_as_writer(
             &env,
             pool_id.clone(),
-            "deposit_claim",
+            "deposit_claim_secure",
             Vec::from_array(
                 &env,
                 [
@@ -355,7 +356,7 @@ impl BatchSettlement {
                 ],
             ),
         );
-        ShieldedPoolClient::new(&env, &pool_id).deposit_claim(
+        ShieldedPoolClient::new(&env, &pool_id).deposit_claim_secure(
             &writer,
             &token,
             &amount,
@@ -476,20 +477,25 @@ fn spend_margin_nullifiers(env: &Env, nullifiers: &Vec<BytesN<32>>) {
         .unwrap_or_else(|| panic!("not initialized"));
     let writer = env.current_contract_address();
     let pool = ShieldedPoolClient::new(env, &shielded_pool_id);
+    let registry_id: Address = env.storage().persistent().get(&DataKey::IntentRegistry)
+        .unwrap_or_else(|| panic!("not initialized"));
+    let registry = IntentRegistryClient::new(env, &registry_id);
     for nullifier in nullifiers.iter() {
+        let root = registry.nullifier_root(&nullifier);
         authorize_as_writer(
             env,
             shielded_pool_id.clone(),
-            "spend",
+            "spend_secure",
             Vec::from_array(
                 env,
                 [
                     writer.clone().into_val(env),
+                    root.clone().into_val(env),
                     nullifier.clone().into_val(env),
                 ],
             ),
         );
-        pool.spend(&writer, &nullifier);
+        pool.spend_secure(&writer, &root, &nullifier);
     }
 }
 
@@ -497,6 +503,7 @@ fn validate_active_intents(
     env: &Env,
     filled_intents: &Vec<BytesN<32>>,
     payloads: &Vec<BytesN<32>>,
+    nullifiers: &Vec<BytesN<32>>,
 ) {
     validate_public_items(env, filled_intents, true);
 
@@ -507,6 +514,7 @@ fn validate_active_intents(
         .unwrap_or_else(|| panic!("not initialized"));
     let registry = IntentRegistryClient::new(env, &registry_id);
     let mut seen = Vec::<BytesN<32>>::new(env);
+    let mut expected_nullifiers = Vec::<BytesN<32>>::new(env);
 
     for (index, intent) in filled_intents.iter().enumerate() {
         if seen.contains(&intent) {
@@ -518,7 +526,19 @@ fn validate_active_intents(
         if registry.matching_payload_commitment(&intent) != payloads.get(index as u32).unwrap() {
             panic!("registered intent payload mismatch");
         }
+        let nullifier = registry.intent_nullifier(&intent);
+        if !expected_nullifiers.contains(&nullifier) {
+            expected_nullifiers.push_back(nullifier);
+        }
         seen.push_back(intent);
+    }
+    if expected_nullifiers.len() != nullifiers.len() {
+        panic!("registered note nullifier count mismatch");
+    }
+    for nullifier in nullifiers.iter() {
+        if !expected_nullifiers.contains(&nullifier) {
+            panic!("unregistered note nullifier in settlement");
+        }
     }
 }
 
@@ -606,8 +626,12 @@ fn record_margin_changes(env: &Env, commitments: &Vec<BytesN<32>>) {
         .get(&DataKey::ShieldedPool)
         .unwrap_or_else(|| panic!("not initialized"));
     let pool = ShieldedPoolClient::new(env, &pool_id);
+    let writer = env.current_contract_address();
     for commitment in commitments.iter() {
-        pool.deposit(&commitment);
+        authorize_as_writer(env, pool_id.clone(), "append_secure_note",
+            Vec::from_array(env, [writer.clone().into_val(env),
+                commitment.clone().into_val(env)]));
+        pool.append_secure_note(&writer, &commitment);
     }
 }
 
@@ -902,8 +926,8 @@ mod tests {
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
         let proof = proof(&env);
-        let intent_registry = setup_intent_registry(&env, &id, false);
         let shielded_pool = setup_shielded_pool(&env, &id);
+        let intent_registry = setup_intent_registry(&env, &id, &shielded_pool, false);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
@@ -993,9 +1017,9 @@ mod tests {
             &fee_makers(&env),
             &fee_takers(&env),
         );
-        let registry_id = setup_intent_registry(&env, &id, false);
-        let registry = IntentRegistryClient::new(&env, &registry_id);
         let pool_id = setup_shielded_pool(&env, &id);
+        let registry_id = setup_intent_registry(&env, &id, &pool_id, false);
+        let registry = IntentRegistryClient::new(&env, &registry_id);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proved)),
@@ -1065,7 +1089,9 @@ mod tests {
             &BytesN::from_array(&env, &[32; 32]),
         );
         pool.set_writer(&id, &true);
-        let registry_id = setup_intent_registry(&env, &id, false);
+        pool.configure_secure_note_circuits(&deposit_circuit, &BytesN::from_array(&env, &[34; 32]));
+        pool.disable_legacy_notes();
+        let registry_id = setup_intent_registry(&env, &id, &pool_id, false);
         let registry = IntentRegistryClient::new(&env, &registry_id);
         let token = env
             .register_stellar_asset_contract_v2(Address::generate(&env))
@@ -1086,7 +1112,7 @@ mod tests {
                 .persistent()
                 .set(&DataKey::ResidualMargin(residual.clone()), &5i128);
         });
-        let commitment = BytesN::from_array(&env, &[77; 32]);
+        let commitment = BytesN::from_array(&env, &[17; 32]);
         let mut inputs = Bytes::new(&env);
         super::append_u128_field(&env, &mut inputs, 5);
         super::append_field(&env, &mut inputs, &pool.token_digest(&token));
@@ -1154,13 +1180,14 @@ mod tests {
             &fee_makers(&env),
             &fee_takers(&env),
         );
-        let registry = setup_intent_registry(&env, &id, false);
+        let pool_id = setup_shielded_pool(&env, &id);
+        let registry = setup_intent_registry(&env, &id, &pool_id, false);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proved)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
             &setup_position_state(&env, &id),
-            &setup_shielded_pool(&env, &id),
+            &pool_id,
             &registry,
             &circuit(&env),
         );
@@ -1225,8 +1252,8 @@ mod tests {
             &fee_makers(&env),
             &fee_takers(&env),
         );
-        let registry = setup_intent_registry(&env, &id, false);
         let pool_id = setup_shielded_pool(&env, &id);
+        let registry = setup_intent_registry(&env, &id, &pool_id, false);
         let token = env
             .register_stellar_asset_contract_v2(Address::generate(&env))
             .address();
@@ -1288,7 +1315,8 @@ mod tests {
     fn rejects_reversed_maker_priority() {
         let env = Env::default();
         let id = env.register(BatchSettlement, ());
-        let registry = setup_intent_registry(&env, &id, false);
+        let pool_id = setup_shielded_pool(&env, &id);
+        let registry = setup_intent_registry(&env, &id, &pool_id, false);
         env.as_contract(&id, || {
             env.storage()
                 .persistent()
@@ -1326,13 +1354,15 @@ mod tests {
             0,
             2,
         );
-        let intent_registry = setup_intent_registry(&env, &id, false);
+        let pool_id = setup_shielded_pool(&env, &id);
+        let intent_registry = setup_intent_registry_with_nullifiers(
+            &env, &id, &pool_id, false, &spent.get(0).unwrap(), &spent.get(1).unwrap());
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
             &setup_position_state(&env, &id),
-            &setup_shielded_pool(&env, &id),
+            &pool_id,
             &intent_registry,
             &circuit(&env),
         );
@@ -1373,13 +1403,15 @@ mod tests {
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
         let proof = proof(&env);
+        let pool_id = setup_shielded_pool(&env, &id);
+        let registry_id = setup_intent_registry(&env, &id, &pool_id, false);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
             &setup_position_state(&env, &id),
-            &setup_shielded_pool(&env, &id),
-            &setup_intent_registry(&env, &id, false),
+            &pool_id,
+            &registry_id,
             &circuit(&env),
         );
 
@@ -1417,13 +1449,15 @@ mod tests {
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
         let proof = proof(&env);
+        let pool_id = setup_shielded_pool(&env, &id);
+        let registry_id = setup_intent_registry(&env, &id, &pool_id, false);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
             &setup_position_state(&env, &id),
-            &setup_shielded_pool(&env, &id),
-            &setup_intent_registry(&env, &id, false),
+            &pool_id,
+            &registry_id,
             &circuit(&env),
         );
 
@@ -1484,13 +1518,15 @@ mod tests {
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
         let proof = empty_proof(&env);
+        let pool_id = setup_shielded_pool(&env, &id);
+        let registry_id = setup_intent_registry(&env, &id, &pool_id, false);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, None),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
             &setup_position_state(&env, &id),
-            &setup_shielded_pool(&env, &id),
-            &setup_intent_registry(&env, &id, false),
+            &pool_id,
+            &registry_id,
             &circuit(&env),
         );
 
@@ -1529,13 +1565,15 @@ mod tests {
         let market = BytesN::from_array(&env, &[2; 32]);
         let proof = proof(&env);
 
+        let pool_id = setup_shielded_pool(&env, &id);
+        let registry_id = setup_intent_registry(&env, &id, &pool_id, false);
         client.init(
             &setup_governance_with_verifier(&env, &BytesN::from_array(&env, &[10; 32])),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
             &setup_position_state(&env, &id),
-            &setup_shielded_pool(&env, &id),
-            &setup_intent_registry(&env, &id, false),
+            &pool_id,
+            &registry_id,
             &circuit(&env),
         );
         client.settle(
@@ -1573,13 +1611,15 @@ mod tests {
         let market = BytesN::from_array(&env, &[2; 32]);
         let proof = proof(&env);
 
+        let pool_id = setup_shielded_pool(&env, &id);
+        let registry_id = setup_intent_registry(&env, &id, &pool_id, false);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
             &setup_position_state(&env, &id),
-            &setup_shielded_pool(&env, &id),
-            &setup_intent_registry(&env, &id, false),
+            &pool_id,
+            &registry_id,
             &BytesN::from_array(&env, &[11; 32]),
         );
         client.settle(
@@ -1621,13 +1661,15 @@ mod tests {
         let governance_client = GovernanceClient::new(&env, &governance);
 
         governance_client.set_paused(&true);
+        let pool_id = setup_shielded_pool(&env, &id);
+        let registry_id = setup_intent_registry(&env, &id, &pool_id, false);
         client.init(
             &governance,
             &proof_ledger,
             &setup_market(&env, &market, 50_000_00000000, 950, true),
             &setup_position_state(&env, &id),
-            &setup_shielded_pool(&env, &id),
-            &setup_intent_registry(&env, &id, false),
+            &pool_id,
+            &registry_id,
             &circuit(&env),
         );
         client.settle(
@@ -1665,13 +1707,15 @@ mod tests {
         let market = BytesN::from_array(&env, &[2; 32]);
         let proof = proof(&env);
 
+        let pool_id = setup_shielded_pool(&env, &id);
+        let registry_id = setup_intent_registry(&env, &id, &pool_id, false);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, None),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
             &setup_position_state(&env, &id),
-            &setup_shielded_pool(&env, &id),
-            &setup_intent_registry(&env, &id, false),
+            &pool_id,
+            &registry_id,
             &circuit(&env),
         );
         client.settle(
@@ -1712,13 +1756,15 @@ mod tests {
 
         let market_contract = setup_market(&env, &market, 50_000_00000000, 950, true);
         set_market_oracle_price(&env, &market_contract, &market, 50_000_00000000, 700);
+        let pool_id = setup_shielded_pool(&env, &id);
+        let registry_id = setup_intent_registry(&env, &id, &pool_id, false);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &market_contract,
             &setup_position_state(&env, &id),
-            &setup_shielded_pool(&env, &id),
-            &setup_intent_registry(&env, &id, false),
+            &pool_id,
+            &registry_id,
             &circuit(&env),
         );
         client.settle(
@@ -1757,13 +1803,15 @@ mod tests {
         let market = BytesN::from_array(&env, &[2; 32]);
         let proof = proof(&env);
 
+        let pool_id = setup_shielded_pool(&env, &id);
+        let registry_id = setup_intent_registry(&env, &id, &pool_id, false);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, false),
             &setup_position_state(&env, &id),
-            &setup_shielded_pool(&env, &id),
-            &setup_intent_registry(&env, &id, false),
+            &pool_id,
+            &registry_id,
             &circuit(&env),
         );
         client.settle(
@@ -1800,13 +1848,15 @@ mod tests {
         let batch = BytesN::from_array(&env, &[1; 32]);
         let market = BytesN::from_array(&env, &[2; 32]);
         let proof = proof(&env);
+        let pool_id = setup_shielded_pool(&env, &id);
+        let registry_id = setup_intent_registry(&env, &id, &pool_id, true);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
             &setup_position_state(&env, &id),
-            &setup_shielded_pool(&env, &id),
-            &setup_intent_registry(&env, &id, true),
+            &pool_id,
+            &registry_id,
             &circuit(&env),
         );
 
@@ -1845,13 +1895,15 @@ mod tests {
         let market = BytesN::from_array(&env, &[2; 32]);
         let duplicate_intents = duplicate_filled_intents(&env);
         let proof = proof_with_intents(&env, &duplicate_intents);
+        let pool_id = setup_shielded_pool(&env, &id);
+        let registry_id = setup_intent_registry(&env, &id, &pool_id, false);
         client.init(
             &setup_governance(&env),
             &setup_proof_ledger(&env, Some(&proof)),
             &setup_market(&env, &market, 50_000_00000000, 950, true),
             &setup_position_state(&env, &id),
-            &setup_shielded_pool(&env, &id),
-            &setup_intent_registry(&env, &id, false),
+            &pool_id,
+            &registry_id,
             &circuit(&env),
         );
 
@@ -2075,21 +2127,34 @@ mod tests {
             &BytesN::from_array(env, &[32; 32]),
         );
         pool.set_writer(writer, &true);
+        pool.configure_secure_note_circuits(
+            &BytesN::from_array(env, &[33; 32]),
+            &BytesN::from_array(env, &[34; 32]),
+        );
+        pool.disable_legacy_notes();
         pool_id
     }
 
-    fn setup_intent_registry(env: &Env, settler: &Address, cancel_first: bool) -> Address {
+    fn setup_intent_registry(env: &Env, settler: &Address, pool_id: &Address, cancel_first: bool) -> Address {
+        setup_intent_registry_with_nullifiers(env, settler, pool_id, cancel_first,
+            &BytesN::from_array(env, &[15; 32]), &BytesN::from_array(env, &[16; 32]))
+    }
+
+    fn setup_intent_registry_with_nullifiers(env: &Env, settler: &Address, pool_id: &Address,
+        cancel_first: bool, nullifier_a: &BytesN<32>, nullifier_b: &BytesN<32>) -> Address {
         let registry_id = env.register(IntentRegistry, ());
         let registry = IntentRegistryClient::new(env, &registry_id);
         env.mock_all_auths();
         registry.init(&Address::generate(env), settler);
+        registry.configure_secure_pool(pool_id);
+        let root = ShieldedPoolClient::new(env, pool_id).secure_note_root();
         let batch = BytesN::from_array(env, &[1; 32]);
         let market = BytesN::from_array(env, &[2; 32]);
         let shares_a = BytesN::from_array(env, &[21; 32]);
         let shares_b = BytesN::from_array(env, &[22; 32]);
 
-        registry.submit(&batch, &market, &intent_a(env), &shares_a);
-        registry.submit(&batch, &market, &intent_b(env), &shares_b);
+        registry.submit(&batch, &market, &intent_a(env), &shares_a, &root, nullifier_a);
+        registry.submit(&batch, &market, &intent_b(env), &shares_b, &root, nullifier_b);
         if cancel_first {
             registry.cancel(&intent_a(env));
         }

@@ -20,6 +20,7 @@ import { registerOrdersRoute } from "@/features/orders/orders.route";
 import { registerPositionClosesRoute } from "@/features/position-closes/position-closes.route";
 import { registerPortfolioRoute } from "@/features/portfolio/portfolio.route";
 import { registerPointsRoute } from "@/features/points/points.route";
+import { registerRewardsRoute } from "@/features/rewards/rewards.route";
 import { registerProofsRoute } from "@/features/proofs/proofs.route";
 import { registerRelaysRoute } from "@/features/relays/relays.route";
 import { loadEnv } from "@/config/env";
@@ -110,6 +111,10 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
         resolveProofArtifact: (proof) => prover.artifactFor(proof) ?? executor.artifactFor(proof),
       })
     : undefined;
+  if (env.assetCustodyRequired && onchain) {
+    const notes = onchain.secureNoteSnapshot([...executor.store.marginCommitments]);
+    executor.store.replaceMarginCommitments(notes.commitments);
+  }
   const fundingEngine = createFundingEngine(
     executor,
     {
@@ -202,6 +207,7 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
   registerAccountEventsRoute(router, executor);
   registerPortfolioRoute(router, executor);
   registerPointsRoute(router, executor.store, env.makerWalletAddress);
+  registerRewardsRoute(router, relayer, executor.store, env, deployment);
   registerNotesRoute(router, executor, prover, env, onchain, relayer);
   registerNoteBackupRoutes(router, executor, env, relayer, deployment?.contracts["shielded-pool"]);
   registerMarketsRoute(router, executor, oracle, env, onchain, markets);

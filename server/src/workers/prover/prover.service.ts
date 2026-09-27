@@ -13,6 +13,8 @@ import {
   hashFields,
   intentBindingFields,
   mod,
+  secureMarginCommitment,
+  secureMarginNullifier,
 } from "@pnlx/crypto";
 import { isLiquidatable, PRICE_SCALE, RATE_SCALE, settleClose } from "@pnlx/market-math";
 import {
@@ -36,6 +38,7 @@ import type {
   LiquidationRecord,
   PositionCloseRecord,
   ProofMeta,
+  SecureDepositNoteWitness,
   WithdrawalRecord,
 } from "@pnlx/protocol-types";
 import type {
@@ -321,6 +324,42 @@ export class ProverService implements Prover {
     };
   }
 
+  proveSecureDepositNote(input: SecureDepositNoteWitness): DepositNoteRecord {
+    if (input.amount <= 0n) throw new Error("deposit amount must be positive");
+    if (secureMarginCommitment({
+      amount: input.amount,
+      assetDigest: input.tokenDigest,
+      blinding: input.blinding,
+      ownerDigest: input.ownerDigest,
+      rhoDigest: input.rhoDigest,
+      spendSecretDigest: input.spendSecretDigest,
+    }) !== input.commitment) {
+      throw new Error("secure deposit note commitment mismatch");
+    }
+    const circuitId = "secure-deposit-note";
+    const publicInputs = publicInputDigest(circuitId, [
+      input.amount, input.tokenDigest, input.commitment,
+    ]);
+    const artifact = buildProofArtifact(this.root, circuitId, {
+      name: artifactName(circuitId, [input.tokenDigest, input.commitment, input.amount]),
+      inputs: {
+        amount: input.amount,
+        token_digest: field(input.tokenDigest),
+        commitment: field(input.commitment),
+        owner_digest: field(input.ownerDigest),
+        rho_digest: field(input.rhoDigest),
+        blinding: field(input.blinding),
+        spend_secret_digest: field(input.spendSecretDigest),
+      },
+    });
+    return {
+      amount: input.amount,
+      commitment: input.commitment,
+      tokenDigest: input.tokenDigest,
+      proof: this.bindArtifact(circuitId, publicInputs, artifact),
+    };
+  }
+
   proveIntentValidity(input: IntentValidityProofInput): IntentValidityRecord {
     const plan = intentValidityProofPlan(input);
     const artifact = buildProofArtifact(this.root, "intent-validity", plan.artifactOptions);
@@ -486,6 +525,75 @@ export class ProverService implements Prover {
     };
   }
 
+  proveSecureWithdrawal(input: WithdrawalProofInput): WithdrawalRecord {
+    if (input.noteAmount <= 0n || input.withdrawAmount <= 0n ||
+      input.withdrawAmount > input.noteAmount) {
+      throw new Error("invalid secure withdrawal amount");
+    }
+    if (input.pathSiblings.length !== POSITION_MERKLE_DEPTH ||
+      input.pathIndices.length !== POSITION_MERKLE_DEPTH) {
+      throw new Error("invalid secure withdrawal membership path");
+    }
+    if (secureMarginCommitment({
+      amount: input.noteAmount,
+      assetDigest: input.assetDigest,
+      blinding: input.blinding,
+      ownerDigest: input.ownerDigest,
+      rhoDigest: input.rhoDigest,
+      spendSecretDigest: input.spendSecretDigest,
+    }) !== input.noteCommitment ||
+      secureMarginNullifier(input) !== input.nullifier) {
+      throw new Error("secure withdrawal note opening mismatch");
+    }
+    const tokenDigest = input.tokenDigest ?? input.assetDigest;
+    if (tokenDigest !== input.assetDigest) throw new Error("withdrawal token digest mismatch");
+    const change = input.noteAmount - input.withdrawAmount;
+    const changeCommitment = change === 0n ? ZERO_HEX : secureMarginCommitment({
+      amount: change,
+      assetDigest: input.assetDigest,
+      blinding: requiredHex(input.changeBlinding, "changeBlinding"),
+      ownerDigest: input.ownerDigest,
+      rhoDigest: requiredHex(input.changeRhoDigest, "changeRhoDigest"),
+      spendSecretDigest: input.spendSecretDigest,
+    });
+    const circuitId = "secure-withdraw";
+    const publicInputs = publicInputDigest(circuitId, [
+      input.withdrawAmount, input.root, input.nullifier, tokenDigest,
+      input.recipient, changeCommitment,
+    ]);
+    const artifact = buildProofArtifact(this.root, circuitId, {
+      name: artifactName(circuitId, [input.nullifier, input.withdrawAmount]),
+      inputs: {
+        note_amount: input.noteAmount,
+        withdraw_amount: input.withdrawAmount,
+        root: field(input.root),
+        nullifier: field(input.nullifier),
+        token_digest: field(tokenDigest),
+        recipient_digest: field(input.recipient),
+        change_commitment: field(changeCommitment),
+        asset_digest: field(input.assetDigest),
+        owner_digest: field(input.ownerDigest),
+        rho_digest: field(input.rhoDigest),
+        blinding: field(input.blinding),
+        spend_secret_digest: field(input.spendSecretDigest),
+        siblings: input.pathSiblings.map((sibling) => field(sibling)),
+        indices: input.pathIndices,
+        change_rho_digest: field(input.changeRhoDigest ?? ZERO_HEX),
+        change_blinding: field(input.changeBlinding ?? ZERO_HEX),
+        change_spend_secret_digest: field(change === 0n ? ZERO_HEX : input.spendSecretDigest),
+      },
+    });
+    return {
+      root: input.root,
+      nullifier: input.nullifier,
+      recipient: input.recipient,
+      tokenDigest,
+      withdrawAmount: input.withdrawAmount,
+      changeCommitment,
+      proof: this.bindArtifact(circuitId, publicInputs, artifact),
+    };
+  }
+
   proveLiquidation(input: LiquidationProofInput): LiquidationRecord {
     this.validatePositionOpening(input);
     const funding = signedFundingWitness(input.fundingPayment);
@@ -599,13 +707,13 @@ export class ProverService implements Prover {
     if (input.newPositionCommitment !== expectedNewPositionCommitment) {
       throw new Error("new position commitment mismatch");
     }
-    const expectedMarginOutputCommitment = circuitMarginCommitment({
+    const expectedMarginOutputCommitment = secureMarginCommitment({
       amount: input.marginOutputAmount,
       assetDigest: input.marginOutputAssetDigest,
       blinding: input.marginOutputBlinding,
       ownerDigest: input.ownerDigest,
       rhoDigest: input.marginOutputRhoDigest,
-      spendSecretDigest: "0x0",
+      spendSecretDigest: input.marginOutputSpendSecretDigest,
     });
     if (input.marginOutputCommitment !== expectedMarginOutputCommitment) {
       throw new Error("margin output commitment mismatch");
@@ -658,6 +766,7 @@ export class ProverService implements Prover {
         margin_output_asset_digest: field(input.marginOutputAssetDigest),
         margin_output_rho_digest: field(input.marginOutputRhoDigest),
         margin_output_blinding: field(input.marginOutputBlinding),
+        margin_output_spend_secret_digest: field(input.marginOutputSpendSecretDigest),
         path_siblings: input.pathSiblings.map((sibling) => field(sibling)),
         path_indices: input.pathIndices,
         zero_value: 0n,
@@ -811,14 +920,14 @@ function intentValidityProofPlan(input: IntentValidityProofInput): IntentValidit
   if (input.marginRoot === "0x0") throw new Error("margin root is empty");
   if (input.intent.noteNullifier === "0x0") throw new Error("note nullifier is empty");
   if (input.noteAmount < input.intent.margin) throw new Error("intent margin exceeds note");
-  if (input.pathSiblings.length !== FIELD_MERKLE_DEPTH) {
+  if (input.pathSiblings.length !== POSITION_MERKLE_DEPTH) {
     throw new Error("invalid margin membership path");
   }
-  if (input.pathIndices.length !== FIELD_MERKLE_DEPTH) {
+  if (input.pathIndices.length !== POSITION_MERKLE_DEPTH) {
     throw new Error("invalid margin membership path");
   }
 
-  const noteCommitment = circuitMarginCommitment({
+  const noteCommitment = secureMarginCommitment({
     amount: input.noteAmount,
     assetDigest: input.assetDigest,
     blinding: input.blinding,
@@ -829,7 +938,7 @@ function intentValidityProofPlan(input: IntentValidityProofInput): IntentValidit
   if (noteCommitment !== input.noteCommitment) {
     throw new Error("margin note commitment mismatch");
   }
-  const noteNullifier = circuitNullifier({
+  const noteNullifier = secureMarginNullifier({
     rhoDigest: input.rhoDigest,
     spendSecretDigest: input.spendSecretDigest,
   });
@@ -846,13 +955,13 @@ function intentValidityProofPlan(input: IntentValidityProofInput): IntentValidit
     if (input.changeRhoDigest === ZERO_HEX || input.changeBlinding === ZERO_HEX) {
       throw new Error("margin change opening is required");
     }
-    const expectedChangeCommitment = circuitMarginCommitment({
+    const expectedChangeCommitment = secureMarginCommitment({
       amount: noteChange,
       assetDigest: input.assetDigest,
       blinding: input.changeBlinding,
       ownerDigest: input.ownerDigest,
       rhoDigest: input.changeRhoDigest,
-      spendSecretDigest: ZERO_HEX,
+      spendSecretDigest: input.spendSecretDigest,
     });
     if (expectedChangeCommitment !== input.noteChangeCommitment) {
       throw new Error("margin change commitment mismatch");

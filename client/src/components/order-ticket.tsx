@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ActionToast } from "@/components/action-toast";
 import { USDC_SCALE, usdcToProtocolAmount } from "@/lib/asset-units";
 import { formatNumber, formatUsd } from "@/lib/format";
+import { useSlippagePercent } from "@/lib/trade-settings";
 import { protocolOrderSize } from "@/lib/trade-submit";
 import type { SubmitTradeIntentResult, TradeSubmitStage } from "@/lib/trade-submit";
 import { fillFees, PRICE_SCALE } from "@pnlx/market-math";
@@ -15,7 +16,9 @@ interface OrderTicketProps {
   availableCollateral?: number | null;
   connected?: boolean;
   market: MarketDisplay;
+  mode: TicketMode;
   onDeposit?: (input: OrderTicketDepositInput) => Promise<void>;
+  onModeChange: (mode: TicketMode) => void;
   onSubmit?: (input: OrderTicketSubmitInput) => Promise<SubmitTradeIntentResult>;
   order: OrderDraft;
   session?: WalletSession | null;
@@ -49,7 +52,9 @@ export function OrderTicket({
   availableCollateral,
   connected = false,
   market,
+  mode,
   onDeposit,
+  onModeChange,
   onSubmit,
   order,
 }: OrderTicketProps) {
@@ -62,11 +67,10 @@ export function OrderTicket({
   const [submitSuccess, setSubmitSuccess] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
   const [depositing, setDepositing] = useState(false);
-  const [ticketMode, setTicketMode] = useState<TicketMode>("trade");
   const [margin, setMargin] = useState(() => readStoredMargin(market.marketId, order.collateral));
   const [fundAmount, setFundAmount] = useState(() => readStoredMargin(market.marketId, order.collateral));
   const [limitPrice, setLimitPrice] = useState(market.price);
-  const [slippagePercent, setSlippagePercent] = useState(0.5);
+  const slippagePercent = useSlippagePercent();
   const [leverage, setLeverage] = useState(Math.min(order.leverage, market.maxLeverage));
   const [takeProfitPrice, setTakeProfitPrice] = useState(
     order.takeProfitPrice ?? defaultTakeProfit(order.side, market.price, order.leverage),
@@ -124,7 +128,7 @@ export function OrderTicket({
 
   function openMobileTicket(nextSide: Side) {
     selectSide(nextSide);
-    setTicketMode("trade");
+    onModeChange("trade");
     document.getElementById("trade-order-ticket")?.scrollIntoView({
       behavior: "smooth",
       block: "start",
@@ -229,7 +233,7 @@ export function OrderTicket({
         onProgress: setSubmitStage,
       });
       setSubmitStage(undefined);
-      setTicketMode("trade");
+      onModeChange("trade");
       setSubmitSuccess(`${formatUsd(amount, { maximumFractionDigits: 2 })} deposited`);
     } catch (error) {
       setSubmitStage(undefined);
@@ -258,17 +262,17 @@ export function OrderTicket({
         </button>
       </div>
       <div className="ticket-heading">
-        <p>{ticketMode === "deposit" ? "Deposit" : "Trade"}</p>
+        <p>{mode === "deposit" ? "Deposit" : "Trade"}</p>
         <span>{market.pair}</span>
       </div>
 
-      {ticketMode === "deposit" ? (
+      {mode === "deposit" ? (
         <>
           <button
             className="secondary-ticket-button ticket-mode-back"
             disabled={depositing}
             type="button"
-            onClick={() => setTicketMode("trade")}
+            onClick={() => onModeChange("trade")}
           >
             <ArrowLeft size={16} />
             Trade
@@ -358,7 +362,7 @@ export function OrderTicket({
         </div>
       </div>
 
-      {orderType === "limit" ? (
+      {orderType === "limit" && (
         <div className="ticket-field">
           <div className="field-label">
             <span>Limit Price</span>
@@ -371,21 +375,6 @@ export function OrderTicket({
               onChange={(event) => setLimitPrice(Number(event.target.value) || 0)}
             />
             <span className="asset-pill">{market.quoteAsset}</span>
-          </div>
-        </div>
-      ) : (
-        <div className="ticket-field">
-          <div className="field-label">
-            <span>Slippage</span>
-          </div>
-          <div className="field-control">
-            <input
-              aria-label="Market slippage"
-              inputMode="decimal"
-              value={slippagePercent}
-              onChange={(event) => setSlippagePercent(clamp(Number(event.target.value) || 0, 0.01, 20))}
-            />
-            <span className="asset-pill">%</span>
           </div>
         </div>
       )}
@@ -411,7 +400,7 @@ export function OrderTicket({
             className="add-funds-action"
             disabled={!connected || !onDeposit || depositing || submitting}
             type="button"
-            onClick={() => setTicketMode("deposit")}
+            onClick={() => onModeChange("deposit")}
           >
             <Plus aria-hidden="true" size={12} strokeWidth={2.25} />
             <span>Add funds</span>

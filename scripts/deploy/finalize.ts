@@ -75,6 +75,13 @@ invoke(deployment.contracts["shielded-pool"], "init", [
   "--withdraw_circuit_id",
   bytes32(circuitKey("withdraw")),
 ], true);
+invoke(deployment.contracts["shielded-pool"], "configure_secure_note_circuits", [
+  "--deposit_circuit_id",
+  bytes32(circuitKey("secure-deposit-note")),
+  "--withdraw_circuit_id",
+  bytes32(circuitKey("secure-withdraw")),
+]);
+invoke(deployment.contracts["shielded-pool"], "disable_legacy_notes", []);
 if (env.collateralTokenContract) {
   const configured = JSON.parse(readContract(deployment.contracts["shielded-pool"], "fee_destinations")) as
     | { insurance: string; treasury: string } | null;
@@ -168,6 +175,12 @@ invoke(deployment.contracts["position-close"], "init", [
   "--circuit_id",
   bytes32(circuitKey("position-close")),
 ], true);
+invoke(deployment.contracts["intent-registry"], "configure_secure_pool", [
+  "--pool", deployment.contracts["shielded-pool"],
+]);
+invoke(deployment.contracts["position-close"], "configure_secure_pool", [
+  "--pool", deployment.contracts["shielded-pool"],
+]);
 invoke(deployment.contracts["disclosure-verifier"], "init", [
   "--governance",
   deployment.contracts.governance,
@@ -194,6 +207,10 @@ invoke(deployment.contracts["shielded-pool"], "set_writer", [
   "--enabled",
   "true",
 ]);
+invoke(deployment.contracts["shielded-pool"], "set_writer", [
+  "--writer", deployment.contracts["position-close"],
+  "--enabled", "true",
+]);
 invoke(deployment.contracts["position-state"], "set_writer", [
   "--writer",
   deployment.contracts.liquidation,
@@ -207,10 +224,10 @@ invoke(deployment.contracts["position-state"], "set_writer", [
   "true",
 ]);
 
-const withdrawDir = join(root, "circuits/withdraw/target/bb");
+const withdrawDir = join(root, "circuits/secure-withdraw/target/bb");
 const publicInputs = join(withdrawDir, "public_inputs");
 const proof = join(withdrawDir, "proof");
-invoke(deployment.verifiers["withdraw-proof-verifier"], "verify_and_record", [
+invoke(deployment.verifiers["secure-withdraw-proof-verifier"], "verify_and_record", [
   "--public_inputs-file-path",
   publicInputs,
   "--proof_bytes-file-path",

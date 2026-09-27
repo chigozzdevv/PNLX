@@ -1,5 +1,6 @@
 import type { Hex } from "@/types/trading";
 import { poseidon2Hash } from "@zkpassport/poseidon2";
+import { secureMarginCommitment, secureMarginNullifier } from "@pnlx/crypto/secure-margin-commitment";
 
 const FIELD_PRIME =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
@@ -71,6 +72,32 @@ export async function createCircuitMarginNote(input: {
     ownerDigest,
     rhoDigest,
     spendSecretDigest,
+  };
+}
+
+export async function createSecureMarginNote(input: {
+  amount: bigint;
+  assetDigest?: Hex;
+  assetId?: string;
+  blinding: string;
+  owner: string;
+  ownerDigest?: Hex;
+  rho: string;
+  spendSecret: string;
+  spendSecretDigest?: Hex;
+}): Promise<CircuitMarginNote> {
+  const assetDigest = input.assetDigest ?? (await digestToFieldHex(`asset:${input.assetId ?? "usdc"}`));
+  const ownerDigest = input.ownerDigest ?? (await digestToFieldHex(`owner:${input.owner}`));
+  const rhoDigest = await digestToFieldHex(`rho:${input.rho}`);
+  const blinding = await digestToFieldHex(`blinding:${input.blinding}`);
+  const spendSecretDigest = input.spendSecretDigest ??
+    await digestToFieldHex(`spend:${input.spendSecret}`);
+  const note = { amount: input.amount, assetDigest, blinding, ownerDigest,
+    rhoDigest, spendSecretDigest };
+  return {
+    ...note,
+    commitment: secureMarginCommitment(note),
+    noteNullifier: secureMarginNullifier(note),
   };
 }
 

@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { BottomTicker } from "@/components/bottom-ticker";
-import { emptyLiquidityAccount } from "@/lib/liquidity-account";
 import { pnlxGet } from "@/lib/pnlx-api";
 import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useWalletSession } from "@/lib/use-wallet-session";
@@ -57,7 +56,7 @@ export function PointsPage() {
   const points = loaded && wallet.session?.address === loaded.address ? loaded.points : null;
   const next = points?.nextTier;
   return (
-    <AppShell account={emptyLiquidityAccount} activeView="points" wallet={wallet}>
+    <AppShell activeView="points" wallet={wallet}>
       <main className="mx-auto w-full max-w-6xl px-4 pb-20 pt-10 md:px-6">
         <h1 className="text-3xl font-semibold tracking-tight">Points</h1>
         <p className="mt-2 text-sm text-[var(--text-muted)]">Your activity, counted over the last 90 days.</p>

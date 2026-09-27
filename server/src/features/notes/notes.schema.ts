@@ -27,6 +27,7 @@ export function parseAssetDepositNote(input: Record<string, string>): AssetDepos
     from: required(input.from, "from"),
     ownerDigest: optionalHex(input.ownerDigest),
     rhoDigest: optionalHex(input.rhoDigest),
+    spendSecretDigest: optionalHex(input.spendSecretDigest),
     source: input.source,
     token: required(input.token, "token"),
     tokenDigest: optionalHex(input.tokenDigest),

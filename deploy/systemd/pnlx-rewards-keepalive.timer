@@ -1,0 +1,11 @@
+[Unit]
+Description=Keep PNLX rewards escrow ledger active
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=3600
+Unit=pnlx-rewards-keepalive.service
+
+[Install]
+WantedBy=timers.target

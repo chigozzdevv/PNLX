@@ -178,6 +178,10 @@ export interface DepositNoteWitness {
   tokenDigest: Hex;
 }
 
+export interface SecureDepositNoteWitness extends DepositNoteWitness {
+  spendSecretDigest: Hex;
+}
+
 export interface DepositNoteRecord {
   amount: bigint;
   commitment: Hex;
@@ -431,6 +435,7 @@ export interface PositionCloseWitness {
   marginOutputAssetDigest: Hex;
   marginOutputRhoDigest: Hex;
   marginOutputBlinding: Hex;
+  marginOutputSpendSecretDigest: Hex;
   pathIndices: boolean[];
   pathSiblings: Hex[];
 }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { fieldMerkleProof, hashFields, positionMerkleProof } from "@pnlx/crypto";
+import { hashFields, positionMerkleProof, secureMarginProof } from "@pnlx/crypto";
 import { PRICE_SCALE, settleClose } from "@pnlx/market-math";
-import { createCircuitMarginNote, createCircuitPositionNote } from "@pnlx/sdk";
+import { createCircuitPositionNote, createSecureMarginNote } from "@pnlx/sdk";
 import type { Hex } from "@pnlx/protocol-types";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,7 +52,7 @@ describe("local client prover", () => {
 
   test("generates deposit and intent proof bundles for client-side registration", async () => {
     const handle = createLocalClientProverHandler(process.cwd());
-    const note = createCircuitMarginNote({
+    const note = createSecureMarginNote({
       amount: 12_000n,
       assetId: "usdc",
       blinding: "local-prover-blind",
@@ -62,7 +62,7 @@ describe("local client prover", () => {
     });
 
     const depositResponse = await handle(
-      new Request("http://127.0.0.1:4101/deposit-note", {
+      new Request("http://127.0.0.1:4101/secure-deposit-note", {
         method: "POST",
         body: body({
           amount: note.amount,
@@ -70,6 +70,7 @@ describe("local client prover", () => {
           commitment: note.commitment,
           ownerDigest: note.ownerDigest,
           rhoDigest: note.rhoDigest,
+          spendSecretDigest: note.spendSecretDigest,
           tokenDigest: note.assetDigest,
         }),
         headers: { "content-type": "application/json" },
@@ -80,7 +81,7 @@ describe("local client prover", () => {
     expect((deposit.record as Record<string, unknown>).commitment).toBe(note.commitment);
     expect(typeof (deposit.artifact as Record<string, unknown>).proofBase64).toBe("string");
 
-    const membership = fieldMerkleProof([note.commitment as Hex], note.commitment as Hex);
+    const membership = secureMarginProof([note.commitment as Hex], note.commitment as Hex);
     const intentResponse = await handle(
       new Request("http://127.0.0.1:4101/intent-validity", {
         method: "POST",
@@ -121,7 +122,7 @@ describe("local client prover", () => {
     expect(JSON.stringify(intent)).not.toContain("local-prover-spend");
 
     const badResponse = await handle(
-      new Request("http://127.0.0.1:4101/deposit-note", {
+      new Request("http://127.0.0.1:4101/secure-deposit-note", {
         method: "POST",
         body: body({
           amount: note.amount,
@@ -129,6 +130,7 @@ describe("local client prover", () => {
           commitment: note.commitment,
           ownerDigest: note.ownerDigest,
           rhoDigest: note.rhoDigest,
+          spendSecretDigest: note.spendSecretDigest,
           tokenDigest: note.assetDigest,
         }),
         headers: { "content-type": "application/json" },
@@ -139,7 +141,7 @@ describe("local client prover", () => {
 
   test("generates partial-note intent change commitments from the spent note owner digest", async () => {
     const handle = createLocalClientProverHandler(process.cwd());
-    const note = createCircuitMarginNote({
+    const note = createSecureMarginNote({
       amount: 12_000n,
       assetId: "usdc",
       blinding: "partial-intent-note-blind",
@@ -147,7 +149,7 @@ describe("local client prover", () => {
       rho: "partial-intent-note-rho",
       spendSecret: "partial-intent-note-spend",
     });
-    const changeNote = createCircuitMarginNote({
+    const changeNote = createSecureMarginNote({
       amount: 5_000n,
       assetDigest: note.assetDigest,
       assetId: "usdc",
@@ -156,8 +158,9 @@ describe("local client prover", () => {
       ownerDigest: note.ownerDigest,
       rho: "partial-intent-change-rho",
       spendSecret: "partial-intent-change-spend",
+      spendSecretDigest: note.spendSecretDigest,
     });
-    const membership = fieldMerkleProof([note.commitment as Hex], note.commitment as Hex);
+    const membership = secureMarginProof([note.commitment as Hex], note.commitment as Hex);
 
     const response = await handle(
       new Request("http://127.0.0.1:4101/intent-validity", {
@@ -236,7 +239,7 @@ describe("local client prover", () => {
       size: 0n,
       spendSecret: "local-close-new-position-spend",
     });
-    const marginOutput = createCircuitMarginNote({
+    const marginOutput = createSecureMarginNote({
       amount: closeSettlement.newMargin,
       assetId: "usdc",
       blinding: "local-close-margin-blind",
@@ -261,6 +264,7 @@ describe("local client prover", () => {
           marginOutputBlinding: marginOutput.blinding,
           marginOutputCommitment: marginOutput.commitment,
           marginOutputRhoDigest: marginOutput.rhoDigest,
+          marginOutputSpendSecretDigest: marginOutput.spendSecretDigest,
           marketDigest: position.marketDigest,
           marketId: "btc-usd-perp",
           markPrice: 51_000n * PRICE_SCALE,

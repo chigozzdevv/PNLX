@@ -24,11 +24,11 @@ import type {
 } from "@pnlx/protocol-types";
 import {
   EMPTY_ROOT,
-  fieldMerkleProof,
-  fieldMerkleRoot,
   merkleRoot,
   positionMerkleProof,
   positionMerkleRoot,
+  secureMarginProof,
+  secureMarginRoot,
 } from "@pnlx/crypto";
 import { assertPrivateMatchIntent } from "@/workers/batch-matcher/private-intent";
 
@@ -76,11 +76,19 @@ export class ProtocolStore {
   }
 
   marginMembershipRoot(): Hex {
-    return fieldMerkleRoot([...this.marginCommitments]);
+    return secureMarginRoot([...this.marginCommitments]);
   }
 
   marginMembershipProof(commitment: Hex) {
-    return fieldMerkleProof([...this.marginCommitments], commitment);
+    return secureMarginProof([...this.marginCommitments], commitment);
+  }
+
+  replaceMarginCommitments(commitments: Hex[]): void {
+    if (new Set(commitments).size !== commitments.length) {
+      throw new Error("duplicate secure margin commitment");
+    }
+    this.marginCommitments.clear();
+    for (const commitment of commitments) this.marginCommitments.add(commitment);
   }
 
   positionRoot(): Hex {

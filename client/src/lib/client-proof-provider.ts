@@ -63,6 +63,16 @@ export interface ClientProofProvider {
     tokenDigest: Hex;
   }): Promise<ProofBundle<DepositNoteProofRecord>>;
 
+  secureDepositNote(input: {
+    amount: bigint;
+    blinding: Hex;
+    commitment: Hex;
+    ownerDigest: Hex;
+    rhoDigest: Hex;
+    spendSecretDigest: Hex;
+    tokenDigest: Hex;
+  }): Promise<ProofBundle<DepositNoteProofRecord>>;
+
   intentValidity(input: {
     assetDigest: Hex;
     batchId: string;
@@ -105,6 +115,7 @@ export interface ClientProofProvider {
     marginOutputBlinding: Hex;
     marginOutputCommitment: Hex;
     marginOutputRhoDigest: Hex;
+    marginOutputSpendSecretDigest: Hex;
     marketDigest: Hex;
     marketId: string;
     markPrice: bigint;
@@ -143,6 +154,8 @@ export interface ClientProofProvider {
     tokenDigest: Hex;
     withdrawAmount: bigint;
   }): Promise<ProofBundle<WithdrawalRecord>>;
+
+  secureWithdraw(input: Parameters<ClientProofProvider["withdraw"]>[0]): Promise<ProofBundle<WithdrawalRecord>>;
 }
 
 export function defaultClientProofProvider(): ClientProofProvider | undefined {
@@ -165,6 +178,10 @@ class HttpClientProofProvider implements ClientProofProvider {
     return this.post<DepositNoteProofRecord>("/deposit-note", stringifyBigInts(input));
   }
 
+  secureDepositNote(input: Parameters<ClientProofProvider["secureDepositNote"]>[0]) {
+    return this.post<DepositNoteProofRecord>("/secure-deposit-note", stringifyBigInts(input));
+  }
+
   intentValidity(input: Parameters<ClientProofProvider["intentValidity"]>[0]) {
     return this.post<IntentValidityRecord>("/intent-validity", stringifyBigInts(input));
   }
@@ -175,6 +192,10 @@ class HttpClientProofProvider implements ClientProofProvider {
 
   withdraw(input: Parameters<ClientProofProvider["withdraw"]>[0]) {
     return this.post<WithdrawalRecord>("/withdraw", stringifyBigInts(input));
+  }
+
+  secureWithdraw(input: Parameters<ClientProofProvider["secureWithdraw"]>[0]) {
+    return this.post<WithdrawalRecord>("/secure-withdraw", stringifyBigInts(input));
   }
 
   private async post<T>(path: string, data: Record<string, unknown>): Promise<ProofBundle<T>> {

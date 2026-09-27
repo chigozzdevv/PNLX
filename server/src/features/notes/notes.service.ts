@@ -51,6 +51,7 @@ export class NotesService {
   }
 
   membership(commitment: Hex): DepositNoteResult {
+    this.syncSecureNotes();
     if (!this.executor.store.marginCommitments.has(commitment)) {
       throw new Error("margin note not found");
     }
@@ -75,7 +76,7 @@ export class NotesService {
     this.assertCollateralToken(input.token);
     const onchain = this.requireOnchain();
     this.assertCollateralFunding(input, onchain);
-    const depositProof = this.prover.proveDepositNote(assetDepositWitness(input));
+    const depositProof = this.prover.proveSecureDepositNote(assetDepositWitness(input));
     const proofVerification = onchain.verifyProof(depositProof.proof);
     this.assertSubmittedCustodyRelay(proofVerification, "verify_and_record");
     const action = onchain.prepareDepositAsset({ ...input, depositProof });
@@ -119,7 +120,10 @@ export class NotesService {
     const pending = this.assertPendingDeposit(input);
     const relay = this.assertSubmittedPreparedDepositRelay(input.relayId, pending, authenticated);
     this.executor.store.recordProof(input.depositProof.proof);
-    this.executor.deposit(input.commitment);
+    this.syncSecureNotes();
+    if (!this.executor.store.marginCommitments.has(input.commitment)) {
+      throw new Error("deposit commitment was not recorded on-chain");
+    }
     this.executor.store.finalizePendingAssetDeposit(input.commitment, relay);
     const membershipProof = this.executor.store.marginMembershipProof(input.commitment);
     return {
@@ -140,10 +144,13 @@ export class NotesService {
     this.assertCollateralToken(input.token);
     const onchainRelay = this.requireOnchain();
     this.assertCollateralFunding(input, onchainRelay);
-    const depositProof = this.prover.proveDepositNote(assetDepositWitness(input));
+    const depositProof = this.prover.proveSecureDepositNote(assetDepositWitness(input));
     const onchain = onchainRelay.depositAsset({ ...input, depositProof });
-    this.assertSubmittedCustodyRelay(onchain, "deposit_asset");
-    this.executor.deposit(input.commitment);
+    this.assertSubmittedCustodyRelay(onchain, "deposit_asset_secure");
+    this.syncSecureNotes();
+    if (!this.executor.store.marginCommitments.has(input.commitment)) {
+      throw new Error("deposit commitment was not recorded on-chain");
+    }
     const membershipProof = this.executor.store.marginMembershipProof(input.commitment);
     return {
       amount: input.amount,
@@ -165,9 +172,12 @@ export class NotesService {
     const onchainRelay = this.requireOnchain();
     this.assertCollateralFunding(input, onchainRelay);
     const onchain = onchainRelay.depositAsset({ ...input, depositProof: input.depositProof });
-    this.assertSubmittedCustodyRelay(onchain, "deposit_asset");
+    this.assertSubmittedCustodyRelay(onchain, "deposit_asset_secure");
     this.executor.store.recordProof(input.depositProof.proof);
-    this.executor.deposit(input.commitment);
+    this.syncSecureNotes();
+    if (!this.executor.store.marginCommitments.has(input.commitment)) {
+      throw new Error("deposit commitment was not recorded on-chain");
+    }
     const membershipProof = this.executor.store.marginMembershipProof(input.commitment);
     return {
       amount: input.amount,
@@ -187,7 +197,7 @@ export class NotesService {
       throw new Error("plain withdrawals disabled; use asset-backed withdrawal");
     }
     this.assertWithdrawalRoot(input.root);
-    const record = this.prover.proveWithdrawal(input);
+    const record = this.prover.proveSecureWithdrawal(input);
     this.onchain?.withdraw(record);
     this.executor.store.recordProof(record.proof);
     this.executor.store.addWithdrawal(record);
@@ -206,6 +216,7 @@ export class NotesService {
   }
 
   withdrawAsset(input: WithdrawAssetNoteInput): WithdrawAssetNoteResult {
+    this.syncSecureNotes();
     this.assertCollateralToken(input.token);
     const onchainRelay = this.requireOnchain();
     const recipientDigest = onchainRelay.tokenDigest(input.recipientAddress);
@@ -215,24 +226,25 @@ export class NotesService {
       recipientDigest,
     };
     this.assertWithdrawalRoot(request.root);
-    const withdrawal = this.prover.proveWithdrawal(request);
+    const withdrawal = this.prover.proveSecureWithdrawal(request);
     const record = {
       ...withdrawal,
       recipientAddress: request.recipientAddress,
       token: request.token,
     };
     const onchain = onchainRelay.withdrawAsset(record);
-    this.assertSubmittedCustodyRelay(onchain, "withdraw_asset");
+    this.assertSubmittedCustodyRelay(onchain, "withdraw_asset_secure");
     this.executor.store.recordProof(record.proof);
     this.executor.store.addWithdrawal(record);
     return record;
   }
 
   withdrawAssetProven(input: ProvenWithdrawAssetNoteInput): WithdrawAssetNoteResult {
+    this.syncSecureNotes();
     this.assertCollateralToken(input.token);
     this.assertWithdrawalRecord(input);
     const onchain = this.requireOnchain().withdrawAsset(input);
-    this.assertSubmittedCustodyRelay(onchain, "withdraw_asset");
+    this.assertSubmittedCustodyRelay(onchain, "withdraw_asset_secure");
     this.executor.store.recordProof(input.proof);
     this.executor.store.addWithdrawal(input);
     return input;
@@ -243,6 +255,15 @@ export class NotesService {
       throw new Error("asset custody requires on-chain relay");
     }
     return this.onchain;
+  }
+
+  private syncSecureNotes(): void {
+    if (!this.env.assetCustodyRequired) return;
+    const snapshot = this.requireOnchain().secureNoteSnapshot(
+      [...this.executor.store.marginCommitments]);
+    if (snapshot.root !== this.executor.store.marginMembershipRoot()) {
+      this.executor.store.replaceMarginCommitments(snapshot.commitments);
+    }
   }
 
   private assertCollateralToken(token: string): void {
@@ -340,7 +361,7 @@ export class NotesService {
       throw new Error("signed deposit relay is not a wallet transaction");
     }
     if (!relay.submitted || !relay.txHash) {
-      throw new Error("deposit_asset transaction was not submitted");
+      throw new Error("deposit_asset_secure transaction was not submitted");
     }
     if (relay.commitment !== pending.commitment) {
       throw new Error("signed deposit relay commitment mismatch");
@@ -372,12 +393,12 @@ export class NotesService {
     if (input.depositProof.commitment !== input.commitment) {
       throw new Error("asset deposit proof commitment mismatch");
     }
-    if (input.depositProof.proof.circuitId !== "deposit-note") {
+    if (input.depositProof.proof.circuitId !== "secure-deposit-note") {
       throw new Error("asset deposit proof circuit mismatch");
     }
     this.prover.assertBoundProof(
       input.depositProof.proof,
-      "deposit-note",
+      "secure-deposit-note",
       contractPublicInputHash([
         publicU128(input.amount),
         publicField(input.depositProof.tokenDigest),
@@ -389,12 +410,12 @@ export class NotesService {
   private assertWithdrawalRecord(input: ProvenWithdrawNoteInput): void {
     this.assertWithdrawalRoot(input.root);
     if (input.withdrawAmount <= 0n) throw new Error("withdraw amount must be positive");
-    if (input.proof.circuitId !== "withdraw") {
+    if (input.proof.circuitId !== "secure-withdraw") {
       throw new Error("withdrawal proof circuit mismatch");
     }
     this.prover.assertBoundProof(
       input.proof,
-      "withdraw",
+      "secure-withdraw",
       contractPublicInputHash([
         publicU128(input.withdrawAmount),
         publicField(input.root),
@@ -407,13 +428,14 @@ export class NotesService {
   }
 }
 
-function assetDepositWitness(input: AssetDepositNoteInput): DepositNoteWitness {
+function assetDepositWitness(input: AssetDepositNoteInput): DepositNoteWitness & { spendSecretDigest: Hex } {
   return {
     amount: input.amount,
     blinding: requiredHex(input.blinding, "blinding"),
     commitment: input.commitment,
     ownerDigest: requiredHex(input.ownerDigest, "ownerDigest"),
     rhoDigest: requiredHex(input.rhoDigest, "rhoDigest"),
+    spendSecretDigest: requiredHex(input.spendSecretDigest, "spendSecretDigest"),
     tokenDigest: requiredHex(input.tokenDigest, "tokenDigest"),
   };
 }

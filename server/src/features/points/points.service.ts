@@ -92,15 +92,15 @@ export class PointsService {
   }
 }
 
-function confirmedFills(
+export function confirmedFills(
   settlement: BatchSettlement,
   store: ProtocolStore,
-): Array<{ maker: Hex; taker: Hex; notional: bigint }> | null {
+): Array<{ maker: Hex; taker: Hex; notional: bigint; grossTakerFee: bigint; treasuryFee: bigint }> | null {
   if (!Array.isArray(settlement.makerIntents) || !Array.isArray(settlement.takerIntents) ||
     !Array.isArray(settlement.matchingPayloadCommitments) ||
     settlement.makerIntents.length !== settlement.takerIntents.length) return null;
   const remaining = new Map<Hex, bigint>();
-  const fills: Array<{ maker: Hex; taker: Hex; notional: bigint }> = [];
+  const fills: Array<{ maker: Hex; taker: Hex; notional: bigint; grossTakerFee: bigint; treasuryFee: bigint }> = [];
   let totalSize = 0n;
   let grossTakerFee = 0n;
   let makerRebate = 0n;
@@ -128,7 +128,9 @@ function confirmedFills(
     makerRebate += fees.makerRebate;
     insurance += fees.insurance;
     treasury += fees.treasury;
-    fills.push({ maker: maker.ownerCommitment, taker: taker.ownerCommitment, notional: notional(size, maker.limitPrice) });
+    fills.push({ maker: maker.ownerCommitment, taker: taker.ownerCommitment,
+      notional: notional(size, maker.limitPrice), grossTakerFee: fees.grossTakerFee,
+      treasuryFee: fees.treasury });
   }
   return totalSize * 2n === settlement.aggregateVolume &&
     grossTakerFee === settlement.grossTakerFee && makerRebate === settlement.makerRebate &&

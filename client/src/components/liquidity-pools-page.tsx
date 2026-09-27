@@ -4,7 +4,6 @@ import { ArrowUpRight } from "lucide-react";
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { BottomTicker } from "@/components/bottom-ticker";
-import { emptyLiquidityAccount } from "@/lib/liquidity-account";
 import { formatVaultUnits } from "@/lib/liquidity-vault";
 import { useLiquidityVault } from "@/lib/use-liquidity-vault";
 import { useMarketTicker } from "@/lib/use-market-ticker";
@@ -20,7 +19,7 @@ export function LiquidityPoolsPage() {
   const status = vault.status;
 
   return (
-    <AppShell account={emptyLiquidityAccount} activeView="liquidity" wallet={wallet}>
+    <AppShell activeView="liquidity" wallet={wallet}>
       <main className="liquidity-page liquidity-list-page">
         <div className="liquidity-heading">
           <h1>Liquidity</h1>

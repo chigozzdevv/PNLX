@@ -95,6 +95,7 @@ export interface AssetDepositRelayInput {
 
 export interface OnchainRelay {
   readonly enabled: boolean;
+  secureNoteSnapshot?(cached?: Hex[]): { commitments: Hex[]; root: Hex };
   assetBalance(token: string, account: string, source?: string): bigint;
   deposit(commitment: Hex): OnchainRelayResult;
   depositAsset(input: AssetDepositRelayInput): OnchainRelayResult;

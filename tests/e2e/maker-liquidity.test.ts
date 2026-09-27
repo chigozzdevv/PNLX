@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  circuitMarginCommitment,
+  secureMarginCommitment,
   hashFields,
 } from "@pnlx/crypto";
 import type { PrivateMatchIntent } from "@pnlx/protocol-types";
@@ -73,7 +73,7 @@ describe("maker note allocation", () => {
     expect(change?.amount).toBe("4990000000");
     expect(change?.status).toBe("available");
     expect(change?.commitment).toBe(
-      circuitMarginCommitment({
+      secureMarginCommitment({
         amount: 4_990_000_000n,
         assetDigest: note.assetDigest,
         blinding: change!.blinding,

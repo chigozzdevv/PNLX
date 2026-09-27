@@ -12,8 +12,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    <html lang="en" suppressHydrationWarning>
+      <body>
+        <script dangerouslySetInnerHTML={{ __html: "try{document.documentElement.dataset.theme=localStorage.getItem('pnlx-theme')==='light'?'light':'dark'}catch{document.documentElement.dataset.theme='dark'}" }} />
+        {children}
+      </body>
     </html>
   );
 }

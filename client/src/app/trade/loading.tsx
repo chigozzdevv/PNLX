@@ -6,10 +6,10 @@ export default function TradeLoading() {
     <div
       aria-label="Opening trading terminal"
       aria-live="polite"
-      className="min-h-screen bg-[var(--surface-page)] text-[var(--text-primary)]"
+      className="app-shell min-h-screen bg-[var(--surface-page)] text-[var(--text-primary)]"
       role="status"
     >
-      <header className="sticky top-0 z-40 border-b border-white/7 bg-[rgba(12,12,11,0.9)] backdrop-blur-xl">
+      <header className="app-header sticky top-0 z-40 backdrop-blur-xl">
         <div className="app-header-inner flex min-h-[72px] min-w-0 items-center gap-3 px-3 md:gap-4 md:px-5">
           <Link aria-label="PNLX home" className="app-brand" href="/">
             <Image

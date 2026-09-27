@@ -131,14 +131,14 @@ describe("deployment manifest", () => {
     for (const contract of manifest.contracts) {
       expect(contract.wasmHash).toMatch(/^0x[0-9a-f]{64}$/);
     }
-    expect(manifest.verifiers).toHaveLength(11);
+    expect(manifest.verifiers).toHaveLength(14);
     const noirVerifiers = manifest.verifiers.filter((verifier) =>
       verifier.verifierContract === "proof-verifier"
     );
     const risc0Verifier = manifest.verifiers.find((verifier) =>
       verifier.verifierAuthority === "batch-match-risc0-verifier"
     );
-    expect(noirVerifiers).toHaveLength(10);
+    expect(noirVerifiers).toHaveLength(13);
     expect(noirVerifiers.every((verifier) => verifier.verifierSource === "artifact")).toBe(true);
     expect(
       noirVerifiers.every((verifier) => verifier.verifierAuthority.endsWith("-proof-verifier")),
@@ -202,7 +202,12 @@ describe("deployment manifest", () => {
     ]);
     expect(shieldedPoolWriters.map((item) => item.args)).toEqual([
       ["batch-settlement", true],
+      ["position-close", true],
     ]);
+    expect(manifest.initPlan.find((item) => item.method === "configure_secure_note_circuits")?.args)
+      .toEqual([circuitKey("secure-deposit-note"), circuitKey("secure-withdraw")]);
+    expect(manifest.initPlan.filter((item) => item.method === "configure_secure_pool"))
+      .toHaveLength(2);
     expect(fundingUpdater?.args).toEqual(["funding-settlement", true]);
     expect(disclosureInit?.args).toEqual(["governance", "proof-ledger", circuitKey("disclosure")]);
   }, 120_000);

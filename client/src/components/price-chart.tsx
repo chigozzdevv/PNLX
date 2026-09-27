@@ -64,6 +64,30 @@ interface ChartSeries {
 const CHART_HEIGHT = 560;
 const LOAD_MORE_THRESHOLD = 40;
 
+function chartTheme() {
+  const light = document.documentElement.dataset.theme === "light";
+  const line = light ? "rgba(35, 32, 28, 0.12)" : "rgba(235, 230, 220, 0.08)";
+  return {
+    crosshair: {
+      horzLine: { color: light ? "rgba(35, 32, 28, 0.35)" : "rgba(211, 205, 194, 0.34)", labelBackgroundColor: light ? "#5d5951" : "#3a3833" },
+      mode: CrosshairMode.Normal,
+      vertLine: { color: light ? "rgba(35, 32, 28, 0.28)" : "rgba(211, 205, 194, 0.28)", labelBackgroundColor: light ? "#5d5951" : "#3a3833" },
+    },
+    grid: {
+      horzLines: { color: light ? "rgba(35, 32, 28, 0.07)" : "rgba(235, 230, 220, 0.05)" },
+      vertLines: { color: light ? "rgba(35, 32, 28, 0.055)" : "rgba(235, 230, 220, 0.04)" },
+    },
+    layout: {
+      attributionLogo: true,
+      background: { color: light ? "#f6f5f2" : "#0c0c0b", type: ColorType.Solid },
+      fontFamily: "var(--font-sans), Inter, sans-serif",
+      textColor: light ? "#625e56" : "#918c83",
+    },
+    rightPriceScale: { borderColor: line },
+    timeScale: { borderColor: line },
+  };
+}
+
 export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function PriceChart(
   { candles, drawingScope, indicators, market, onLoadOlder },
   ref,
@@ -118,19 +142,12 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
       initialRangeSetRef.current = false;
       previousFirstTimeRef.current = undefined;
       historyRequestPendingRef.current = false;
+      const theme = chartTheme();
 
     const chart = createChart(container, {
       height: container.clientHeight || CHART_HEIGHT,
       width: container.clientWidth,
-      crosshair: {
-        horzLine: { color: "rgba(211, 205, 194, 0.34)", labelBackgroundColor: "#3a3833" },
-        mode: CrosshairMode.Normal,
-        vertLine: { color: "rgba(211, 205, 194, 0.28)", labelBackgroundColor: "#3a3833" },
-      },
-      grid: {
-        horzLines: { color: "rgba(235, 230, 220, 0.05)" },
-        vertLines: { color: "rgba(235, 230, 220, 0.04)" },
-      },
+      ...theme,
       handleScale: {
         axisDoubleClickReset: true,
         axisPressedMouseMove: { price: true, time: false },
@@ -143,23 +160,17 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
         pressedMouseMove: true,
         vertTouchDrag: true,
       },
-      layout: {
-        attributionLogo: true,
-        background: { color: "#0c0c0b", type: ColorType.Solid },
-        fontFamily: "var(--font-sans), Inter, sans-serif",
-        textColor: "#918c83",
-      },
       localization: {
         priceFormatter: (price: number) => formatNumber(price, price < 10 ? 5 : 2),
       },
       rightPriceScale: {
-        borderColor: "rgba(235, 230, 220, 0.08)",
+        ...theme.rightPriceScale,
         minimumWidth: 76,
         scaleMargins: { bottom: 0.08, top: 0.08 },
       },
       timeScale: {
+        ...theme.timeScale,
         barSpacing: 8,
-        borderColor: "rgba(235, 230, 220, 0.08)",
         minBarSpacing: 1.5,
         rightOffset: 8,
         secondsVisible: false,
@@ -167,6 +178,8 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
         timeVisible: true,
       },
     });
+    const themeObserver = new MutationObserver(() => chart.applyOptions(chartTheme()));
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
       borderDownColor: "#f15367",
@@ -228,6 +241,7 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
     setDrawingSurface({ chart, series: candleSeries });
 
       cleanupChart = () => {
+        themeObserver.disconnect();
         resizeObserver.disconnect();
         chart.unsubscribeCrosshairMove(handleCrosshair);
         chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleVisibleRange);

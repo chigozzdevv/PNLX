@@ -28,6 +28,7 @@ pub enum DataKey {
     PositionState,
     ProofLedger,
     Circuit,
+    SecurePool,
 }
 
 #[derive(Clone)]
@@ -72,8 +73,25 @@ pub struct PositionCloseMeta {
 #[contract]
 pub struct PositionClose;
 
+#[soroban_sdk::contractclient(name = "ShieldedPoolClient")]
+pub trait ShieldedPoolInterface {
+    fn legacy_notes_disabled(env: &Env) -> bool;
+    fn append_secure_note(env: &Env, writer: &Address, commitment: &BytesN<32>);
+}
+
 #[contractimpl]
 impl PositionClose {
+    pub fn configure_secure_pool(env: Env, pool: Address) {
+        let governance_id: Address = env.storage().persistent().get(&DataKey::Governance)
+            .unwrap_or_else(|| panic!("not initialized"));
+        GovernanceClient::new(&env, &governance_id).admin().require_auth();
+        if env.storage().persistent().has(&DataKey::SecurePool) ||
+            !ShieldedPoolClient::new(&env, &pool).legacy_notes_disabled() {
+            panic!("secure pool unavailable");
+        }
+        env.storage().persistent().set(&DataKey::SecurePool, &pool);
+    }
+
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
         let governance_id: Address = env.storage().persistent().get(&DataKey::Governance)
             .unwrap_or_else(|| panic!("not initialized"));
@@ -268,6 +286,17 @@ fn settle_position_close(
         &position_nullifier,
         &new_position_commitment,
     );
+    if let Some(pool_id) = env.storage().persistent().get::<_, Address>(&DataKey::SecurePool) {
+        let writer = env.current_contract_address();
+        authorize_as_writer(
+            &env,
+            pool_id.clone(),
+            "append_secure_note",
+            Vec::from_array(&env, [writer.clone().into_val(&env),
+                margin_output_commitment.clone().into_val(&env)]),
+        );
+        ShieldedPoolClient::new(&env, &pool_id).append_secure_note(&writer, &margin_output_commitment);
+    }
 
     env.storage().persistent().set(
         &close_key,
@@ -515,6 +544,7 @@ mod tests {
     use oracle_interface::OracleAsset;
     use position_state::{PositionState, PositionStateClient};
     use proof_ledger::{ProofLedger, ProofLedgerClient};
+    use shielded_pool::{ShieldedPool, ShieldedPoolClient as PoolClient};
     use soroban_sdk::{
         crypto::bn254::Bn254Fr,
         symbol_short,
@@ -619,6 +649,40 @@ mod tests {
         let state = PositionStateClient::new(&env, &setup.position_state);
         assert_eq!(state.leaf_count(), 2);
         assert!(state.has_root(&position_root(&env)));
+    }
+
+    #[test]
+    fn close_registers_a_secure_note_at_the_same_time() {
+        let env = Env::default();
+        let id = env.register(PositionClose, ());
+        let client = PositionCloseClient::new(&env, &id);
+        let proof = proof(&env);
+        let setup = setup_protocol(&env, &id, Some(&proof), None);
+        let pool_id = env.register(ShieldedPool, ());
+        let pool = PoolClient::new(&env, &pool_id);
+        pool.init(&setup.governance, &setup.proof_ledger,
+            &BytesN::from_array(&env, &[21; 32]), &BytesN::from_array(&env, &[22; 32]));
+        pool.configure_secure_note_circuits(&BytesN::from_array(&env, &[23; 32]),
+            &BytesN::from_array(&env, &[24; 32]));
+        pool.set_writer(&id, &true);
+        client.init(&setup.governance, &setup.proof_ledger, &setup.conditional_order,
+            &setup.market, &setup.position_state, &circuit(&env));
+        assert!(client.try_configure_secure_pool(&pool_id).is_err());
+        pool.disable_legacy_notes();
+        client.configure_secure_pool(&pool_id);
+
+        let output = BytesN::from_array(&env, &[5; 32]);
+        client.settle_manual(&BytesN::from_array(&env, &[1; 32]),
+            &position_root(&env), &position_commitment(&env),
+            &BytesN::from_array(&env, &[2; 32]), &BytesN::from_array(&env, &[3; 32]),
+            &mark_price(&env), &BytesN::from_array(&env, &[4; 32]), &output, &proof);
+        assert_eq!(pool.secure_note_count(), 1);
+        assert!(pool.has_commitment(&output));
+        assert!(client.try_settle_manual(&BytesN::from_array(&env, &[1; 32]),
+            &position_root(&env), &position_commitment(&env),
+            &BytesN::from_array(&env, &[2; 32]), &BytesN::from_array(&env, &[3; 32]),
+            &mark_price(&env), &BytesN::from_array(&env, &[4; 32]), &output, &proof).is_err());
+        assert_eq!(pool.secure_note_count(), 1);
     }
 
     #[test]

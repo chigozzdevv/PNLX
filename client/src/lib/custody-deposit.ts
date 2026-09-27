@@ -1,5 +1,5 @@
 import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
-import { createCircuitMarginNote, randomLabel, type CircuitMarginNote } from "@/lib/private-note";
+import { createSecureMarginNote, randomLabel, type CircuitMarginNote } from "@/lib/private-note";
 import { signWalletTransaction, type WalletSession } from "@/lib/wallet-auth";
 import type { Hex, ServerProofMeta } from "@/types/trading";
 import {
@@ -26,7 +26,7 @@ interface RelayedTx {
 interface PreparedDepositAction {
   command: string[];
   contractId: string;
-  functionName: "deposit_asset";
+  functionName: "deposit_asset_secure";
   kind: "deposit";
   xdr?: string;
 }
@@ -91,7 +91,7 @@ export interface PreparedWalletAssetDeposit {
 export async function prepareWalletAssetDeposit(
   input: PrepareWalletAssetDepositInput,
 ): Promise<PreparedWalletAssetDeposit> {
-  const note = await createCircuitMarginNote({
+  const note = await createSecureMarginNote({
     amount: input.amount,
     assetDigest: input.assetDigest,
     assetId: input.assetId ?? "usdc",
@@ -107,6 +107,7 @@ export async function prepareWalletAssetDeposit(
     from: input.session.address,
     ownerDigest: note.ownerDigest,
     rhoDigest: note.rhoDigest,
+    spendSecretDigest: note.spendSecretDigest,
     token: input.token,
     tokenDigest: note.assetDigest,
   };
@@ -130,18 +131,20 @@ async function prepareProvenDeposit(
     from: string;
     ownerDigest: Hex;
     rhoDigest: Hex;
+    spendSecretDigest: Hex;
     token: string;
     tokenDigest: Hex;
   },
   token?: string,
 ): Promise<PrepareAssetDepositResponse> {
   const depositProof = await registerProofBundle(
-    await proofProvider.depositNote({
+    await proofProvider.secureDepositNote({
       amount: BigInt(request.amount),
       blinding: request.blinding,
       commitment: request.commitment,
       ownerDigest: request.ownerDigest,
       rhoDigest: request.rhoDigest,
+      spendSecretDigest: request.spendSecretDigest,
       tokenDigest: request.tokenDigest,
     }),
     token,

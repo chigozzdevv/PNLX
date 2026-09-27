@@ -33,6 +33,7 @@ export interface AssetDepositNoteInput {
   from: string;
   ownerDigest?: Hex;
   rhoDigest?: Hex;
+  spendSecretDigest?: Hex;
   source?: string;
   token: string;
   tokenDigest?: Hex;

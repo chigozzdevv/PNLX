@@ -1,0 +1,6 @@
+[package]
+name = "secure_withdraw"
+type = "bin"
+authors = ["PNLX"]
+
+[dependencies]

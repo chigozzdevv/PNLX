@@ -57,6 +57,7 @@ export function TradingPage() {
   const ticker = useMarketTicker(trading.data.ticker);
   const [selectedMarketId, setSelectedMarketId] = useState(readStoredMarketId);
   const [chartInterval, setChartInterval] = useState<CandleInterval>("15m");
+  const [ticketMode, setTicketMode] = useState<"trade" | "deposit">("trade");
   const [chartIndicators, setChartIndicators] = useState<ChartIndicatorId[]>([]);
   const priceChartRef = useRef<PriceChartHandle>(null);
   const markets = trading.data.markets;
@@ -321,6 +322,10 @@ export function TradingPage() {
     <AppShell
       account={trading.data.account}
       activeView="trade"
+      onOpenDeposit={displaySelectedMarket && orderDraft ? () => {
+        setTicketMode("deposit");
+        document.getElementById("trade-order-ticket")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } : undefined}
       onRepairCollateral={handleRepairCollateral}
       showRepairCollateral={Boolean(repairCandidate)}
       wallet={wallet}
@@ -384,6 +389,8 @@ export function TradingPage() {
             <OrderTicket
               availableCollateral={trading.data.account.availableShieldedUsdc}
               connected={Boolean(wallet.session)}
+              mode={ticketMode}
+              onModeChange={setTicketMode}
               session={wallet.session}
               key={displaySelectedMarket.marketId}
               onDeposit={async (input) => {

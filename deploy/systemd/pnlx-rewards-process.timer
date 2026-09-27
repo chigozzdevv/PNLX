@@ -1,0 +1,11 @@
+[Unit]
+Description=Credit confirmed PNLX rewards daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=3600
+Unit=pnlx-rewards-process.service
+
+[Install]
+WantedBy=timers.target

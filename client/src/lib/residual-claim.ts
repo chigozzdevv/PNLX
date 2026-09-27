@@ -1,6 +1,6 @@
 import { defaultClientProofProvider, registerProofBundle, type ClientProofProvider, type DepositNoteProofRecord } from "@/lib/client-proof-provider";
 import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
-import { createCircuitMarginNote, randomLabel } from "@/lib/private-note";
+import { createSecureMarginNote, randomLabel } from "@/lib/private-note";
 import { backUpPrivateMarginNote } from "@/lib/private-note-backup";
 import {
   privateMarginNotes,
@@ -83,12 +83,13 @@ export async function recoverResidualClaim(input: {
   const provider = input.proofProvider ?? defaultClientProofProvider();
   if (!provider) throw new Error("Client proof provider is not configured");
   const depositProof = await registerProofBundle(
-    await provider.depositNote({
+    await provider.secureDepositNote({
       amount,
       blinding: note.blinding,
       commitment: note.commitment,
       ownerDigest: note.ownerDigest,
       rhoDigest: note.rhoDigest,
+      spendSecretDigest: note.spendSecretDigest,
       tokenDigest: note.assetDigest,
     }),
     session.token,
@@ -108,7 +109,7 @@ async function makeClaimingNote(
   assetDigest: Hex,
   input: { intentCommitment: Hex; session: WalletSession },
 ): Promise<StoredPrivateMarginNote> {
-  const circuitNote = await createCircuitMarginNote({
+  const circuitNote = await createSecureMarginNote({
     amount,
     assetDigest,
     blinding: randomLabel("residual-blind"),
@@ -120,6 +121,7 @@ async function makeClaimingNote(
     ...circuitNote,
     amount: amount.toString(),
     claimSourceIntentCommitment: input.intentCommitment,
+    noteFormat: "secure",
     ownerCommitment: input.session.ownerCommitment,
     status: "claiming",
     walletAddress: input.session.address,

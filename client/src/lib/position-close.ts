@@ -10,11 +10,10 @@ import {
 import {
   circuitPositionCommitment,
   circuitPositionNullifier,
-  createCircuitMarginCommitment,
   digestToFieldHex,
-  fieldHashPair,
   randomLabel,
 } from "@/lib/private-note";
+import { secureMarginCommitment, secureMarginNullifier } from "@pnlx/crypto/secure-margin-commitment";
 import {
   privateMarginNoteRuntimeScopeFromHealth,
   savePrivateMarginNote,
@@ -26,7 +25,6 @@ import type { Hex, MarketDisplay, PositionRow, Side } from "@/types/trading";
 import type { WalletSession } from "@/lib/wallet-auth";
 
 const PRICE_SCALE = 100_000_000n;
-const ZERO_HEX = `0x${"0".repeat(64)}` as Hex;
 const MAX_FILL_INDEX_SCAN = 512;
 
 interface PositionCloseContextResponse {
@@ -182,13 +180,16 @@ async function closePositionAttempt(input: ClosePositionInput): Promise<ClosePos
   const marginOutputBlinding = await digestToFieldHex(
     `blinding:${positionCommitment}:close-margin:${randomLabel("margin-blind")}`,
   );
-  const marginOutputCommitment = createCircuitMarginCommitment({
+  const marginOutputSpendSecretDigest = await digestToFieldHex(
+    `spend:${positionCommitment}:close-margin:${randomLabel("margin-spend")}`,
+  );
+  const marginOutputCommitment = secureMarginCommitment({
     amount: closeSettlement.newMargin,
     assetDigest: marginOutputAssetDigest,
     blinding: marginOutputBlinding,
     ownerDigest: positionSecrets.ownerDigest,
     rhoDigest: marginOutputRhoDigest,
-    spendSecretDigest: ZERO_HEX,
+    spendSecretDigest: marginOutputSpendSecretDigest,
   });
 
   if (closeSettlement.newMargin > 0n) {
@@ -197,9 +198,11 @@ async function closePositionAttempt(input: ClosePositionInput): Promise<ClosePos
     const pending = savePrivateMarginNote({
       amount: closeSettlement.newMargin.toString(), assetDigest: marginOutputAssetDigest,
       blinding: marginOutputBlinding, commitment: marginOutputCommitment,
-      noteNullifier: fieldHashPair(ZERO_HEX, marginOutputRhoDigest),
+      noteNullifier: secureMarginNullifier({ rhoDigest: marginOutputRhoDigest,
+        spendSecretDigest: marginOutputSpendSecretDigest }),
+      noteFormat: "secure",
       ownerCommitment: input.session.ownerCommitment, ownerDigest: positionSecrets.ownerDigest,
-      rhoDigest: marginOutputRhoDigest, spendSecretDigest: ZERO_HEX,
+      rhoDigest: marginOutputRhoDigest, spendSecretDigest: marginOutputSpendSecretDigest,
       walletAddress: input.session.address, status: "pending",
     });
     await backUpPrivateMarginNote(pending, input.session);
@@ -220,6 +223,7 @@ async function closePositionAttempt(input: ClosePositionInput): Promise<ClosePos
       marginOutputBlinding,
       marginOutputCommitment,
       marginOutputRhoDigest,
+      marginOutputSpendSecretDigest,
       marketDigest: positionSecrets.marketDigest,
       marketId: input.market.marketId,
       markPrice,
@@ -254,11 +258,13 @@ async function closePositionAttempt(input: ClosePositionInput): Promise<ClosePos
       assetDigest: marginOutputAssetDigest,
       blinding: marginOutputBlinding,
       commitment: marginOutputCommitment,
-      noteNullifier: fieldHashPair(ZERO_HEX, marginOutputRhoDigest),
+      noteNullifier: secureMarginNullifier({ rhoDigest: marginOutputRhoDigest,
+        spendSecretDigest: marginOutputSpendSecretDigest }),
+      noteFormat: "secure",
       ownerCommitment: input.session.ownerCommitment,
       ownerDigest: positionSecrets.ownerDigest,
       rhoDigest: marginOutputRhoDigest,
-      spendSecretDigest: ZERO_HEX,
+      spendSecretDigest: marginOutputSpendSecretDigest,
       walletAddress: input.session.address,
     });
   }

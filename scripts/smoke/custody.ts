@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createPrivateKey, randomUUID, sign } from "node:crypto";
 import { ownerCommitment } from "@pnlx/crypto";
-import { createCircuitMarginNote } from "@pnlx/sdk";
+import { createSecureMarginNote } from "@pnlx/sdk";
 import { createAppRuntimeAsync } from "@/app";
 import { loadEnv, type ServerEnv } from "@/config/env";
 import { stellarSignedMessageHash } from "@/features/auth/auth.service";
@@ -285,7 +285,7 @@ async function prepareCustodyDeposit(input: {
   const spendSecret = `custody-smoke-spend-${seed}`;
   const rho = `custody-smoke-rho-${seed}`;
   const blindingSeed = `custody-smoke-blind-${seed}`;
-  const note = createCircuitMarginNote({
+  const note = createSecureMarginNote({
     assetDigest: input.tokenDigest,
     assetId: "usdc",
     amount: input.amount,
@@ -294,12 +294,13 @@ async function prepareCustodyDeposit(input: {
     rho,
     blinding: blindingSeed,
   });
-  const depositProof = new ProverService().proveDepositNote({
+  const depositProof = new ProverService().proveSecureDepositNote({
     amount: input.amount,
     blinding: note.blinding,
     commitment: note.commitment,
     ownerDigest: note.ownerDigest,
     rhoDigest: note.rhoDigest,
+    spendSecretDigest: note.spendSecretDigest,
     tokenDigest: note.assetDigest,
   });
   const prepared = await post(input.app, "/notes/deposit-asset/prepare-proven", {

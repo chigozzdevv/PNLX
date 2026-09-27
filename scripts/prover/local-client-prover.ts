@@ -50,6 +50,19 @@ export function createLocalClientProverHandler(root = process.cwd()) {
         });
         return json(proofBundle(prover, record, record.proof));
       }
+      if (request.method === "POST" && url.pathname === "/secure-deposit-note") {
+        const input = await request.json() as Record<string, unknown>;
+        const record = prover.proveSecureDepositNote({
+          amount: BigInt(String(input.amount)),
+          blinding: requiredHex(input.blinding, "blinding"),
+          commitment: requiredHex(input.commitment, "commitment"),
+          ownerDigest: requiredHex(input.ownerDigest, "ownerDigest"),
+          rhoDigest: requiredHex(input.rhoDigest, "rhoDigest"),
+          spendSecretDigest: requiredHex(input.spendSecretDigest, "spendSecretDigest"),
+          tokenDigest: requiredHex(input.tokenDigest, "tokenDigest"),
+        });
+        return json(proofBundle(prover, record, record.proof));
+      }
       if (request.method === "POST" && url.pathname === "/intent-validity") {
         const input = await request.json() as Record<string, unknown>;
         const record = prover.proveIntentValidity({
@@ -99,6 +112,7 @@ export function createLocalClientProverHandler(root = process.cwd()) {
           marginOutputBlinding: requiredHex(input.marginOutputBlinding, "marginOutputBlinding"),
           marginOutputCommitment: requiredHex(input.marginOutputCommitment, "marginOutputCommitment"),
           marginOutputRhoDigest: requiredHex(input.marginOutputRhoDigest, "marginOutputRhoDigest"),
+          marginOutputSpendSecretDigest: requiredHex(input.marginOutputSpendSecretDigest, "marginOutputSpendSecretDigest"),
           marketDigest: requiredHex(input.marketDigest, "marketDigest"),
           marketId: requiredString(input.marketId, "marketId"),
           markPrice: BigInt(String(input.markPrice)),
@@ -120,9 +134,12 @@ export function createLocalClientProverHandler(root = process.cwd()) {
         });
         return json(proofBundle(prover, record, record.proof));
       }
-      if (request.method === "POST" && url.pathname === "/withdraw") {
+      if (request.method === "POST" &&
+        (url.pathname === "/withdraw" || url.pathname === "/secure-withdraw")) {
         const input = await request.json() as Record<string, unknown>;
-        const record = prover.proveWithdrawal({
+        const prove = url.pathname === "/secure-withdraw"
+          ? prover.proveSecureWithdrawal.bind(prover) : prover.proveWithdrawal.bind(prover);
+        const record = prove({
           assetDigest: requiredHex(input.assetDigest, "assetDigest"),
           blinding: requiredHex(input.blinding, "blinding"),
           changeBlinding: optionalHex(input.changeBlinding),

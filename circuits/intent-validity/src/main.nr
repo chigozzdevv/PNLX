@@ -2,22 +2,32 @@ fn hash_pair(left: Field, right: Field) -> Field {
     std::hash::poseidon2_permutation([left, right, 0, 36893488147419103232], 4)[0]
 }
 
+global SECURE_MARGIN_DOMAIN: Field = 0x504e4c5844524f504d4152;
+global SECURE_NULLIFIER_DOMAIN: Field = 0x504e4c5844524f504d4e554c;
+
 fn note_commitment(
     asset_digest: Field,
     note_amount: u128,
     owner_digest: Field,
     rho_digest: Field,
     blinding: Field,
+    spend_secret_digest: Field,
 ) -> Field {
     let amount_field = note_amount as Field;
     let left = hash_pair(asset_digest, amount_field);
-    let right = hash_pair(owner_digest, hash_pair(rho_digest, blinding));
-    hash_pair(left, right)
+    let right = hash_pair(owner_digest,
+        hash_pair(hash_pair(rho_digest, blinding), spend_secret_digest));
+    hash_pair(SECURE_MARGIN_DOMAIN, hash_pair(left, right))
 }
 
-fn merkle_root(leaf: Field, path_siblings: [Field; 8], path_indices: [bool; 8]) -> Field {
+fn compute_note_nullifier(spend_secret_digest: Field, rho_digest: Field) -> Field {
+    hash_pair(SECURE_NULLIFIER_DOMAIN,
+        hash_pair(spend_secret_digest, rho_digest))
+}
+
+fn merkle_root(leaf: Field, path_siblings: [Field; 20], path_indices: [bool; 20]) -> Field {
     let mut current = leaf;
-    for i in 0..8 {
+    for i in 0..20 {
         let sibling = path_siblings[i];
         let left = if path_indices[i] { sibling } else { current };
         let right = if path_indices[i] { current } else { sibling };
@@ -32,10 +42,10 @@ fn hash_pair_matches_typescript_vector() {
     assert(hash_pair(1, 139) != hash_pair(138, 8));
 }
 
-fn empty_siblings() -> [Field; 8] {
-    let mut siblings = [0; 8];
+fn empty_siblings() -> [Field; 20] {
+    let mut siblings = [0; 20];
     let mut empty: Field = 0;
-    for i in 0..8 {
+    for i in 0..20 {
         siblings[i] = empty;
         empty = hash_pair(empty, empty);
     }
@@ -43,8 +53,8 @@ fn empty_siblings() -> [Field; 8] {
 }
 
 fn valid_note_root() -> Field {
-    let indices = [false; 8];
-    merkle_root(note_commitment(2, 12_000, 3, 4, 5), empty_siblings(), indices)
+    let indices = [false; 20];
+    merkle_root(note_commitment(2, 12_000, 3, 4, 5, 6), empty_siblings(), indices)
 }
 
 fn compute_intent_commitment(
@@ -84,8 +94,8 @@ fn main(
     rho_digest: Field,
     blinding: Field,
     spend_secret_digest: Field,
-    path_siblings: [Field; 8],
-    path_indices: [bool; 8],
+    path_siblings: [Field; 20],
+    path_indices: [bool; 20],
     current_batch: pub u128,
     batch_digest: pub Field,
     market_digest: pub Field,
@@ -115,6 +125,7 @@ fn main(
     assert(note_nullifier != zero_commitment);
     assert(nonce_digest != zero_commitment);
     assert(salt_digest != zero_commitment);
+    assert(spend_secret_digest != zero_commitment);
 
     let computed_note_commitment = note_commitment(
         asset_digest,
@@ -122,10 +133,11 @@ fn main(
         owner_digest,
         rho_digest,
         blinding,
+        spend_secret_digest,
     );
     assert(computed_note_commitment == note_commitment_public);
     assert(merkle_root(note_commitment_public, path_siblings, path_indices) == margin_root);
-    assert(hash_pair(spend_secret_digest, rho_digest) == note_nullifier);
+    assert(compute_note_nullifier(spend_secret_digest, rho_digest) == note_nullifier);
 
     let change = note_amount - margin;
     if change == 0 {
@@ -139,6 +151,7 @@ fn main(
             owner_digest,
             change_rho_digest,
             change_blinding,
+            spend_secret_digest,
         ));
     }
 
@@ -159,61 +172,74 @@ fn main(
 #[test]
 fn valid_intent() {
     let siblings = empty_siblings();
-    let indices = [false, false, false, false, false, false, false, false];
-    let commitment = compute_intent_commitment(20, 21, 22, true, 1, 5_100_000_000_000, 12_000, hash_pair(6, 4), 23, 24);
-    main(1, 12_000, 5_100_000_000_000, true, 10, 12_000, 2, 3, 4, 5, 6, siblings, indices, 9, 20, 21, 22, commitment, valid_note_root(), note_commitment(2, 12_000, 3, 4, 5), hash_pair(6, 4), 0, 23, 24, 0, 0, 0);
+    let indices = [false; 20];
+    let commitment = compute_intent_commitment(20, 21, 22, true, 1, 5_100_000_000_000, 12_000, compute_note_nullifier(6, 4), 23, 24);
+    main(1, 12_000, 5_100_000_000_000, true, 10, 12_000, 2, 3, 4, 5, 6, siblings, indices, 9, 20, 21, 22, commitment, valid_note_root(), note_commitment(2, 12_000, 3, 4, 5, 6), compute_note_nullifier(6, 4), 0, 23, 24, 0, 0, 0);
+}
+
+#[test(should_fail)]
+fn rejects_second_nullifier_for_same_note() {
+    let siblings = empty_siblings();
+    let indices = [false; 20];
+    let rotated_nullifier = compute_note_nullifier(7, 4);
+    let commitment = compute_intent_commitment(20, 21, 22, true, 1,
+        5_100_000_000_000, 12_000, rotated_nullifier, 23, 24);
+    main(1, 12_000, 5_100_000_000_000, true, 10, 12_000, 2, 3, 4, 5, 7,
+        siblings, indices, 9, 20, 21, 22, commitment, valid_note_root(),
+        note_commitment(2, 12_000, 3, 4, 5, 6), rotated_nullifier,
+        0, 23, 24, 0, 0, 0);
 }
 
 #[test(should_fail)]
 fn rejects_expired_intent() {
     let siblings = empty_siblings();
-    let indices = [false, false, false, false, false, false, false, false];
-    let commitment = compute_intent_commitment(20, 21, 22, true, 1, 5_100_000_000_000, 12_000, hash_pair(6, 4), 23, 24);
-    main(1, 12_000, 5_100_000_000_000, true, 8, 12_000, 2, 3, 4, 5, 6, siblings, indices, 9, 20, 21, 22, commitment, valid_note_root(), note_commitment(2, 12_000, 3, 4, 5), hash_pair(6, 4), 0, 23, 24, 0, 0, 0);
+    let indices = [false; 20];
+    let commitment = compute_intent_commitment(20, 21, 22, true, 1, 5_100_000_000_000, 12_000, compute_note_nullifier(6, 4), 23, 24);
+    main(1, 12_000, 5_100_000_000_000, true, 8, 12_000, 2, 3, 4, 5, 6, siblings, indices, 9, 20, 21, 22, commitment, valid_note_root(), note_commitment(2, 12_000, 3, 4, 5, 6), compute_note_nullifier(6, 4), 0, 23, 24, 0, 0, 0);
 }
 
 #[test(should_fail)]
 fn rejects_zero_size() {
     let siblings = empty_siblings();
-    let indices = [false, false, false, false, false, false, false, false];
-    main(0, 12_000, 5_100_000_000_000, true, 10, 12_000, 2, 3, 4, 5, 6, siblings, indices, 9, 20, 21, 22, 77, valid_note_root(), note_commitment(2, 12_000, 3, 4, 5), hash_pair(6, 4), 0, 23, 24, 0, 0, 0);
+    let indices = [false; 20];
+    main(0, 12_000, 5_100_000_000_000, true, 10, 12_000, 2, 3, 4, 5, 6, siblings, indices, 9, 20, 21, 22, 77, valid_note_root(), note_commitment(2, 12_000, 3, 4, 5, 6), compute_note_nullifier(6, 4), 0, 23, 24, 0, 0, 0);
 }
 
 #[test(should_fail)]
 fn rejects_empty_margin_root() {
     let siblings = empty_siblings();
-    let indices = [false, false, false, false, false, false, false, false];
-    let commitment = compute_intent_commitment(20, 21, 22, true, 1, 5_100_000_000_000, 12_000, hash_pair(6, 4), 23, 24);
-    main(1, 12_000, 5_100_000_000_000, true, 10, 12_000, 2, 3, 4, 5, 6, siblings, indices, 9, 20, 21, 22, commitment, 0, note_commitment(2, 12_000, 3, 4, 5), hash_pair(6, 4), 0, 23, 24, 0, 0, 0);
+    let indices = [false; 20];
+    let commitment = compute_intent_commitment(20, 21, 22, true, 1, 5_100_000_000_000, 12_000, compute_note_nullifier(6, 4), 23, 24);
+    main(1, 12_000, 5_100_000_000_000, true, 10, 12_000, 2, 3, 4, 5, 6, siblings, indices, 9, 20, 21, 22, commitment, 0, note_commitment(2, 12_000, 3, 4, 5, 6), compute_note_nullifier(6, 4), 0, 23, 24, 0, 0, 0);
 }
 
 #[test(should_fail)]
 fn rejects_empty_nullifier() {
     let siblings = empty_siblings();
-    let indices = [false, false, false, false, false, false, false, false];
-    main(1, 12_000, 5_100_000_000_000, true, 10, 12_000, 2, 3, 4, 5, 6, siblings, indices, 9, 20, 21, 22, 77, valid_note_root(), note_commitment(2, 12_000, 3, 4, 5), 0, 0, 23, 24, 0, 0, 0);
+    let indices = [false; 20];
+    main(1, 12_000, 5_100_000_000_000, true, 10, 12_000, 2, 3, 4, 5, 6, siblings, indices, 9, 20, 21, 22, 77, valid_note_root(), note_commitment(2, 12_000, 3, 4, 5, 6), 0, 0, 23, 24, 0, 0, 0);
 }
 
 #[test(should_fail)]
 fn rejects_bad_note_opening() {
     let siblings = empty_siblings();
-    let indices = [false, false, false, false, false, false, false, false];
-    let commitment = compute_intent_commitment(20, 21, 22, true, 1, 5_100_000_000_000, 12_000, hash_pair(6, 4), 23, 24);
-    main(1, 12_000, 5_100_000_000_000, true, 10, 12_000, 2, 3, 4, 999, 6, siblings, indices, 9, 20, 21, 22, commitment, valid_note_root(), note_commitment(2, 12_000, 3, 4, 5), hash_pair(6, 4), 0, 23, 24, 0, 0, 0);
+    let indices = [false; 20];
+    let commitment = compute_intent_commitment(20, 21, 22, true, 1, 5_100_000_000_000, 12_000, compute_note_nullifier(6, 4), 23, 24);
+    main(1, 12_000, 5_100_000_000_000, true, 10, 12_000, 2, 3, 4, 999, 6, siblings, indices, 9, 20, 21, 22, commitment, valid_note_root(), note_commitment(2, 12_000, 3, 4, 5, 6), compute_note_nullifier(6, 4), 0, 23, 24, 0, 0, 0);
 }
 
 #[test(should_fail)]
 fn rejects_bad_merkle_path() {
     let mut siblings = empty_siblings();
     siblings[0] = 1;
-    let indices = [false, false, false, false, false, false, false, false];
-    let commitment = compute_intent_commitment(20, 21, 22, true, 1, 5_100_000_000_000, 12_000, hash_pair(6, 4), 23, 24);
-    main(1, 12_000, 5_100_000_000_000, true, 10, 12_000, 2, 3, 4, 5, 6, siblings, indices, 9, 20, 21, 22, commitment, valid_note_root(), note_commitment(2, 12_000, 3, 4, 5), hash_pair(6, 4), 0, 23, 24, 0, 0, 0);
+    let indices = [false; 20];
+    let commitment = compute_intent_commitment(20, 21, 22, true, 1, 5_100_000_000_000, 12_000, compute_note_nullifier(6, 4), 23, 24);
+    main(1, 12_000, 5_100_000_000_000, true, 10, 12_000, 2, 3, 4, 5, 6, siblings, indices, 9, 20, 21, 22, commitment, valid_note_root(), note_commitment(2, 12_000, 3, 4, 5, 6), compute_note_nullifier(6, 4), 0, 23, 24, 0, 0, 0);
 }
 
 #[test(should_fail)]
 fn rejects_bad_intent_commitment() {
     let siblings = empty_siblings();
-    let indices = [false, false, false, false, false, false, false, false];
-    main(1, 12_000, 5_100_000_000_000, true, 10, 12_000, 2, 3, 4, 5, 6, siblings, indices, 9, 20, 21, 22, 999, valid_note_root(), note_commitment(2, 12_000, 3, 4, 5), hash_pair(6, 4), 0, 23, 24, 0, 0, 0);
+    let indices = [false; 20];
+    main(1, 12_000, 5_100_000_000_000, true, 10, 12_000, 2, 3, 4, 5, 6, siblings, indices, 9, 20, 21, 22, 999, valid_note_root(), note_commitment(2, 12_000, 3, 4, 5, 6), compute_note_nullifier(6, 4), 0, 23, 24, 0, 0, 0);
 }
