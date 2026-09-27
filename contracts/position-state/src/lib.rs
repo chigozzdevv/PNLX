@@ -24,6 +24,8 @@ pub enum DataKey {
     Spent(BytesN<32>),
     TreeHashVersion,
     Writer(Address),
+    SpentCommitment(BytesN<32>),
+    CommitmentGuardReady,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -55,6 +57,7 @@ impl PositionState {
             .instance()
             .set(&DataKey::Governance, &governance);
         env.storage().persistent().set(&DataKey::LeafCount, &0u32);
+        env.storage().persistent().set(&DataKey::CommitmentGuardReady, &true);
         env.storage().persistent().set(&DataKey::TreeHashVersion, &POSEIDON2_TREE_VERSION);
         env.storage()
             .persistent()
@@ -123,6 +126,26 @@ impl PositionState {
             .has(&DataKey::Spent(position_nullifier))
     }
 
+    pub fn is_commitment_spent(env: Env, position_commitment: BytesN<32>) -> bool {
+        env.storage().persistent().has(&DataKey::SpentCommitment(position_commitment))
+    }
+
+    pub fn backfill_spent_commitments(env: Env, commitments: Vec<BytesN<32>>) {
+        require_admin(&env);
+        if commitments.is_empty() || commitments.len() > MAX_APPEND_ITEMS {
+            panic!("invalid backfill count");
+        }
+        for commitment in commitments.iter() {
+            validate_commitment(&env, &commitment);
+            env.storage().persistent().set(&DataKey::SpentCommitment(commitment), &true);
+        }
+    }
+
+    pub fn enable_commitment_guard(env: Env) {
+        require_admin(&env);
+        env.storage().persistent().set(&DataKey::CommitmentGuardReady, &true);
+    }
+
     pub fn append(env: Env, writer: Address, commitment: BytesN<32>) -> AppendReceipt {
         Self::append_many(env.clone(), writer, Vec::from_array(&env, [commitment]))
     }
@@ -167,16 +190,21 @@ impl PositionState {
         position_nullifier: BytesN<32>,
     ) {
         require_writer(&env, &writer);
+        if !env.storage().persistent().get(&DataKey::CommitmentGuardReady).unwrap_or(false) {
+            panic!("spent commitments not reconciled");
+        }
         validate_commitment(&env, &position_commitment);
         validate_commitment(&env, &position_nullifier);
         if !Self::has_root(env.clone(), membership_root) {
             panic!("unknown position root");
         }
         let key = DataKey::Spent(position_nullifier);
-        if env.storage().persistent().has(&key) {
+        let commitment_key = DataKey::SpentCommitment(position_commitment.clone());
+        if env.storage().persistent().has(&key) || env.storage().persistent().has(&commitment_key) {
             panic!("position already spent");
         }
         env.storage().persistent().set(&key, &position_commitment);
+        env.storage().persistent().set(&commitment_key, &true);
     }
 }
 
@@ -340,6 +368,31 @@ mod tests {
         let nullifier = value(&env, 9);
         client.spend_position(&writer, &first.root, &value(&env, 1), &nullifier);
         assert!(client.is_spent(&nullifier));
+        assert!(client.is_commitment_spent(&value(&env, 1)));
+        assert!(client.try_spend_position(&writer, &second.root, &value(&env, 1), &value(&env, 10)).is_err());
+    }
+
+    #[test]
+    fn backfill_prevents_rotated_nullifier_for_prior_close() {
+        let env = Env::default();
+        let id = env.register(PositionState, ());
+        let client = PositionStateClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        let writer = Address::generate(&env);
+        client.init(&setup_governance(&env, &admin));
+        env.mock_all_auths();
+        client.set_writer(&writer, &true);
+        let first = client.append(&writer, &value(&env, 1));
+        env.as_contract(&id, || {
+            env.storage().persistent().set(&DataKey::Spent(value(&env, 9)), &value(&env, 1));
+            env.storage().persistent().remove(&DataKey::CommitmentGuardReady);
+        });
+        assert!(client.try_spend_position(&writer, &first.root, &value(&env, 1), &value(&env, 10)).is_err());
+        client.backfill_spent_commitments(&Vec::from_array(&env, [value(&env, 1)]));
+        assert!(client.is_commitment_spent(&value(&env, 1)));
+        assert!(client.try_spend_position(&writer, &first.root, &value(&env, 2), &value(&env, 11)).is_err());
+        client.enable_commitment_guard();
+        assert!(client.try_spend_position(&writer, &first.root, &value(&env, 1), &value(&env, 10)).is_err());
     }
 
     #[test]
