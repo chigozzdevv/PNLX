@@ -954,6 +954,7 @@ async function closeManualPosition(input: {
     marginOutputAssetDigest: output.assetDigest,
     marginOutputRhoDigest: output.rhoDigest,
     marginOutputBlinding: output.blinding,
+    marginOutputSpendSecretDigest: output.spendSecretDigest,
     pathIndices: context.membershipProof.indices,
     pathSiblings: context.membershipProof.siblings,
   });
@@ -1097,6 +1098,7 @@ async function closeLongTakeProfit(input: {
     marginOutputAssetDigest: marginOutput.assetDigest,
     marginOutputRhoDigest: marginOutput.rhoDigest,
     marginOutputBlinding: marginOutput.blinding,
+    marginOutputSpendSecretDigest: marginOutput.spendSecretDigest,
     pathIndices: closeContext.membershipProof.indices,
     pathSiblings: closeContext.membershipProof.siblings,
   });

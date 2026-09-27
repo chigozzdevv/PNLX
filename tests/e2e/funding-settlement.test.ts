@@ -594,6 +594,7 @@ function setupPositionWithConditionalClose(options: { triggered?: boolean } = {}
       marginOutputCommitment,
       marginOutputAssetDigest: hashFields("asset", ["usdc"]),
       marginOutputBlinding: hashFields("margin-output-blinding", ["funding"]),
+      marginOutputSpendSecretDigest: hashFields("margin-output-spend-secret", ["funding"]),
       marginOutputRhoDigest: hashFields("margin-output-rho", ["funding"]),
       marketDigest: hashFields("market", [market.marketId]),
       marketId: market.marketId,
