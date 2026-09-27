@@ -149,7 +149,7 @@ export async function finalizePendingMakerCloseOutput(
   }
 }
 
-export async function markMakerCloseOutputSettled(commitment: string, settlementTxHash: string): Promise<void> {
+export async function markRecoveredMakerNoteSettled(commitment: string, settlementTxHash: string): Promise<void> {
   const config = requiredMongoConfig();
   const client = new MongoClient(config.uri);
   try {
@@ -164,12 +164,14 @@ export async function markMakerCloseOutputSettled(commitment: string, settlement
     if (result.modifiedCount === 1) return;
     const existing = await collection.findOne({ _id: makerNoteDocumentId(config.namespace, commitment) });
     if (existing?.vaultSettlementTxHash !== settlementTxHash) {
-      throw new Error("maker close output was not recovered for this vault settlement");
+      throw new Error("maker note was not recovered for this vault settlement");
     }
   } finally {
     await client.close();
   }
 }
+
+export const markMakerCloseOutputSettled = markRecoveredMakerNoteSettled;
 
 export async function recordMakerNoteRecovery(commitment: string, amount: string): Promise<void> {
   if (!/^[1-9][0-9]*$/.test(amount)) throw new Error("recovered amount must be positive");
