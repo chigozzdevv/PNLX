@@ -28,10 +28,9 @@ import { MarketsService } from "@/features/markets/markets.service";
 import {
   MarketDataService,
   parseHyperliquidAssetContextUpdates,
-  parseHyperliquidCandles,
   parseHermesPriceUpdates,
-  parsePythTradingViewCandles,
 } from "@/features/markets/market-data.service";
+import { parseHyperliquidCandles } from "@/features/markets/market-candle-stream";
 import { parseMarketCandles } from "@/features/markets/markets.schema";
 import { NotesService } from "@/features/notes/notes.service";
 import { OrdersService } from "@/features/orders/orders.service";
@@ -140,20 +139,15 @@ describe("support workers", () => {
     }]);
   });
 
-  test("coalesces and caches Pyth Pro candle snapshots", async () => {
+  test("coalesces and caches native candle snapshots", async () => {
     let requests = 0;
     const fetcher = async () => {
       requests += 1;
       await new Promise((resolve) => setTimeout(resolve, 5));
-      return new Response(JSON.stringify({
-        c: [0.19, 0.20],
-        h: [0.195, 0.205],
-        l: [0.185, 0.19],
-        o: [0.188, 0.19],
-        s: "ok",
-        t: [1_784_692_000, 1_784_692_900],
-        v: [0, 0],
-      }), { status: 200 });
+      return new Response(JSON.stringify([
+        { c: 0.19, h: 0.195, l: 0.185, o: 0.188, t: 1_784_692_000_000, v: 0 },
+        { c: 0.20, h: 0.205, l: 0.19, o: 0.19, t: 1_784_692_900_000, v: 0 },
+      ]), { status: 200 });
     };
     const env = loadEnv();
     env.pythApiKey = "test-pyth-key";
@@ -167,7 +161,7 @@ describe("support workers", () => {
     const cached = await service.candles(input);
 
     expect(requests).toBe(1);
-    expect(first.source).toBe("pyth-pro-history");
+    expect(first.source).toBe("hyperliquid");
     expect(first.cached).toBe(false);
     expect(concurrent.candles).toEqual(first.candles);
     expect(cached.cached).toBe(true);
@@ -181,15 +175,7 @@ describe("support workers", () => {
     const refreshGate = new Promise<void>((resolve) => {
       releaseRefresh = resolve;
     });
-    const snapshot = (close: number) => new Response(JSON.stringify({
-      c: [close],
-      h: [close + 0.005],
-      l: [close - 0.005],
-      o: [close],
-      s: "ok",
-      t: [1_784_692_900],
-      v: [0],
-    }), { status: 200 });
+    const snapshot = (close: number) => new Response(JSON.stringify([{ c: close, h: close + 0.005, l: close - 0.005, o: close, t: 1_784_692_900_000, v: 0 }]), { status: 200 });
     const fetcher = async () => {
       requests += 1;
       if (requests === 1) return snapshot(0.19);
@@ -223,43 +209,11 @@ describe("support workers", () => {
 
     now += 5_001;
     const stale = await service.candles(input);
-    // The expired refresh retries Pyth twice, then retries the Hyperliquid
-    // fallback twice before returning the cached snapshot.
-    expect(requests).toBe(6);
+    expect(requests).toBe(4);
     expect(stale.cached).toBe(true);
     expect(stale.stale).toBe(true);
     expect(stale.candles.at(-1)?.close).toBe(0.20);
     expect(first.candles.at(-1)?.close).toBe(0.19);
-  });
-
-  test("skips invalid Pyth OHLC rows while retaining zero volume", () => {
-    const candles = parsePythTradingViewCandles({
-      c: [0.20, 0.20, 0.20, 0, 0.23],
-      h: [0.21, 0.21, 0.21, 0.21, 0.21],
-      l: [0.18, 0.18, 0.18, 0.18, 0.18],
-      o: [0.19, 0.19, "", 0.19, 0.19],
-      s: "ok",
-      t: [1_784_692_000, null, 1_784_692_002, 1_784_692_003, 1_784_692_004],
-      v: [0, 0, 0, 0, 0],
-    });
-
-    expect(candles).toEqual([{
-      close: 0.20,
-      high: 0.21,
-      low: 0.18,
-      open: 0.19,
-      time: "2026-07-22T03:46:40.000Z",
-      volume: 0,
-    }]);
-    expect(() => parsePythTradingViewCandles({
-      c: [0],
-      h: [0],
-      l: [0],
-      o: [""],
-      s: "ok",
-      t: [null],
-      v: [0],
-    })).toThrow("candle provider returned no valid candles");
   });
 
   test("parses bounded candle history windows", () => {
@@ -280,46 +234,28 @@ describe("support workers", () => {
   });
 
   test("forwards candle history windows and handles exhausted history", async () => {
-    let requestedUrl = "";
-    const fetcher = async (input: URL | RequestInfo) => {
-      requestedUrl = String(input);
-      return new Response(JSON.stringify({ s: "no_data" }), { status: 200 });
+    let requestedBody = "";
+    const fetcher = async (_input: unknown, init?: RequestInit) => {
+      requestedBody = String(init?.body);
+      return new Response("[]", { status: 200 });
     };
-    const env = loadEnv();
-    env.pythApiKey = "test-pyth-key";
-    const service = new MarketDataService(env, fetcher as never);
-
+    const service = new MarketDataService(loadEnv(), fetcher as never);
     const response = await service.candles({
-      from: 1_784_692_000,
-      interval: "15m",
-      limit: 160,
-      marketId: "xlm-usd-perp",
-      to: 1_784_692_900,
+      from: 1_784_692_000, interval: "15m", limit: 160, marketId: "xlm-usd-perp", to: 1_784_692_900,
     });
-    const providerUrl = new URL(requestedUrl);
-
-    expect(providerUrl.searchParams.get("from")).toBe("1784692000");
-    expect(providerUrl.searchParams.get("to")).toBe("1784692900");
-    expect(providerUrl.pathname).toBe("/v1/fixed_rate@200ms/history");
+    expect(JSON.parse(requestedBody).req).toEqual({
+      coin: "XLM", interval: "15m", startTime: 1_784_692_000_000, endTime: 1_784_692_900_000,
+    });
     expect(response.candles).toEqual([]);
     expect(response.hasMore).toBe(false);
-    expect(parsePythTradingViewCandles({ s: "no_data" })).toEqual([]);
   });
 
-  test("retries an aborted cold Pyth candle request", async () => {
+  test("retries an aborted cold candle request", async () => {
     let requests = 0;
     const fetcher = async () => {
       requests += 1;
       if (requests === 1) throw new DOMException("The operation was aborted.", "AbortError");
-      return new Response(JSON.stringify({
-        c: [0.19],
-        h: [0.195],
-        l: [0.185],
-        o: [0.188],
-        s: "ok",
-        t: [1_784_692_000],
-        v: [0],
-      }), { status: 200 });
+      return new Response(JSON.stringify([{ c: 0.19, h: 0.195, l: 0.185, o: 0.188, t: 1_784_692_000_000, v: 0 }]), { status: 200 });
     };
     const env = loadEnv();
     env.pythApiKey = "test-pyth-key";
@@ -335,7 +271,7 @@ describe("support workers", () => {
     expect(response.candles.at(-1)?.close).toBe(0.19);
   });
 
-  test("uses public Hyperliquid candles when Pyth Pro is not configured", async () => {
+  test("uses native trade candles for chart history", async () => {
     let requestedUrl = "";
     let requestedInit: RequestInit | undefined;
     const fetcher = async (input: URL | RequestInfo, init?: RequestInit) => {
@@ -382,11 +318,12 @@ describe("support workers", () => {
       low: 0.185,
       open: 0.19,
       time: "2026-07-22T04:01:40.000Z",
+      trades: 12,
       volume: 400.5,
     }]);
   });
 
-  test("falls back to Hyperliquid when a Pyth Pro market is not entitled", async () => {
+  test("keeps chart history on the candle stream provider even with Pyth configured", async () => {
     const requestedProviders: string[] = [];
     const fetcher = async (input: URL | RequestInfo) => {
       const url = String(input);
@@ -417,7 +354,7 @@ describe("support workers", () => {
       marketId: "xlm-usd-perp",
     });
 
-    expect(requestedProviders.filter((url) => url.includes("pyth.dourolabs.app"))).toHaveLength(2);
+    expect(requestedProviders).toEqual(["https://api.hyperliquid.xyz/info"]);
     expect(requestedProviders.at(-1)).toBe("https://api.hyperliquid.xyz/info");
     expect(response.source).toBe("hyperliquid");
     expect(response.candles.at(-1)?.close).toBe(0.20);

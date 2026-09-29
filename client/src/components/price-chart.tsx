@@ -7,9 +7,11 @@ import {
   HistogramSeries,
   LineSeries,
   createChart,
+  type AutoscaleInfoProvider,
   type CandlestickData,
   type HistogramData,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type LineData,
   type MouseEventParams,
@@ -38,6 +40,7 @@ export interface PriceChartProps {
   drawingScope: string;
   indicators: ChartIndicatorId[];
   market: MarketDisplay;
+  markPrice?: number;
   onLoadOlder: () => Promise<void>;
 }
 
@@ -51,6 +54,7 @@ interface ChartSeries {
   bollingerMiddle?: ISeriesApi<"Line">;
   bollingerUpper?: ISeriesApi<"Line">;
   candles: ISeriesApi<"Candlestick">;
+  mark?: IPriceLine;
   ema?: ISeriesApi<"Line">;
   macd?: ISeriesApi<"Line">;
   macdHistogram?: ISeriesApi<"Histogram">;
@@ -89,7 +93,7 @@ function chartTheme() {
 }
 
 export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function PriceChart(
-  { candles, drawingScope, indicators, market, onLoadOlder },
+  { candles, drawingScope, indicators, market, markPrice, onLoadOlder },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -98,6 +102,7 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
   const loadOlderRef = useRef(onLoadOlder);
   const candlesRef = useRef(candles);
   const indicatorsRef = useRef(indicators);
+  const markPriceRef = useRef(markPrice);
   const initialRangeSetRef = useRef(false);
   const previousFirstTimeRef = useRef<number | undefined>(undefined);
   const historyRequestPendingRef = useRef(false);
@@ -111,6 +116,7 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
   loadOlderRef.current = onLoadOlder;
   candlesRef.current = candles;
   indicatorsRef.current = indicators;
+  markPriceRef.current = markPrice;
 
   useImperativeHandle(ref, () => ({
     reset: () => {
@@ -192,6 +198,7 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
       wickUpColor: "#28d58f",
     }, 0);
     const series: ChartSeries = { candles: candleSeries };
+    syncMarkLine(series, markPriceRef.current);
 
     const handleCrosshair = (param: MouseEventParams<Time>) => {
       const value = param.seriesData.get(candleSeries) as CandlestickData<Time> | undefined;
@@ -256,6 +263,10 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
       cleanupChart();
     };
   }, []);
+
+  useEffect(() => {
+    if (seriesRef.current) syncMarkLine(seriesRef.current, markPrice);
+  }, [markPrice]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -363,6 +374,28 @@ function syncVolumeSeries(
     time: toTime(point.time),
     value: point.value,
   })));
+}
+
+function syncMarkLine(series: ChartSeries, price?: number): void {
+  const validPrice = price !== undefined && Number.isFinite(price) && price > 0;
+  const autoscaleInfoProvider: AutoscaleInfoProvider | undefined = validPrice ? (base) => {
+    const range = base();
+    if (!range?.priceRange) return range;
+    return { ...range, priceRange: {
+      minValue: Math.min(range.priceRange.minValue, price),
+      maxValue: Math.max(range.priceRange.maxValue, price),
+    } };
+  } : undefined;
+  series.candles.applyOptions({ autoscaleInfoProvider });
+  if (price === undefined || !Number.isFinite(price) || price <= 0) {
+    if (series.mark) series.candles.removePriceLine(series.mark);
+    series.mark = undefined;
+    return;
+  }
+  if (series.mark) series.mark.applyOptions({ price });
+  else series.mark = series.candles.createPriceLine({
+    price, title: "Mark", color: "#ff7a32", lineWidth: 1, lineStyle: 2, axisLabelVisible: true,
+  });
 }
 
 function configureIndicators(

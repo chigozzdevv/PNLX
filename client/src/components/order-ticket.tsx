@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft, CircleDollarSign, Plus } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ActionToast } from "@/components/action-toast";
 import { USDC_SCALE, usdcToProtocolAmount } from "@/lib/asset-units";
 import { formatNumber, formatUsd } from "@/lib/format";
@@ -70,6 +70,7 @@ export function OrderTicket({
   const [margin, setMargin] = useState(() => readStoredMargin(market.marketId, order.collateral));
   const [fundAmount, setFundAmount] = useState(() => readStoredMargin(market.marketId, order.collateral));
   const [limitPrice, setLimitPrice] = useState(market.price);
+  const priceInitialized = useRef(market.price > 0);
   const slippagePercent = useSlippagePercent();
   const [leverage, setLeverage] = useState(Math.min(order.leverage, market.maxLeverage));
   const [takeProfitPrice, setTakeProfitPrice] = useState(
@@ -101,7 +102,8 @@ export function OrderTicket({
   const stopLossPercent = percentFromPnl("sl", stopLossPnl, margin);
   const availableCollateralValue = availableCollateral ?? 0;
   const hasEnoughCollateral = availableCollateralValue >= margin;
-  const canSubmit = connected && Boolean(onSubmit) && !submitting && !depositing && margin > 0 && hasEnoughCollateral;
+  const priceReady = Number.isFinite(market.price) && market.price > 0;
+  const canSubmit = connected && priceReady && Boolean(onSubmit) && !submitting && !depositing && margin > 0 && hasEnoughCollateral;
   const canDeposit = connected && Boolean(onDeposit) && !submitting && !depositing && fundAmount > 0;
   const primaryDisabled = !canSubmit;
   const primaryBusy = submitting || depositing;
@@ -109,6 +111,14 @@ export function OrderTicket({
     const riskMove = leverage > 0 ? 1 / leverage - market.maintenanceMarginRate : 0;
     return side === "long" ? sizingPrice * (1 - riskMove) : sizingPrice * (1 + riskMove);
   }, [leverage, market.maintenanceMarginRate, side, sizingPrice]);
+
+  useEffect(() => {
+    if (!priceReady || priceInitialized.current) return;
+    priceInitialized.current = true;
+    setLimitPrice(market.price);
+    setTakeProfitPrice((current) => current > 0 ? current : order.takeProfitPrice ?? defaultTakeProfit(side, market.price, leverage));
+    setStopLossPrice((current) => current > 0 ? current : order.stopLossPrice ?? defaultStopLoss(side, market.price, leverage));
+  }, [market.price, leverage, side, order.stopLossPrice, order.takeProfitPrice, priceReady]);
 
   useEffect(() => {
     writeStoredMargin(market.marketId, margin);
@@ -168,6 +178,7 @@ export function OrderTicket({
   }
 
   async function submitOrder() {
+    if (!priceReady) return;
     if (!connected) {
       setSubmitError("Connect a wallet first");
       return;
@@ -495,19 +506,19 @@ export function OrderTicket({
       <div className="ticket-order-preview" aria-label="Estimated order values">
         <div>
           <span>Position size</span>
-          <strong>{formatPositionSize(size, market.price)} {market.baseAsset}</strong>
+          <strong>{priceReady ? `${formatPositionSize(size, market.price)} ${market.baseAsset}` : "—"}</strong>
         </div>
         <div>
           <span>Exposure</span>
-          <strong>{formatUsd(exposure, { maximumFractionDigits: 2 })}</strong>
+          <strong>{priceReady ? formatUsd(exposure, { maximumFractionDigits: 2 }) : "—"}</strong>
         </div>
         <div>
           <span>Max taker fee</span>
-          <strong>{formatUsd(maxTakerFee, { maximumFractionDigits: 4 })}</strong>
+          <strong>{priceReady ? formatUsd(maxTakerFee, { maximumFractionDigits: 4 }) : "—"}</strong>
         </div>
         <div>
           <span>Est. liquidation</span>
-          <strong>${formatNumber(liquidationPrice, market.price < 10 ? 5 : 2)}</strong>
+          <strong>{priceReady ? `$${formatNumber(liquidationPrice, market.price < 10 ? 5 : 2)}` : "—"}</strong>
         </div>
       </div>
 

@@ -187,6 +187,7 @@ export interface MarketDisplay {
   assetName: string;
   oraclePrice: string;
   price: number;
+  markPrice?: number;
   change24h: number;
   fundingRate: number | null;
   openInterest: number | null;
@@ -205,6 +206,7 @@ export interface ChartCandle {
   high: number;
   low: number;
   close: number;
+  trades?: number;
   volume: number;
 }
 

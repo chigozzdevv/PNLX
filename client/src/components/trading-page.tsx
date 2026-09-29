@@ -53,9 +53,9 @@ export function TradingPage() {
   );
   const [pendingOrders, setPendingOrders] = useState<ServerOwnerOrderSnapshot[]>([]);
   const [optimisticOrderClock, setOptimisticOrderClock] = useState(0);
-  const trading = useTradingData(wallet.session, refreshKey);
-  const ticker = useMarketTicker(trading.data.ticker);
   const [selectedMarketId, setSelectedMarketId] = useState(readStoredMarketId);
+  const trading = useTradingData(wallet.session, refreshKey, selectedMarketId);
+  const ticker = useMarketTicker(trading.data.ticker);
   const [chartInterval, setChartInterval] = useState<CandleInterval>("15m");
   const [ticketMode, setTicketMode] = useState<"trade" | "deposit">("trade");
   const [chartIndicators, setChartIndicators] = useState<ChartIndicatorId[]>([]);
@@ -69,16 +69,9 @@ export function TradingPage() {
     [activeMarketId, markets],
   );
   const candles = useMarketCandles(selectedMarket?.marketId, chartInterval);
-  const liveSelectedMarket = useMemo(() => {
-    if (!selectedMarket) return undefined;
-    const latestClose = candles.candles.at(-1)?.close;
-    if (!latestClose) return selectedMarket;
-    return {
-      ...selectedMarket,
-      price: latestClose,
-    };
-  }, [candles.candles, selectedMarket]);
-  const displaySelectedMarket = liveSelectedMarket;
+  const displaySelectedMarket = useMemo(() => selectedMarket ? {
+    ...selectedMarket, price: selectedMarket.markPrice ?? 0,
+  } : undefined, [selectedMarket]);
   const orderDraft = displaySelectedMarket ? orderDraftFromMarket(displaySelectedMarket) : undefined;
   const orders = useMemo(() => {
     const liveIds = new Set(trading.data.orders.map((order) => order.intentCommitment));
@@ -363,6 +356,7 @@ export function TradingPage() {
                     indicators={chartIndicators}
                     key={`${displaySelectedMarket.marketId}:${chartInterval}`}
                     market={displaySelectedMarket}
+                    markPrice={displaySelectedMarket.markPrice}
                     onLoadOlder={candles.loadOlder}
                     ref={priceChartRef}
                   />

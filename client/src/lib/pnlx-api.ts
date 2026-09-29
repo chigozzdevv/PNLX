@@ -8,8 +8,8 @@ export async function pnlxPost<T>(
   return pnlxRequest<T>("POST", path, data, token);
 }
 
-export async function pnlxGet<T>(path: string, token?: string): Promise<T> {
-  return pnlxRequest<T>("GET", path, undefined, token);
+export async function pnlxGet<T>(path: string, token?: string, signal?: AbortSignal): Promise<T> {
+  return pnlxRequest<T>("GET", path, undefined, token, signal);
 }
 
 function stringifyBody(data: unknown): string {
@@ -21,6 +21,7 @@ async function pnlxRequest<T>(
   path: string,
   data?: unknown,
   token?: string,
+  signal?: AbortSignal,
 ): Promise<T> {
   const requestBody = data === undefined ? undefined : stringifyBody(data);
   let response: Response;
@@ -34,6 +35,7 @@ async function pnlxRequest<T>(
         ...(data === undefined ? {} : { "content-type": "application/json" }),
       },
       method,
+      signal,
     });
     text = await response.text();
   } catch {

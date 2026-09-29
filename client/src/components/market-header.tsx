@@ -84,8 +84,8 @@ export function MarketHeader({ markets, selectedMarket, onSelectMarket }: Market
       </div>
 
       <div className="market-price-block">
-        <span>Price</span>
-        <strong>${formatNumber(selectedMarket.price, priceDigits)}</strong>
+        <span>Mark price</span>
+        <strong>{selectedMarket.markPrice === undefined ? "—" : `$${formatNumber(selectedMarket.markPrice, priceDigits)}`}</strong>
       </div>
 
       <div className="market-summary">

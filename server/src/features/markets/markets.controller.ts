@@ -29,6 +29,10 @@ export class MarketsController {
     return json(await this.markets.latestPrice(parseMarketPriceStream(request)));
   }
 
+  candleStream(request: Request): Response {
+    return this.markets.candleStream(parseMarketCandles(request), request.signal);
+  }
+
   prices(request: Request): Response {
     return this.markets.priceStream(parseMarketPriceStream(request), request.signal);
   }

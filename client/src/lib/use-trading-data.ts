@@ -78,7 +78,7 @@ const PRIVATE_OPENING_RECOVERY_PREFIX = "pnlx.account-key-opening-recovery.v2";
 const SUPPORTED_MARKET_ORDER = ["btc-usd-perp", "eth-usd-perp", "xlm-usd-perp", "sol-usd-perp", "xrp-usd-perp"];
 const SUPPORTED_MARKET_IDS = new Set(SUPPORTED_MARKET_ORDER);
 
-export function useTradingData(session: WalletSession | null, refreshKey = 0): TradingDataState {
+export function useTradingData(session: WalletSession | null, refreshKey = 0, watchedMarketId?: string): TradingDataState {
   const emptyData = useMemo(() => emptyLiveData(session), [session]);
   const [privateNotesVersion, setPrivateNotesVersion] = useState(0);
   const latestOnchainMarks = useRef(new Map<string, { price?: bigint; receivedAt: number }>());
@@ -122,31 +122,20 @@ export function useTradingData(session: WalletSession | null, refreshKey = 0): T
     };
   }, [emptyData, privateNotesVersion, refreshKey, session]);
 
-  const markMarketKey = useMemo(
-    () => [...new Set(
-      state.data.positions
-        .filter((position) => position.status === "open")
-        .map((position) => position.marketId),
-    )].sort().join("|"),
-    [state.data.positions],
-  );
+  const markMarketKey = useMemo(() => {
+    const watchedMarket = watchedMarketId && (
+      state.data.markets.find((market) => market.marketId === watchedMarketId) ?? state.data.markets[0]
+    );
+    return [...new Set([
+      ...(watchedMarket ? [watchedMarket.marketId] : []),
+      ...state.data.positions.filter((position) => position.status === "open").map((position) => position.marketId),
+    ])].sort().join("|");
+  }, [state.data.markets, state.data.positions, watchedMarketId]);
 
   useEffect(() => {
     function clearOnchainMark(marketId: string) {
       latestOnchainMarks.current.set(marketId, { receivedAt: Date.now() });
-      setState((current) => {
-        let changed = false;
-        const positions = current.data.positions.map((position) => {
-          if (
-            position.status !== "open" ||
-            position.marketId !== marketId ||
-            (position.marketPrice === undefined && position.unrealizedPnl === undefined)
-          ) return position;
-          changed = true;
-          return { ...position, marketPrice: undefined, unrealizedPnl: undefined };
-        });
-        return changed ? { ...current, data: { ...current.data, positions } } : current;
-      });
+      setState((current) => ({ ...current, data: applyLatestOnchainMarks(current.data, latestOnchainMarks.current) }));
     }
 
     if (!markMarketKey || typeof EventSource === "undefined") return;
@@ -173,26 +162,7 @@ export function useTradingData(session: WalletSession | null, refreshKey = 0): T
           const rawMarkPrice = BigInt(update.price);
           if (rawMarkPrice <= 0n) return;
           latestOnchainMarks.current.set(marketId, { price: rawMarkPrice, receivedAt: Date.now() });
-          const marketPrice = Number(rawMarkPrice) / PRICE_SCALE;
-          setState((current) => {
-            let changed = false;
-            const positions = current.data.positions.map((position) => {
-              if (position.status !== "open" || position.marketId !== marketId) return position;
-              const unrealizedPnl = unrealizedPnlAtMark(position, rawMarkPrice);
-              if (position.marketPrice === marketPrice && position.unrealizedPnl === unrealizedPnl) {
-                return position;
-              }
-              changed = true;
-              return {
-                ...position,
-                marketPrice,
-                unrealizedPnl,
-              };
-            });
-            return changed
-              ? { ...current, data: { ...current.data, positions } }
-              : current;
-          });
+          setState((current) => ({ ...current, data: applyLatestOnchainMarks(current.data, latestOnchainMarks.current) }));
         } catch {
           // Ignore malformed mark updates and keep the last verified value.
         }
@@ -228,16 +198,24 @@ export function useTradingData(session: WalletSession | null, refreshKey = 0): T
   return state;
 }
 
-function applyLatestOnchainMarks(
+export function applyLatestOnchainMarks(
   data: TradingLiveData,
   marks: Map<string, { price?: bigint; receivedAt: number }>,
+  now = Date.now(),
 ): TradingLiveData {
   let changed = false;
+  const markets = data.markets.map((market) => {
+    const mark = marks.get(market.marketId);
+    const markPrice = mark?.price && now - mark.receivedAt <= ONCHAIN_MARK_MAX_SILENCE_MS
+      ? Number(mark.price) / PRICE_SCALE : undefined;
+    if (market.markPrice === markPrice) return market;
+    changed = true;
+    return { ...market, markPrice };
+  });
   const positions = data.positions.map((position) => {
     if (position.status !== "open") return position;
     const mark = marks.get(position.marketId);
-    if (!mark) return position;
-    if (!mark.price || Date.now() - mark.receivedAt > ONCHAIN_MARK_MAX_SILENCE_MS) {
+    if (!mark?.price || now - mark.receivedAt > ONCHAIN_MARK_MAX_SILENCE_MS) {
       if (position.marketPrice === undefined && position.unrealizedPnl === undefined) return position;
       changed = true;
       return { ...position, marketPrice: undefined, unrealizedPnl: undefined };
@@ -248,7 +226,7 @@ function applyLatestOnchainMarks(
     changed = true;
     return { ...position, marketPrice, unrealizedPnl };
   });
-  return changed ? { ...data, positions } : data;
+  return changed ? { ...data, markets, positions } : data;
 }
 
 function unrealizedPnlAtMark(

@@ -39,6 +39,7 @@ export interface MarketCandle {
   low: number;
   open: number;
   time: string;
+  trades?: number;
   volume: number;
 }
 

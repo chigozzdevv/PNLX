@@ -230,6 +230,12 @@ export class MarketsService {
     return this.marketData.latestPrice(marketId);
   }
 
+  candleStream(input: MarketCandlesInput, signal?: AbortSignal): Response {
+    return this.marketData.streamCandles(input, signal, (candle) => applySettlementVolumes(
+      [candle], input, this.executor.store.marketSettlementVolumes.values(),
+    )[0]);
+  }
+
   priceStream(marketId: string, signal?: AbortSignal): Response {
     return this.marketData.stream(marketId, signal);
   }
