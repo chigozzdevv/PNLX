@@ -59,7 +59,7 @@ export class RelayerService {
     if (output && output.status !== 0) {
       throw new Error(`stellar relay failed (${relayTarget(request.kind, invokePayload)}): ${formatStellarFailure(output)}`);
     }
-    const txHash = output ? parseTxHash(commandOutput(output)) : undefined;
+    const txHash = output ? parseTxHash(output.stdout, output.stderr) : undefined;
     if (command && output?.status === 0 && sendsTransaction(command) && !txHash) {
       throw new Error("stellar relay did not return a transaction hash");
     }
@@ -110,7 +110,7 @@ export class RelayerService {
     if (output.status !== 0) {
       throw new Error(`stellar relay failed (${relayTarget(request.kind, invokePayload)}): ${formatStellarFailure(output)}`);
     }
-    const txHash = parseTxHash(commandOutput(output));
+    const txHash = parseTxHash(output.stdout, output.stderr);
     if (sendsTransaction(command) && !txHash) {
       throw new Error("stellar relay did not return a transaction hash");
     }
@@ -168,7 +168,7 @@ export class RelayerService {
       }
       const hashCommand = stellarTxHashCommand(this.config, xdr);
       const hashed = await runCommandWithRetryAsync(hashCommand, this.commandTimeoutMs(), runner, request.signal);
-      const txHash = hashed.status === 0 ? parseTxHash(commandOutput(hashed)) : undefined;
+      const txHash = hashed.status === 0 ? parseTxHash(hashed.stdout, hashed.stderr) : undefined;
       if (!txHash) throw new Error("journaled transaction hash was not returned");
       if (prepared && txHash.toLowerCase() !== prepared.txHash.toLowerCase()) {
         throw new Error("resumed XDR does not match the journaled transaction hash");
@@ -181,7 +181,7 @@ export class RelayerService {
       let output: CommandResult;
       try { output = await runner(command[0], command.slice(1), this.commandTimeoutMs()); }
       catch { throw new JournaledRelayError(txHash, "journaled transaction response lost; reconciliation required"); }
-      const returnedHash = parseTxHash(commandOutput(output));
+      const returnedHash = parseTxHash(output.stdout, output.stderr);
       if (output.status !== 0 || returnedHash !== txHash) {
         throw new JournaledRelayError(txHash, output.status !== 0
           ? "journaled transaction response uncertain; reconcile the prepared transaction hash"
@@ -312,7 +312,7 @@ export class RelayerService {
     if (output && output.status !== 0) {
       throw new Error(`Transaction rejected by Stellar: ${formatStellarFailure(output)}`);
     }
-    const txHash = output ? parseTxHash(commandOutput(output)) : undefined;
+    const txHash = output ? parseTxHash(output.stdout, output.stderr) : undefined;
     if (command && output?.status === 0 && !txHash) {
       throw new Error("stellar relay did not return a transaction hash");
     }
@@ -739,7 +739,7 @@ function hashTransactionXdr(
   if (output.status !== 0) {
     throw new Error(`${label} XDR is malformed: ${formatStellarFailure(output)}`);
   }
-  const txHash = parseTxHash(commandOutput(output));
+  const txHash = parseTxHash(output.stdout, output.stderr);
   if (!txHash) {
     throw new Error(`${label} XDR hash was not returned`);
   }
@@ -796,51 +796,61 @@ function formatStellarFailure(output: CommandResult): string {
   return text || String(output.status ?? "unknown stellar cli failure");
 }
 
-function parseTxHash(output: string): `0x${string}` | undefined {
-  const fromJson = txHashFromJson(output);
-  if (fromJson) return fromJson;
-
-  const match = output.trim().match(/^(?:0x)?([0-9a-fA-F]{64})$/) ??
-    output.match(/(?:transaction hash(?: is)?|txHash|transactionHash|transaction_hash)["'\s:=]+(?:0x)?([0-9a-fA-F]{64})(?:$|[^0-9a-fA-F])/i);
-  return match ? `0x${match[1].toLowerCase()}` : undefined;
-}
-
-function txHashFromJson(output: string): `0x${string}` | undefined {
-  const trimmed = output.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return undefined;
-
-  try {
-    return findTxHash(JSON.parse(trimmed));
-  } catch {
-    return undefined;
-  }
-}
-
-function findTxHash(value: unknown): `0x${string}` | undefined {
-  if (typeof value === "string") {
-    const match = value.match(/^(?:0x)?([0-9a-fA-F]{64})$/);
-    return match ? `0x${match[1].toLowerCase()}` : undefined;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findTxHash(item);
-      if (found) return found;
+function parseTxHash(...outputs: string[]): `0x${string}` | undefined {
+  const candidates = new Set<`0x${string}`>();
+  const explorerHashes = new Set<`0x${string}`>();
+  const add = (value: unknown) => {
+    if (typeof value !== "string") return;
+    const match = value.match(/^(?:0x)?([0-9a-f]{64})$/i);
+    if (match) candidates.add(`0x${match[1].toLowerCase()}`);
+  };
+  for (const output of outputs) {
+    const text = output.replace(/\x1b\[[0-9;]*m/g, "").trim();
+    add(text);
+    try {
+      const value: unknown = JSON.parse(text);
+      if (typeof value === "string") add(value);
+      else collectJsonTxHashes(value, add);
+    } catch {
+      for (const raw of text.split(/\r?\n/)) {
+        const line = raw.trim();
+        add(line);
+        try {
+          const value: unknown = JSON.parse(line);
+          if (typeof value === "string") add(value);
+          else collectJsonTxHashes(value, add);
+          continue;
+        } catch { /* CLI progress lines are not JSON. */ }
+        const progress = line.replace(/^[^a-z0-9"'\[\{]+/i, "");
+        const labelled = progress.match(/^(?:["']?(?:transaction hash|signing transaction|txHash|transactionHash|transaction_hash|tx_hash)["']?)(?:\s*[:=]\s*|\s+is\s+|\s+)["']?((?:0x)?[0-9a-f]{64})["']?\s*,?$/i);
+        if (labelled) add(labelled[1]);
+        const jsonField = line.match(/^"(?:hash|txHash|transactionHash|transaction_hash|tx_hash)"\s*:\s*"((?:0x)?[0-9a-f]{64})"\s*,?$/i);
+        if (jsonField) add(jsonField[1]);
+        try {
+          const url = new URL(progress);
+          const tx = url.pathname.match(/^\/explorer\/(?:testnet|public|futurenet)\/tx\/(?:0x)?([0-9a-f]{64})\/?$/i);
+          if (url.protocol === "https:" && url.hostname === "stellar.expert" && !url.port &&
+            !url.username && !url.password && !url.search && !url.hash && tx) {
+            explorerHashes.add(`0x${tx[1].toLowerCase()}`);
+          }
+        } catch { /* Only complete, recognized transaction URLs corroborate a hash. */ }
+      }
     }
-    return undefined;
   }
-  if (!value || typeof value !== "object") return undefined;
+  if (candidates.size !== 1) return undefined;
+  const hash = [...candidates][0]!;
+  return [...explorerHashes].every((value) => value === hash) ? hash : undefined;
+}
 
+function collectJsonTxHashes(value: unknown, add: (value: unknown) => void): void {
+  if (Array.isArray(value)) {
+    for (const item of value) collectJsonTxHashes(item, add);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
   const record = value as Record<string, unknown>;
-  for (const key of ["hash", "txHash", "transactionHash", "transaction_hash"] as const) {
-    const found = findTxHash(record[key]);
-    if (found) return found;
-  }
-  for (const nested of Object.values(record)) {
-    if (!nested || typeof nested !== "object") continue;
-    const found = findTxHash(nested);
-    if (found) return found;
-  }
-  return undefined;
+  for (const key of ["hash", "txHash", "transactionHash", "transaction_hash", "tx_hash"]) add(record[key]);
+  for (const nested of Object.values(record)) collectJsonTxHashes(nested, add);
 }
 
 function parseBuiltXdr(output: string): string | undefined {
