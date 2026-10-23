@@ -9,8 +9,8 @@ use boundless_market::{
 };
 use clap::Parser;
 use pnlx_risc0_batch_match_core::{prove_request, ProofRequest};
-use risc0_zkvm::{default_executor, sha::Digest, ExecutorEnv, Journal};
-use serde::Serialize;
+use risc0_zkvm::{compute_image_id, default_executor, sha::Digest, ExecutorEnv, Journal};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as ShaDigest, Sha256};
 use std::{env, fs, path::PathBuf, str::FromStr, time::Duration};
 use tracing_subscriber::{filter::LevelFilter, prelude::*, EnvFilter};
@@ -73,6 +73,47 @@ struct RequestOutput {
     request_id: String,
 }
 
+struct GuestProgram {
+    bytes: Vec<u8>,
+    image_id: Digest,
+    path: PathBuf,
+}
+
+impl GuestProgram {
+    fn load(path: Option<PathBuf>) -> Result<Self> {
+        let (bytes, path) = match path {
+            Some(path) => (
+                fs::read(&path).context("read configured guest program")?,
+                path,
+            ),
+            None => (
+                pnlx_risc0_methods::BATCH_MATCH_ELF.to_vec(),
+                PathBuf::from(pnlx_risc0_methods::BATCH_MATCH_PATH),
+            ),
+        };
+        let image_id = compute_image_id(&bytes).context("compute guest program image ID")?;
+        Ok(Self {
+            bytes,
+            image_id,
+            path,
+        })
+    }
+
+    fn verify_pin(&self) -> Result<()> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Pin {
+            image_id: String,
+        }
+        let pin: Pin = serde_json::from_str(include_str!("../../image-id.json"))?;
+        verify_image_id(self.image_id, &pin.image_id)?;
+        if let Ok(expected) = env::var("PNLX_EXPECTED_BATCH_MATCH_IMAGE_ID") {
+            verify_image_id(self.image_id, &expected)?;
+        }
+        Ok(())
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
@@ -85,12 +126,14 @@ async fn main() -> Result<()> {
         .init();
 
     let mut args = Args::parse();
+    let program =
+        GuestProgram::load(env::var_os("RISC0_BATCH_MATCH_PROGRAM_PATH").map(PathBuf::from))?;
     if args.print_image_id {
-        println!("0x{}", hex::encode(image_id_bytes()));
+        println!("0x{}", program.image_id);
         return Ok(());
     }
     if args.print_program_path {
-        println!("{}", pnlx_risc0_methods::BATCH_MATCH_PATH);
+        println!("{}", program.path.display());
         return Ok(());
     }
     let input_path = args
@@ -103,12 +146,12 @@ async fn main() -> Result<()> {
         .ok_or_else(|| anyhow!("OUTPUT_DIR is required unless an inspection flag is used"))?;
     args.input_path = Some(input_path);
     args.output_dir = Some(output_dir);
-    run(args).await
+    run(args, program).await
 }
 
-async fn run(args: Args) -> Result<()> {
+async fn run(args: Args, program: GuestProgram) -> Result<()> {
     reject_dev_mode()?;
-    verify_expected_image_id()?;
+    program.verify_pin()?;
     let input_path = args.input_path.as_ref().expect("validated input path");
     let output_dir = args
         .output_dir
@@ -122,7 +165,7 @@ async fn run(args: Args) -> Result<()> {
     let proved = prove_request(&request);
     let journal = Journal::new(proved.journal.clone());
 
-    let cycles = preflight(&request, &proved.journal)?;
+    let cycles = preflight(&program.bytes, &request, &proved.journal)?;
     tracing::info!("RISC0 batch-match preflight completed in {cycles} cycles");
     if args.preflight_only {
         return Ok(());
@@ -152,9 +195,9 @@ async fn run(args: Args) -> Result<()> {
             .context("encode zkVM input for Boundless")?;
         let proof_request = client
             .new_request()
-            .with_program(pnlx_risc0_methods::BATCH_MATCH_ELF)
+            .with_program(program.bytes.clone())
             .with_env(env)
-            .with_image_id(image_id_digest())
+            .with_image_id(program.image_id)
             .with_cycles(cycles)
             .with_journal(journal)
             .with_offer(default_offer()?)
@@ -180,7 +223,7 @@ async fn run(args: Args) -> Result<()> {
     if journal_bytes != proved.journal {
         anyhow::bail!("Boundless journal does not match expected batch public input bytes");
     }
-    if Digest::from(<[u8; 32]>::from(image_id)) != image_id_digest() {
+    if Digest::from(<[u8; 32]>::from(image_id)) != program.image_id {
         anyhow::bail!("Boundless image id does not match PNLX batch-match guest");
     }
 
@@ -205,14 +248,14 @@ async fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
-fn preflight(request: &ProofRequest, expected_journal: &[u8]) -> Result<u64> {
+fn preflight(program: &[u8], request: &ProofRequest, expected_journal: &[u8]) -> Result<u64> {
     let env = ExecutorEnv::builder()
         .write(request)
         .context("encode zkVM preflight input")?
         .build()
         .context("build zkVM preflight environment")?;
     let session = default_executor()
-        .execute(env, pnlx_risc0_methods::BATCH_MATCH_ELF)
+        .execute(env, program)
         .context("execute batch-match guest preflight")?;
     if session.journal.bytes != expected_journal {
         anyhow::bail!("RISC0 guest preflight journal does not match expected batch output");
@@ -273,12 +316,9 @@ fn reject_dev_mode() -> Result<()> {
     Ok(())
 }
 
-fn verify_expected_image_id() -> Result<()> {
-    let Ok(expected) = env::var("PNLX_EXPECTED_BATCH_MATCH_IMAGE_ID") else {
-        return Ok(());
-    };
-    let actual = format!("0x{}", hex::encode(image_id_bytes()));
-    if !actual.eq_ignore_ascii_case(&expected) {
+fn verify_image_id(image_id: Digest, expected: &str) -> Result<()> {
+    let actual = format!("0x{image_id}");
+    if !actual.eq_ignore_ascii_case(expected) {
         anyhow::bail!("batch-match guest image ID does not match the pinned deployment image ID: expected {expected}, built {actual}");
     }
     Ok(())
@@ -390,21 +430,19 @@ fn batch_match_cycles() -> Result<u64> {
     }
 }
 
-fn image_id_digest() -> Digest {
-    Digest::from(image_id_bytes())
-}
-
-fn image_id_bytes() -> [u8; 32] {
-    let mut out = [0u8; 32];
-    for (index, word) in pnlx_risc0_methods::BATCH_MATCH_ID.iter().enumerate() {
-        out[index * 4..index * 4 + 4].copy_from_slice(&word.to_le_bytes());
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_program_uses_its_actual_image_and_rejects_a_wrong_pin() {
+        let program =
+            GuestProgram::load(Some(PathBuf::from(pnlx_risc0_methods::BATCH_MATCH_PATH))).unwrap();
+        assert_eq!(program.image_id, compute_image_id(&program.bytes).unwrap());
+        assert!(verify_image_id(program.image_id, &format!("0x{}", program.image_id)).is_ok());
+        assert!(verify_image_id(program.image_id, &format!("0x{}", "00".repeat(32))).is_err());
+        assert!(GuestProgram::load(Some(PathBuf::from("/no-such-pnlx-guest"))).is_err());
+    }
 
     #[test]
     fn accepts_production_offer_ordering() {
