@@ -16,7 +16,8 @@
     "liquidation": "CCNATX32NICKSGUKM3MDEUJ7IYEZMZM3QAJEJPQ3WG4PAALRVNU3HJR4",
     "position-close": "CDTPAULZ2IC3427X3WGU5OAFK277HWEQ3EAL6MUDTT4QY4ZART7GTG4N",
     "disclosure-verifier": "CCWQJBFQWV63ZQMSDTQJ6NWZX4VITZNYJLSQI5AYREC7GYG3EHCCR4HZ",
-    "liquidity-vault": "CAU23XCVR5EMOMCMAZ3CIKJAHS7QREUUX7QX5B5QECUPZ2NQMKOLAT2M"
+    "liquidity-vault": "CAU23XCVR5EMOMCMAZ3CIKJAHS7QREUUX7QX5B5QECUPZ2NQMKOLAT2M",
+    "legacy-pair-exit": "CCSSI66X6HBQ7DC7EC2CBKYAERVLJYWTO5WV6V2EDNLZZ43XMZUEYAGJ"
   },
   "network": "testnet",
   "risc0VerifierStack": {
@@ -26,7 +27,7 @@
     "router": "CCM3HDMOON2B3LYEVWOF4I6LUQ2OATCENYRGAIQSNYTHU3XYBNXUIJ5E",
     "selector": "73c457ba"
   },
-  "risc0BatchMatchImageId": "0xc66bb3de46c1f158e85066f765ff7275961853d7575c228f9abdbd8694ec0128",
+  "risc0BatchMatchImageId": "0xc55d4795131e29e89f8fdfb9cca03793458418c31c734712ec970c212ad27284",
   "source": "pnlx-admin",
   "sourceAddress": "GDNHJPGBEPMMAINDMU3TN6V6PCDQKXWVY4FWHLMBJXPCBSCKLUYIESOC",
   "feeDestinations": {
@@ -47,24 +48,26 @@
     "withdraw-proof-verifier": "CDPKC22GX74JE5I2FYXPA2KVKJ4XKZNMICUXG4UG7J3CDY2IBZYEMX35",
     "batch-match-risc0-verifier": "CBYI35OAPFJK6H5WFLAZ36VC5KIZ6KZMCU6HMZJLJRPOJ3XKNTEDDFR7",
     "secure-deposit-note-proof-verifier": "CBUGPTG67S5DUV4G4FGXVZ2TFTICDX6MLDFWF3TNU35EMOYO47MVHNUD",
-    "secure-withdraw-proof-verifier": "CCKF6LEUQMKMYK5KRGDG6STSYWRIX7BN4DHBTN4XKIPTPIPZAOIM5EGX"
+    "secure-withdraw-proof-verifier": "CCKF6LEUQMKMYK5KRGDG6STSYWRIX7BN4DHBTN4XKIPTPIPZAOIM5EGX",
+    "legacy-position-close-pair-proof-verifier": "CDQ26APYCECVS4NHT5KBNG6BC2KVBWMNHQIEITGF7RJDOMPHO7F4IDIU",
+    "position-close-pair-proof-verifier": "CBGYFRLMXBNLYLV52OELKZGY3ORHH4Y3CC5KKEZLZ52MS6W6VBLMM54H"
   },
   "wasmHashes": {
     "governance": "0x8c66029a6e456164ed209c92b935ec38d9f0c64eb4d46e29d90c47f17f23aa55",
     "proof-ledger": "0x6c675704c737e1fb89067e6ed50d09352927db945de02546c1d87c27542e1d4d",
     "price-oracle": "0x5c0a5fa1bc5a393d1717b3a5cafb7cb5841592c458163763e5de8ceb673d7d12",
-    "position-state": "0x07e98a0fcebd0f579199ef750879c771fa09861b377ddc635d5f82e8fb16142c",
+    "position-state": "0xfaf03cfb62311c971b14a3c4649544b935ba3280af57825c9960d1699b4936bf",
     "shielded-pool": "0x980aca41884c5367e21b0415c35baa3a2e21d4f7f964735543aeabfd5b31de16",
-    "intent-registry": "0x3e2ef1809d164869c6083d6cedcdd04e4ff855707e5baebef5f59918fd415e7d",
-    "conditional-order": "0xa1fa962060aac4c5362b2bde3a55e7889f10c6d979e9ff312933b9da4ee34a88",
-    "market": "0xfceb80ce0f591f1abcdf0905b7b06f4a7db3f0153833ea4dd1e412dd942d45d1",
+    "intent-registry": "0x7c8e987bf1579e4cb6e20fe1c9b9b27475c729d549f267fa0533503a7f9fd855",
+    "conditional-order": "0x2015c66402e55bfb26f353873799e22e21396c2912757def64fe12077a70c12f",
+    "market": "0xb44143eef90eb122af99b60314b39af1de00a380e2145b5dadf8875a0f88daa4",
     "funding-settlement": "0xdddf25788fd96747f48dd8e1c2d5e16869b210fd8cb3fdc14b6c7a0fa42e699a",
-    "batch-settlement": "0xacc4da639dd355eec6b8332a2291b0669e15178297e6dbac7a6cffd43fc496f6",
-    "liquidation": "0x177675c4547499b4fca83b96b4e057761e0e3dfee578cfe3b18459e26a78b1c4",
-    "position-close": "0xaced0e6765ed4a718748b4038d19b56ec5c97aba39b5411059938d9706d4068c",
+    "batch-settlement": "0x49696c34eb05baa9b852f7201c08ae8d370a7a1963ecd23e2b0cdf93fb5ff5aa",
+    "liquidation": "0xdd0376bf4c06a65d01087ca2e3c60018536aa30181d10b104175a7445d1e8d4a",
+    "position-close": "0xf274de567a41273429e2e7156a2e81458917dd1be0a382c9f8249f8f31e78a98",
     "disclosure-verifier": "0x2c98496fe148895113b7e8f65fa5397f878aa424a05296530116df118cfe653c",
     "proof-verifier": "0x671fc838a286644c6eee5aeb0dac7d6e86ee7e099f48bd7452fb6f1da6895152",
-    "risc0-proof-verifier": "0xa96c47407222ad66ad50a7ed34fb30bdf2c4baa0c89feb2459841ea1ff27896a",
+    "risc0-proof-verifier": "0xf789174baecf6e86e68931b7cbcbd9412559b0cfa6d7f30a551c92bff924adeb",
     "risc0-router": "0xed1473aca5938c4d5c3efcbc378d6baa9dd9f322627ccf05618ab46602ea4227",
     "risc0-groth16-verifier": "0x6e1cb1bdcdd72f30341b2b4f53b19e4099ce6a15bf4a8c763b29ab19c7d7970b",
     "risc0-emergency-stop": "0x23d56e3995dd3898fbbd062978f52adf62a41cf2143d757d147d407d6a1b650a",
@@ -78,7 +81,62 @@
     "position-close-proof-verifier": "0x671fc838a286644c6eee5aeb0dac7d6e86ee7e099f48bd7452fb6f1da6895152",
     "position-transition-proof-verifier": "0xbe24718b96844aaf4af5df11d562b80b9bd2eac5dab624f9c7096ab43cfe0d08",
     "withdraw-proof-verifier": "0x671fc838a286644c6eee5aeb0dac7d6e86ee7e099f48bd7452fb6f1da6895152",
-    "batch-match-risc0-verifier": "0xa96c47407222ad66ad50a7ed34fb30bdf2c4baa0c89feb2459841ea1ff27896a",
-    "liquidity-vault": "0x5f58cb281a55a31b30af708c6a299e32573099aba9320d5fc5402b09da0d98f6"
-  }
+    "batch-match-risc0-verifier": "0xf789174baecf6e86e68931b7cbcbd9412559b0cfa6d7f30a551c92bff924adeb",
+    "liquidity-vault": "0x5f58cb281a55a31b30af708c6a299e32573099aba9320d5fc5402b09da0d98f6",
+    "legacy-pair-exit": "0xafdd874c12e144fbee20cb479cfc590949380b417a2d6dae798a99632aaf4f8e",
+    "legacy-position-close-pair-proof-verifier": "0x671fc838a286644c6eee5aeb0dac7d6e86ee7e099f48bd7452fb6f1da6895152",
+    "position-close-pair-proof-verifier": "0x671fc838a286644c6eee5aeb0dac7d6e86ee7e099f48bd7452fb6f1da6895152"
+  },
+  "legacyPairExit": {
+    "helper": "CCSSI66X6HBQ7DC7EC2CBKYAERVLJYWTO5WV6V2EDNLZZ43XMZUEYAGJ",
+    "verifier": "CDQ26APYCECVS4NHT5KBNG6BC2KVBWMNHQIEITGF7RJDOMPHO7F4IDIU",
+    "circuitId": "0xccf82f9578ff9728e03f02753d8603bfc00c18f8b64187c455f503743e0b4c3b",
+    "circuitHash": "0xd50633aa2aea84ad737ee7f2bf1f8e19a9572b58289960b32052bc308947f657",
+    "verifierHash": "0xdc693257cb3268296a708d6af522afee722b20cd94c3608a677c0455d4320061",
+    "helperWasmHash": "0xafdd874c12e144fbee20cb479cfc590949380b417a2d6dae798a99632aaf4f8e",
+    "verifierWasmHash": "0x671fc838a286644c6eee5aeb0dac7d6e86ee7e099f48bd7452fb6f1da6895152",
+    "allowlistHash": "0xdf5d9db70f68c9ca7b7929e0999c3cf0ab6c85a548e3958d437a3c248bee5400",
+    "allowedPairs": [
+      {
+        "asset_digest": "0200996c3c920e50797dbbaabd79671c5713320f8d3acad8c25592e7f4f00288",
+        "market_id": "e165e4d4aaa072398b2f7b0f21c6bee52e3ff3c23f00edecd961ce7c3cc60fe8",
+        "position_commitments": [
+          "0f4036bbd0a34fa0901ef52023012adcd7fcc1d21ce48919a41c091b611b28d5",
+          "16b5af648f484a756984aa6877e2083c9f66eb0dcd12073b9d1cf48e1a505169"
+        ],
+        "position_nullifiers": [
+          "0064f1df22fcd9531404947417255f9aedafc0557afbb5926f1ff1a81c0bb50d",
+          "1b911299112fbaf94ed3447e38d70dd4f776ee595a9070f9454a182c074ba682"
+        ]
+      },
+      {
+        "asset_digest": "0200996c3c920e50797dbbaabd79671c5713320f8d3acad8c25592e7f4f00288",
+        "market_id": "e165e4d4aaa072398b2f7b0f21c6bee52e3ff3c23f00edecd961ce7c3cc60fe8",
+        "position_commitments": [
+          "115ac4a4f674e2c280f93f4cf5aa531583b72bb8158506b5410859ee3983db40",
+          "261d8cf06fd5c676f0aad814de6bfa90894d0211921934946c16a58da29ebea6"
+        ],
+        "position_nullifiers": [
+          "1993cf67654355c072e168f4b5ed44b9e58e4eeefcb35259c8a53bda18fb464b",
+          "0c5ad4b75c49057e7dc76224753b4a9d39f6873aa1f196b298491a66850c2fa4"
+        ]
+      },
+      {
+        "asset_digest": "0200996c3c920e50797dbbaabd79671c5713320f8d3acad8c25592e7f4f00288",
+        "market_id": "e165e4d4aaa072398b2f7b0f21c6bee52e3ff3c23f00edecd961ce7c3cc60fe8",
+        "position_commitments": [
+          "1793bdeafef17ff5724e6453000435572c32efa7294a313034262ec55e4b53b2",
+          "12b9af2dbc396ad62db5d9992e996e446d73ac4f86967278b8c05485764c7dab"
+        ],
+        "position_nullifiers": [
+          "010e66e4d20ce57a089e0b21acf744be4977bdbbf9c309832b6093017955133f",
+          "07541b59eea2764853fcfaa0a219954c71dac23297c6305d978d0413097a37d3"
+        ]
+      }
+    ],
+    "active": false,
+    "createdAt": "2026-10-23T16:57:47.205Z",
+    "retiredVerifierHash": "0xe9b16e730458dc8d62d8bb893fc79c313b768340e1f874dc691a121ff19dd7a3"
+  },
+  "risc0BatchMatchVerifierHash": "0x68b9c0d6d7b51dab49ab184f7ecc403b4a4d7976757796e5c62d45f159c41b4a"
 }
