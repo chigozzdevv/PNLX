@@ -42,6 +42,8 @@ pub struct RecoveredIntent {
     pub note_change_commitment: String,
     pub note_nullifier: String,
     pub owner_commitment: String,
+    pub owner_digest: String,
+    pub position_seed: String,
     pub signed_size: String,
     pub source_intent_commitment: Option<String>,
 }
@@ -140,6 +142,8 @@ struct Execution {
 }
 
 struct Residual {
+    owner_digest: String,
+    position_seed: String,
     intent_commitment: String,
     limit_price: u128,
     margin: u128,
@@ -338,12 +342,13 @@ fn match_batch(request: &ProofRequest) -> MatchOutput {
         } else {
             fees.maker_rebate as i128
         };
+        let reverse = to_field_biguint(&field_hash_pair(&longs[long_index].intent.position_seed, &shorts[short_index].intent.position_seed)).bit(0);
         let long_fill = create_fill(
             request,
             &mut longs[long_index],
             size,
             price,
-            fills.len(),
+            fills.len() + if reverse { 1 } else { 0 },
             long_delta,
         );
         let short_fill = create_fill(
@@ -351,7 +356,7 @@ fn match_batch(request: &ProofRequest) -> MatchOutput {
             &mut shorts[short_index],
             size,
             price,
-            fills.len() + 1,
+            fills.len() + if reverse { 0 } else { 1 },
             short_delta,
         );
         let execution = create_execution(
@@ -372,8 +377,8 @@ fn match_batch(request: &ProofRequest) -> MatchOutput {
             &mut spent_nullifiers,
             shorts[short_index].intent.note_nullifier.clone(),
         );
-        fills.push(long_fill);
-        fills.push(short_fill);
+        if reverse { fills.push(short_fill); fills.push(long_fill); }
+        else { fills.push(long_fill); fills.push(short_fill); }
         executions.push(execution);
 
         longs[long_index].remaining -= size;
@@ -531,24 +536,24 @@ fn create_fill(
         "max leverage exceeded"
     );
 
-    let rho = format!("{}:position:{}", order.intent.intent_commitment, fill_index);
-    let blinding_raw = format!("{}:blinding:{}", order.intent.intent_commitment, fill_index);
-    let market_digest = digest_to_field_hex(&format!("market:{}", order.intent.market_id));
-    let owner_digest = digest_to_field_hex(&format!("owner:{}", order.intent.owner_commitment));
-    let rho_digest = digest_to_field_hex(&format!("rho:{rho}"));
-    let blinding = digest_to_field_hex(&format!("blinding:{blinding_raw}"));
-    let spend_secret_digest =
-        digest_to_field_hex(&format!("spend:{}:{}", order.intent.owner_commitment, rho));
+    assert!(to_field_biguint(&order.intent.position_seed) != BigUint::zero(), "private position seed required");
+    let market_digest = hash_fields("market-id", &[Norm::text(&order.intent.market_id)]);
+    let owner_digest = order.intent.owner_digest.clone();
+    let scoped = field_hash_pair(&order.intent.position_seed, &fill_index.to_string());
+    let rho_digest = field_hash_pair("0x504e4c5852484f", &scoped);
+    let blinding = field_hash_pair("0x504e4c58424c494e44", &scoped);
+    let spend_secret_digest = field_hash_pair("0x504e4c585350454e44", &scoped);
     let position_commitment = circuit_position_commitment(
         &market_digest,
         order.side,
         size,
         price,
         margin,
-        parse_u128(&request.market.funding_index),
+        parse_i128(&request.market.funding_index),
         &owner_digest,
         &rho_digest,
         &blinding,
+        &spend_secret_digest,
     );
     let position_nullifier = field_hash_pair(&spend_secret_digest, &rho_digest);
 
@@ -642,6 +647,8 @@ fn create_residuals(request: &ProofRequest, orders: &[BookOrder]) -> Vec<Residua
             let margin = order.margin - order.allocated_margin;
             assert!(margin > 0, "invalid residual margin");
             Residual {
+                owner_digest: order.intent.owner_digest.clone(),
+                position_seed: field_hash_pair(&order.intent.position_seed, &residual_commitment(order)),
                 intent_commitment: residual_commitment(order),
                 limit_price: order.limit_price,
                 margin,
@@ -679,15 +686,7 @@ fn residual_commitment(order: &BookOrder) -> String {
 }
 
 fn residual_nullifier(order: &BookOrder) -> String {
-    hash_fields(
-        "residual-nullifier",
-        &[
-            Norm::text(&order.intent.intent_commitment),
-            Norm::num(order.filled),
-            Norm::num(order.remaining),
-            Norm::num(order.allocated_margin),
-        ],
-    )
+    field_hash_pair("0x504e4c585245534e554c", &residual_commitment(order))
 }
 
 fn match_transcript_digest(output: &MatchOutput) -> String {
@@ -1012,7 +1011,7 @@ mod fee_tests {
         let proved = prove_request(&request);
         assert_eq!(
             proved.journal_digest,
-            "0xea0818b3cf26379aeeee205d04799ab63de650e445e7aa028ff544ccbc05e5f6"
+            "0x76167ef738e7df7fb613abfb82bb4c2c5bc181bc9aeb45598e4c4d197834d8c0"
         );
         assert_eq!(proved.draft.gross_taker_fee, "500000");
         assert_eq!(proved.draft.maker_rebate, "150000");
@@ -1039,10 +1038,11 @@ fn circuit_position_commitment(
     size: u128,
     entry_price: u128,
     margin: u128,
-    funding_index: u128,
+    funding_index: i128,
     owner_digest: &str,
     rho_digest: &str,
     blinding: &str,
+    spend_secret_digest: &str,
 ) -> String {
     let side_value = if side == Side::Long { "1" } else { "2" };
     let left = field_hash_pair(
@@ -1053,7 +1053,7 @@ fn circuit_position_commitment(
         &field_hash_pair(&margin.to_string(), &funding_index.to_string()),
         &field_hash_pair(owner_digest, &field_hash_pair(rho_digest, blinding)),
     );
-    field_hash_pair(&left, &right)
+    field_hash_pair("0x504e4c58504f534954494f4e", &field_hash_pair(&left, &field_hash_pair(&right, spend_secret_digest)))
 }
 
 fn field_hash_pair(left: &str, right: &str) -> String {
@@ -1126,37 +1126,29 @@ fn hash_fields(domain: &str, fields: &[Norm]) -> String {
 }
 
 fn matching_payload_commitment(intent: &RecoveredIntent) -> String {
-    hash_fields(
-        "matching-payload",
-        &[
-            Norm::text(&intent.intent_commitment),
-            Norm::text(&intent.market_id),
-            Norm::text(&intent.owner_commitment),
-            Norm::I128(parse_i128(&intent.signed_size)),
-            Norm::num(parse_u128(&intent.limit_price)),
-            Norm::num(parse_u128(&intent.margin)),
-            Norm::text(&intent.note_nullifier),
-            Norm::text(&intent.note_change_commitment),
-            Norm::text(intent.source_intent_commitment.as_deref().unwrap_or("0x0")),
-        ],
-    )
+    let signed = parse_i128(&intent.signed_size);
+    payload_commitment(&intent.intent_commitment, &intent.market_id, &intent.owner_digest,
+        signed, &intent.limit_price, &intent.margin, &intent.note_nullifier,
+        &intent.note_change_commitment, &intent.position_seed)
+}
+
+fn payload_commitment(intent: &str, market: &str, owner: &str, signed_size: i128,
+    limit: &str, margin: &str, nullifier: &str, change: &str, seed: &str) -> String {
+    assert!(to_field_biguint(seed) != BigUint::zero(), "private position seed required");
+    let entropy = field_hash_pair("0x504e4c58454e54524f5059", seed);
+    let mut r = field_hash_pair(change, &entropy);
+    let size = signed_size.unsigned_abs().to_string();
+    let market_digest = hash_fields("market-id", &[Norm::text(market)]);
+    for value in [nullifier, margin, limit, &size, if signed_size > 0 { "1" } else { "2" }, owner, &market_digest] {
+        r = field_hash_pair(value, &r);
+    }
+    field_hash_pair(intent, &r)
 }
 
 fn residual_payload_commitment(residual: &Residual) -> String {
-    hash_fields(
-        "matching-payload",
-        &[
-            Norm::text(&residual.intent_commitment),
-            Norm::text(&residual.market_id),
-            Norm::text(&residual.owner_commitment),
-            Norm::I128(residual.signed_size),
-            Norm::num(residual.limit_price),
-            Norm::num(residual.margin),
-            Norm::text(&residual.note_nullifier),
-            Norm::text("0x0"),
-            Norm::text(&residual.source_intent_commitment),
-        ],
-    )
+    payload_commitment(&residual.intent_commitment, &residual.market_id, &residual.owner_digest,
+        residual.signed_size, &residual.limit_price.to_string(), &residual.margin.to_string(),
+        &residual.note_nullifier, "0x0", &residual.position_seed)
 }
 
 enum Norm {

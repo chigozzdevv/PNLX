@@ -24,7 +24,7 @@ export class OrdersController {
   async replace(request: Request): Promise<Response> {
     const body = await readJson<Record<string, unknown>>(request);
     return json(
-      this.orders.replace(parseReplaceOrder(body), authenticatedAddress(request)),
+      await this.orders.replaceDurable(parseReplaceOrder(body), authenticatedAddress(request)),
       201,
     );
   }

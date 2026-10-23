@@ -1,4 +1,4 @@
-import { registerPendingConditionalOrdersForPosition } from "@/lib/conditional-orders";
+import { inheritPendingConditionalStrategy, registerPendingConditionalOrdersForPosition } from "@/lib/conditional-orders";
 import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
 import type { ServerAccountEvent } from "@/types/trading";
 import type { WalletSession } from "@/lib/wallet-auth";
@@ -50,6 +50,9 @@ export type PrivateAccountEventPayload =
         entryFee?: string;
         entryPrice: string;
         fundingIndex: string;
+        ownerDigest?: `0x${string}`;
+        positionSeed?: `0x${string}`;
+        fillIndex?: number;
         margin: string;
         marketId: string;
         positionCommitment: `0x${string}`;
@@ -60,9 +63,26 @@ export type PrivateAccountEventPayload =
       };
     }
   | {
-      kind: "position-close" | "liquidation" | "residual-order";
+      kind: "position-close" | "liquidation";
+      closeOutputNote?: PrivateCloseOutputNote;
+      positionClose?: { marginOutputCommitment: `0x${string}`; positionCommitment: `0x${string}`; positionNullifier: `0x${string}` };
+      [key: string]: unknown;
+    }
+  | {
+      kind: "residual-order";
       [key: string]: unknown;
     };
+
+export interface PrivateCloseOutputNote {
+  amount: string;
+  assetDigest: `0x${string}`;
+  blinding: `0x${string}`;
+  commitment: `0x${string}`;
+  noteNullifier: `0x${string}`;
+  ownerDigest: `0x${string}`;
+  rhoDigest: `0x${string}`;
+  spendSecretDigest: `0x${string}`;
+}
 
 export async function ensureAccountEncryptionKey(session: WalletSession): Promise<AccountKeyStatus> {
   const registered = await readRegisteredAccountKey(session);
@@ -124,17 +144,43 @@ export async function syncPrivateConditionalOrders(
 ): Promise<void> {
   if (accountEvents.length === 0) return;
   await ensureAccountEncryptionKey(session);
+  const payloads: PrivateAccountEventPayload[] = [];
   for (const event of accountEvents) {
     const payload = await decryptAccountEvent<PrivateAccountEventPayload>(
       session.ownerCommitment,
       event.ciphertext,
     ).catch(() => undefined);
-    if (payload?.kind !== "position-opening" || !payload.opening) continue;
-    await registerPendingConditionalOrdersForPosition(session, {
-      kind: "position-opening",
-      ...payload.opening,
-    });
+    if (payload) payloads.push(payload);
   }
+  // Account history can arrive newest-first, after a residual has already filled.
+  for (let pass = 0; pass < payloads.length; pass += 1) {
+    let inherited = false;
+    for (const payload of payloads) {
+      if (payload.kind !== "residual-order") continue;
+      const residual = payload.residual;
+      if (!residual || typeof residual !== "object") continue;
+      const record = residual as Record<string, unknown>;
+      if (typeof record.intentCommitment !== "string" || typeof record.sourceIntentCommitment !== "string" ||
+          typeof record.ownerCommitment !== "string" || typeof record.marketId !== "string") continue;
+      inherited = inheritPendingConditionalStrategy(session, {
+        intentCommitment: record.intentCommitment as `0x${string}`,
+        sourceIntentCommitment: record.sourceIntentCommitment as `0x${string}`,
+        ownerCommitment: record.ownerCommitment as `0x${string}`,
+        marketId: record.marketId,
+      }) || inherited;
+    }
+    if (!inherited) break;
+  }
+  const failures: unknown[] = [];
+  for (const payload of payloads) {
+    if (payload?.kind !== "position-opening" || !payload.opening) continue;
+    try {
+      await registerPendingConditionalOrdersForPosition(session, { kind: "position-opening", ...payload.opening });
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) throw new AggregateError(failures, "Private position protection registration is pending");
 }
 
 export async function decryptAccountEvent<T>(ownerCommitment: string, ciphertext: string): Promise<T> {

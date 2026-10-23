@@ -10,6 +10,7 @@ export interface PositionCloseContextInput {
 }
 
 export interface PositionCloseContextResult {
+  payoutAmount: string;
   market: {
     fundingIndex: string;
     marketId: string;

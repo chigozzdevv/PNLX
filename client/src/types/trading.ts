@@ -253,6 +253,9 @@ export interface PositionRow {
   /** Protocol position legs represented by one aggregated UI row. */
   positionLegs?: PositionRow[];
   privateState?: {
+    ownerDigest?: Hex;
+    positionSeed?: Hex;
+    fillIndex?: number;
     entryFee?: string;
     entryPrice: string;
     fundingIndex: string;

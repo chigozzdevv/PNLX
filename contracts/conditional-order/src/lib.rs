@@ -96,8 +96,11 @@ impl ConditionalOrder {
         validate_hash(&env, &close_commitment);
 
         let key = DataKey::Order(close_commitment);
-        if env.storage().persistent().has(&key) {
-            panic!("conditional order exists");
+        if let Some(existing) = env.storage().persistent().get::<_, ConditionalOrderMeta>(&key) {
+            if existing.market_id != market_id || existing.position_nullifier != position_nullifier {
+                panic!("conditional order mismatch");
+            }
+            return;
         }
         env.storage().persistent().set(
             &key,
@@ -135,6 +138,7 @@ impl ConditionalOrder {
         validate_proof(&env, &proof);
         validate_public_inputs(
             &env,
+            &market_id,
             mark_price,
             &position_nullifier,
             &close_commitment,
@@ -258,6 +262,7 @@ fn validate_proof(env: &Env, proof: &ProofMeta) {
 
 fn validate_public_inputs(
     env: &Env,
+    market_id: &BytesN<32>,
     mark_price: i128,
     position_nullifier: &BytesN<32>,
     close_commitment: &BytesN<32>,
@@ -265,6 +270,7 @@ fn validate_public_inputs(
 ) {
     let expected = conditional_close_public_input_hash(
         env,
+        market_id,
         mark_price as u128,
         position_nullifier,
         close_commitment,
@@ -276,11 +282,13 @@ fn validate_public_inputs(
 
 pub fn conditional_close_public_input_hash(
     env: &Env,
+    market_id: &BytesN<32>,
     mark_price: u128,
     position_nullifier: &BytesN<32>,
     close_commitment: &BytesN<32>,
 ) -> BytesN<32> {
     let mut public_inputs = Bytes::new(env);
+    append_field(env, &mut public_inputs, market_id);
     append_u128_field(env, &mut public_inputs, mark_price);
     append_field(env, &mut public_inputs, position_nullifier);
     append_field(env, &mut public_inputs, close_commitment);
@@ -352,8 +360,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "conditional order exists")]
-    fn rejects_duplicate_registration() {
+    fn registration_retry_is_idempotent_and_conflicts_are_rejected() {
         let env = Env::default();
         let id = env.register(ConditionalOrder, ());
         let client = ConditionalOrderClient::new(&env, &id);
@@ -369,6 +376,8 @@ mod tests {
         );
         client.register(&market, &nullifier, &close);
         client.register(&market, &nullifier, &close);
+        assert!(client.try_register(&BytesN::from_array(&env, &[9; 32]), &nullifier, &close).is_err());
+        assert!(client.try_register(&market, &BytesN::from_array(&env, &[9; 32]), &close).is_err());
     }
 
     #[test]
@@ -506,6 +515,7 @@ mod tests {
             verifier_hash: verifier(env),
             public_input_hash: super::conditional_close_public_input_hash(
                 env,
+                &BytesN::from_array(env, &[1; 32]),
                 mark_price(env) as u128,
                 &BytesN::from_array(env, &[2; 32]),
                 &BytesN::from_array(env, &[3; 32]),

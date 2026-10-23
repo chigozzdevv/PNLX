@@ -1,3 +1,4 @@
+import { matchingPayloadCommitment, privateMatchIntentFromTradeIntent } from "@/workers/batch-matcher/private-intent";
 import { describe, expect, test } from "bun:test";
 import { commitIntent, hashFields, intentBindingFields, ownerCommitment } from "@pnlx/crypto";
 import { PRICE_SCALE, RATE_SCALE } from "@pnlx/market-math";
@@ -327,8 +328,8 @@ describe("private batch settlement", () => {
     const aliceCommitment = commitIntent(aliceIntent);
     const aliceStored = executor.store.intents.get(aliceCommitment);
     expect(aliceStored?.intentCommitment).toBe(aliceCommitment);
-    expect(JSON.stringify(aliceStored)).not.toContain("long");
-    expect(JSON.stringify(aliceStored)).not.toContain("51000");
+    expect(JSON.stringify(aliceStored, (_key, value) => typeof value === "bigint" ? value.toString() : value)).not.toContain("long");
+    expect(JSON.stringify(aliceStored, (_key, value) => typeof value === "bigint" ? value.toString() : value)).not.toContain("51000");
     const alicePrivatePayload = executor.store.privateMatchIntents.get(aliceCommitment);
     expect(alicePrivatePayload).toMatchObject({
       intentCommitment: aliceCommitment,
@@ -355,7 +356,9 @@ describe("private batch settlement", () => {
     expect(executor.store.positionsFor(ownerCommitment("alice"))).toEqual([
       expect.objectContaining({
         ownerCommitment: ownerCommitment("alice"),
-        positionCommitment: settlement.newCommitments[0],
+        positionCommitment: new BatchMatcherService().match({ batchId: "batch-1", market,
+          intents: [alicePrivatePayload!, executor.store.privateMatchIntents.get(commitIntent(bobIntent))!] })
+          .fills.find((fill) => fill.intentCommitment === aliceCommitment)!.positionCommitment,
         sourceIntentCommitment: aliceCommitment,
         status: "open",
       }),
@@ -940,6 +943,14 @@ function createIntentValidity(
   };
   executor.store.recordProof(proof);
   return {
+    assetDigest: hashFields("asset", ["usdc"]),
+    ownerDigest: hashFields("fixture-owner-digest", [intent.owner]),
+    positionSeed: hashFields("fixture-position-seed", [intent.nonce]),
+    matchingPayloadCommitment: matchingPayloadCommitment(privateMatchIntentFromTradeIntent({
+      intent, intentCommitment, noteChangeCommitment: noteChangeCommitment, ownerCommitment: ownerCommitment(intent.owner),
+      ownerDigest: hashFields("fixture-owner-digest", [intent.owner]),
+      positionSeed: hashFields("fixture-position-seed", [intent.nonce]),
+    })),
     batchDigest: binding.batchDigest,
     currentBatch: 1n,
     expiryBatch: 2n,
@@ -1041,6 +1052,8 @@ function recoveredIntent(
     noteChangeCommitment,
     noteNullifier,
     ownerCommitment: hashFields("owner", [id]),
+    ownerDigest: hashFields("fixture-owner-digest", [id]),
+    positionSeed: hashFields("fixture-position-seed", [id]),
     signedSize: side === "long" ? size : -size,
   };
 }

@@ -29,6 +29,9 @@ import {
   type MarketSettlementVolumeRecord,
   type ProtocolStore,
 } from "@/shared/state/store";
+import { createDelegatedConditionalPolicy, type DelegatedConditionalPolicy } from "@/shared/protocol/delegated-policies";
+import type { PendingPairedClose } from "@/shared/protocol/paired-close-journal";
+import type { PendingIntentSubmission } from "@/shared/protocol/intent-submission-journal";
 
 const ZERO_HEX = "0x0" as Hex;
 
@@ -38,6 +41,9 @@ export interface ProtocolStoreSnapshot {
   batchExecutionRuns: [Hex, BatchExecutionRunRecord][];
   conditionalCloses: [Hex, ConditionalOrderRecord][];
   conditionalOrders: [Hex, ConditionalOrderCommitment][];
+  delegatedPolicies?: [Hex, DelegatedConditionalPolicy][];
+  pendingPairedCloses?: [Hex, PendingPairedClose][];
+  pendingIntentSubmissions?: [Hex, PendingIntentSubmission][];
   disclosures: [Hex, DisclosureRecord][];
   fundingUpdates: [string, FundingUpdateRecord][];
   fundingPremiumSamples: [string, FundingPremiumSampleRecord][];
@@ -66,6 +72,9 @@ export function snapshotProtocolStore(store: ProtocolStore): ProtocolStoreSnapsh
     accountEncryptionKeys: [...store.accountEncryptionKeys.entries()],
     conditionalCloses: [...store.conditionalCloses.entries()],
     conditionalOrders: [...store.conditionalOrders.entries()],
+    delegatedPolicies: [...store.delegatedPolicies.entries()],
+    pendingPairedCloses: [...store.pendingPairedCloses.entries()],
+    pendingIntentSubmissions: [...store.pendingIntentSubmissions.entries()],
     disclosures: [...store.disclosures.entries()],
     fundingUpdates: [...store.fundingUpdates.entries()],
     fundingPremiumSamples: retainedFundingPremiumSamples([...store.fundingPremiumSamples.entries()]),
@@ -96,6 +105,9 @@ export function applyProtocolStoreSnapshot(store: ProtocolStore, snapshot: Parti
   store.spentNullifiers.clear();
   store.intents.clear();
   store.residualOrders.clear();
+  store.delegatedPolicies.clear();
+  store.pendingPairedCloses.clear();
+  store.pendingIntentSubmissions.clear();
   store.orderLifecycle.clear();
   store.positionLifecycle.clear();
   store.markets.clear();
@@ -133,6 +145,22 @@ export function applyProtocolStoreSnapshot(store: ProtocolStore, snapshot: Parti
     });
   }
   for (const [key, value] of snapshot.residualOrders ?? []) store.residualOrders.set(key, value);
+  for (const [key, value] of snapshot.delegatedPolicies ?? []) {
+    if (key.toLowerCase() !== value.intentCommitment.toLowerCase()) throw new Error("delegated conditional snapshot key mismatch");
+    const { createdAt: _createdAt, intentCommitment: _intent, marketId: _market, ownerCommitment: _owner, ...input } = value;
+    const validated = createDelegatedConditionalPolicy(input, value)!;
+    store.delegatedPolicies.set(validated.intentCommitment, validated);
+  }
+  for (const [key, value] of snapshot.pendingPairedCloses ?? []) {
+    if (key.toLowerCase() !== value.journalKey.toLowerCase() || key.toLowerCase() !== value.pair.positions[0].closeCommitment.toLowerCase()) {
+      throw new Error("paired close journal snapshot key mismatch");
+    }
+    store.pendingPairedCloses.set(key.toLowerCase() as Hex, value);
+  }
+  for (const [key, value] of snapshot.pendingIntentSubmissions ?? []) {
+    if (key !== value.intentCommitment || key !== value.prepared.record.intentCommitment) throw new Error("prepared intent snapshot key mismatch");
+    store.pendingIntentSubmissions.set(key, value);
+  }
   for (const [key, value] of snapshot.privateMatchIntents ?? []) {
     store.privateMatchIntents.set(key, {
       ...value,

@@ -239,6 +239,7 @@ describe("local client prover", () => {
       side: "long",
       size: 0n,
       spendSecret: "local-close-new-position-spend",
+      spendSecretDigest: position.spendSecretDigest,
     });
     const marginOutput = createSecureMarginNote({
       amount: closeSettlement.newMargin,
@@ -255,6 +256,7 @@ describe("local client prover", () => {
           blinding: position.blinding,
           closeCommitment: hashFields("manual-position-close", ["local-close"]),
           closeSize: 1n,
+          currentFundingIndex: 0n,
           entryPrice: 50_000n * PRICE_SCALE,
           fee: 0n,
           fundingIndex: 0n,

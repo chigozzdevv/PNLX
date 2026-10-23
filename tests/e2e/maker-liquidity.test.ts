@@ -8,6 +8,8 @@ import {
   buildMakerChangeNote,
   eligibleMakerNotes,
   MakerLiquidityService,
+  makerQuoteForIntent,
+  finalizedMakerNotes,
   selectMakerNoteAllocations,
 } from "@/workers/maker-liquidity/maker-liquidity.service";
 
@@ -35,6 +37,8 @@ const payload: PrivateMatchIntent = {
   noteChangeCommitment: "0x0",
   noteNullifier: hashFields("client", ["nullifier"]),
   ownerCommitment: hashFields("client", ["owner"]),
+  ownerDigest: hashFields("fixture-owner-digest", ["client"]),
+  positionSeed: hashFields("fixture-position-seed", ["client"]),
   signedSize: 505_689_001n,
 };
 
@@ -165,3 +169,53 @@ function makerNote(label: string, amount: bigint) {
     spendSecretDigest: hashFields("maker-spend", [label]),
   };
 }
+
+describe("house maker price policy", () => {
+  test("quotes both sides from the reference rather than copying a client limit", () => {
+    expect(makerQuoteForIntent({ signedSize: 1n, limitPrice: 101n }, 100n)).toBe(100n);
+    expect(makerQuoteForIntent({ signedSize: -1n, limitPrice: 99n }, 100n)).toBe(100n);
+  });
+
+  test("rejects a non-crossing limit and an extreme limit on either side", () => {
+    expect(makerQuoteForIntent({ signedSize: 1n, limitPrice: 99n }, 100n)).toBeUndefined();
+    expect(makerQuoteForIntent({ signedSize: -1n, limitPrice: 101n }, 100n)).toBeUndefined();
+    expect(makerQuoteForIntent({ signedSize: 1n, limitPrice: 1_000_000n }, 100n)).toBeUndefined();
+    expect(makerQuoteForIntent({ signedSize: -1n, limitPrice: 1n }, 100n)).toBeUndefined();
+  });
+
+  test("applies spread against the customer and uses conservative integer rounding", () => {
+    expect(makerQuoteForIntent({ signedSize: 1n, limitPrice: 102n }, 101n, 25n)).toBe(102n);
+    expect(makerQuoteForIntent({ signedSize: -1n, limitPrice: 100n }, 101n, 25n)).toBe(100n);
+    expect(makerQuoteForIntent({ signedSize: 1n, limitPrice: 101n }, 101n, 25n)).toBeUndefined();
+    expect(makerQuoteForIntent({ signedSize: -1n, limitPrice: 101n }, 101n, 25n)).toBeUndefined();
+  });
+
+  test("enforces the exact two-percent client-price boundary", () => {
+    expect(makerQuoteForIntent({ signedSize: 1n, limitPrice: 10_200n }, 10_000n)).toBe(10_000n);
+    expect(makerQuoteForIntent({ signedSize: 1n, limitPrice: 10_201n }, 10_000n)).toBeUndefined();
+    expect(makerQuoteForIntent({ signedSize: -1n, limitPrice: 9_800n }, 10_000n)).toBe(10_000n);
+    expect(makerQuoteForIntent({ signedSize: -1n, limitPrice: 9_799n }, 10_000n)).toBeUndefined();
+  });
+
+  test("rejects invalid reference/spread policies before quoting", () => {
+    expect(() => makerQuoteForIntent({ signedSize: 1n, limitPrice: 100n }, 0n)).toThrow("invalid maker price policy");
+    expect(() => makerQuoteForIntent({ signedSize: 1n, limitPrice: 100n }, 100n, -1n)).toThrow("invalid maker price policy");
+    expect(() => makerQuoteForIntent({ signedSize: 1n, limitPrice: 100n }, 100n, 10_000n)).toThrow("invalid maker price policy");
+  });
+});
+
+test("settlement replay preserves an existing child note in either store order", () => {
+  const makerIntent = hashFields("maker-replay", ["intent"]);
+  const sourceIntent = payload.intentCommitment;
+  const parent = { ...note, status: "spent" as const,
+    lockedByIntentCommitment: makerIntent, sourceIntentCommitment: sourceIntent };
+  const change = buildMakerChangeNote(parent, payload.margin, sourceIntent)!;
+  for (const status of ["spent", "locked", "draining", "withdrawing"] as const) {
+    const child = { ...change, status };
+    for (const notes of [[parent, child], [child, parent]]) {
+      const result = finalizedMakerNotes(notes, new Set([makerIntent]), new Map([[makerIntent, payload]]));
+      expect(result.filter((item) => item.commitment === child.commitment)).toEqual([child]);
+      expect(result.find((item) => item.commitment === child.commitment)?.status).toBe(status);
+    }
+  }
+});

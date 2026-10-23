@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { commitConditionalOrder, hashFields, ownerCommitment } from "@pnlx/crypto";
+import { commitConditionalOrder, digestToFieldHex, hashFields, ownerCommitment } from "@pnlx/crypto";
 import { PRICE_SCALE, settleClose } from "@pnlx/market-math";
 import type {
   BatchSettlement,
@@ -10,6 +10,8 @@ import type {
   LiquidationWitness,
   MarketConfig,
   PositionCloseRecord,
+  PairedPositionCloseRecord,
+  PrivateMatchIntent,
   PositionCloseWitness,
   ProofMeta,
 } from "@pnlx/protocol-types";
@@ -21,6 +23,9 @@ import { createProver } from "@/workers/prover/prover.worker";
 import { ConditionalOrdersService } from "@/features/conditional-orders/conditional-orders.service";
 import { LiquidationsService } from "@/features/liquidations/liquidations.service";
 import { PositionClosesService } from "@/features/position-closes/position-closes.service";
+import { hostedPositionCloseWitness } from "@/features/position-closes/paired-position-witness";
+import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
+import { prepareRisc0SettlementDraft } from "@/workers/risc0-matcher/risc0-proof";
 
 describe("funding settlement enforcement", () => {
   test("builds a real funding settlement proof artifact", () => {
@@ -78,6 +83,7 @@ describe("funding settlement enforcement", () => {
         provePositionClose(input: PositionCloseWitness): PositionCloseRecord {
           proved = true;
           return {
+      currentFundingIndex: input.currentFundingIndex,
             closeCommitment: input.closeCommitment,
             marginOutputCommitment: input.marginOutputCommitment,
             marketId: input.marketId,
@@ -115,6 +121,7 @@ describe("funding settlement enforcement", () => {
         provePositionClose(input: PositionCloseWitness): PositionCloseRecord {
           proved = true;
           return {
+      currentFundingIndex: input.currentFundingIndex,
             closeCommitment: input.closeCommitment,
             marginOutputCommitment: input.marginOutputCommitment,
             marketId: input.marketId,
@@ -153,13 +160,14 @@ describe("funding settlement enforcement", () => {
       executor,
       ownerCommitment: owner,
       positionCommitment,
-    } = setupPositionWithConditionalClose();
+    } = setupPairedConditionalClose();
     const liveMarkPrice = closeInput.markPrice + 25n;
     const service = new PositionClosesService(
       executor,
       {} as ProverService,
       {
         enabled: true,
+        marketFundingIndex() { return closeInput.currentFundingIndex; },
         marketPrice(marketId: string) {
           expect(marketId).toBe(closeInput.marketId);
           return liveMarkPrice;
@@ -185,6 +193,7 @@ describe("funding settlement enforcement", () => {
       {
         provePositionClose(input: PositionCloseWitness): PositionCloseRecord {
           return {
+      currentFundingIndex: input.currentFundingIndex,
             closeCommitment: input.closeCommitment,
             marginOutputCommitment: input.marginOutputCommitment,
             marketId: input.marketId,
@@ -232,6 +241,7 @@ describe("funding settlement enforcement", () => {
         proveLiquidation(input: LiquidationWitness): LiquidationRecord {
           proved = true;
           return {
+      currentFundingIndex: input.currentFundingIndex,
             marketId: input.marketId,
             maintenanceRate: input.maintenanceRate,
             markPrice: input.markPrice,
@@ -275,6 +285,7 @@ describe("funding settlement enforcement", () => {
         provePositionClose(input: PositionCloseWitness): PositionCloseRecord {
           proved = true;
           return {
+      currentFundingIndex: input.currentFundingIndex,
             closeCommitment: input.closeCommitment,
             marginOutputCommitment: input.marginOutputCommitment,
             marketId: input.marketId,
@@ -312,11 +323,14 @@ describe("funding settlement enforcement", () => {
     expect(settlement.newMargin).toBe(1_005n);
   });
 
-  test("executes a conditional trigger and position close as one workflow", () => {
+  test("executes a conditional trigger and position close as one workflow", async () => {
     const { closeCommitment, closeInput, executor, positionCommitment } =
-      setupPositionWithConditionalClose({ triggered: false });
+      setupPairedConditionalClose({ triggered: false });
     const trigger = conditionalTriggerFor(closeInput, closeCommitment);
     const calls: string[] = [];
+    const settled = new Set<Hex>();
+    const appendIndices = new Map<Hex, number>();
+    const settlementTxHash = hashFields("tx", ["conditional-pair"]);
     const service = new ConditionalOrdersService(
       executor,
       {
@@ -330,26 +344,38 @@ describe("funding settlement enforcement", () => {
             proof: proofMeta("conditional"),
           };
         },
-        provePositionClose(input: PositionCloseWitness): PositionCloseRecord {
-          calls.push("close-proof");
-          return {
-            closeCommitment: input.closeCommitment,
-            marginOutputCommitment: input.marginOutputCommitment,
-            marketId: input.marketId,
-            markPrice: input.markPrice,
-            newPositionCommitment: input.newPositionCommitment,
-            positionCommitment: input.positionCommitment,
-            positionNullifier: input.positionNullifier,
-            positionRoot: input.positionRoot,
-            proof: proofMeta("close"),
-          };
+        async provePositionClosePairAsync(witnesses: [PositionCloseWitness, PositionCloseWitness]): Promise<PairedPositionCloseRecord> {
+          calls.push("pair-proof");
+          const proof = proofMeta("position-close-pair");
+          return { marketId: witnesses[0].marketId, assetDigest: witnesses[0].marginOutputAssetDigest,
+            markPrice: witnesses[0].markPrice, currentFundingIndex: witnesses[0].currentFundingIndex,
+            maintenanceRate: 50_000n, liquidation: false, positionRoot: witnesses[0].positionRoot,
+            positions: [{ ...witnesses[0], proof }, { ...witnesses[1], proof }], proof };
         },
       } as unknown as ProverService,
       testConditionalEnv(false),
       {
-        settlePositionClose() {
-          calls.push("close-relay");
-          return { relays: [] };
+        enabled: true,
+        marketPrice() { return closeInput.markPrice; },
+        async marketPriceAsync() { return closeInput.markPrice; },
+        async marketFundingIndexAsync() { return closeInput.currentFundingIndex; },
+        async isPositionCloseSettledAsync(commitment: Hex) { return settled.has(commitment); },
+        async positionCloseAppendIndexAsync(commitment: Hex) { return appendIndices.get(commitment)!; },
+        async positionPairTransactionStatus() { return "SUCCESS"; },
+        async settleJournaledPositionPair(pair: PairedPositionCloseRecord, conditional: boolean,
+          beforeSubmit: (prepared: { txHash: Hex; xdr: string }) => Promise<void>) {
+          calls.push("pair-relay");
+          expect(conditional).toBe(true);
+          expect(executor.store.positionCloses.size).toBe(0);
+          await beforeSubmit({ txHash: settlementTxHash, xdr: "signed-pair-envelope" });
+          expect(executor.store.pendingPairedCloses.get(pair.positions[0].closeCommitment)?.settlementTxHash).toBe(settlementTxHash);
+          const appendAt = executor.store.positionCommitments.size;
+          for (const [index, record] of pair.positions.entries()) {
+            appendIndices.set(record.closeCommitment, appendAt + index);
+            settled.add(record.closeCommitment);
+          }
+          return { relays: [submittedRelay("verify_and_record", hashFields("tx", ["conditional-pair-proof"])),
+            submittedRelay("settle_pair_conditional_proven", settlementTxHash)] };
         },
         triggerConditionalClose() {
           calls.push("trigger-relay");
@@ -358,18 +384,23 @@ describe("funding settlement enforcement", () => {
       } as never,
     );
 
-    const result = service.execute({ close: closeInput, trigger });
+    const result = await service.execute({ close: closeInput, trigger });
 
     expect(result.conditionalClose.closeCommitment).toBe(closeCommitment);
     expect(result.positionClose.closeCommitment).toBe(closeCommitment);
-    expect(calls).toEqual(["close-proof", "trigger-proof", "trigger-relay", "close-relay"]);
+    expect(calls).toEqual(["trigger-proof", "trigger-relay", "pair-proof", "pair-relay"]);
+    expect(executor.store.positionCloses.size).toBe(2);
+    expect([...executor.store.pendingPairedCloses.values()].filter((run) => !run.retired)).toHaveLength(0);
+    expect([...executor.store.pendingPairedCloses.values()].some((run) => run.retiredReconciled)).toBe(true);
+    expect([...executor.store.positionCloses.values()].every((position) => position.settlementTxHash === settlementTxHash)).toBe(true);
+    expect([...executor.store.positionLifecycle.values()].every((position) => position.status === "closed")).toBe(true);
     expect(executor.store.conditionalCloses.has(closeCommitment)).toBe(true);
     expect(executor.store.positionCloses.has(closeCommitment)).toBe(true);
     expect(executor.store.positionLifecycle.get(positionCommitment)?.status).toBe("closed");
   });
 
-  test("does not trigger a conditional order when the close leg is invalid", () => {
-    const { closeCommitment, closeInput, executor } = setupPositionWithConditionalClose({
+  test("does not trigger a conditional order when the close leg is invalid", async () => {
+    const { closeCommitment, closeInput, executor } = setupPairedConditionalClose({
       triggered: false,
     });
     const trigger = conditionalTriggerFor(closeInput, closeCommitment);
@@ -389,12 +420,12 @@ describe("funding settlement enforcement", () => {
       testConditionalEnv(false),
     );
 
-    expect(() =>
+    await expect(
       service.execute({
         close: { ...closeInput, markPrice: closeInput.markPrice + 1n },
         trigger: { ...trigger, markPrice: closeInput.markPrice + 1n },
       }),
-    ).toThrow("position close mark price mismatch");
+    ).rejects.toThrow("conditional close mark price mismatch");
     expect(calls).toEqual([]);
     expect(executor.store.conditionalCloses.has(closeCommitment)).toBe(false);
     expect(executor.store.positionCloses.has(closeCommitment)).toBe(false);
@@ -480,6 +511,39 @@ function submittedRelay(functionName: string, txHash: Hex) {
     submitted: true,
     txHash,
   };
+}
+
+function setupPairedConditionalClose(options: { triggered?: boolean } = {}) {
+  const executor = createExecutor();
+  const key = (label: string) => digestToFieldHex(`funding-pair-fixture:${label}`);
+  const market: MarketConfig = { marketId: "btc-usd-perp", oraclePrice: 100_000_000n, fundingIndex: 0n,
+    initialMarginRate: 100_000n, maintenanceMarginRate: 50_000n, maxLeverage: 10n };
+  executor.addMarket(market);
+  const intents: PrivateMatchIntent[] = [1n, -1n].map((side, index) => ({ batchId: "funding-pair",
+    marketId: market.marketId, intentCommitment: key(`intent-${index}`), noteNullifier: key(`note-${index}`),
+    ownerCommitment: ownerCommitment(`GFUNDING${index}`), ownerDigest: key(`owner-${index}`),
+    positionSeed: key(`private-seed-${index}`), noteChangeCommitment: "0x0", limitPrice: market.oraclePrice,
+    margin: 200_000_000n, signedSize: side * 1_000_000_000n }));
+  const match = new BatchMatcherService().match({ batchId: "funding-pair", market, intents });
+  const settlement = { ...prepareRisc0SettlementDraft({ batchId: "funding-pair", market, intents, match }), proof: proofMeta("batch-match") };
+  executor.store.settlements.set(`${market.marketId}:funding-pair`, settlement);
+  for (const intent of intents) executor.store.privateMatchIntents.set(intent.intentCommitment, intent);
+  for (const fill of match.fills) {
+    executor.store.positionCommitments.add(fill.positionCommitment);
+    executor.store.positionLifecycle.set(fill.positionCommitment, { batchId: "funding-pair", marketId: market.marketId,
+      ownerCommitment: fill.ownerCommitment, positionCommitment: fill.positionCommitment, positionNullifier: fill.positionNullifier,
+      sourceIntentCommitment: fill.intentCommitment, settlementDigest: settlement.settlementDigest,
+      status: "open", openedAt: 1, updatedAt: 1 });
+  }
+  const position = [...executor.store.positionLifecycle.values()].find((item) => item.sourceIntentCommitment === intents[0]!.intentCommitment)!;
+  const closeCommitment = commitConditionalOrder({ kind: "take-profit", marketId: market.marketId,
+    markPrice: market.oraclePrice, positionNullifier: position.positionNullifier, reduceOnly: true,
+    salt: "funding", side: "long", size: 1_000_000_000n, triggerPrice: market.oraclePrice - 1n });
+  executor.store.addConditionalOrder({ closeCommitment, marketId: market.marketId, positionNullifier: position.positionNullifier });
+  const closeInput = hostedPositionCloseWitness({ store: executor.store, position, markPrice: market.oraclePrice,
+    currentFundingIndex: market.fundingIndex, assetDigest: key("asset"), closeCommitment }).witness;
+  return { closeCommitment, closeInput, executor, ownerCommitment: position.ownerCommitment,
+    positionCommitment: position.positionCommitment, positionNullifier: position.positionNullifier };
 }
 
 function setupPositionWithConditionalClose(options: { triggered?: boolean } = {}): {
@@ -582,6 +646,7 @@ function setupPositionWithConditionalClose(options: { triggered?: boolean } = {}
   return {
     closeCommitment,
     closeInput: {
+      currentFundingIndex: market.fundingIndex,
       blinding: hashFields("blinding", ["funding"]),
       closeCommitment,
       closeSize: 2n,
@@ -713,6 +778,7 @@ function setupPositionForLiquidation(): {
   return {
     executor,
     liquidationInput: {
+      currentFundingIndex: market.fundingIndex,
       blinding: hashFields("blinding", ["liquidation"]),
       entryPrice: 3_400_00000000n,
       fundingIndex: 12n * PRICE_SCALE,

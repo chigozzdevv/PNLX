@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { circuitPositionCommitment, secureMarginCommitment, creditDropPositionCommitment, fieldHex, positionMerkleProof } from "@pnlx/crypto";
+import { buildProofArtifactAsync } from "@pnlx/proof-system";
 import { prepareCreditDropClose } from "./credit-drop-close";
 
 const position = { side: "long" as const, size: 100_000_000n, entryPrice: 100n, margin: 100n,
@@ -13,6 +14,14 @@ export function creditDropCloseFixture() {
     liquidation: false, outputRho: fieldHex(8n), outputBlinding: fieldHex(9n),
     outputSpendSecretDigest: fieldHex(11n), reserveOutputRho: fieldHex(10n) };
 }
+
+test("proves helper-generated sponsored close inputs against the Noir circuit", async () => {
+  const close = prepareCreditDropClose(creditDropCloseFixture());
+  const artifact = await buildProofArtifactAsync(process.cwd(), "credit-drop-close", {
+    name: "sponsored-close-compatibility", inputs: close.inputs,
+  });
+  expect(artifact.publicInputsHash).toBe(close.publicInputHash);
+}, 120_000);
 
 test("sponsored close uses the same accounting for the user output and reserve receipt", () => {
   const input = creditDropCloseFixture();

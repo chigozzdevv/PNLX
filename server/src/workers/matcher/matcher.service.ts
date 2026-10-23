@@ -128,7 +128,7 @@ class EmbeddedMatcherProviderGateway implements MatcherProviderGateway {
     return proofTask.then((settlement) => {
       const positionOpenings = createPositionOpenings(settlement, match.fills, input.market.fundingIndex);
       return {
-        positionEvents: createPositionEvents(match.fills, input.market.fundingIndex, match.executions),
+        positionEvents: createPositionEvents(match.fills, input.market.fundingIndex, match.executions, input.intents),
         positionOpenings,
         privateMatchIntents: match.residuals,
         residualOrders: createResidualOrderRecords(input, settlement, match.residuals),
@@ -262,13 +262,19 @@ function createPositionEvents(
     makerRebate: bigint;
     shortPositionCommitment: `0x${string}`;
   }>,
+  intents: PrivateMatchIntent[],
 ): PrivatePositionOpeningEvent[] {
-  return fills.map((fill) => {
+  return fills.map((fill, fillIndex) => {
+    const source = intents.find((intent) => intent.intentCommitment === fill.intentCommitment);
+    if (!source) throw new Error("position entropy source is missing");
     const execution = executions.find((candidate) =>
       candidate.longPositionCommitment === fill.positionCommitment ||
       candidate.shortPositionCommitment === fill.positionCommitment);
     if (!execution) throw new Error("position fee allocation is missing");
     return {
+      ownerDigest: source.ownerDigest,
+      positionSeed: source.positionSeed,
+      fillIndex,
       entryFee: execution.makerIntentCommitment === fill.intentCommitment
         ? -execution.makerRebate : execution.grossTakerFee,
       entryPrice: fill.price,

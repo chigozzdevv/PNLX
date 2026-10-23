@@ -30,7 +30,7 @@ fn main(
     is_long: bool,
     is_take_profit: bool,
     reduce_only: bool,
-    market_digest: Field,
+    market_digest: pub Field,
     trigger_price: u128,
     mark_price: pub u128,
     size: u128,
@@ -39,6 +39,7 @@ fn main(
     salt_digest: Field,
     zero_value: Field,
 ) {
+    assert(zero_value == 0);
     assert(reduce_only);
     assert(market_digest != zero_value);
     assert(trigger_price > 0);

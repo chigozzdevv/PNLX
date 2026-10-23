@@ -3,6 +3,9 @@ import {
   circuitDisclosureCommitment,
   commitConditionalOrder,
   commitIntent,
+  derivePositionSeed,
+  digestToFieldHex,
+  positionSecrets,
   type FieldMerkleProof,
   fieldMerkleProof,
   secureMarginProof,
@@ -54,6 +57,11 @@ process.env.STELLAR_ONCHAIN_RELAY = "false";
 process.env.STELLAR_RELAYER_MODE = "local";
 
 type CircuitMarginNote = ReturnType<typeof createSecureMarginNote>;
+const fixtureAuthorities = new Map<Hex, { ownerDigest: Hex; positionSeed: Hex }>();
+function rememberFixtureAuthority(intent: TradeIntent, note: Pick<CircuitMarginNote, "ownerDigest" | "spendSecretDigest">) {
+  fixtureAuthorities.set(commitIntent(intent), { ownerDigest: note.ownerDigest,
+    positionSeed: derivePositionSeed(note.spendSecretDigest, digestToFieldHex(`nonce:${intent.nonce}`), digestToFieldHex(`salt:${intent.salt}`)) });
+}
 type MarginMembershipProof = Pick<FieldMerkleProof, "indices" | "root" | "siblings">;
 type TestKeyPair = {
   privateKey: KeyObject;
@@ -152,6 +160,7 @@ async function submitIntentRequest(
   membershipProof: Record<string, unknown>,
   headers: Record<string, string> = { "content-type": "application/json" },
 ): Promise<Response> {
+  rememberFixtureAuthority(tradeIntentFromBody(intent), note as unknown as CircuitMarginNote);
   const validity = await proveIntent(app, intent, note, membershipProof, headers);
   return app.handle(
     new Request("http://pnlx.local/intents", {
@@ -169,6 +178,7 @@ async function proveAndSubmitIntentRequest(
   membershipProof: Record<string, unknown>,
   headers: Record<string, string> = { "content-type": "application/json" },
 ): Promise<Response> {
+  rememberFixtureAuthority(tradeIntentFromBody(intent), note as unknown as CircuitMarginNote);
   return app.handle(
     new Request("http://pnlx.local/intents/prove-and-submit", {
       method: "POST",
@@ -253,6 +263,7 @@ function buildPrivateIntent(
     rhoDigest: input.note.rhoDigest as Hex,
     spendSecretDigest: input.note.spendSecretDigest as Hex,
   });
+  fixtureAuthorities.set(validity.intentCommitment, { ownerDigest: validity.ownerDigest, positionSeed: validity.positionSeed });
   const record = {
     batchDigest: validity.batchDigest,
     batchId: intent.batchId,
@@ -319,32 +330,21 @@ function createSettledPositionWitness(input: {
   side: "long" | "short";
   size: bigint;
 }) {
-  const intentCommitment = commitIntent({
-    batchId: input.intent.batchId,
-    marketId: input.intent.marketId,
-    owner: input.intent.owner,
-    side: input.side,
-    size: input.size,
-    limitPrice: input.intent.limitPrice,
-    margin: input.intent.margin,
-    noteNullifier: input.intent.noteNullifier,
-    nonce: input.intent.nonce,
-    salt: input.intent.salt,
-  });
-  const owner = ownerCommitment(input.owner);
-  const rho = `${intentCommitment}:position:${input.fillIndex}`;
-  const position = createCircuitPositionNote({
-    marketId: input.intent.marketId,
-    side: input.side,
-    size: input.size,
-    entryPrice: input.entryPrice,
-    margin: input.margin,
-    fundingIndex: input.fundingIndex,
-    owner,
-    spendSecret: `${owner}:${rho}`,
-    rho,
-    blinding: `${intentCommitment}:blinding:${input.fillIndex}`,
-  });
+  const intentCommitment = commitIntent(input.intent);
+  const authority = fixtureAuthorities.get(intentCommitment);
+  if (!authority) throw new Error("private fixture authority was not retained");
+  let position: ReturnType<typeof createCircuitPositionNote> | undefined;
+  for (let fillIndex = 0; fillIndex < input.allCommitments.length; fillIndex += 1) {
+    const secrets = positionSecrets(authority.positionSeed, fillIndex);
+    const candidate = createCircuitPositionNote({
+      marketId: input.intent.marketId, side: input.side, size: input.size,
+      entryPrice: input.entryPrice, margin: input.margin, fundingIndex: input.fundingIndex,
+      owner: input.owner, ownerDigest: authority.ownerDigest, ...secrets,
+      blindingDigest: secrets.blinding, rho: "", blinding: "", spendSecret: "",
+    });
+    if (candidate.commitment === input.allCommitments[fillIndex]) { position = candidate; break; }
+  }
+  if (!position) throw new Error("private fixture witness does not match settlement");
   const membershipProof = positionMerkleProof(input.allCommitments, position.commitment as Hex);
 
   return { position, membershipProof };
@@ -970,7 +970,8 @@ describe("server api", () => {
     const verifiers = result.verifiers as Record<string, string>[];
     const batchVerifier = verifiers.find((entry) => entry.circuitId === "batch-match");
 
-    expect(verifiers).toHaveLength(14);
+    expect(verifiers).toHaveLength(15);
+    expect(verifiers.some((entry)=>entry.circuitId==="position-close-pair")).toBe(true);
     expect(batchVerifier?.circuitKey).toBe(RISC0_BATCH_MATCH_CIRCUIT_KEY);
     expect(batchVerifier?.verifierHash).toBe(RISC0_STELLAR_VERIFIER_HASH);
     expect(batchVerifier?.verifierAuthority).toBe("batch-match-risc0-verifier");
@@ -1001,9 +1002,7 @@ describe("server api", () => {
         "/notes/withdraw-asset",
         "/liquidations",
         "/conditional-orders/trigger",
-        "/conditional-orders/execute",
         "/position-closes",
-        "/position-closes/manual",
         "/disclosures",
         "/orders/replace",
       ]) {
@@ -2410,7 +2409,7 @@ describe("server api", () => {
       markPrice: closeMarkPrice,
       margin: longPosition.position.margin,
       fundingPayment: 0n,
-      fee: 10n,
+      fee: 0n,
     });
     const owner = ownerCommitment("shared-long-owner");
     const closedPosition = createCircuitPositionNote({
@@ -2422,6 +2421,8 @@ describe("server api", () => {
       fundingIndex: 0n,
       owner,
       spendSecret: "shared-long-closed-position-spend",
+      ownerDigest: longPosition.position.ownerDigest,
+      spendSecretDigest: longPosition.position.spendSecretDigest,
       rho: "shared-long-closed-position-rho",
       blinding: "shared-long-closed-position-blind",
     });
@@ -2430,10 +2431,12 @@ describe("server api", () => {
       amount: closeSettlement.newMargin,
       owner,
       spendSecret: "shared-long-close-margin-spend",
+      ownerDigest: longPosition.position.ownerDigest,
       rho: "shared-long-close-margin-rho",
       blinding: "shared-long-close-margin-blind",
     });
     const provenClose = clientProver.provePositionClose({
+      currentFundingIndex: 0n,
       marketId: market.marketId,
       positionCommitment: longPosition.position.commitment as Hex,
       positionNullifier: longPosition.position.positionNullifier as Hex,
@@ -2447,7 +2450,7 @@ describe("server api", () => {
       margin: longPosition.position.margin,
       fundingIndex: 0n,
       fundingPayment: 0n,
-      fee: 10n,
+      fee: 0n,
       newMargin: closeSettlement.newMargin,
       remainingMargin: 0n,
       marginOutputAmount: closeSettlement.newMargin,
@@ -2494,7 +2497,7 @@ describe("server api", () => {
       markPrice: fixture.closeMarkPrice,
       margin: fixture.longPosition.position.margin,
       fundingPayment: 0n,
-      fee: 10n,
+      fee: 0n,
     });
     const owner = ownerCommitment(`${suffix}-long-owner`);
     const accountKeyResponse = await app.handle(
@@ -2518,6 +2521,8 @@ describe("server api", () => {
       fundingIndex: 0n,
       owner,
       spendSecret: `${suffix}-closed-position-spend`,
+      ownerDigest: fixture.longPosition.position.ownerDigest,
+      spendSecretDigest: fixture.longPosition.position.spendSecretDigest,
       rho: `${suffix}-closed-position-rho`,
       blinding: `${suffix}-closed-position-blind`,
     });
@@ -2526,11 +2531,13 @@ describe("server api", () => {
       amount: closeSettlement.newMargin,
       owner,
       spendSecret: `${suffix}-close-margin-spend`,
+      ownerDigest: fixture.longPosition.position.ownerDigest,
       rho: `${suffix}-close-margin-rho`,
       blinding: `${suffix}-close-margin-blind`,
     });
     const closeCommitment = hashFields("manual-position-close", [suffix]);
     const provenClose = clientProver.provePositionClose({
+      currentFundingIndex: 0n,
       marketId: fixture.market.marketId,
       positionCommitment: fixture.longPosition.position.commitment as Hex,
       positionNullifier: fixture.longPosition.position.positionNullifier as Hex,
@@ -2544,7 +2551,7 @@ describe("server api", () => {
       margin: fixture.longPosition.position.margin,
       fundingIndex: 0n,
       fundingPayment: 0n,
-      fee: 10n,
+      fee: 0n,
       newMargin: closeSettlement.newMargin,
       remainingMargin: 0n,
       marginOutputAmount: closeSettlement.newMargin,
@@ -2604,30 +2611,10 @@ describe("server api", () => {
     const runtime = createAppRuntime();
     const app = runtime.router;
     const suffix = "close-context";
-    const market = {
-      marketId: "btc-usd-perp-close-context",
-      oraclePrice: 50_000n * PRICE_SCALE,
-      maxLeverage: 5n,
-      initialMarginRate: 200_000n,
-      maintenanceMarginRate: 100_000n,
-      fundingIndex: 0n,
-    };
-    const owner = ownerCommitment(`${suffix}-owner`);
-    const positionCommitment = hashFields("position-close-context-position", [suffix]);
-    runtime.executor.addMarket(market);
-    runtime.executor.store.positionCommitments.add(positionCommitment);
-    runtime.executor.store.addPositionOpening({
-      batchId: `${suffix}-batch`,
-      marketId: market.marketId,
-      openedAt: 1,
-      ownerCommitment: owner,
-      positionCommitment,
-      positionNullifier: hashFields("position-close-context-nullifier", [suffix]),
-      settlementDigest: hashFields("position-close-context-settlement", [suffix]),
-      sourceIntentCommitment: hashFields("position-close-context-intent", [suffix]),
-      status: "open",
-      updatedAt: 1,
-    });
+    const fixture = await createCloseableLongPositionFixture(app, new ProverService(), suffix);
+    const market = fixture.market;
+    const owner = ownerCommitment(`${suffix}-long-owner`);
+    const positionCommitment = fixture.longPosition.position.commitment;
     const currentMarkPrice = 57_000n * PRICE_SCALE;
     const currentFundingIndex = 7n;
     const updateResponse = await app.handle(
@@ -2694,6 +2681,7 @@ describe("server api", () => {
     expect(marketUpdateResponse.status).toBeLessThan(300);
 
     const provenLiquidation = clientProver.proveLiquidation({
+      currentFundingIndex: 0n,
       marketId: fixture.market.marketId,
       positionCommitment: fixture.longPosition.position.commitment as Hex,
       positionNullifier: fixture.longPosition.position.positionNullifier as Hex,
@@ -2936,6 +2924,7 @@ describe("server api", () => {
     await post("/markets/update", liquidationMarket);
 
     const provenLiquidation = clientProver.proveLiquidation({
+      currentFundingIndex: 160n,
       marketId: market.marketId,
       positionCommitment: bobPosition.position.commitment,
       positionNullifier: bobPosition.position.positionNullifier,
@@ -3022,10 +3011,10 @@ describe("server api", () => {
       markPrice: 56_000n * PRICE_SCALE,
       margin: alicePosition.position.margin,
       fundingPayment: 0n,
-      fee: 10n,
+      fee: 0n,
     });
     expect(closeSettlement.realizedPnl).toBe(5_000n);
-    expect(closeSettlement.newMargin).toBe(16_990n + fillFees(1n, 51_000n * PRICE_SCALE).makerRebate);
+    expect(closeSettlement.newMargin).toBe(17_000n + fillFees(1n, 51_000n * PRICE_SCALE).makerRebate);
     const aliceOwner = ownerCommitment("alice");
     const closedPosition = createCircuitPositionNote({
       marketId: market.marketId,
@@ -3036,6 +3025,8 @@ describe("server api", () => {
       fundingIndex: 160n,
       owner: aliceOwner,
       spendSecret: "alice-closed-position-spend",
+      ownerDigest: alicePosition.position.ownerDigest,
+      spendSecretDigest: alicePosition.position.spendSecretDigest,
       rho: "alice-closed-position-rho",
       blinding: "alice-closed-position-blind",
     });
@@ -3044,11 +3035,13 @@ describe("server api", () => {
       amount: closeSettlement.newMargin,
       owner: aliceOwner,
       spendSecret: "alice-close-margin-spend",
+      ownerDigest: alicePosition.position.ownerDigest,
       rho: "alice-close-margin-rho",
       blinding: "alice-close-margin-blind",
     });
 
     const positionClose = await post("/position-closes", {
+      currentFundingIndex: "160",
       marketId: market.marketId,
       positionCommitment: alicePosition.position.commitment,
       positionNullifier: alicePosition.position.positionNullifier,
@@ -3062,7 +3055,7 @@ describe("server api", () => {
       margin: alicePosition.position.margin.toString(),
       fundingIndex: "160",
       fundingPayment: "0",
-      fee: "10",
+      fee: "0",
       newMargin: closeSettlement.newMargin.toString(),
       remainingMargin: "0",
       marginOutputAmount: closeSettlement.newMargin.toString(),
@@ -3352,6 +3345,7 @@ describe("server api", () => {
       new Request("http://pnlx.local/position-closes", {
         method: "POST",
         body: body({
+      currentFundingIndex: 0n,
           marketId: "btc-usd-perp",
           positionNullifier: hashFields("position-nullifier", ["alice", "untriggered-close"]),
           closeCommitment: hashFields("close", ["untriggered"]),
@@ -3362,7 +3356,7 @@ describe("server api", () => {
           markPrice: (56_000n * PRICE_SCALE).toString(),
           margin: "12000",
           fundingPayment: "0",
-          fee: "10",
+          fee: "0",
           newMargin: "17990",
           newPositionCommitment: hashFields("new-position", ["untriggered"]),
           marginOutputCommitment: hashFields("margin-output", ["untriggered"]),
@@ -3440,6 +3434,7 @@ describe("server api", () => {
       new Request("http://pnlx.local/position-closes", {
         method: "POST",
         body: body({
+      currentFundingIndex: 0n,
           marketId: witness.marketId,
           positionNullifier: settlingNullifier,
           closeCommitment,
@@ -3450,7 +3445,7 @@ describe("server api", () => {
           markPrice: (56_000n * PRICE_SCALE).toString(),
           margin: "12000",
           fundingPayment: "0",
-          fee: "10",
+          fee: "0",
           newMargin: "17990",
           newPositionCommitment: hashFields("new-position", ["mismatched"]),
           marginOutputCommitment: hashFields("margin-output", ["mismatched"]),

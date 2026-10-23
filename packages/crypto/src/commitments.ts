@@ -55,8 +55,8 @@ export interface IntentBindingFields extends CircuitIntentCommitmentInput {
 
 export function intentBindingFields(intent: TradeIntent): IntentBindingFields {
   const fields = {
-    batchDigest: digestToFieldHex(`batch:${intent.batchId}`),
-    marketDigest: digestToFieldHex(`market:${intent.marketId}`),
+    batchDigest: fieldHex(BigInt(hashFields("batch-id", [intent.batchId]))),
+    marketDigest: fieldHex(BigInt(hashFields("market-id", [intent.marketId]))),
     ownerCommitmentField: intentOwnerCommitmentField(ownerCommitment(intent.owner)),
     side: intent.side,
     size: intent.size,
@@ -114,7 +114,7 @@ export function conditionalOrderBindingFields(
   order: ConditionalOrderWitness,
 ): ConditionalOrderBindingFields {
   const fields = {
-    marketDigest: digestToFieldHex(`market:${order.marketId}`),
+    marketDigest: fieldHex(BigInt(hashFields("market-id", [order.marketId]))),
     positionNullifier: order.positionNullifier,
     side: order.side,
     kind: order.kind,

@@ -63,6 +63,8 @@ export interface PrivateMatchIntent {
   noteChangeCommitment: Hex;
   noteNullifier: Hex;
   ownerCommitment: Hex;
+  ownerDigest: Hex;
+  positionSeed: Hex;
   signedSize: bigint;
   sourceIntentCommitment?: Hex;
 }
@@ -73,6 +75,8 @@ export interface IntentRecord {
   marketId: string;
   marketDigest: Hex;
   marginRoot: Hex;
+  assetDigest: Hex;
+  currentBatch: bigint;
   ownerCommitmentField: Hex;
   ownerCommitment: Hex;
   intentCommitment: Hex;
@@ -156,6 +160,10 @@ export interface IntentValidityWitness {
 }
 
 export interface IntentValidityRecord {
+  assetDigest: Hex;
+  matchingPayloadCommitment: Hex;
+  ownerDigest: Hex;
+  positionSeed: Hex;
   batchDigest: Hex;
   currentBatch: bigint;
   expiryBatch: bigint;
@@ -265,7 +273,11 @@ export type BatchExecutionPhase =
   | "maker-finalize";
 
 export interface BatchExecutionRunRecord {
+  submissionAttempted?: boolean;
+  // Private recovery data; omit from API responses and telemetry.
+  settlementTranscript?: BatchExecutionSettlementTranscript;
   aggregateVolume?: bigint;
+  intentCommitments?: Hex[];
   batchId: string;
   completedAt?: number;
   fillCount?: number;
@@ -278,6 +290,14 @@ export interface BatchExecutionRunRecord {
   startedAt: number;
   status: BatchExecutionRunStatus;
   updatedAt?: number;
+}
+
+export interface BatchExecutionSettlementTranscript {
+  accountEvents: AccountEventRecord[];
+  privateMatchIntents?: PrivateMatchIntent[];
+  positionOpenings: PositionLifecycleRecord[];
+  residualOrders?: ResidualOrderRecord[];
+  settlement: BatchSettlement;
 }
 
 export type LiquidationAutomationJobStatus = "pending" | "executed" | "failed" | "stale";
@@ -352,6 +372,7 @@ export interface LiquidationWitness {
   margin: bigint;
   fundingPayment: bigint;
   fundingIndex: bigint;
+  currentFundingIndex: bigint;
   maintenanceRate: bigint;
   marketDigest: Hex;
   ownerDigest: Hex;
@@ -365,6 +386,7 @@ export interface LiquidationWitness {
 export interface LiquidationRecord {
   marketId: string;
   markPrice: bigint;
+  currentFundingIndex: bigint;
   maintenanceRate: bigint;
   positionCommitment: Hex;
   positionNullifier: Hex;
@@ -418,6 +440,7 @@ export interface PositionCloseWitness {
   markPrice: bigint;
   margin: bigint;
   fundingIndex: bigint;
+  currentFundingIndex: bigint;
   fundingPayment: bigint;
   fee: bigint;
   newMargin: bigint;
@@ -443,6 +466,7 @@ export interface PositionCloseWitness {
 export interface PositionCloseRecord {
   marketId: string;
   markPrice: bigint;
+  currentFundingIndex: bigint;
   positionCommitment: Hex;
   positionNullifier: Hex;
   positionRoot: Hex;
@@ -454,6 +478,18 @@ export interface PositionCloseRecord {
   proof: ProofMeta;
   proofVerificationTxHash?: Hex;
   settlementTxHash?: Hex;
+}
+
+export interface PairedPositionCloseRecord {
+  marketId: string;
+  assetDigest: Hex;
+  markPrice: bigint;
+  currentFundingIndex: bigint;
+  maintenanceRate: bigint;
+  liquidation: boolean;
+  positionRoot: Hex;
+  positions: [PositionCloseRecord, PositionCloseRecord];
+  proof: ProofMeta;
 }
 
 export interface DisclosureInput {

@@ -9,6 +9,11 @@ name = "intent_registry"
 
 [dependencies]
 soroban-sdk = { workspace = true }
+soroban-poseidon = { workspace = true }
+governance-interface = { path = "../governance-interface" }
+proof-ledger-interface = { path = "../proof-ledger-interface" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+governance = { path = "../governance" }
+proof-ledger = { path = "../proof-ledger" }

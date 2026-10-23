@@ -2,7 +2,7 @@ import { hashFields } from "@pnlx/crypto";
 import { contractPublicInputHash, publicField, publicU128, type ContractPublicInput } from "@pnlx/proof-system";
 import type { BatchSettlement, BatchSettlementCapacity, Hex } from "@pnlx/protocol-types";
 
-const MAX_PUBLIC_ITEMS = 8;
+export const MAX_PUBLIC_ITEMS = 8;
 const CAPACITY_MARKER = "; capacity=";
 type SettlementOutputs = Pick<BatchSettlement, "orderUpdates" | "newCommitments" | "marginChangeCommitments" | "spentNullifiers"> &
   Partial<Pick<BatchSettlement, "makerIntents" | "takerIntents" | "matchingPayloadCommitments" | "residualCommitments" | "residualMargins" | "residualPayloadCommitments">>;

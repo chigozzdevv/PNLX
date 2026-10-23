@@ -25,6 +25,9 @@ import type {
   WithdrawalRecord,
 } from "@pnlx/protocol-types";
 import { ProtocolStore } from "@/shared/state/store";
+import type { DelegatedConditionalPolicy } from "@/shared/protocol/delegated-policies";
+import type { PendingPairedClose } from "@/shared/protocol/paired-close-journal";
+import type { PendingIntentSubmission } from "@/shared/protocol/intent-submission-journal";
 import {
   applyProtocolStoreSnapshot,
   parseProtocolSnapshot,
@@ -180,6 +183,18 @@ export class MongoProtocolStore extends ProtocolStore {
     this.persist(() => super.addIntent(record, privateMatchIntent));
   }
 
+  override restoreConfirmedIntent(record: IntentRecord, privateMatchIntent: PrivateMatchIntent): void {
+    this.persist(() => super.restoreConfirmedIntent(record, privateMatchIntent));
+  }
+
+  override addPendingIntentSubmission(record: PendingIntentSubmission): void {
+    this.persist(() => super.addPendingIntentSubmission(record));
+  }
+
+  override removePendingIntentSubmission(intentCommitment: Hex): void {
+    this.persist(() => super.removePendingIntentSubmission(intentCommitment));
+  }
+
   override updateIntentSubmissionTxHash(intentCommitment: Hex, submissionTxHash: Hex): IntentRecord {
     return this.persist(() => super.updateIntentSubmissionTxHash(intentCommitment, submissionTxHash));
   }
@@ -229,6 +244,22 @@ export class MongoProtocolStore extends ProtocolStore {
 
   override addConditionalOrder(record: ConditionalOrderCommitment): void {
     this.persist(() => super.addConditionalOrder(record));
+  }
+
+  override addDelegatedConditionalPolicy(record: DelegatedConditionalPolicy): void {
+    this.persist(() => super.addDelegatedConditionalPolicy(record));
+  }
+
+  override addPendingPairedClose(record: PendingPairedClose): void {
+    this.persist(() => super.addPendingPairedClose(record));
+  }
+
+  override removePendingPairedClose(journalKey: Hex): void {
+    this.persist(() => super.removePendingPairedClose(journalKey));
+  }
+
+  override updatePendingPairedClose(record: PendingPairedClose): void {
+    this.persist(() => super.updatePendingPairedClose(record));
   }
 
   override addConditionalClose(record: ConditionalOrderRecord): void {

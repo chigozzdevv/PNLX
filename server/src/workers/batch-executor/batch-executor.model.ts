@@ -4,7 +4,8 @@ export interface BatchExecutorConfig {
   batchIdPrefix?: string;
   intervalMs: number;
   oracleRefreshIntervalMs?: number;
-  refreshMarketOracle?: (marketId: string) => Promise<void> | void;
+  oracleRefreshTimeoutMs?: number;
+  refreshMarketOracle?: (marketId: string, signal?: AbortSignal) => Promise<void> | void;
   sampleFundingPremium?: (marketId: string, sampledAt: number) => Promise<void> | void;
   settlementsOnchainRequired?: boolean;
 }
@@ -17,7 +18,7 @@ export interface RunBatchExecutorInput {
 
 export interface BatchExecutorMarketResult {
   marketId: string;
-  record: BatchExecutionRunRecord;
+  record: Omit<BatchExecutionRunRecord, "intentCommitments" | "settlementTranscript">;
 }
 
 export interface BatchExecutorRunResult {

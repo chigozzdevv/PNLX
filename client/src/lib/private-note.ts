@@ -136,7 +136,9 @@ export function circuitPositionCommitment(input: CircuitPositionCommitmentInput)
     fieldHashPair(input.margin, input.fundingIndex),
     fieldHashPair(input.ownerDigest, fieldHashPair(input.rhoDigest, input.blinding)),
   );
-  return fieldHashPair(left, right);
+  if (BigInt(input.spendSecretDigest) === 0n) throw new Error("Position spending authority is required");
+  return fieldHashPair(0x504e4c58504f534954494f4en,
+    fieldHashPair(left, fieldHashPair(right, input.spendSecretDigest)));
 }
 
 export function circuitPositionNullifier(

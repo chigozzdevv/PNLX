@@ -36,6 +36,7 @@ function run(command, timeoutMs) {
   const result = spawnSync(command[0], command.slice(1), {
     encoding: "utf8",
     timeout: timeoutMs,
+    killSignal: "SIGKILL",
   });
   const timeoutMessage = result.error?.message ?? "";
   return {

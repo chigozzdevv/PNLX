@@ -4,6 +4,7 @@ use soroban_sdk::{contractclient, Address, BytesN, Env};
 
 #[contractclient(name = "IntentRegistryClient")]
 pub trait IntentRegistryInterface {
+    fn collateral_digest(env:Env)->BytesN<32>;
     fn cancel(env: Env, intent_commitment: BytesN<32>);
     fn consume(env: Env, settler: Address, intent_commitment: BytesN<32>);
     fn has_intent(env: Env, intent_commitment: BytesN<32>) -> bool;

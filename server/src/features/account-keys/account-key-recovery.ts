@@ -2,6 +2,11 @@ import {
   circuitPositionCommitment,
   circuitPositionNullifier,
   digestToFieldHex,
+  fieldHex,
+  hashFields,
+  positionSecrets,
+  secureMarginCommitment,
+  secureMarginNullifier,
 } from "@pnlx/crypto";
 import { fillFees } from "@pnlx/market-math";
 import type {
@@ -12,7 +17,7 @@ import type {
   PrivateMatchIntent,
   Side,
 } from "@pnlx/protocol-types";
-import { createPositionOpeningAccountEvent } from "@/shared/protocol/account-event-outcomes";
+import { createPositionCloseAccountEvent, createPositionOpeningAccountEvent } from "@/shared/protocol/account-event-outcomes";
 import type { ProtocolStore } from "@/shared/state/store";
 
 type PositionOpeningPayload = Parameters<typeof createPositionOpeningAccountEvent>[1];
@@ -95,6 +100,49 @@ export function recoverPositionOpeningEventsForOwner(
   return { events, skipped };
 }
 
+export function recoverConfirmedCloseOutputEventsForOwner(
+  store: ProtocolStore,
+  ownerCommitment: Hex,
+  publicKey: string,
+): AccountKeyRecovery {
+  const events: AccountEventRecord[] = [];
+  const skipped: AccountKeyRecoverySkip[] = [];
+  for (const run of store.pendingPairedCloses.values()) {
+    if (!run.retired || !run.retiredReconciled || !run.settlementTxHash) continue;
+    for (let index = 0; index < run.pair.positions.length; index++) {
+      const record = run.pair.positions[index]!;
+      const position = store.positionLifecycle.get(record.positionCommitment);
+      if (position?.ownerCommitment.toLowerCase() !== ownerCommitment.toLowerCase()) continue;
+      const winning = store.positionCloses.get(record.closeCommitment);
+      if (!winning || winning.positionCommitment !== record.positionCommitment || winning.positionNullifier !== record.positionNullifier ||
+          winning.marginOutputCommitment !== record.marginOutputCommitment || winning.settlementTxHash !== run.settlementTxHash ||
+          position.closeCommitment !== record.closeCommitment || position.marginOutputCommitment !== record.marginOutputCommitment ||
+          position.status === "open") continue;
+      try {
+        const note = run.outputNotes[index]!;
+        if (note.ownerCommitment !== position.ownerCommitment || note.commitment !== winning.marginOutputCommitment ||
+            typeof note.amount !== "string" || !/^[0-9]+$/.test(note.amount) || BigInt(note.amount) >= (1n << 128n)) {
+          throw new Error("confirmed close output binding mismatch");
+        }
+        if (BigInt(note.amount) === 0n) continue;
+        const fields = ["assetDigest", "blinding", "ownerDigest", "rhoDigest", "spendSecretDigest", "noteNullifier"] as const;
+        for (const field of fields) if (typeof note[field] !== "string" || !/^0x[0-9a-f]+$/i.test(String(note[field]))) {
+          throw new Error("confirmed close output opening is unavailable");
+        }
+        const opening = { amount: BigInt(note.amount), assetDigest: note.assetDigest as Hex, blinding: note.blinding as Hex,
+          ownerDigest: note.ownerDigest as Hex, rhoDigest: note.rhoDigest as Hex, spendSecretDigest: note.spendSecretDigest as Hex };
+        if (secureMarginCommitment(opening) !== note.commitment || secureMarginNullifier(opening) !== note.noteNullifier) {
+          throw new Error("confirmed close output opening mismatch");
+        }
+        events.push(createPositionCloseAccountEvent(winning, position, publicKey, run.createdAt, note));
+      } catch {
+        skipped.push({ positionCommitment: record.positionCommitment, reason: "confirmed close output opening could not be recovered" });
+      }
+    }
+  }
+  return { events, skipped };
+}
+
 function reconstructSettlementOpenings(
   settlement: BatchSettlement,
   positions: Map<Hex, PositionLifecycleRecord>,
@@ -135,6 +183,9 @@ function reconstructSettlementOpenings(
     const rightMargin = allocateMargin(rightState, size) - rightEntryFee;
 
     addIfValid(out, left, {
+      ownerDigest: leftState.intent.ownerDigest,
+      positionSeed: leftState.intent.positionSeed,
+      fillIndex: index,
       ...(fees ? { entryFee: leftEntryFee } : {}),
       entryPrice: price,
       fundingIndex: left.fundingIndex ?? 0n,
@@ -147,6 +198,9 @@ function reconstructSettlementOpenings(
       sourceIntentCommitment: left.sourceIntentCommitment,
     }, index);
     addIfValid(out, right, {
+      ownerDigest: rightState.intent.ownerDigest,
+      positionSeed: rightState.intent.positionSeed,
+      fillIndex: index + 1,
       ...(fees ? { entryFee: rightEntryFee } : {}),
       entryPrice: price,
       fundingIndex: right.fundingIndex ?? 0n,
@@ -211,12 +265,10 @@ function matchesPosition(
   payload: PositionOpeningPayload,
   fillIndex: number,
 ): boolean {
-  const marketDigest = digestToFieldHex(`market:${payload.marketId}`);
-  const ownerDigest = digestToFieldHex(`owner:${position.ownerCommitment}`);
-  const rho = `${payload.sourceIntentCommitment}:position:${fillIndex}`;
-  const rhoDigest = digestToFieldHex(`rho:${rho}`);
-  const blinding = digestToFieldHex(`blinding:${payload.sourceIntentCommitment}:blinding:${fillIndex}`);
-  const spendSecretDigest = digestToFieldHex(`spend:${position.ownerCommitment}:${rho}`);
+  if (!payload.positionSeed || !payload.ownerDigest) return false;
+  const marketDigest = fieldHex(BigInt(hashFields("market-id", [payload.marketId])));
+  const ownerDigest = payload.ownerDigest;
+  const {rhoDigest,blinding,spendSecretDigest} = positionSecrets(payload.positionSeed,fillIndex);
   const commitment = circuitPositionCommitment({
     blinding,
     entryPrice: payload.entryPrice,

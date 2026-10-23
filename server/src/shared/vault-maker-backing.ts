@@ -10,6 +10,7 @@ export interface VaultMakerAllocation {
   maker: string;
   noteCommitments: string[];
   remainingPrincipal?: string;
+  appliedPrincipalReceipts?: Record<string,{receiptId:string;principal:string;before:string}>;
   registeredAmount: string;
   series: number;
   status: "outstanding" | "draining" | "closed";

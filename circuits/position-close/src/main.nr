@@ -1,365 +1,169 @@
+global POSITION_DOMAIN: Field = 0x504e4c58504f534954494f4e;
+global SECURE_MARGIN_DOMAIN: Field = 0x504e4c5844524f504d4152;
+global PRICE_SCALE: u128 = 100_000_000;
+global RATE_SCALE: u128 = 1_000_000;
+global MAX_SIGNED_ABS: u128 = 170141183460469231731687303715884105727;
+
 fn hash_pair(left: Field, right: Field) -> Field {
     std::hash::poseidon2_permutation([left, right, 0, 36893488147419103232], 4)[0]
 }
 
-global SECURE_MARGIN_DOMAIN: Field = 0x504e4c5844524f504d4152;
+fn signed_index(abs_value: u128, is_negative: bool) -> Field {
+    assert(abs_value <= MAX_SIGNED_ABS);
+    if abs_value == 0 { assert(!is_negative); }
+    if is_negative { -(abs_value as Field) } else { abs_value as Field }
+}
 
-fn position_commitment(
-    is_long: bool,
-    size: u128,
-    entry_price: u128,
-    margin: u128,
-    funding_index: u128,
-    market_digest: Field,
-    owner_digest: Field,
-    rho_digest: Field,
-    blinding: Field,
-) -> Field {
+fn funding_payment(is_long: bool, size: u128, old_abs: u128, old_negative: bool,
+    current_abs: u128, current_negative: bool) -> (u128, bool) {
+    let _old = signed_index(old_abs, old_negative);
+    let _current = signed_index(current_abs, current_negative);
+    let increased = if old_negative != current_negative {
+        old_negative
+    } else if old_negative {
+        old_abs >= current_abs
+    } else { current_abs >= old_abs };
+    let delta = if old_negative != current_negative { old_abs + current_abs }
+        else if old_abs >= current_abs { old_abs - current_abs }
+        else { current_abs - old_abs };
+    let amount = (size * delta) / PRICE_SCALE;
+    (amount, (amount != 0) & (is_long != increased))
+}
+
+fn position_commitment(is_long: bool, size: u128, entry_price: u128, margin: u128,
+    funding_index: Field, market_digest: Field, owner_digest: Field, rho: Field,
+    blinding: Field, spend_secret_digest: Field) -> Field {
     let side = if is_long { 1 as Field } else { 2 as Field };
-    let left = hash_pair(
-        hash_pair(market_digest, side),
-        hash_pair(size as Field, entry_price as Field),
-    );
-    let right = hash_pair(
-        hash_pair(margin as Field, funding_index as Field),
-        hash_pair(owner_digest, hash_pair(rho_digest, blinding)),
-    );
-    hash_pair(left, right)
+    let left = hash_pair(hash_pair(market_digest, side), hash_pair(size as Field, entry_price as Field));
+    let right = hash_pair(hash_pair(margin as Field, funding_index), hash_pair(owner_digest, hash_pair(rho, blinding)));
+    hash_pair(POSITION_DOMAIN, hash_pair(left, hash_pair(right, spend_secret_digest)))
 }
 
-fn note_commitment(
-    asset_digest: Field,
-    note_amount: u128,
-    owner_digest: Field,
-    rho_digest: Field,
-    blinding: Field,
-    output_spend_secret_digest: Field,
-) -> Field {
-    let amount_field = note_amount as Field;
-    let left = hash_pair(asset_digest, amount_field);
-    let right = hash_pair(owner_digest,
-        hash_pair(hash_pair(rho_digest, blinding), output_spend_secret_digest));
-    hash_pair(SECURE_MARGIN_DOMAIN, hash_pair(left, right))
+fn note_commitment(asset: Field, amount: u128, owner: Field, rho: Field,
+    blinding: Field, spend_secret_digest: Field) -> Field {
+    hash_pair(SECURE_MARGIN_DOMAIN, hash_pair(hash_pair(asset, amount as Field),
+        hash_pair(owner, hash_pair(hash_pair(rho, blinding), spend_secret_digest))))
 }
 
-fn merkle_root(leaf: Field, path_siblings: [Field; 20], path_indices: [bool; 20]) -> Field {
-    let mut current = leaf;
-    for i in 0..20 {
-        let sibling = path_siblings[i];
-        let left = if path_indices[i] { sibling } else { current };
-        let right = if path_indices[i] { current } else { sibling };
-        current = hash_pair(left, right);
-    }
-    current
+fn merkle_root(leaf: Field, siblings: [Field; 20], indices: [bool; 20]) -> Field {
+    let mut node = leaf;
+    for i in 0..20 { node = if indices[i] { hash_pair(siblings[i], node) } else { hash_pair(node, siblings[i]) }; }
+    node
 }
 
-fn main(
-    is_long: bool,
-    size: u128,
-    close_size: u128,
-    entry_price: u128,
-    mark_price: pub u128,
-    margin: u128,
-    funding_index: u128,
-    funding_payment_abs: u128,
-    funding_is_credit: bool,
-    fee: u128,
-    new_margin: u128,
-    remaining_margin: u128,
-    margin_output_amount: u128,
-    price_scale: pub u128,
-    position_root: pub Field,
-    position_commitment_public: pub Field,
-    position_nullifier: pub Field,
-    close_commitment: pub Field,
-    new_position_commitment: pub Field,
-    margin_output_commitment: pub Field,
-    market_digest: Field,
-    owner_digest: Field,
-    rho_digest: Field,
-    blinding: Field,
-    spend_secret_digest: Field,
-    new_position_rho_digest: Field,
-    new_position_blinding: Field,
-    margin_output_asset_digest: Field,
-    margin_output_rho_digest: Field,
-    margin_output_blinding: Field,
-    margin_output_spend_secret_digest: Field,
-    path_siblings: [Field; 20],
-    path_indices: [bool; 20],
-    zero_value: Field,
-) {
-    assert(size > 0);
-    assert(close_size > 0);
-    assert(close_size == size);
-    assert(entry_price > 0);
-    assert(mark_price > 0);
-    assert(price_scale > 0);
-    assert(position_root != zero_value);
-    assert(position_commitment_public != zero_value);
-    assert(position_nullifier != zero_value);
-    assert(close_commitment != zero_value);
-    assert(new_position_commitment != zero_value);
-    assert(margin_output_commitment != zero_value);
-    assert(new_position_commitment != close_commitment);
-    assert(margin_output_commitment != close_commitment);
-    assert(new_position_rho_digest != zero_value);
-    assert(new_position_blinding != zero_value);
-    assert(margin_output_asset_digest != zero_value);
-    assert(margin_output_rho_digest != zero_value);
-    assert(margin_output_blinding != zero_value);
-    assert(margin_output_spend_secret_digest != zero_value);
-
-    let computed_position = position_commitment(
-        is_long,
-        size,
-        entry_price,
-        margin,
-        funding_index,
-        market_digest,
-        owner_digest,
-        rho_digest,
-        blinding,
-    );
-    assert(computed_position == position_commitment_public);
-    assert(merkle_root(position_commitment_public, path_siblings, path_indices) == position_root);
-    assert(hash_pair(spend_secret_digest, rho_digest) == position_nullifier);
-
-    let is_profit = if is_long {
-        mark_price >= entry_price
-    } else {
-        entry_price >= mark_price
-    };
-    let price_delta = if is_profit {
-        if is_long { mark_price - entry_price } else { entry_price - mark_price }
-    } else {
-        if is_long { entry_price - mark_price } else { mark_price - entry_price }
-    };
-    let pnl_abs = (close_size * price_delta) / price_scale;
-    let margin_after_pnl = if is_profit {
-        margin + pnl_abs
-    } else {
-        assert(margin >= pnl_abs);
-        margin - pnl_abs
-    };
-    let margin_after_funding = if funding_is_credit {
-        margin_after_pnl + funding_payment_abs
-    } else {
-        assert(margin_after_pnl >= funding_payment_abs);
-        margin_after_pnl - funding_payment_abs
-    };
-    assert(margin_after_funding >= fee);
-    assert(new_margin == margin_after_funding - fee);
-    assert(remaining_margin + margin_output_amount == new_margin);
-
-    let remaining_size = size - close_size;
-    assert(remaining_margin == 0);
-    let expected_new_position = position_commitment(
-        is_long,
-        remaining_size,
-        entry_price,
-        remaining_margin,
-        funding_index,
-        market_digest,
-        owner_digest,
-        new_position_rho_digest,
-        new_position_blinding,
-    );
-    assert(expected_new_position == new_position_commitment);
-
-    let expected_margin_output = note_commitment(
-        margin_output_asset_digest,
-        margin_output_amount,
-        owner_digest,
-        margin_output_rho_digest,
-        margin_output_blinding,
-        margin_output_spend_secret_digest,
-    );
-    assert(expected_margin_output == margin_output_commitment);
-}
-
-fn default_siblings() -> [Field; 20] {
+fn empty_siblings() -> [Field; 20] {
     let mut siblings = [0; 20];
-    let mut empty: Field = 0;
-    for i in 0..20 {
-        siblings[i] = empty;
-        empty = hash_pair(empty, empty);
-    }
+    let mut node: Field = 0;
+    for i in 0..20 { siblings[i] = node; node = hash_pair(node, node); }
     siblings
 }
 
-fn default_indices() -> [bool; 20] {
-    [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false]
+fn pnl(is_long: bool, size: u128, entry: u128, mark: u128) -> (u128, bool) {
+    let profit = if is_long { mark >= entry } else { entry >= mark };
+    let delta = if mark >= entry { mark - entry } else { entry - mark };
+    (size * delta / PRICE_SCALE, profit)
 }
 
-fn exercise_close(
-    is_long: bool,
-    size: u128,
-    close_size: u128,
-    entry_price: u128,
-    mark_price: u128,
-    margin: u128,
-    funding_index: u128,
-    funding_payment_abs: u128,
-    funding_is_credit: bool,
-    fee: u128,
-    new_margin: u128,
-    remaining_margin: u128,
-    margin_output_amount: u128,
-    position_root: Field,
-    position_commitment_public: Field,
-    position_nullifier: Field,
-    path_siblings: [Field; 20],
-    path_indices: [bool; 20],
+fn equity_parts(is_long: bool, size: u128, entry: u128, mark: u128, margin: u128,
+    old_abs: u128, old_negative: bool, current_abs: u128, current_negative: bool) -> (u128, u128) {
+    let (pnl_amount, profit) = pnl(is_long, size, entry, mark);
+    let (funding_amount, credit) = funding_payment(is_long, size, old_abs, old_negative, current_abs, current_negative);
+    let credits = margin + (if profit { pnl_amount } else { 0 }) + (if credit { funding_amount } else { 0 });
+    let debits = (if profit { 0 } else { pnl_amount }) + (if credit { 0 } else { funding_amount });
+    (credits, debits)
+}
+
+fn main(
+    is_long: bool, size: u128, close_size: u128, entry_price: u128,
+    mark_price: pub u128, margin: u128, funding_index: Field,
+    funding_payment_abs: u128, funding_is_credit: bool, fee: u128,
+    new_margin: u128, remaining_margin: u128, margin_output_amount: u128,
+    price_scale: pub u128, position_root: pub Field,
+    position_commitment_public: pub Field, position_nullifier: pub Field,
+    close_commitment: pub Field, new_position_commitment: pub Field,
+    margin_output_commitment: pub Field, market_digest: pub Field,
+    current_funding_index_abs: pub u128, current_funding_index_is_negative: pub bool,
+    funding_index_abs: u128, funding_index_is_negative: bool,
+    owner_digest: Field, rho_digest: Field, blinding: Field, spend_secret_digest: Field,
+    new_position_rho_digest: Field, new_position_blinding: Field,
+    margin_output_asset_digest: Field, margin_output_rho_digest: Field,
+    margin_output_blinding: Field, margin_output_spend_secret_digest: Field,
+    path_siblings: [Field; 20], path_indices: [bool; 20], zero_value: Field,
 ) {
-    let market_digest = 2;
-    let owner_digest = 3;
-    let new_position = position_commitment(
-        is_long,
-        size - close_size,
-        entry_price,
-        remaining_margin,
-        funding_index,
-        market_digest,
-        owner_digest,
-        7,
-        8,
-    );
-    let margin_output = note_commitment(9, margin_output_amount, owner_digest, 10, 11, 12);
-    main(
-        is_long,
-        size,
-        close_size,
-        entry_price,
-        mark_price,
-        margin,
-        funding_index,
-        funding_payment_abs,
-        funding_is_credit,
-        fee,
-        new_margin,
-        remaining_margin,
-        margin_output_amount,
-        100_000_000,
-        position_root,
-        position_commitment_public,
-        position_nullifier,
-        13,
-        new_position,
-        margin_output,
-        market_digest,
-        owner_digest,
-        4,
-        5,
-        6,
-        7,
-        8,
-        9,
-        10,
-        11,
-        12,
-        path_siblings,
-        path_indices,
-        0,
-    );
+    assert(zero_value == 0);
+    assert((size > 0) & (close_size == size));
+    assert((entry_price > 0) & (mark_price > 0));
+    assert(price_scale == PRICE_SCALE);
+    assert((market_digest != 0) & (owner_digest != 0) & (rho_digest != 0) & (blinding != 0) & (spend_secret_digest != 0));
+    assert((position_root != 0) & (position_commitment_public != 0) & (position_nullifier != 0));
+    assert((close_commitment != 0) & (new_position_commitment != 0) & (margin_output_commitment != 0));
+    assert((new_position_commitment != close_commitment) & (margin_output_commitment != close_commitment));
+    assert((new_position_rho_digest != 0) & (new_position_blinding != 0));
+    assert((margin_output_asset_digest != 0) & (margin_output_rho_digest != 0) & (margin_output_blinding != 0) & (margin_output_spend_secret_digest != 0));
+    assert(funding_index == signed_index(funding_index_abs, funding_index_is_negative));
+    let position = position_commitment(is_long, size, entry_price, margin, funding_index,
+        market_digest, owner_digest, rho_digest, blinding, spend_secret_digest);
+    assert(position == position_commitment_public);
+    assert(merkle_root(position, path_siblings, path_indices) == position_root);
+    assert(hash_pair(spend_secret_digest, rho_digest) == position_nullifier);
+    let (funding, credit) = funding_payment(is_long, size, funding_index_abs, funding_index_is_negative,
+        current_funding_index_abs, current_funding_index_is_negative);
+    assert((funding_payment_abs == funding) & (funding_is_credit == credit));
+    assert(fee == 0);
+    let (credits, debits) = equity_parts(is_long, size, entry_price, mark_price, margin,
+        funding_index_abs, funding_index_is_negative, current_funding_index_abs, current_funding_index_is_negative);
+    assert(credits >= debits);
+    assert(new_margin == credits - debits);
+    assert((remaining_margin == 0) & (margin_output_amount == new_margin));
+    assert(position_commitment(is_long, 0, entry_price, 0, funding_index,
+        market_digest, owner_digest, new_position_rho_digest, new_position_blinding,
+        spend_secret_digest) == new_position_commitment);
+    assert(note_commitment(margin_output_asset_digest, margin_output_amount, owner_digest,
+        margin_output_rho_digest, margin_output_blinding, margin_output_spend_secret_digest) == margin_output_commitment);
+}
+
+fn exercise(is_long: bool, mark: u128, old_abs: u128, old_negative: bool,
+    current_abs: u128, current_negative: bool, funding_override: u128, secret: Field, public_market: Field, fee: u128) {
+    let size = 100_000_000;
+    let entry = 100;
+    let margin = 1000;
+    let index = signed_index(old_abs, old_negative);
+    let position = position_commitment(is_long, size, entry, margin, index, 2, 3, 4, 5, 6);
+    let siblings = empty_siblings();
+    let indices = [false; 20];
+    let root = merkle_root(position, siblings, indices);
+    let (funding, credit) = funding_payment(is_long, size, old_abs, old_negative, current_abs, current_negative);
+    let (credits, debits) = equity_parts(is_long, size, entry, mark, margin, old_abs, old_negative, current_abs, current_negative);
+    let output = credits - debits;
+    main(is_long, size, size, entry, mark, margin, index, funding + funding_override, credit, fee,
+        output, 0, output, PRICE_SCALE, root, position, hash_pair(secret, 4), 13,
+        position_commitment(is_long, 0, entry, 0, index, 2, 3, 7, 8, secret),
+        note_commitment(9, output, 3, 10, 11, 12), public_market,
+        current_abs, current_negative, old_abs, old_negative, 3, 4, 5, secret,
+        7, 8, 9, 10, 11, 12, siblings, indices, 0);
 }
 
 #[test]
-fn valid_long_profit_close() {
-    let siblings = default_siblings();
-    let indices = default_indices();
-    let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
-    let root = merkle_root(commitment, siblings, indices);
-    exercise_close(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, root, commitment, hash_pair(6, 4), siblings, indices);
-}
-
+fn long_profit() { exercise(true, 110, 0, false, 0, false, 0, 6, 2, 0); }
 #[test]
-fn valid_long_loss_close() {
-    let siblings = default_siblings();
-    let indices = default_indices();
-    let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
-    let root = merkle_root(commitment, siblings, indices);
-    exercise_close(true, 1, 1, 5_000_000_000_000, 4_800_000_000_000, 12_000, 0, 0, false, 10, 9_990, 0, 9_990, root, commitment, hash_pair(6, 4), siblings, indices);
-}
-
+fn short_profit() { exercise(false, 90, 0, false, 0, false, 0, 6, 2, 0); }
 #[test]
-fn valid_short_profit_close() {
-    let siblings = default_siblings();
-    let indices = default_indices();
-    let commitment = position_commitment(false, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
-    let root = merkle_root(commitment, siblings, indices);
-    exercise_close(false, 1, 1, 5_000_000_000_000, 4_400_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, root, commitment, hash_pair(6, 4), siblings, indices);
-}
-
-#[test(should_fail)]
-fn rejects_partial_close() {
-    let siblings = default_siblings();
-    let indices = default_indices();
-    let commitment = position_commitment(true, 4, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
-    let root = merkle_root(commitment, siblings, indices);
-    exercise_close(true, 4, 2, 5_000_000_000_000, 5_100_000_000_000, 12_000, 0, 0, false, 10, 13_990, 13_990, 0, root, commitment, hash_pair(6, 4), siblings, indices);
-}
-
+fn long_loss() { exercise(true, 90, 0, false, 0, false, 0, 6, 2, 0); }
 #[test]
-fn valid_short_funding_credit_close() {
-    let siblings = default_siblings();
-    let indices = default_indices();
-    let commitment = position_commitment(false, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
-    let root = merkle_root(commitment, siblings, indices);
-    exercise_close(false, 1, 1, 5_000_000_000_000, 5_000_000_000_000, 12_000, 0, 100, true, 10, 12_090, 0, 12_090, root, commitment, hash_pair(6, 4), siblings, indices);
-}
-
+fn authenticated_funding_debit() { exercise(true, 100, 0, false, 10, false, 0, 6, 2, 0); }
+#[test]
+fn authenticated_funding_credit() { exercise(false, 100, 0, false, 10, false, 0, 6, 2, 0); }
+#[test]
+fn funding_crosses_zero() { exercise(true, 100, 5, false, 7, true, 0, 6, 2, 0); }
 #[test(should_fail)]
-fn rejects_bad_pnl() {
-    let siblings = default_siblings();
-    let indices = default_indices();
-    let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
-    let root = merkle_root(commitment, siblings, indices);
-    exercise_close(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 18_000, 0, 18_000, root, commitment, hash_pair(6, 4), siblings, indices);
-}
-
+fn rejects_unbound_spending_secret() { exercise(true, 110, 0, false, 0, false, 0, 99, 2, 0); }
 #[test(should_fail)]
-fn rejects_over_close() {
-    let siblings = default_siblings();
-    let indices = default_indices();
-    let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
-    let root = merkle_root(commitment, siblings, indices);
-    exercise_close(true, 1, 2, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 23_990, 0, 23_990, root, commitment, hash_pair(6, 4), siblings, indices);
-}
-
+fn rejects_fabricated_funding() { exercise(true, 110, 0, false, 0, false, 100, 6, 2, 0); }
 #[test(should_fail)]
-fn rejects_insolvent_close() {
-    let siblings = default_siblings();
-    let indices = default_indices();
-    let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
-    let root = merkle_root(commitment, siblings, indices);
-    exercise_close(true, 1, 1, 5_000_000_000_000, 3_000_000_000_000, 12_000, 0, 0, false, 10, 0, 0, 0, root, commitment, hash_pair(6, 4), siblings, indices);
-}
-
+fn rejects_wrong_market() { exercise(true, 110, 0, false, 0, false, 0, 6, 99, 0); }
 #[test(should_fail)]
-fn rejects_bad_position_path() {
-    let siblings = [1, 17, 4573, 1225581, 328455725, 88026134317, 23591003996973, 6322389071188781, 1694400271078593325, 454099272649063011117, 121698605069948886979373, 32615226158746301710471981, 8740880610544008858406490925, 2342556003625794374052939567917, 627805008971712892246187804201773, 168251742404419055121978331526075181, 45091466964384306772690192848988148525, 12084513146454994215080971683528823804717, 3238649523249938449641700411185724779664173, 867958072230983504503975710197774240949998381];
-    let correct_siblings = default_siblings();
-    let indices = default_indices();
-    let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
-    let root = merkle_root(commitment, correct_siblings, indices);
-    exercise_close(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, root, commitment, hash_pair(6, 4), siblings, indices);
-}
-
+fn rejects_unconfigured_close_fee() { exercise(true, 110, 0, false, 0, false, 0, 6, 2, 1); }
 #[test(should_fail)]
-fn rejects_bad_position_nullifier() {
-    let siblings = default_siblings();
-    let indices = default_indices();
-    let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
-    let root = merkle_root(commitment, siblings, indices);
-    exercise_close(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, root, commitment, 999, siblings, indices);
-}
-
+fn rejects_negative_zero_index() { exercise(true, 110, 0, true, 0, false, 0, 6, 2, 0); }
 #[test(should_fail)]
-fn rejects_bad_output_commitment() {
-    let siblings = default_siblings();
-    let indices = default_indices();
-    let commitment = position_commitment(true, 1, 5_000_000_000_000, 12_000, 0, 2, 3, 4, 5);
-    let root = merkle_root(commitment, siblings, indices);
-    main(true, 1, 1, 5_000_000_000_000, 5_600_000_000_000, 12_000, 0, 0, false, 10, 17_990, 0, 17_990, 100_000_000, root, commitment, hash_pair(6, 4), 13, 14, note_commitment(9, 17_990, 3, 10, 11, 12), 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, siblings, indices, 0);
-}
+fn rejects_unilateral_bankrupt_claim() { exercise(true, 1, 0, false, 1000, false, 0, 6, 2, 0); }

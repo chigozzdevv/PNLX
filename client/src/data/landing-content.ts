@@ -16,7 +16,7 @@ export const landingStats = [
 export const privacyPillars = [
   {
     title: "Trade without broadcasting your book",
-    body: "Margin, side, size and intent metadata stay out of the public mempool while the order is being prepared and matched.",
+    body: "Orders are matched off-chain. The current operator and hosted proving services receive plaintext trading inputs.",
   },
   {
     title: "Keep markets verifiable",
@@ -24,7 +24,7 @@ export const privacyPillars = [
   },
   {
     title: "Built for perps risk",
-    body: "The interface keeps margin, leverage, liquidation and position state close to the trade flow without exposing more than needed.",
+    body: "The testnet supports position and margin workflows. TP/SL execution depends on service availability, proof completion, and backed liquidity.",
   },
 ];
 
@@ -55,8 +55,8 @@ export const workflowSteps = [
   },
   {
     eyebrow: "02",
-    title: "Match privately",
-    body: "Batches can match eligible intents without revealing every pre-settlement trade detail.",
+    title: "Match off-chain",
+    body: "The operator matches eligible plaintext intents and supplies the inputs to the configured batch prover.",
   },
   {
     eyebrow: "03",
@@ -66,21 +66,21 @@ export const workflowSteps = [
   {
     eyebrow: "04",
     title: "Manage risk",
-    body: "Positions remain visible to the trader, while public state focuses on outcomes and constraints.",
+    body: "Positions are recoverable by the trader. Operators and hosted provers can also access the inputs used in these workflows.",
   },
 ];
 
 export const landingFeatureRows = [
   {
     title: "Private Margin.",
-    body: "Fund trades from a shielded balance while keeping margin details and account state out of the public pre-trade path.",
+    body: "Use commitment-based margin notes. Wallet deposits and withdrawals remain public, and hosted proof inputs are visible to their prover.",
   },
   {
     title: "Private Intents.",
-    body: "Submit side, size and order details as private intent data instead of broadcasting them as plaintext order flow.",
+    body: "Send trading inputs to the off-chain matcher. PNLX operators and hosted batch provers can read those inputs.",
   },
   {
     title: "Verified Settlement.",
-    body: "Publish proof-backed state updates after matching, so the market can verify outcomes without seeing a trader's full book.",
+    body: "Publish proofs and state updates for verification. Privacy also depends on the handling of plaintext inputs by matching and proving services.",
   },
 ];

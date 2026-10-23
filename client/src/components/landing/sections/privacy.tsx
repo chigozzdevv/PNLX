@@ -13,7 +13,7 @@ export function LandingPrivacySection() {
     <section className="landing-privacy-section" id="product">
       <div className="landing-privacy-copy">
         <h2>
-          Private order flow.
+          Less public order data.
           <br />
           Verifiable settlement.
         </h2>

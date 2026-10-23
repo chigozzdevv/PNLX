@@ -2,13 +2,14 @@
 
 use soroban_sdk::{
     contract, contractclient, contractevent, contractimpl, contracttype,
-    token::Client as TokenClient, Address, BytesN, Env,
+    token::Client as TokenClient, Address, BytesN, Env, Vec,
 };
 
 const REBATE: u32 = 0;
 const REFERRAL: u32 = 1;
 const TTL_THRESHOLD: u32 = 100_000;
 const TTL_TARGET: u32 = 1_000_000;
+const MAX_DROP_EPOCH_SECONDS: u64 = 30 * 24 * 60 * 60;
 
 #[derive(Clone)]
 #[contracttype]
@@ -23,6 +24,12 @@ enum DataKey {
     Returned,
     DropFunded,
     DropReturned,
+    DropAllocated,
+    DropReserved,
+    DropConsumer,
+    DropEpoch(BytesN<32>),
+    DropBatch(BytesN<32>),
+    DropNullifier(BytesN<32>),
     Credit(Address, u32),
     CreditedTotal(Address, u32),
     ClaimedTotal(Address, u32),
@@ -41,6 +48,16 @@ pub struct FeePaid {
 pub struct FeeDestinations {
     pub insurance: Address,
     pub treasury: Address,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct DropEpoch {
+    pub allocation_root: BytesN<32>,
+    pub amount: i128,
+    pub spent: i128,
+    pub expires_at: u64,
+    pub released: bool,
 }
 
 #[contractclient(name = "FeePoolClient")]
@@ -108,6 +125,8 @@ impl RewardsEscrow {
         store.set(&DataKey::Returned, &0_i128);
         store.set(&DataKey::DropFunded, &0_i128);
         store.set(&DataKey::DropReturned, &0_i128);
+        store.set(&DataKey::DropAllocated, &0_i128);
+        store.set(&DataKey::DropReserved, &0_i128);
         extend_instance(&env);
     }
 
@@ -190,9 +209,171 @@ impl RewardsEscrow {
             .expect("not initialized")
     }
 
+    pub fn drop_allocated(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::DropAllocated)
+            .unwrap_or(0)
+    }
+
+    pub fn drop_reserved(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::DropReserved)
+            .unwrap_or(0)
+    }
+
+    pub fn drop_epoch(env: Env, epoch_id: BytesN<32>) -> Option<DropEpoch> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::DropEpoch(epoch_id))
+    }
+
+    pub fn drop_consumer(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::DropConsumer)
+    }
+
+    pub fn configure_drop_consumer(env: Env, consumer: Address) {
+        Self::treasury(env.clone()).require_auth();
+        let store = env.storage().instance();
+        if store.has(&DataKey::DropConsumer)
+            || consumer == env.current_contract_address()
+            || consumer == Self::treasury(env.clone())
+        {
+            panic!("invalid credit drop consumer");
+        }
+        store.set(&DataKey::DropConsumer, &consumer);
+        extend_instance(&env);
+    }
+
+    pub fn issue_drop_epoch(
+        env: Env,
+        epoch_id: BytesN<32>,
+        allocation_root: BytesN<32>,
+        amount: i128,
+        expires_at: u64,
+    ) {
+        Self::treasury(env.clone()).require_auth();
+        if epoch_id == BytesN::from_array(&env, &[0; 32])
+            || allocation_root == BytesN::from_array(&env, &[0; 32])
+            || amount <= 0
+            || expires_at <= env.ledger().timestamp()
+            || expires_at
+                > env
+                    .ledger()
+                    .timestamp()
+                    .saturating_add(MAX_DROP_EPOCH_SECONDS)
+            || Self::drop_available(env.clone()) < amount
+        {
+            panic!("invalid credit drop epoch");
+        }
+        let key = DataKey::DropEpoch(epoch_id);
+        let store = env.storage().persistent();
+        if store.has(&key) {
+            panic!("credit drop epoch already issued");
+        }
+        store.set(
+            &key,
+            &DropEpoch {
+                allocation_root,
+                amount,
+                spent: 0,
+                expires_at,
+                released: false,
+            },
+        );
+        store.extend_ttl(&key, TTL_THRESHOLD, TTL_TARGET);
+        add_instance_amount(&env, DataKey::DropReserved, amount);
+        extend_instance(&env);
+    }
+
+    pub fn spend_drop_batch(
+        env: Env,
+        epoch_id: BytesN<32>,
+        batch_id: BytesN<32>,
+        nullifiers: Vec<BytesN<32>>,
+        amount: i128,
+    ) {
+        let consumer: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::DropConsumer)
+            .expect("credit drop consumer not configured");
+        consumer.require_auth();
+        if amount <= 0
+            || nullifiers.is_empty()
+            || nullifiers.len() > 8
+            || batch_id == BytesN::from_array(&env, &[0; 32])
+            || env
+                .storage()
+                .persistent()
+                .has(&DataKey::DropBatch(batch_id.clone()))
+        {
+            panic!("invalid credit drop batch");
+        }
+        let key = DataKey::DropEpoch(epoch_id);
+        let store = env.storage().persistent();
+        let mut epoch: DropEpoch = store.get(&key).expect("unknown credit drop epoch");
+        if epoch.released
+            || env.ledger().timestamp() >= epoch.expires_at
+            || epoch.amount.checked_sub(epoch.spent).unwrap_or(-1) < amount
+        {
+            panic!("credit drop budget unavailable");
+        }
+        for nullifier in nullifiers.iter() {
+            if nullifier == BytesN::from_array(&env, &[0; 32])
+                || store.has(&DataKey::DropNullifier(nullifier.clone()))
+            {
+                panic!("credit drop already spent");
+            }
+            store.set(&DataKey::DropNullifier(nullifier.clone()), &true);
+            store.extend_ttl(
+                &DataKey::DropNullifier(nullifier),
+                TTL_THRESHOLD,
+                TTL_TARGET,
+            );
+        }
+        epoch.spent = epoch
+            .spent
+            .checked_add(amount)
+            .expect("credit drop spent overflow");
+        store.set(&key, &epoch);
+        store.extend_ttl(&key, TTL_THRESHOLD, TTL_TARGET);
+        store.set(&DataKey::DropBatch(batch_id.clone()), &true);
+        store.extend_ttl(&DataKey::DropBatch(batch_id), TTL_THRESHOLD, TTL_TARGET);
+        add_instance_amount(&env, DataKey::DropReserved, -amount);
+        add_instance_amount(&env, DataKey::DropAllocated, amount);
+        TokenClient::new(&env, &Self::token(env.clone())).transfer(
+            &env.current_contract_address(),
+            &Self::fee_pool(env.clone()),
+            &amount,
+        );
+        extend_instance(&env);
+    }
+
+    pub fn expire_drop_epoch(env: Env, epoch_id: BytesN<32>) {
+        let key = DataKey::DropEpoch(epoch_id);
+        let store = env.storage().persistent();
+        let mut epoch: DropEpoch = store.get(&key).expect("unknown credit drop epoch");
+        if epoch.released || env.ledger().timestamp() < epoch.expires_at {
+            panic!("credit drop epoch has not expired");
+        }
+        let unused = epoch
+            .amount
+            .checked_sub(epoch.spent)
+            .expect("invalid credit drop epoch");
+        epoch.released = true;
+        store.set(&key, &epoch);
+        store.extend_ttl(&key, TTL_THRESHOLD, TTL_TARGET);
+        add_instance_amount(&env, DataKey::DropReserved, -unused);
+        extend_instance(&env);
+    }
+
     pub fn drop_available(env: Env) -> i128 {
         let amount = Self::drop_funded(env.clone())
             .checked_sub(Self::drop_returned(env.clone()))
+            .and_then(|value| value.checked_sub(Self::drop_allocated(env.clone())))
+            .and_then(|value| value.checked_sub(Self::drop_reserved(env.clone())))
             .expect("invalid credit drop accounting");
         check_balance(&env);
         amount
@@ -470,6 +651,7 @@ fn check_balance(env: &Env) {
         .expect("invalid rewards accounting");
     let drops = RewardsEscrow::drop_funded(env.clone())
         .checked_sub(RewardsEscrow::drop_returned(env.clone()))
+        .and_then(|value| value.checked_sub(RewardsEscrow::drop_allocated(env.clone())))
         .expect("invalid credit drop accounting");
     let recognized = rewards.checked_add(drops).expect("escrow balance overflow");
     if TokenClient::new(env, &RewardsEscrow::token(env.clone()))
@@ -488,7 +670,11 @@ fn assert_kind(kind: u32) {
 
 fn add_instance_amount(env: &Env, key: DataKey, amount: i128) {
     let store = env.storage().instance();
-    let current: i128 = store.get(&key).expect("not initialized");
+    let current: i128 = store.get(&key).unwrap_or_else(|| match &key {
+        // These totals did not exist before Credit Drop epochs were introduced.
+        DataKey::DropAllocated | DataKey::DropReserved => 0,
+        _ => panic!("not initialized"),
+    });
     let next = current.checked_add(amount).expect("reward amount overflow");
     if next < 0 {
         panic!("negative reward amount");
@@ -514,12 +700,14 @@ fn extend_instance(env: &Env) {
 mod tests {
     extern crate std;
 
-    use super::{FeeDestinations, FeePaid, RewardsEscrow, RewardsEscrowArgs, RewardsEscrowClient};
+    use super::{
+        DataKey, FeeDestinations, FeePaid, RewardsEscrow, RewardsEscrowArgs, RewardsEscrowClient,
+    };
     use soroban_sdk::{
         contract, contractimpl,
-        testutils::Address as _,
+        testutils::{Address as _, Ledger as _},
         token::{Client as TokenClient, StellarAssetClient},
-        Address, BytesN, Env,
+        Address, BytesN, Env, Vec,
     };
 
     #[contract]
@@ -704,5 +892,178 @@ mod tests {
         rewards.return_unallocated(&900);
         assert!(rewards.try_fund(&1).is_err());
         assert_eq!(token.balance(&treasury), 2_900);
+    }
+
+    #[test]
+    fn older_instance_keeps_rewards_and_can_start_using_drop_epochs() {
+        let (env, rewards, _, token, _, owner) = setup();
+        rewards.fund(&600);
+        rewards.fund_drop(&100);
+        let paid_grant = BytesN::from_array(&env, &[21; 32]);
+        let outstanding_grant = BytesN::from_array(&env, &[22; 32]);
+        rewards.credit(&paid_grant, &owner, &0, &200);
+        assert_eq!(rewards.claim(&owner, &0), 200);
+        rewards.credit(&outstanding_grant, &owner, &1, &150);
+        rewards.return_unallocated(&50);
+        rewards.return_unallocated_drop(&10);
+
+        // An upgraded pre-epoch instance has every old entry but neither new total.
+        env.as_contract(&rewards.address, || {
+            env.storage().instance().remove(&DataKey::DropAllocated);
+            env.storage().instance().remove(&DataKey::DropReserved);
+        });
+        assert_eq!(rewards.drop_allocated(), 0);
+        assert_eq!(rewards.drop_reserved(), 0);
+        assert_eq!(rewards.funded(), 600);
+        assert_eq!(rewards.paid(), 200);
+        assert_eq!(rewards.returned(), 50);
+        assert_eq!(rewards.liability(), 150);
+        assert_eq!(rewards.drop_funded(), 100);
+        assert_eq!(rewards.drop_returned(), 10);
+        assert_eq!(rewards.available(), 200);
+        assert_eq!(rewards.drop_available(), 90);
+        assert!(rewards.credited(&paid_grant));
+        assert!(rewards.credited(&outstanding_grant));
+        assert_eq!(rewards.claimable(&owner, &1), 150);
+        assert_eq!(rewards.credited_total(&owner, &0), 200);
+        assert_eq!(rewards.claimed_total(&owner, &0), 200);
+        assert!(rewards.try_credit(&paid_grant, &owner, &0, &1).is_err());
+
+        rewards.credit(&BytesN::from_array(&env, &[23; 32]), &owner, &0, &40);
+        assert_eq!(rewards.claim(&owner, &1), 150);
+        assert_eq!(rewards.claimable(&owner, &0), 40);
+        assert_eq!(rewards.liability(), 40);
+        assert_eq!(rewards.paid(), 350);
+        assert_eq!(rewards.available(), 160);
+        assert_eq!(token.balance(&owner), 350);
+
+        env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+        let epoch = BytesN::from_array(&env, &[24; 32]);
+        rewards.configure_drop_consumer(&Address::generate(&env));
+        rewards.issue_drop_epoch(&epoch, &BytesN::from_array(&env, &[25; 32]), &80, &1_100);
+        rewards.spend_drop_batch(
+            &epoch,
+            &BytesN::from_array(&env, &[26; 32]),
+            &Vec::from_array(&env, [BytesN::from_array(&env, &[27; 32])]),
+            &30,
+        );
+        assert_eq!(rewards.drop_allocated(), 30);
+        assert_eq!(rewards.drop_reserved(), 50);
+        assert_eq!(rewards.drop_available(), 10);
+        env.ledger().with_mut(|ledger| ledger.timestamp = 1_100);
+        rewards.expire_drop_epoch(&epoch);
+        rewards.return_unallocated_drop(&60);
+        assert_eq!(rewards.drop_returned(), 70);
+        assert_eq!(rewards.drop_allocated(), 30);
+        assert_eq!(rewards.drop_reserved(), 0);
+        assert_eq!(rewards.drop_available(), 0);
+        assert_eq!(rewards.funded(), 600);
+        assert_eq!(rewards.returned(), 50);
+        assert_eq!(rewards.available(), 160);
+        assert_eq!(rewards.claimable(&owner, &0), 40);
+    }
+
+    #[test]
+    fn existing_nonzero_drop_totals_survive_compatible_reads_and_updates() {
+        let (env, rewards, _, _, _, owner) = setup();
+        env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+        rewards.fund_drop(&100);
+        rewards.configure_drop_consumer(&Address::generate(&env));
+        let first = BytesN::from_array(&env, &[31; 32]);
+        let root = BytesN::from_array(&env, &[32; 32]);
+        rewards.issue_drop_epoch(&first, &root, &80, &1_100);
+        rewards.spend_drop_batch(
+            &first,
+            &BytesN::from_array(&env, &[33; 32]),
+            &Vec::from_array(&env, [BytesN::from_array(&env, &[34; 32])]),
+            &30,
+        );
+        rewards.fund(&100);
+        rewards.credit(&BytesN::from_array(&env, &[35; 32]), &owner, &0, &50);
+        assert_eq!(rewards.drop_allocated(), 30);
+        assert_eq!(rewards.drop_reserved(), 50);
+        assert_eq!(rewards.available(), 50);
+        assert_eq!(rewards.drop_available(), 20);
+        rewards.issue_drop_epoch(&BytesN::from_array(&env, &[36; 32]), &root, &10, &1_200);
+        assert_eq!(rewards.drop_allocated(), 30);
+        assert_eq!(rewards.drop_reserved(), 60);
+        assert_eq!(rewards.drop_available(), 10);
+        assert_eq!(rewards.drop_epoch(&first).unwrap().spent, 30);
+    }
+
+    #[test]
+    fn drop_epoch_reserves_budget_and_spends_only_once_into_the_fee_pool() {
+        let (env, rewards, _, token, _, _) = setup();
+        env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+        let epoch = BytesN::from_array(&env, &[11; 32]);
+        let root = BytesN::from_array(&env, &[12; 32]);
+        let batch = BytesN::from_array(&env, &[13; 32]);
+        let nullifier = BytesN::from_array(&env, &[14; 32]);
+        let consumer = Address::generate(&env);
+        rewards.fund_drop(&100);
+        rewards.configure_drop_consumer(&consumer);
+        assert_eq!(rewards.drop_consumer(), Some(consumer));
+        rewards.issue_drop_epoch(&epoch, &root, &80, &1_100);
+        assert_eq!(rewards.drop_available(), 20);
+        assert_eq!(rewards.drop_reserved(), 80);
+        assert!(rewards.try_return_unallocated_drop(&21).is_err());
+        assert!(rewards
+            .try_issue_drop_epoch(&epoch, &root, &1, &1_100)
+            .is_err());
+
+        let pool = rewards.fee_pool();
+        rewards.spend_drop_batch(
+            &epoch,
+            &batch,
+            &Vec::from_array(&env, [nullifier.clone()]),
+            &30,
+        );
+        assert_eq!(token.balance(&pool), 30);
+        assert_eq!(rewards.drop_allocated(), 30);
+        assert_eq!(rewards.drop_reserved(), 50);
+        assert_eq!(rewards.drop_available(), 20);
+        assert_eq!(rewards.drop_epoch(&epoch).unwrap().spent, 30);
+        assert!(rewards
+            .try_spend_drop_batch(
+                &epoch,
+                &batch,
+                &Vec::from_array(&env, [BytesN::from_array(&env, &[15; 32])]),
+                &1
+            )
+            .is_err());
+        assert!(rewards
+            .try_spend_drop_batch(
+                &epoch,
+                &BytesN::from_array(&env, &[16; 32]),
+                &Vec::from_array(&env, [nullifier]),
+                &1
+            )
+            .is_err());
+        assert!(rewards
+            .try_spend_drop_batch(
+                &epoch,
+                &BytesN::from_array(&env, &[17; 32]),
+                &Vec::from_array(&env, [BytesN::from_array(&env, &[18; 32])]),
+                &51
+            )
+            .is_err());
+
+        env.ledger().with_mut(|ledger| ledger.timestamp = 1_100);
+        assert!(rewards
+            .try_spend_drop_batch(
+                &epoch,
+                &BytesN::from_array(&env, &[19; 32]),
+                &Vec::from_array(&env, [BytesN::from_array(&env, &[20; 32])]),
+                &1
+            )
+            .is_err());
+        rewards.expire_drop_epoch(&epoch);
+        assert!(rewards.drop_epoch(&epoch).unwrap().released);
+        assert_eq!(rewards.drop_reserved(), 0);
+        assert_eq!(rewards.drop_available(), 70);
+        assert!(rewards.try_expire_drop_epoch(&epoch).is_err());
+        assert!(rewards
+            .try_issue_drop_epoch(&epoch, &root, &1, &1_200)
+            .is_err());
     }
 }

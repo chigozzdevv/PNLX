@@ -1,7 +1,9 @@
 import { MongoClient } from "@/shared/mongo/client";
 import type { Hex } from "@pnlx/protocol-types";
 import { loadEnv } from "@/config/env";
-import { markMakerCloseOutputSettled, readMakerNotes } from "@/shared/maker-note-store";
+import { markMakerCloseOutputSettled, readMakerNotes,recordZeroMakerCloseOutput,type StoredMakerNoteRecord } from "@/shared/maker-note-store";
+import {secureMarginCommitment,ownerCommitment} from "@pnlx/crypto";
+import {createExecutorAsync} from "@/workers/executor/executor.worker";
 import {
   closeVaultMakerAllocation,
   readVaultMakerAllocations,
@@ -11,6 +13,7 @@ import {
 import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
 import { assertSuccessfulTransaction } from "./register-vault-maker-note";
+import {applyVaultPrincipalReceipt} from "@/shared/vault-principal-receipts";
 
 interface PositionSettlement {
   _id: string;
@@ -27,6 +30,29 @@ interface PositionSettlement {
   seriesPrincipalBefore: string;
   status: "pending" | "submitted" | "confirmed";
   txHash?: string;
+}
+
+export function makerCloseRecoveryAmount(note:StoredMakerNoteRecord):bigint {
+  const amount=String(note.amount??"");
+  if(!/^\d+$/.test(amount))throw new Error("invalid maker close output amount");
+  const returned=BigInt(amount);
+  if(returned===0n) {
+    if(note.status!=="draining"&&!(note.status==="spent"&&note.recoveredAmount==="0")) {
+      throw new Error("zero-value maker output is not ready for loss recognition");
+    }
+  } else if(note.status!=="spent"||note.recoveredAmount!==amount) {
+    throw new Error("confirmed maker close output must be fully recovered before vault settlement");
+  }
+  const field=(key:string):Hex=>{
+    const value=note[key];
+    if(typeof value!=="string"||!/^0x[0-9a-fA-F]{1,64}$/.test(value))throw new Error("maker close output opening is incomplete");
+    return value as Hex;
+  };
+  if(secureMarginCommitment({amount:returned,assetDigest:field("assetDigest"),ownerDigest:field("ownerDigest"),
+    rhoDigest:field("rhoDigest"),blinding:field("blinding"),spendSecretDigest:field("spendSecretDigest")})!==note.commitment) {
+    throw new Error("maker close output amount does not match its commitment");
+  }
+  return returned;
 }
 
 export async function settleVaultMakerPosition(input: {
@@ -54,13 +80,20 @@ export async function settleVaultMakerPosition(input: {
   }
   const note = (await readMakerNotes()).find((item) => item.commitment === input.noteCommitment &&
     item.vaultAllocationId === input.allocationId && item.closePositionCommitment === input.positionCommitment);
-  if (!note || note.status !== "spent" || !note.recoveredAmount ||
-    note.closeTxHash !== input.closeTxHash || note.walletAddress !== allocation.maker ||
-    BigInt(String(note.recoveredAmount)) <= 0n) {
+  if (!note || note.closeTxHash !== input.closeTxHash || note.walletAddress !== allocation.maker) {
     throw new Error("confirmed maker close output must be recovered before vault settlement");
   }
-  const returned = BigInt(String(note.recoveredAmount));
+  const returned=makerCloseRecoveryAmount(note);
   await assertSuccessfulTransaction(env.stellarRpcUrl, input.closeTxHash);
+  const executor=await createExecutorAsync({mongo:{collection:env.mongodbCollection,database:env.mongodbDatabase,
+    documentId:env.stellarNetwork,ensureIndexes:false,uri:env.mongodbUri},privateMatchingRequired:env.privateMatchingRequired});
+  try {
+    const position=executor.store.positionLifecycle.get(input.positionCommitment);
+    const close=position?.closeCommitment?executor.store.positionCloses.get(position.closeCommitment):undefined;
+    if(!position||position.status!=="closed"||position.ownerCommitment!==ownerCommitment(allocation.maker)||
+      position.marginOutputCommitment!==input.noteCommitment||close?.settlementTxHash!==input.closeTxHash||
+      close.proof.circuitId!=="position-close-pair")throw new Error("maker loss or recovery is not bound to a confirmed paired close");
+  }finally{await (executor.store as {close?:()=>Promise<void>}).close?.();}
 
   const relayer = createRelayer({ config: {
     commandTimeoutMs: env.stellarCommandTimeoutMs,
@@ -78,6 +111,7 @@ export async function settleVaultMakerPosition(input: {
     return BigInt(value);
   };
   const seriesArgs = ["--series", String(allocation.series)];
+  if(returned===0n)await recordZeroMakerCloseOutput(input.noteCommitment,input.closeTxHash);
   const balances = async () => ({
     principal: await readAmount(vaultId, "series_principal", seriesArgs),
     liquid: await readAmount(vaultId, "series_liquid", seriesArgs),
@@ -146,8 +180,8 @@ export async function settleVaultMakerPosition(input: {
       }
       const tx = await relayer.relayAsync({ kind: "contract-invoke", payload: {
         args: ["--series", String(allocation.series), "--principal", receipt.principal,
-          "--returned", receipt.returned],
-        contractId: vaultId, functionName: "settle", send: "yes", source: input.operatorSource,
+          ...(returned===0n?[]:["--returned",receipt.returned])],
+        contractId: vaultId, functionName: returned===0n?"record_loss":"settle", send: "yes", source: input.operatorSource,
       } });
       if (!tx.submitted || !tx.txHash) {
         throw new Error("maker position vault settlement was not submitted");
@@ -164,8 +198,9 @@ export async function settleVaultMakerPosition(input: {
       after.maker !== BigInt(receipt.makerBalanceBefore) - returned) {
       throw new Error("maker position vault settlement balances do not reconcile");
     }
-    await applyPrincipalReceipt(db, namespace, allocation, input.principal,
-      BigInt(receipt.allocationPrincipalBefore));
+    await applyVaultPrincipalReceipt(db.collection<VaultMakerAllocation & {_id:string}>("vault_maker_allocations"),{
+      allocationDocumentId:`${namespace}:${allocation.id}`,receiptId:`position-close:${receipt._id}`,
+      principal:input.principal,before:BigInt(receipt.allocationPrincipalBefore)});
     await markMakerCloseOutputSettled(input.noteCommitment, receipt.txHash);
     if (BigInt(receipt.allocationPrincipalBefore) === input.principal) {
       const current = await db.collection<VaultMakerAllocation & { _id: string }>("vault_maker_allocations")
@@ -180,30 +215,4 @@ export async function settleVaultMakerPosition(input: {
   } finally {
     await client.close();
   }
-}
-
-async function applyPrincipalReceipt(
-  db: ReturnType<MongoClient["db"]>,
-  namespace: string,
-  allocation: VaultMakerAllocation,
-  principal: bigint,
-  before: bigint,
-): Promise<void> {
-  const allocations = db.collection<VaultMakerAllocation & { _id: string }>("vault_maker_allocations");
-  const after = before - principal;
-  const current = await allocations.findOne({ _id: `${namespace}:${allocation.id}` });
-  if (!current) throw new Error("maker allocation disappeared before principal reconciliation");
-  const actual = remainingVaultMakerPrincipal(current);
-  if (actual === after) return;
-  if (actual !== before || current.status !== "outstanding") {
-    throw new Error("maker allocation principal changed during position reconciliation");
-  }
-  const result = await allocations.updateOne(
-    { _id: current._id, status: "outstanding",
-      ...(current.remainingPrincipal === undefined
-        ? { remainingPrincipal: { $exists: false } }
-        : { remainingPrincipal: current.remainingPrincipal }) },
-    { $set: { remainingPrincipal: after.toString() } },
-  );
-  if (result.modifiedCount !== 1) throw new Error("maker allocation principal changed before receipt was applied");
 }

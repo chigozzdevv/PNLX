@@ -102,6 +102,7 @@ export function createLocalClientProverHandler(root = process.cwd()) {
           blinding: requiredHex(input.blinding, "blinding"),
           closeCommitment: requiredHex(input.closeCommitment, "closeCommitment"),
           closeSize: BigInt(String(input.closeSize)),
+          currentFundingIndex: BigInt(String(input.currentFundingIndex)),
           entryPrice: BigInt(String(input.entryPrice)),
           fee: BigInt(String(input.fee)),
           fundingIndex: BigInt(String(input.fundingIndex)),

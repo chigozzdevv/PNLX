@@ -21,8 +21,8 @@ export function registerConditionalOrdersRoute(
   router.add("POST", "/conditional-orders/trigger-proven", (request) =>
     controller.triggerProven(request)
   );
+  router.add("POST", "/conditional-orders/execute", (request) => controller.execute(request), { auth: true });
   if (options.witnessRoutesEnabled) {
     router.add("POST", "/conditional-orders/trigger", (request) => controller.trigger(request));
-    router.add("POST", "/conditional-orders/execute", (request) => controller.execute(request));
   }
 }

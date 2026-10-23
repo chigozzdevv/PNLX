@@ -12,6 +12,7 @@ import type {
   LiquidationWitness,
   PositionCloseRecord,
   PositionCloseWitness,
+  PairedPositionCloseRecord,
   WithdrawalRecord,
   WithdrawalRequest,
 } from "@pnlx/protocol-types";
@@ -42,8 +43,13 @@ export interface Prover {
   proveIntentValidity(input: IntentValidityProofInput): IntentValidityRecord;
   proveIntentValidityAsync?(input: IntentValidityProofInput): Promise<IntentValidityRecord>;
   proveConditionalClose(input: ConditionalCloseProofInput): ConditionalOrderRecord;
+  proveConditionalCloseAsync?(input: ConditionalCloseProofInput): Promise<ConditionalOrderRecord>;
   proveLiquidation(input: LiquidationProofInput): LiquidationRecord;
   provePositionClose(input: PositionCloseProofInput): PositionCloseRecord;
+  provePositionClosePairAsync?(inputs: [PositionCloseProofInput, PositionCloseProofInput], maintenanceRate: bigint,
+    liquidation?: boolean): Promise<PairedPositionCloseRecord>;
+  provePositionClosePair?(inputs: [PositionCloseProofInput, PositionCloseProofInput], maintenanceRate: bigint,
+    liquidation?: boolean): PairedPositionCloseRecord;
   proveDisclosure(input: DisclosureProofInput): DisclosureRecord;
   proveWithdrawal(input: WithdrawalProofInput): WithdrawalRecord;
 }

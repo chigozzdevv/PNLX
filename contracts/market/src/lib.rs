@@ -84,6 +84,10 @@ impl Market {
         Self::get(env, market_id).funding_index
     }
 
+    pub fn maintenance_rate(env: Env, market_id: BytesN<32>) -> i128 {
+        Self::get(env, market_id).maintenance_rate
+    }
+
     pub fn advance_funding(
         env: Env,
         updater: Address,

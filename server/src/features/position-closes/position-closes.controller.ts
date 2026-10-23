@@ -26,7 +26,9 @@ export class PositionClosesController {
 
   async createManual(request: Request): Promise<Response> {
     const body = await readJson<Record<string, unknown>>(request);
-    return json({ positionClose: this.positionCloses.createManual(parsePositionClose(body)) }, 201);
+    return json({ positionClose: await this.positionCloses.createManualPaired(
+      parsePositionClose(body), authenticatedAddress(request),
+    ) }, 201);
   }
 
   async createProven(request: Request): Promise<Response> {

@@ -132,20 +132,25 @@ export class MarketsService {
   async refreshFromOracle(
     input: RefreshOracleMarketInput,
     authenticated?: string,
+    signal?: AbortSignal,
   ): Promise<OracleMarketResult> {
+    assertRefreshActive(signal);
     assertProtocolAdmin(authenticated, this.env.protocolAdminAddresses, {
       required: this.env.protocolAdminRequired,
     });
     assertOracleAuthorityReady(this.env);
     if (this.onchainEnabled()) assertOracleReadyForOnchain(this.env);
-    const existing = this.executor.store.markets.get(input.marketId);
+    let existing = this.executor.store.markets.get(input.marketId);
     if (!existing) throw new Error("unknown market");
 
     const price = await this.oracle.latestMarket({
       feedId: feedIdForMarket(input.marketId, this.env, input.feedId),
       marketId: input.marketId,
-    });
-    const market = {
+    }, signal);
+    assertRefreshActive(signal);
+    existing = this.executor.store.markets.get(input.marketId);
+    if (!existing) throw new Error("unknown market");
+    let market = {
       ...existing,
       oraclePrice: price.price,
     };
@@ -153,9 +158,10 @@ export class MarketsService {
     const oracleRelay = this.onchainEnabled() && shouldPublishOracle(this.env)
       ? await publishOraclePrice(
           this.onchain,
-          oracleRelayConfig(market.marketId, this.env, price.price, price.publishTime),
+          { ...oracleRelayConfig(market.marketId, this.env, price.price, price.publishTime), signal },
         )
       : undefined;
+    assertRefreshActive(signal);
     const marketRepairRelay = this.onchain as
       | Partial<Pick<
           OnchainRelayService,
@@ -167,11 +173,16 @@ export class MarketsService {
         ? await marketRepairRelay.isMarketActiveAsync(market.marketId)
         : marketRepairRelay?.isMarketActive?.(market.marketId)
       : undefined;
+    assertRefreshActive(signal);
     const marketRelay = marketActive === false
       ? marketRepairRelay?.upsertMarketAsync
-        ? await marketRepairRelay.upsertMarketAsync(market, marketRelayConfig(market.marketId, this.env))
+        ? await marketRepairRelay.upsertMarketAsync(market, marketRelayConfig(market.marketId, this.env), signal)
         : marketRepairRelay?.upsertMarket?.(market, marketRelayConfig(market.marketId, this.env))
       : undefined;
+    assertRefreshActive(signal);
+    const current = this.executor.store.markets.get(input.marketId);
+    if (!current) throw new Error("unknown market");
+    market = { ...current, oraclePrice: price.price };
     this.executor.store.updateMarket(market);
     return {
       market,
@@ -538,4 +549,8 @@ function oraclePublishers(env: ServerEnv): OraclePriceRelayInput["publishers"] {
       source,
     };
   });
+}
+
+function assertRefreshActive(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error("oracle refresh aborted before mutation");
 }

@@ -89,7 +89,14 @@ export async function insertPendingMakerNote(note: StoredMakerNoteRecord & { com
       } },
       { upsert: true },
     );
-    if (result.upsertedCount !== 1) throw new Error("maker note commitment already exists");
+    if (result.upsertedCount !== 1) {
+      const previous=await collection.findOne({_id:makerNoteDocumentId(config.namespace,note.commitment)});
+      const fields=["commitment","amount","assetDigest","blinding","rhoDigest","spendSecretDigest",
+        "ownerDigest","closeCommitment","closePositionCommitment","vaultAllocationId","vaultParentCommitment"];
+      if (!note.closePositionCommitment || !previous || fields.some((field)=>previous[field]!==note[field])) {
+        throw new Error("maker note commitment already exists with conflicting recovery data");
+      }
+    }
   } finally {
     await client.close();
   }
@@ -143,7 +150,14 @@ export async function finalizePendingMakerCloseOutput(
         status: "pending", closePositionCommitment: { $type: "string" } },
       { $set: { closeTxHash, status: "draining", updatedAt: Date.now() } },
     );
-    if (result.modifiedCount !== 1) throw new Error("pending maker close output was not found");
+    if (result.modifiedCount !== 1) {
+      const previous=await client.db(config.database).collection<MakerNoteDocument>(config.collection).findOne({
+        _id:makerNoteDocumentId(config.namespace,commitment),namespace:config.namespace,
+        closePositionCommitment:{$type:"string"},status:{$in:["draining","withdrawing","spent"]},
+        closeTxHash,
+      });
+      if(!previous)throw new Error("pending maker close output was not found");
+    }
   } finally {
     await client.close();
   }
@@ -172,6 +186,23 @@ export async function markRecoveredMakerNoteSettled(commitment: string, settleme
 }
 
 export const markMakerCloseOutputSettled = markRecoveredMakerNoteSettled;
+
+export async function recordZeroMakerCloseOutput(commitment:string,closeTxHash:string):Promise<void> {
+  if(!/^(?:0x)?[0-9a-fA-F]{64}$/.test(closeTxHash))throw new Error("confirmed close transaction hash is required");
+  const config=requiredMongoConfig();
+  const client=new MongoClient(config.uri);
+  try {
+    await client.connect();
+    const collection=client.db(config.database).collection<MakerNoteDocument>(config.collection);
+    const result=await collection.updateOne({_id:makerNoteDocumentId(config.namespace,commitment),
+      namespace:config.namespace,amount:"0",status:"draining",closeTxHash,
+      closePositionCommitment:{$type:"string"}},{$set:{status:"spent",recoveredAmount:"0",updatedAt:Date.now()}});
+    if(result.modifiedCount===1)return;
+    const current=await collection.findOne({_id:makerNoteDocumentId(config.namespace,commitment),
+      namespace:config.namespace,amount:"0",status:"spent",closeTxHash,recoveredAmount:"0"});
+    if(!current)throw new Error("confirmed zero-value maker close output was not found");
+  }finally{await client.close();}
+}
 
 export async function recordMakerNoteRecovery(commitment: string, amount: string): Promise<void> {
   if (!/^[1-9][0-9]*$/.test(amount)) throw new Error("recovered amount must be positive");
@@ -207,7 +238,7 @@ export async function transitionMakerNoteStatus(
       },
       { $set: { status: to, updatedAt: Date.now() } },
     );
-    return result.modifiedCount === 1;
+    return result.modifiedCount===1;
   } finally {
     await client.close();
   }
@@ -238,7 +269,14 @@ export async function claimMakerNote(
       { $set: { status: "locked", lockedByIntentCommitment: intentCommitment,
         sourceIntentCommitment, updatedAt: Date.now() } },
     );
-    return result.modifiedCount === 1;
+    if(result.modifiedCount===1)return true;
+    // An exact retry may resume after the atomic claim but before registry submission.
+    const existing=await database.collection<MakerNoteDocument>(config.collection).findOne({
+      _id:makerNoteDocumentId(config.namespace,commitment),namespace:config.namespace,status:"locked",
+      lockedByIntentCommitment:intentCommitment,sourceIntentCommitment,
+      ...(vaultAllocationId?{vaultAllocationId}:{}),
+    });
+    return Boolean(existing);
   } finally {
     await client.close();
   }

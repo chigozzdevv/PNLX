@@ -1,18 +1,13 @@
 import {
-  digestToFieldHex,
   hashFields,
   ownerCommitment,
-  secureMarginCommitment,
-  secureMarginNullifier,
 } from "@pnlx/crypto";
-import { PRICE_SCALE, settleClose } from "@pnlx/market-math";
-import { createCircuitPositionNote } from "@pnlx/sdk";
-import type { Hex, PositionCloseRecord, PositionLifecycleRecord } from "@pnlx/protocol-types";
+import type { Hex, PositionCloseWitness, PositionLifecycleRecord } from "@pnlx/protocol-types";
 import { reconstructPositionOpening } from "@/features/account-keys/account-key-recovery";
 import type { StoredMakerNoteRecord } from "@/shared/maker-note-store";
 import type { ProtocolStore } from "@/shared/state/store";
 import type { VaultMakerAllocation } from "@/shared/vault-maker-backing";
-import type { ProverService } from "@/workers/prover/prover.service";
+import { hostedPositionCloseWitness } from "./paired-position-witness";
 
 
 export interface VaultMakerPair {
@@ -96,95 +91,24 @@ export function preparePairedMakerClose(input: {
   makerNote: StoredMakerNoteRecord;
   makerPosition: PositionLifecycleRecord;
   markPrice: bigint;
-  prover: ProverService;
   store: ProtocolStore;
   traderCloseCommitment: Hex;
-}): { close: PositionCloseRecord; note: StoredMakerNoteRecord & { commitment: string } } {
-  const { makerPosition: position, store } = input;
-  const opening = reconstructPositionOpening(store, position);
-  if (!opening) throw new Error("vault maker position opening cannot be reconstructed");
-  const settlement = [...store.settlements.values()].find(
-    (item) => item.settlementDigest === position.settlementDigest,
-  );
-  const index = settlement?.newCommitments.indexOf(position.positionCommitment) ?? -1;
-  if (!settlement || index < 0) throw new Error("vault maker position is missing from its settlement");
-  const owner = position.ownerCommitment;
-  const rho = `${position.sourceIntentCommitment}:position:${index}`;
-  const original = createCircuitPositionNote({
-    marketId: position.marketId, side: opening.side, size: opening.size,
-    entryPrice: opening.entryPrice, margin: opening.margin,
-    fundingIndex: opening.fundingIndex, owner,
-    spendSecret: `${owner}:${rho}`, rho,
-    blinding: `${position.sourceIntentCommitment}:blinding:${index}`,
-  });
-  if (original.commitment !== position.positionCommitment ||
-    original.positionNullifier !== position.positionNullifier) {
-    throw new Error("vault maker witness does not match the recorded position");
-  }
-  const membership = store.positionMembershipProof(position.positionCommitment);
-  const positionRoot = store.positionMembershipRoot();
-  if (membership.root !== positionRoot) throw new Error("vault maker position root is not current");
-  const fundingPayment = opening.size * (input.fundingIndex - opening.fundingIndex) /
-    PRICE_SCALE * (opening.side === "long" ? 1n : -1n);
-  const settled = settleClose({ side: opening.side, closeSize: opening.size,
-    entryPrice: opening.entryPrice, markPrice: input.markPrice,
-    margin: opening.margin, fundingPayment, fee: 0n });
-  if (settled.newMargin <= 0n) throw new Error("vault maker position requires liquidation");
+}): { witness: PositionCloseWitness; note: StoredMakerNoteRecord & { commitment: string } } {
   if (typeof input.makerNote.spendSecretDigest !== "string" ||
     !/^0x[0-9a-f]{64}$/i.test(input.makerNote.spendSecretDigest) ||
     BigInt(input.makerNote.spendSecretDigest) === 0n) {
     throw new Error("vault maker note spend secret is unavailable");
   }
-  const newPosition = createCircuitPositionNote({
-    marketId: position.marketId, side: opening.side, size: 0n,
-    entryPrice: opening.entryPrice, margin: 0n,
-    fundingIndex: opening.fundingIndex, owner,
-    spendSecret: `${owner}:${position.positionNullifier}:closed-position-spend`,
-    rho: `${position.positionNullifier}:closed-position-rho`,
-    blinding: `${position.positionNullifier}:closed-position-blinding`,
-  });
-  const privateSeed = `${input.makerNote.spendSecretDigest}:${position.positionNullifier}`;
-  const rhoDigest = digestToFieldHex(`vault-maker-close-rho:${privateSeed}`);
-  const blinding = digestToFieldHex(`vault-maker-close-blinding:${privateSeed}`);
-  const assetDigest = input.makerNote.assetDigest as Hex;
-  const outputSpendSecretDigest = digestToFieldHex(
-    `vault-maker-close-spend:${privateSeed}`);
-  const outputCommitment = secureMarginCommitment({
-    amount: settled.newMargin, assetDigest, blinding,
-    ownerDigest: original.ownerDigest, rhoDigest,
-    spendSecretDigest: outputSpendSecretDigest,
-  });
+  if(typeof input.makerNote.assetDigest!=="string")throw new Error("vault maker collateral asset is unavailable");
   const closeCommitment = hashFields("vault-maker-close", [
-    position.positionCommitment, input.traderCloseCommitment,
+    input.makerPosition.positionCommitment, input.traderCloseCommitment,
   ]);
-  const close = input.prover.provePositionClose({
-    marketId: position.marketId, positionCommitment: position.positionCommitment,
-    positionRoot, positionNullifier: position.positionNullifier, closeCommitment,
-    side: opening.side, size: opening.size, closeSize: opening.size,
-    entryPrice: opening.entryPrice, markPrice: input.markPrice,
-    margin: opening.margin, fundingPayment, fee: 0n,
-    newMargin: settled.newMargin, fundingIndex: opening.fundingIndex,
-    remainingMargin: 0n, marginOutputAmount: settled.newMargin,
-    newPositionCommitment: newPosition.commitment,
-    marginOutputCommitment: outputCommitment,
-    marketDigest: original.marketDigest, ownerDigest: original.ownerDigest,
-    rhoDigest: original.rhoDigest, blinding: original.blinding,
-    spendSecretDigest: original.spendSecretDigest,
-    newPositionRhoDigest: newPosition.rhoDigest,
-    newPositionBlinding: newPosition.blinding,
-    marginOutputAssetDigest: assetDigest,
-    marginOutputRhoDigest: rhoDigest, marginOutputBlinding: blinding,
-    marginOutputSpendSecretDigest: outputSpendSecretDigest,
-    pathIndices: membership.indices, pathSiblings: membership.siblings,
-  });
-  return { close, note: {
-    amount: settled.newMargin.toString(), assetDigest, blinding,
-    commitment: outputCommitment, createdAt: Date.now(),
-    noteNullifier: secureMarginNullifier({ rhoDigest,
-      spendSecretDigest: outputSpendSecretDigest }),
-    ownerCommitment: owner, ownerDigest: original.ownerDigest, rhoDigest,
-    spendSecretDigest: outputSpendSecretDigest,
-    walletAddress: String(input.makerNote.walletAddress),
-    closePositionCommitment: position.positionCommitment, closeCommitment,
-  } };
+  const prepared=hostedPositionCloseWitness({store:input.store,position:input.makerPosition,
+    currentFundingIndex:input.fundingIndex,markPrice:input.markPrice,
+    assetDigest:input.makerNote.assetDigest as Hex,closeCommitment});
+  return {witness:prepared.witness,note:{...prepared.note,
+    commitment:prepared.witness.marginOutputCommitment,walletAddress:String(input.makerNote.walletAddress),
+    token:input.makerNote.token,vaultAllocationId:input.makerNote.vaultAllocationId,
+    vaultParentCommitment:input.makerNote.commitment,
+  }};
 }

@@ -1,6 +1,25 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractclient, contractimpl, contracttype, Address, BytesN, Env};
+use governance_interface::GovernanceClient;
+use proof_ledger_interface::ProofLedgerClient;
+use soroban_poseidon::Poseidon2Sponge;
+use soroban_sdk::{contract, contractclient, contractimpl, contracttype, crypto::bn254::Bn254Fr, Address, Bytes, BytesN, Env, U256};
+
+const BN254_SCALAR_MODULUS_BE: [u8; 32] = [
+    0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
+    0x28, 0x33, 0xe8, 0x48, 0x79, 0xb9, 0x70, 0x91, 0x43, 0xe1, 0xf5, 0x93, 0xf0, 0x00, 0x00, 0x01,
+];
+const RESIDUAL_NULLIFIER_DOMAIN: u128 = 0x504e4c585245534e554c;
+
+#[derive(Clone)]
+#[contracttype]
+pub struct ProofMeta {
+    pub circuit_id: BytesN<32>,
+    pub circuit_hash: BytesN<32>,
+    pub verifier_hash: BytesN<32>,
+    pub public_input_hash: BytesN<32>,
+    pub proof_digest: BytesN<32>,
+}
 
 #[contractclient(name = "SecurePoolClient")]
 pub trait SecurePoolInterface {
@@ -22,6 +41,10 @@ pub enum DataKey {
     NullifierRoot(BytesN<32>),
     NullifierIntent(BytesN<32>),
     IntentNullifier(BytesN<32>),
+    Governance,
+    ProofLedger,
+    ValidityCircuit,
+    CollateralDigest,
 }
 
 #[derive(Clone)]
@@ -37,6 +60,25 @@ pub struct IntentRegistry;
 
 #[contractimpl]
 impl IntentRegistry {
+    pub fn collateral_digest(env:Env)->BytesN<32> {
+        env.storage().persistent().get(&DataKey::CollateralDigest)
+            .unwrap_or_else(||panic!("validity verifier not configured"))
+    }
+    pub fn configure_validity(env: Env, governance: Address, proof_ledger: Address,
+        circuit_id: BytesN<32>, collateral_digest: BytesN<32>) {
+        require_operator(&env);
+        if env.storage().persistent().has(&DataKey::ValidityCircuit)
+            || GovernanceClient::new(&env, &governance).admin() != Self::operator(env.clone())
+            || circuit_id == BytesN::from_array(&env, &[0; 32])
+            || collateral_digest == BytesN::from_array(&env, &[0; 32]) {
+            panic!("invalid validity configuration");
+        }
+        env.storage().persistent().set(&DataKey::Governance, &governance);
+        env.storage().persistent().set(&DataKey::ProofLedger, &proof_ledger);
+        env.storage().persistent().set(&DataKey::ValidityCircuit, &circuit_id);
+        env.storage().persistent().set(&DataKey::CollateralDigest, &collateral_digest);
+    }
+
     pub fn init(env: Env, admin: Address, settler: Address) {
         admin.require_auth();
         if env.storage().persistent().has(&DataKey::Settler) {
@@ -54,8 +96,14 @@ impl IntentRegistry {
         matching_payload_commitment: BytesN<32>,
         margin_root: BytesN<32>,
         note_nullifier: BytesN<32>,
+        current_batch: u128,
+        note_change_commitment: BytesN<32>,
+        proof: ProofMeta,
     ) {
         require_operator(&env);
+        validate_validity_proof(&env, &batch_id, &market_id, &intent_commitment,
+            &matching_payload_commitment, &margin_root, &note_nullifier,
+            current_batch, &note_change_commitment, &proof);
         let intent_key = DataKey::Intent(intent_commitment.clone());
         if env.storage().persistent().has(&intent_key) {
             panic!("duplicate intent");
@@ -188,8 +236,15 @@ impl IntentRegistry {
             .persistent()
             .set(&DataKey::Cancelled(source), &true);
         if let Some(nullifier) = source_nullifier {
-            env.storage().persistent().set(&DataKey::IntentNullifier(residual.clone()), &nullifier);
-            env.storage().persistent().set(&DataKey::NullifierIntent(nullifier), &residual);
+            let root: BytesN<32> = env.storage().persistent().get(&DataKey::NullifierRoot(nullifier))
+                .unwrap_or_else(|| panic!("source collateral lineage unavailable"));
+            let residual_nullifier = residual_nullifier(&env, &residual);
+            if env.storage().persistent().has(&DataKey::NullifierIntent(residual_nullifier.clone())) {
+                panic!("residual collateral already registered");
+            }
+            env.storage().persistent().set(&DataKey::IntentNullifier(residual.clone()), &residual_nullifier);
+            env.storage().persistent().set(&DataKey::NullifierIntent(residual_nullifier.clone()), &residual);
+            env.storage().persistent().set(&DataKey::NullifierRoot(residual_nullifier), &root);
         }
         env.storage().persistent().set(
             &residual_key,
@@ -248,6 +303,52 @@ impl IntentRegistry {
     }
 }
 
+fn validity_public_input_hash(env: &Env, collateral: &BytesN<32>, current_batch: u128,
+    batch: &BytesN<32>, market: &BytesN<32>, intent: &BytesN<32>, root: &BytesN<32>,
+    nullifier: &BytesN<32>, change: &BytesN<32>, payload: &BytesN<32>) -> BytesN<32> {
+    let mut encoded = Bytes::new(env);
+    encoded.append(&field_bytes(env, collateral));
+    encoded.append(&U256::from_u128(env, current_batch).to_be_bytes());
+    for value in [batch, market, intent, root, nullifier, change, payload] {
+        encoded.append(&field_bytes(env, value));
+    }
+    env.crypto().sha256(&encoded).to_bytes()
+}
+
+fn validate_validity_proof(env: &Env, batch: &BytesN<32>, market: &BytesN<32>,
+    intent: &BytesN<32>, payload: &BytesN<32>, root: &BytesN<32>, nullifier: &BytesN<32>,
+    current_batch: u128, change: &BytesN<32>, proof: &ProofMeta) {
+    let store = env.storage().persistent();
+    let circuit: BytesN<32> = store.get(&DataKey::ValidityCircuit)
+        .unwrap_or_else(|| panic!("validity verifier not configured"));
+    let governance: Address = store.get(&DataKey::Governance).unwrap();
+    let governor = GovernanceClient::new(env, &governance);
+    if governor.paused() || proof.circuit_id != circuit
+        || proof.verifier_hash != governor.verifier(&circuit) {
+        panic!("invalid validity verifier");
+    }
+    let collateral: BytesN<32> = store.get(&DataKey::CollateralDigest).unwrap();
+    let expected = validity_public_input_hash(env, &collateral, current_batch,
+        batch, market, intent, root, nullifier, change, payload);
+    if proof.public_input_hash != expected { panic!("validity public input mismatch"); }
+    let ledger: Address = store.get(&DataKey::ProofLedger).unwrap();
+    if !ProofLedgerClient::new(env, &ledger).has_proof(&circuit, &proof.verifier_hash,
+        &proof.public_input_hash, &proof.proof_digest) { panic!("unverified intent validity"); }
+}
+
+fn field_bytes(env: &Env, value: &BytesN<32>) -> Bytes {
+    let modulus = U256::from_be_bytes(env, &Bytes::from_array(env, &BN254_SCALAR_MODULUS_BE));
+    U256::from_be_bytes(env, &Bytes::from_array(env, &value.to_array()))
+        .rem_euclid(&modulus).to_be_bytes()
+}
+
+fn residual_nullifier(env: &Env, residual: &BytesN<32>) -> BytesN<32> {
+    let mut hasher = Poseidon2Sponge::<4, Bn254Fr>::new(env);
+    let inputs = soroban_sdk::vec![env, U256::from_u128(env, RESIDUAL_NULLIFIER_DOMAIN),
+        U256::from_be_bytes(env, &field_bytes(env, residual))];
+    Bn254Fr::from_u256(hasher.compute_hash(&inputs)).to_bytes()
+}
+
 fn require_operator(env: &Env) {
     let operator: Address = env
         .storage()
@@ -287,7 +388,9 @@ fn mark_cancelled(env: &Env, intent_commitment: BytesN<32>) {
 mod tests {
     extern crate std;
 
-    use super::{IntentRegistry, IntentRegistryClient};
+    use super::{DataKey, IntentRegistry, IntentRegistryClient, ProofMeta};
+    use governance::{Governance, GovernanceClient};
+    use proof_ledger::{ProofLedger, ProofLedgerClient};
     use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, BytesN, Env};
 
     #[contract]
@@ -300,14 +403,69 @@ mod tests {
 
     fn configure_pool(env: &Env, client: &IntentRegistryClient<'_>) {
         client.configure_secure_pool(&env.register(RootPool, ()));
+        let governance_id = env.register(Governance, ());
+        let governance = GovernanceClient::new(env, &governance_id);
+        governance.init(&client.operator());
+        governance.set_verifier(&validity_circuit(env), &BytesN::from_array(env, &[11;32]), &client.operator());
+        let ledger_id = env.register(ProofLedger, ());
+        ProofLedgerClient::new(env, &ledger_id).init(&governance_id);
+        client.configure_validity(&governance_id, &ledger_id, &validity_circuit(env), &collateral(env));
+    }
+
+    fn validity_circuit(env: &Env) -> BytesN<32> { BytesN::from_array(env, &[10;32]) }
+    fn collateral(env: &Env) -> BytesN<32> { BytesN::from_array(env, &[12;32]) }
+
+    fn valid_proof(env: &Env, batch: &BytesN<32>, market: &BytesN<32>,
+        intent: &BytesN<32>, payload: &BytesN<32>) -> ProofMeta {
+        ProofMeta { circuit_id: validity_circuit(env), circuit_hash: BytesN::from_array(env, &[13;32]),
+            verifier_hash: BytesN::from_array(env, &[11;32]), proof_digest: BytesN::from_array(env, &[14;32]),
+            public_input_hash: super::validity_public_input_hash(env, &collateral(env), 1,
+                batch, market, intent, &BytesN::from_array(env, &[8;32]),
+                &BytesN::from_array(env, &[9;32]), &BytesN::from_array(env, &[0;32]), payload) }
+    }
+
+    fn record_proof(env: &Env, client: &IntentRegistryClient<'_>, proof: &ProofMeta) {
+        let ledger: Address = env.as_contract(&client.address, ||
+            env.storage().persistent().get(&DataKey::ProofLedger).unwrap());
+        ProofLedgerClient::new(env, &ledger).record(&client.operator(), &proof.circuit_id,
+            &proof.verifier_hash, &proof.public_input_hash, &proof.proof_digest);
     }
 
     fn submit(
         env: &Env, client: &IntentRegistryClient<'_>, batch: &BytesN<32>,
         market: &BytesN<32>, intent: &BytesN<32>, payload: &BytesN<32>,
     ) {
+        let proof = valid_proof(env, batch, market, intent, payload);
+        record_proof(env, client, &proof);
         client.submit(batch, market, intent, payload,
-            &BytesN::from_array(env, &[8; 32]), &BytesN::from_array(env, &[9; 32]));
+            &BytesN::from_array(env, &[8; 32]), &BytesN::from_array(env, &[9; 32]),
+            &1, &BytesN::from_array(env, &[0;32]), &proof);
+    }
+
+    #[test]
+    fn verified_validity_is_required_and_bound_to_all_matching_economics() {
+        let env = Env::default(); env.mock_all_auths();
+        let id = env.register(IntentRegistry, ());
+        let client = IntentRegistryClient::new(&env, &id);
+        client.init(&Address::generate(&env), &Address::generate(&env));
+        configure_pool(&env, &client);
+        let batch = BytesN::from_array(&env, &[1;32]);
+        let market = BytesN::from_array(&env, &[2;32]);
+        let intent = BytesN::from_array(&env, &[3;32]);
+        let payload = BytesN::from_array(&env, &[4;32]);
+        let proof = valid_proof(&env, &batch, &market, &intent, &payload);
+        let root = BytesN::from_array(&env, &[8;32]);
+        let nullifier = BytesN::from_array(&env, &[9;32]);
+        let change = BytesN::from_array(&env, &[0;32]);
+        assert!(client.try_submit(&batch, &market, &intent, &payload, &root, &nullifier, &1, &change, &proof).is_err());
+        record_proof(&env, &client, &proof);
+        assert!(client.try_submit(&BytesN::from_array(&env, &[5;32]), &market, &intent, &payload, &root, &nullifier, &1, &change, &proof).is_err());
+        assert!(client.try_submit(&batch, &BytesN::from_array(&env, &[5;32]), &intent, &payload, &root, &nullifier, &1, &change, &proof).is_err());
+        assert!(client.try_submit(&batch, &market, &intent, &BytesN::from_array(&env, &[5;32]), &root, &nullifier, &1, &change, &proof).is_err());
+        assert!(client.try_submit(&batch, &market, &intent, &payload, &root, &nullifier, &2, &change, &proof).is_err());
+        assert!(client.try_submit(&batch, &market, &intent, &payload, &root, &nullifier, &1, &BytesN::from_array(&env, &[5;32]), &proof).is_err());
+        client.submit(&batch, &market, &intent, &payload, &root, &nullifier, &1, &change, &proof);
+        assert!(client.is_active_intent(&intent));
     }
 
     #[test]
@@ -371,6 +529,9 @@ mod tests {
         assert!(client.is_active_intent(&residual));
         assert_eq!(client.submission_sequence(&residual), sequence);
         assert_eq!(client.matching_payload_commitment(&residual), payload);
+        let residual_nullifier = client.intent_nullifier(&residual);
+        assert_eq!(residual_nullifier, super::residual_nullifier(&env, &residual));
+        assert_ne!(residual_nullifier, client.intent_nullifier(&source));
         assert!(client
             .try_rollover(
                 &settler,

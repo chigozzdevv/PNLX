@@ -16,6 +16,7 @@ type FieldHasher = Poseidon2Sponge<4, Bn254Fr>;
 pub enum DataKey {
     CurrentRoot,
     Empty(u32),
+    EmptyNodes,
     Frontier(u32),
     Governance,
     LeafCount,
@@ -26,6 +27,15 @@ pub enum DataKey {
     Writer(Address),
     SpentCommitment(BytesN<32>),
     CommitmentGuardReady,
+    Pair(BytesN<32>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct PositionPair {
+    pub counterparty: BytesN<32>,
+    pub market_id: BytesN<32>,
+    pub asset_digest: BytesN<32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -41,6 +51,44 @@ pub struct PositionState;
 
 #[contractimpl]
 impl PositionState {
+    pub fn pack_empty_nodes(env:Env) {
+        require_admin(&env);
+        if env.storage().persistent().has(&DataKey::EmptyNodes){return;}
+        let mut nodes=Vec::<BytesN<32>>::new(&env);
+        let mut expected=zero(&env);
+        let mut hasher=FieldHasher::new(&env);
+        for level in 0..TREE_DEPTH {
+            let previous:BytesN<32>=env.storage().persistent().get(&DataKey::Empty(level))
+                .unwrap_or_else(||panic!("missing empty position node"));
+            if previous!=expected{panic!("invalid legacy empty position node");}
+            nodes.push_back(previous);
+            expected=field_hash_pair(&env,&mut hasher,&expected,&expected);
+        }
+        env.storage().persistent().set(&DataKey::EmptyNodes,&nodes);
+    }
+    pub fn pair(env: Env, position_commitment: BytesN<32>) -> Option<PositionPair> {
+        env.storage().persistent().get(&DataKey::Pair(position_commitment))
+    }
+
+    pub fn register_pair(env: Env, writer: Address, first: BytesN<32>, second: BytesN<32>,
+        market_id: BytesN<32>, asset_digest: BytesN<32>) {
+        require_writer(&env, &writer);
+        validate_commitment(&env, &first);
+        validate_commitment(&env, &second);
+        validate_commitment(&env, &market_id);
+        validate_commitment(&env, &asset_digest);
+        if first == second || Self::is_commitment_spent(env.clone(), first.clone())
+            || Self::is_commitment_spent(env.clone(), second.clone())
+            || Self::pair(env.clone(), first.clone()).is_some()
+            || Self::pair(env.clone(), second.clone()).is_some() {
+            panic!("position pair unavailable");
+        }
+        env.storage().persistent().set(&DataKey::Pair(first.clone()),
+            &PositionPair { counterparty: second.clone(), market_id: market_id.clone(), asset_digest: asset_digest.clone() });
+        env.storage().persistent().set(&DataKey::Pair(second),
+            &PositionPair { counterparty: first, market_id, asset_digest });
+    }
+
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
         let governance_id: Address = env.storage().instance().get(&DataKey::Governance)
             .unwrap_or_else(|| panic!("not initialized"));
@@ -243,11 +291,15 @@ fn append_frontier(
 }
 
 fn root_from_frontier(env: &Env, hasher: &mut FieldHasher, count: u32) -> BytesN<32> {
+    let packed:Option<Vec<BytesN<32>>>=env.storage().persistent().get(&DataKey::EmptyNodes);
     let mut cursor = count;
     let mut node = zero(env);
     for level in 0..TREE_DEPTH {
-        let empty: BytesN<32> = env.storage().persistent().get(&DataKey::Empty(level))
-            .unwrap_or_else(|| panic!("missing empty position node"));
+        let empty: BytesN<32> = match &packed {
+            Some(nodes)=>nodes.get(level).unwrap_or_else(||panic!("missing packed empty position node")),
+            None=>env.storage().persistent().get(&DataKey::Empty(level))
+                .unwrap_or_else(|| panic!("missing empty position node")),
+        };
         node = if cursor & 1 == 0 {
             field_hash_pair(env, hasher, &node, &empty)
         } else {
@@ -262,11 +314,14 @@ fn root_from_frontier(env: &Env, hasher: &mut FieldHasher, count: u32) -> BytesN
 
 fn store_empty_nodes(env: &Env) -> BytesN<32> {
     let mut root = zero(env);
+    let mut packed=Vec::<BytesN<32>>::new(env);
     let mut hasher = FieldHasher::new(env);
     for level in 0..TREE_DEPTH {
         env.storage().persistent().set(&DataKey::Empty(level), &root);
+        packed.push_back(root.clone());
         root = field_hash_pair(env, &mut hasher, &root, &root);
     }
+    env.storage().persistent().set(&DataKey::EmptyNodes,&packed);
     root
 }
 
@@ -342,6 +397,49 @@ mod tests {
                 0x9c, 0xad, 0x64, 0x1c, 0xe1, 0xed, 0x73, 0x83,
             ]),
         );
+    }
+
+    #[test]
+    fn source_pair_link_is_reciprocal_immutable_and_writer_authorized() {
+        let env = Env::default();
+        env.budget().reset_unlimited();
+        env.mock_all_auths();
+        let id = env.register(PositionState, ());
+        let client = PositionStateClient::new(&env, &id);
+        let writer = Address::generate(&env);
+        client.init(&setup_governance(&env, &Address::generate(&env)));
+        client.set_writer(&writer, &true);
+        let first = value(&env, 1);
+        let second = value(&env, 2);
+        client.append_many(&writer, &Vec::from_array(&env, [first.clone(), second.clone()]));
+        assert!(client.try_register_pair(&Address::generate(&env), &first, &second,
+            &value(&env, 3), &value(&env, 4)).is_err());
+        client.register_pair(&writer, &first, &second, &value(&env, 3), &value(&env, 4));
+        let link = client.pair(&first).unwrap();
+        assert_eq!(link.counterparty, second);
+        assert_eq!(link.market_id, value(&env, 3));
+        assert_eq!(link.asset_digest, value(&env, 4));
+        assert_eq!(client.pair(&second).unwrap().counterparty, first);
+        assert!(client.try_register_pair(&writer, &first, &value(&env, 5),
+            &value(&env, 3), &value(&env, 4)).is_err());
+    }
+
+    #[test]
+    fn packing_legacy_empty_cache_preserves_all_position_state() {
+        let env=Env::default();env.mock_all_auths();
+        let id=env.register(PositionState,());let state=PositionStateClient::new(&env,&id);
+        let writer=Address::generate(&env);state.init(&setup_governance(&env,&Address::generate(&env)));
+        state.set_writer(&writer,&true);
+        let receipt=state.append_many(&writer,&Vec::from_array(&env,[value(&env,1),value(&env,2)]));
+        state.register_pair(&writer,&value(&env,1),&value(&env,2),&value(&env,3),&value(&env,4));
+        state.spend_position(&writer,&receipt.root,&value(&env,1),&value(&env,5));
+        env.as_contract(&id,||env.storage().persistent().remove(&DataKey::EmptyNodes));
+        state.pack_empty_nodes();state.pack_empty_nodes();
+        assert_eq!(state.current_root(),receipt.root);assert_eq!(state.leaf_count(),2);
+        assert!(state.has_root(&receipt.root));assert!(state.is_spent(&value(&env,5)));
+        assert!(state.is_commitment_spent(&value(&env,1)));
+        assert_eq!(state.pair(&value(&env,1)).unwrap().counterparty,value(&env,2));
+        state.append(&writer,&value(&env,6));assert_eq!(state.leaf_count(),3);
     }
 
     #[test]

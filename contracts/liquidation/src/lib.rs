@@ -114,9 +114,14 @@ impl Liquidation {
             panic!("invalid maintenance rate");
         }
         validate_oracle_mark_price(&env, &market_id, mark_price);
+        let market_address: Address = env.storage().persistent().get(&DataKey::MarketContract).unwrap();
+        if MarketClient::new(&env, &market_address).maintenance_rate(&market_id) != maintenance_rate {
+            panic!("maintenance rate mismatch");
+        }
         validate_proof(&env, &proof);
         validate_public_inputs(
             &env,
+            &market_id,
             mark_price,
             maintenance_rate,
             &position_root,
@@ -128,6 +133,10 @@ impl Liquidation {
         let key = DataKey::Liquidated(position_nullifier.clone());
         if env.storage().persistent().has(&key) {
             panic!("already liquidated");
+        }
+        let state_id: Address = env.storage().persistent().get(&DataKey::PositionState).unwrap();
+        if PositionStateClient::new(&env, &state_id).pair(&position_commitment).is_some() {
+            panic!("paired liquidation required");
         }
         spend_position(
             &env,
@@ -265,6 +274,7 @@ fn validate_proof(env: &Env, proof: &ProofMeta) {
 
 fn validate_public_inputs(
     env: &Env,
+    market_id: &BytesN<32>,
     mark_price: i128,
     maintenance_rate: i128,
     position_root: &BytesN<32>,
@@ -273,6 +283,9 @@ fn validate_public_inputs(
     reward_commitment: &BytesN<32>,
     proof: &ProofMeta,
 ) {
+    let market_address: Address = env.storage().persistent().get(&DataKey::MarketContract).unwrap();
+    let funding = MarketClient::new(env, &market_address).funding_index(market_id);
+    if funding == i128::MIN { panic!("invalid funding index"); }
     let expected = liquidation_public_input_hash(
         env,
         mark_price as u128,
@@ -281,6 +294,9 @@ fn validate_public_inputs(
         position_commitment,
         position_nullifier,
         reward_commitment,
+        market_id,
+        funding.unsigned_abs(),
+        funding < 0,
     );
     if proof.public_input_hash != expected {
         panic!("public input mismatch");
@@ -295,6 +311,9 @@ fn liquidation_public_input_hash(
     position_commitment: &BytesN<32>,
     position_nullifier: &BytesN<32>,
     reward_commitment: &BytesN<32>,
+    market_id: &BytesN<32>,
+    funding_abs: u128,
+    funding_negative: bool,
 ) -> BytesN<32> {
     let mut public_inputs = Bytes::new(env);
     append_u128_field(env, &mut public_inputs, mark_price);
@@ -305,6 +324,9 @@ fn liquidation_public_input_hash(
     append_field(env, &mut public_inputs, position_commitment);
     append_field(env, &mut public_inputs, position_nullifier);
     append_field(env, &mut public_inputs, reward_commitment);
+    append_field(env, &mut public_inputs, market_id);
+    append_u128_field(env, &mut public_inputs, funding_abs);
+    append_u128_field(env, &mut public_inputs, funding_negative as u128);
     env.crypto().sha256(&public_inputs).to_bytes()
 }
 
@@ -616,6 +638,9 @@ mod tests {
                 &position_commitment(env),
                 &BytesN::from_array(env, &[2; 32]),
                 &BytesN::from_array(env, &[4; 32]),
+                &BytesN::from_array(env, &[1; 32]),
+                0,
+                false,
             ),
             proof_digest: BytesN::from_array(env, &[7; 32]),
         }

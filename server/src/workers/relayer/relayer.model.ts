@@ -17,6 +17,7 @@ export interface RelayRequest {
     | "signed-xdr"
     | "contract-invoke";
   payload: unknown;
+  signal?: AbortSignal;
 }
 
 export interface RelayedTx {
@@ -57,6 +58,7 @@ export interface PreparedXdr {
 }
 
 export interface ContractReadResult {
+  stdout?: string;
   command: string[];
   commandOutputDigest: Hex;
   commandStatus: number | null;
@@ -87,3 +89,5 @@ export interface CommandResult {
 }
 
 export type CommandRunner = (command: string, args: string[]) => CommandResult;
+
+export type AsyncCommandRunner = (command: string, args: string[], timeoutMs: number) => Promise<CommandResult>;

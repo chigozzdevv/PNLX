@@ -31,6 +31,13 @@ import {
   secureMarginRoot,
 } from "@pnlx/crypto";
 import { assertPrivateMatchIntent } from "@/workers/batch-matcher/private-intent";
+import {
+  assertIdenticalDelegatedConditionalPolicy,
+  createDelegatedConditionalPolicy,
+  type DelegatedConditionalPolicy,
+} from "@/shared/protocol/delegated-policies";
+import type { PendingPairedClose } from "@/shared/protocol/paired-close-journal";
+import { assertIdenticalIntentSubmission, copyIntentSubmission, type PendingIntentSubmission } from "@/shared/protocol/intent-submission-journal";
 
 export const BATCH_EXECUTION_RUN_RETENTION = 1_000;
 export const FUNDING_PREMIUM_SAMPLE_RETENTION = 120;
@@ -48,6 +55,9 @@ export class ProtocolStore {
   readonly spentNullifiers = new Set<Hex>();
   readonly intents = new Map<string, IntentRecord>();
   readonly residualOrders = new Map<Hex, ResidualOrderRecord>();
+  readonly delegatedPolicies = new Map<Hex, DelegatedConditionalPolicy>();
+  readonly pendingPairedCloses = new Map<Hex, PendingPairedClose>();
+  readonly pendingIntentSubmissions = new Map<Hex, PendingIntentSubmission>();
   readonly orderLifecycle = new Map<Hex, OrderLifecycleRecord>();
   readonly positionLifecycle = new Map<Hex, PositionLifecycleRecord>();
   readonly markets = new Map<string, MarketConfig>();
@@ -68,6 +78,54 @@ export class ProtocolStore {
   readonly pendingAssetDeposits = new Map<Hex, PendingAssetDepositRecord>();
   readonly privateMatchIntents = new Map<Hex, PrivateMatchIntent>();
   readonly proofs = new Set<string>();
+
+  addPendingIntentSubmission(record: PendingIntentSubmission): void {
+    if (record.intentCommitment !== record.prepared.record.intentCommitment ||
+        record.validity.intentCommitment !== record.intentCommitment) throw new Error("prepared intent journal key mismatch");
+    assertPrivateMatchIntent(record.prepared.record, record.prepared.privateMatchIntent);
+    const previous = this.pendingIntentSubmissions.get(record.intentCommitment);
+    if (previous) { assertIdenticalIntentSubmission(previous, record); return; }
+    this.pendingIntentSubmissions.set(record.intentCommitment, copyIntentSubmission(record));
+  }
+
+  removePendingIntentSubmission(intentCommitment: Hex): void {
+    this.pendingIntentSubmissions.delete(intentCommitment);
+  }
+
+  addDelegatedConditionalPolicy(record: DelegatedConditionalPolicy): void {
+    const { createdAt: _createdAt, intentCommitment: _intent, marketId: _market, ownerCommitment: _owner, ...input } = record;
+    const validated = createDelegatedConditionalPolicy(input, record)!;
+    const existing = this.delegatedPolicies.get(validated.intentCommitment);
+    if (existing) {
+      assertIdenticalDelegatedConditionalPolicy(existing, validated);
+      return;
+    }
+    this.delegatedPolicies.set(validated.intentCommitment, validated);
+  }
+
+  addPendingPairedClose(record: PendingPairedClose): void {
+    const key = record.journalKey.toLowerCase() as Hex;
+    if (key !== record.pair.positions[0].closeCommitment.toLowerCase()) throw new Error("paired close journal key mismatch");
+    const existing = this.pendingPairedCloses.get(key);
+    if (existing) {
+      const payload = (value: PendingPairedClose) => JSON.stringify({
+        conditional: value.conditional, outputNotes: value.outputNotes, pair: value.pair,
+      }, (_key, item) => typeof item === "bigint" ? item.toString() : item);
+      if (payload(existing) !== payload(record)) throw new Error("conflicting paired close journal");
+      return;
+    }
+    this.pendingPairedCloses.set(key, { ...record, journalKey: key });
+  }
+
+  removePendingPairedClose(journalKey: Hex): void {
+    this.pendingPairedCloses.delete(journalKey.toLowerCase() as Hex);
+  }
+
+  updatePendingPairedClose(record: PendingPairedClose): void {
+    if(!this.pendingPairedCloses.has(record.journalKey))throw new Error("paired journal not found");
+    this.addPendingPairedClose(record);
+    this.pendingPairedCloses.set(record.journalKey,{...record});
+  }
 
   marginRoot(): Hex {
     return this.marginCommitments.size === 0
@@ -209,6 +267,24 @@ export class ProtocolStore {
   }
 
   addIntent(record: IntentRecord, privateMatchIntent?: PrivateMatchIntent): void {
+    this.addIntentRecord(record, privateMatchIntent, true);
+  }
+
+  restoreConfirmedIntent(record: IntentRecord, privateMatchIntent: PrivateMatchIntent): void {
+    const previous = this.intents.get(record.intentCommitment);
+    if (previous) {
+      assertPrivateMatchIntent(previous, privateMatchIntent);
+      if (previous.matchingPayloadCommitment !== record.matchingPayloadCommitment ||
+          previous.noteNullifier !== record.noteNullifier || previous.ownerCommitment !== record.ownerCommitment) {
+        throw new Error("confirmed intent recovery conflicts with local state");
+      }
+      this.privateMatchIntents.set(record.intentCommitment, privateMatchIntent);
+      return;
+    }
+    this.addIntentRecord(record, privateMatchIntent, false);
+  }
+
+  private addIntentRecord(record: IntentRecord, privateMatchIntent: PrivateMatchIntent | undefined, currentRootRequired: boolean): void {
     if (this.intents.has(record.intentCommitment)) {
       throw new Error("intent commitment already exists");
     }
@@ -220,10 +296,9 @@ export class ProtocolStore {
     }
     if (privateMatchIntent) {
       assertPrivateMatchIntent(record, privateMatchIntent);
-      this.privateMatchIntents.set(record.intentCommitment, privateMatchIntent);
     }
     assertProof(this, record.proof);
-    if (record.marginRoot !== this.marginMembershipRoot()) {
+    if (currentRootRequired && record.marginRoot !== this.marginMembershipRoot()) {
       throw new Error("intent margin root is not current");
     }
     if (this.spentNullifiers.has(record.noteNullifier)) {
@@ -235,6 +310,7 @@ export class ProtocolStore {
         throw new Error("intent nullifier already locked");
       }
     }
+    if (privateMatchIntent) this.privateMatchIntents.set(record.intentCommitment, privateMatchIntent);
     this.intents.set(record.intentCommitment, record);
     const now = Date.now();
     this.orderLifecycle.set(record.intentCommitment, {
@@ -673,7 +749,11 @@ export class ProtocolStore {
 export function retainedBatchExecutionRuns(
   entries: [Hex, BatchExecutionRunRecord][],
 ): [Hex, BatchExecutionRunRecord][] {
-  return entries.slice(-BATCH_EXECUTION_RUN_RETENTION);
+  const required = new Set(entries.filter(([, run]) => run.submissionAttempted && run.status !== "settled")
+    .map(([key]) => key));
+  const recent = entries.filter(([key]) => !required.has(key)).slice(-BATCH_EXECUTION_RUN_RETENTION);
+  const retained = new Set([...required, ...recent.map(([key]) => key)]);
+  return entries.filter(([key]) => retained.has(key));
 }
 
 export function backfillMarketSettlementVolumes(store: Pick<
@@ -714,11 +794,9 @@ export function retainedFundingPremiumSamples(
 }
 
 function trimBatchExecutionRuns(runs: Map<Hex, BatchExecutionRunRecord>): void {
-  while (runs.size > BATCH_EXECUTION_RUN_RETENTION) {
-    const oldest = runs.keys().next().value as Hex | undefined;
-    if (!oldest) return;
-    runs.delete(oldest);
-  }
+  if (runs.size <= BATCH_EXECUTION_RUN_RETENTION) return;
+  const retained = new Set(retainedBatchExecutionRuns([...runs.entries()]).map(([key]) => key));
+  for (const key of runs.keys()) if (!retained.has(key)) runs.delete(key);
 }
 
 function trimFundingPremiumSamples(samples: Map<string, FundingPremiumSampleRecord>): void {

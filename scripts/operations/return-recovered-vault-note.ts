@@ -11,6 +11,7 @@ import { createExecutorAsync } from "@/workers/executor/executor.worker";
 import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
 import { assertSuccessfulTransaction } from "./register-vault-maker-note";
+import {applyVaultPrincipalReceipt} from "@/shared/vault-principal-receipts";
 
 interface ReturnReceipt {
   _id: string;
@@ -183,7 +184,9 @@ export async function returnRecoveredVaultNote(argv: string[]): Promise<void> {
           after.maker !== BigInt(receipt.makerBalanceBefore) - returned) {
           throw new Error("maker return balances do not reconcile");
         }
-        await applyReturnReceipt(database, env.stellarNetwork, allocation, receipt);
+        await applyVaultPrincipalReceipt(database.collection<VaultMakerAllocation & {_id:string}>("vault_maker_allocations"),{
+          allocationDocumentId:`${env.stellarNetwork}:${allocation.id}`,receiptId:`note-return:${receipt._id}`,
+          principal:BigInt(receipt.principal),before:BigInt(receipt.allocationPrincipalBefore)});
         await markRecoveredMakerNoteSettled(commitment, receipt.txHash);
         await receipts.updateOne({ _id: receiptId, status: "submitted", txHash: receipt.txHash },
           { $set: { status: "confirmed" } });
@@ -237,28 +240,6 @@ export function assertLinearRecoveredChain(
   }
 }
 
-async function applyReturnReceipt(
-  database: ReturnType<MongoClient["db"]>, namespace: string,
-  allocation: VaultMakerAllocation, receipt: ReturnReceipt,
-): Promise<void> {
-  const allocations = database.collection<VaultMakerAllocation & { _id: string }>("vault_maker_allocations");
-  const before = BigInt(receipt.allocationPrincipalBefore);
-  const after = before - BigInt(receipt.principal);
-  const current = await allocations.findOne({ _id: `${namespace}:${allocation.id}` });
-  if (!current) throw new Error("maker allocation disappeared before return reconciliation");
-  if (remainingVaultMakerPrincipal(current) === after) return;
-  if (remainingVaultMakerPrincipal(current) !== before || current.status !== "outstanding") {
-    throw new Error("maker allocation principal changed before return reconciliation");
-  }
-  const result = await allocations.updateOne(
-    { _id: current._id, status: "outstanding",
-      ...(current.remainingPrincipal === undefined
-        ? { remainingPrincipal: { $exists: false } }
-        : { remainingPrincipal: current.remainingPrincipal }) },
-    { $set: { remainingPrincipal: after.toString() } },
-  );
-  if (result.modifiedCount !== 1) throw new Error("maker allocation changed before receipt was applied");
-}
 
 function requiredArg(argv: string[], flag: string): string {
   const index = argv.indexOf(flag);

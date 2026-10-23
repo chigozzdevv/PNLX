@@ -18,8 +18,8 @@ export function registerPositionClosesRoute(
   router.add("GET", "/position-closes/context", (request) => controller.context(request), { auth: true });
   router.add("POST", "/position-closes/proven", (request) => controller.createProven(request));
   router.add("POST", "/position-closes/manual-proven", (request) => controller.createManualProven(request));
+  router.add("POST", "/position-closes/manual", (request) => controller.createManual(request), { auth: true });
   if (options.witnessRoutesEnabled) {
     router.add("POST", "/position-closes", (request) => controller.create(request));
-    router.add("POST", "/position-closes/manual", (request) => controller.createManual(request));
   }
 }

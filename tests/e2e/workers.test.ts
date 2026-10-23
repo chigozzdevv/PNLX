@@ -1,3 +1,4 @@
+import { matchingPayloadCommitment, privateMatchIntentFromTradeIntent } from "@/workers/batch-matcher/private-intent";
 import { describe, expect, test } from "bun:test";
 import {
   commitIntent,
@@ -652,7 +653,7 @@ describe("support workers", () => {
     expect(store.withdrawals.has(withdrawal.nullifier)).toBe(true);
   });
 
-  test("intent submissions do not become active without submitted on-chain registry tx when required", () => {
+  test("intent submissions do not become active without submitted on-chain registry tx when required", async () => {
     const executor = createExecutor();
     const intent = backedIntent("intent-finality-submit", executor);
     const validity = intentValidity(executor, intent);
@@ -660,6 +661,7 @@ describe("support workers", () => {
       enabled: true,
       secureNoteSnapshot: (commitments: Hex[]) => ({ commitments,
         root: executor.store.marginMembershipRoot() }),
+      isIntentRegisteredAsync: async () => false,
       submitIntent() {
         return { relays: [unsubmittedRelay("intent", "submit")] };
       },
@@ -671,7 +673,7 @@ describe("support workers", () => {
       { intentRegistryOnchainRequired: true },
     );
 
-    expect(() => service.submit({ intent, validity })).toThrow("submit transaction was not submitted");
+    await expect(service.submitDurable({ intent, validity })).rejects.toThrow("submit transaction was not submitted");
     expect(executor.store.intents.has(validity.intentCommitment)).toBe(false);
     expect(executor.store.orderLifecycle.has(validity.intentCommitment)).toBe(false);
   });
@@ -861,7 +863,7 @@ describe("support workers", () => {
       limitPrice: 50_000n * PRICE_SCALE,
       signedSize: 1n,
     });
-    expect(JSON.stringify(record)).not.toContain((50_000n * PRICE_SCALE).toString());
+    expect(JSON.stringify(record, (_key, value) => typeof value === "bigint" ? value.toString() : value)).not.toContain((50_000n * PRICE_SCALE).toString());
   });
 
   test("commits externally proven blind settlement transcripts without private payload recovery", () => {
@@ -1054,10 +1056,16 @@ describe("support workers", () => {
     const matcher = createProoflessMatcher(executor, {
       accountEventEncryptor: (payload) => `base64:test-encrypted:${payload.kind}`,
     });
+    let batchLanded = false;
     const service = new BatchesService(
       executor,
       {
+        enabled: true,
+        positionRoot: () => executor.store.positionMembershipRoot(),
+        isBatchSettled: () => batchLanded,
+        batchPositionAppendIndexAsync: async () => 0,
         settleBatch(settlement: BatchSettlement) {
+          batchLanded = true;
           return {
             relays: [
               {
@@ -1357,6 +1365,7 @@ describe("support workers", () => {
           checkedDigests.push(settlementDigest);
           return confirmedOnchain;
         },
+        async batchPositionAppendIndexAsync() { return executor.store.positionCommitments.size; },
         async settleBatchAsync(settlement: BatchSettlement) {
           confirmedOnchain = true;
           return {
@@ -1503,10 +1512,12 @@ describe("support workers", () => {
         positionRoot() {
           return executor.store.positionMembershipRoot();
         },
+        async batchPositionAppendIndexAsync() { return executor.store.positionCommitments.size; },
         async settleBatchAsync() {
           relayCalls += 1;
           throw new Error("stale batch must not be relayed");
         },
+        isBatchSettled: () => false,
       } as never,
     );
 
@@ -1592,10 +1603,12 @@ describe("support workers", () => {
         positionRoot() {
           return executor.store.positionMembershipRoot();
         },
+        async batchPositionAppendIndexAsync() { return executor.store.positionCommitments.size; },
         async settleBatchAsync() {
           relayCalls += 1;
           throw new Error("stale batch must not be relayed");
         },
+        isBatchSettled: () => false,
       } as never,
     );
 
@@ -2372,11 +2385,13 @@ describe("support workers", () => {
         network: "testnet",
         source: "pnlx-testnet",
         sourceAddress: "GTEST",
-        verifiers: {},
+        verifiers: { "intent-validity-proof-verifier": "intent-validity-verifier" },
       },
       enabled: true,
+      resolveProofArtifact: () => ({ proofPath: "/tmp/intent-proof", publicInputsPath: "/tmp/intent-inputs" }),
     });
     const record = {
+      assetDigest: hashFields("asset", ["usdc"]), currentBatch: 1n,
       batchDigest: digestToFieldHex("batch:intent-relay-batch"),
       batchId: "intent-relay-batch",
       marketDigest: digestToFieldHex("market:btc-usd-perp"),
@@ -2394,16 +2409,18 @@ describe("support workers", () => {
     onchain.submitIntent(record);
     onchain.cancelIntent(record.intentCommitment);
 
-    expect(calls).toHaveLength(2);
-    expect(calls[0]).toContain("intent-registry-contract");
-    expect(calls[0]).toContain("submit");
-    expect(calls[0]).toContain(hashFields("batch-id", [record.batchId]).slice(2));
-    expect(calls[0]).toContain(hashFields("market-id", [record.marketId]).slice(2));
-    expect(calls[0]).toContain(record.intentCommitment.slice(2));
-    expect(calls[0]).toContain(record.matchingPayloadCommitment.slice(2));
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).toContain("intent-validity-verifier");
+    expect(calls[0]).toContain("verify_and_record");
     expect(calls[1]).toContain("intent-registry-contract");
-    expect(calls[1]).toContain("cancel");
+    expect(calls[1]).toContain("submit");
+    expect(calls[1]).toContain(hashFields("batch-id", [record.batchId]).slice(2));
+    expect(calls[1]).toContain(hashFields("market-id", [record.marketId]).slice(2));
     expect(calls[1]).toContain(record.intentCommitment.slice(2));
+    expect(calls[1]).toContain(record.matchingPayloadCommitment.slice(2));
+    expect(calls[1]).toContain("intent-registry-contract");
+    expect(calls[2]).toContain("cancel");
+    expect(calls[2]).toContain(record.intentCommitment.slice(2));
   });
 
   test("prepares wallet-signed stellar cli invocations", () => {
@@ -2527,6 +2544,7 @@ describe("support workers", () => {
       proof: conditionalProof,
     });
     onchain.settlePositionClose({
+      currentFundingIndex: 0n,
       marketId,
       markPrice: 56_000n * PRICE_SCALE,
       positionCommitment: hashFields("position", ["worker-onchain"]),
@@ -2620,6 +2638,7 @@ describe("support workers", () => {
     const nullifier = hashFields("position-nullifier", ["worker-manual-close"]);
 
     onchain.settleManualPositionClose({
+      currentFundingIndex: 0n,
       marketId,
       markPrice: 56_000n * PRICE_SCALE,
       positionCommitment: hashFields("position", ["worker-manual-close"]),
@@ -2668,6 +2687,7 @@ describe("support workers", () => {
       resolveProofArtifact: () => ({ proofPath: "/tmp/proof", publicInputsPath: "/tmp/public_inputs" }),
     });
     const trader = {
+      currentFundingIndex: 0n,
       marketId: "xlm-usd-perp", markPrice: 56_000n * PRICE_SCALE,
       positionCommitment: hashFields("position", [1]),
       positionNullifier: hashFields("nullifier", [1]),
@@ -2748,6 +2768,7 @@ describe("support workers", () => {
     });
 
     expect(() => onchain.settleManualPositionClose({
+      currentFundingIndex: 0n,
       marketId: "btc-usd-perp",
       markPrice: 56_000n * PRICE_SCALE,
       positionCommitment: hashFields("position", ["moved-price"]),
@@ -4414,6 +4435,14 @@ function intentValidity(
   const binding = intentBindingFields(intent);
   const noteCommitment = hashFields("note-commitment", [intentCommitment]);
   return {
+    assetDigest: hashFields("asset", ["usdc"]),
+    ownerDigest: hashFields("fixture-owner-digest", [intent.owner]),
+    positionSeed: hashFields("fixture-position-seed", [intent.nonce]),
+    matchingPayloadCommitment: matchingPayloadCommitment(privateMatchIntentFromTradeIntent({
+      intent, intentCommitment, noteChangeCommitment: "0x0", ownerCommitment: ownerCommitment(intent.owner),
+      ownerDigest: hashFields("fixture-owner-digest", [intent.owner]),
+      positionSeed: hashFields("fixture-position-seed", [intent.nonce]),
+    })),
     batchDigest: binding.batchDigest,
     currentBatch: 1n,
     expiryBatch: 2n,
@@ -4452,6 +4481,7 @@ function unsubmittedRelay(kind: string, functionName: string) {
 function intentRecord(seed: string, marketId: string, marginRoot: Hex, batchId = "external-batch"): IntentRecord {
   const intentCommitment = hashFields("intent", [seed]);
   return {
+    assetDigest: hashFields("asset", ["usdc"]), currentBatch: 1n,
     batchDigest: hashFields("batch-digest", [seed]),
     batchId,
     intentCommitment,

@@ -27,6 +27,7 @@ export function parsePositionClose(input: PositionCloseBody): CreatePositionClos
     closeSize: BigInt(String(input.closeSize)),
     entryPrice: BigInt(String(input.entryPrice)),
     markPrice: BigInt(String(input.markPrice)),
+    currentFundingIndex: BigInt(String(input.currentFundingIndex)),
     margin: BigInt(String(input.margin)),
     fundingIndex: BigInt(String(input.fundingIndex)),
     fundingPayment: BigInt(String(input.fundingPayment)),
@@ -56,6 +57,7 @@ export function parseProvenPositionClose(input: PositionCloseBody): CreateProven
   return {
     marketId: String(input.marketId),
     markPrice: BigInt(String(input.markPrice)),
+    currentFundingIndex: BigInt(String(input.currentFundingIndex)),
     positionCommitment: String(input.positionCommitment) as `0x${string}`,
     positionNullifier: String(input.positionNullifier) as `0x${string}`,
     positionRoot: String(input.positionRoot) as `0x${string}`,

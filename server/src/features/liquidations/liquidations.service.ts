@@ -1,4 +1,5 @@
-import { contractPublicInputHash, publicField, publicU128 } from "@pnlx/proof-system";
+import { contractPublicInputHash, publicField, publicI128, publicU128 } from "@pnlx/proof-system";
+import { hashFields } from "@pnlx/crypto";
 import type { ServerEnv } from "@/config/env";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { OnchainRelayResult } from "@/workers/onchain/onchain.model";
@@ -63,6 +64,8 @@ export class LiquidationsService {
         publicField(input.positionCommitment),
         publicField(input.positionNullifier),
         publicField(input.rewardCommitment),
+        publicField(hashFields("market-id", [input.marketId])),
+        publicI128(input.currentFundingIndex),
       ]),
     );
     const accountEvent = this.accountEventFor(input);

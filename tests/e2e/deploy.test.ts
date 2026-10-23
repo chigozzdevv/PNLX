@@ -131,14 +131,15 @@ describe("deployment manifest", () => {
     for (const contract of manifest.contracts) {
       expect(contract.wasmHash).toMatch(/^0x[0-9a-f]{64}$/);
     }
-    expect(manifest.verifiers).toHaveLength(14);
+    expect(manifest.verifiers).toHaveLength(15);
+    expect(manifest.verifiers.some((entry)=>entry.circuitId==="position-close-pair")).toBe(true);
     const noirVerifiers = manifest.verifiers.filter((verifier) =>
       verifier.verifierContract === "proof-verifier"
     );
     const risc0Verifier = manifest.verifiers.find((verifier) =>
       verifier.verifierAuthority === "batch-match-risc0-verifier"
     );
-    expect(noirVerifiers).toHaveLength(13);
+    expect(noirVerifiers).toHaveLength(14);
     expect(noirVerifiers.every((verifier) => verifier.verifierSource === "artifact")).toBe(true);
     expect(
       noirVerifiers.every((verifier) => verifier.verifierAuthority.endsWith("-proof-verifier")),

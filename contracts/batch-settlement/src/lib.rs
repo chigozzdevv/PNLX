@@ -67,6 +67,7 @@ pub struct SettlementMeta {
 
 #[contractclient(name = "ShieldedPoolClient")]
 pub trait ShieldedPoolInterface {
+    fn token_digest(env: &Env, token: &Address) -> BytesN<32>;
     fn spend_secure(env: &Env, writer: &Address, root: &BytesN<32>, nullifier: &BytesN<32>);
     fn append_secure_note(env: &Env, writer: &Address, commitment: &BytesN<32>);
     fn deposit_claim_secure(
@@ -261,6 +262,7 @@ impl BatchSettlement {
         );
         let oracle = checked_market_price(&env, &market_id);
         let appended = append_positions(&env, &new_commitments);
+        register_position_pairs(&env, &market_id, &new_commitments);
         accrue_fees(&env, insurance_fee, treasury_fee);
 
         let meta = SettlementMeta {
@@ -337,6 +339,7 @@ impl BatchSettlement {
             .get(&DataKey::FeeToken)
             .unwrap_or_else(|| panic!("fee token not configured"));
         let writer = env.current_contract_address();
+        let _asset=collateral_asset(&env);
         env.storage().persistent().remove(&key);
         env.storage()
             .persistent()
@@ -402,6 +405,35 @@ impl BatchSettlement {
             .get(&DataKey::Batch(batch_id, market_id))
             .unwrap_or_else(|| panic!("batch not settled"))
     }
+}
+
+fn register_position_pairs(env: &Env, market: &BytesN<32>, commitments: &Vec<BytesN<32>>) {
+    let asset=collateral_asset(env);
+    let state: Address = env.storage().persistent().get(&DataKey::PositionState).unwrap();
+    let writer = env.current_contract_address();
+    let client = PositionStateClient::new(env, &state);
+    let mut i = 0;
+    while i < commitments.len() {
+        let first = commitments.get(i).unwrap();
+        let second = commitments.get(i + 1).unwrap();
+        authorize_as_writer(env, state.clone(), "register_pair", Vec::from_array(env, [
+            writer.clone().into_val(env), first.clone().into_val(env), second.clone().into_val(env),
+            market.clone().into_val(env), asset.clone().into_val(env)]));
+        client.register_pair(&writer, &first, &second, market, &asset);
+        i += 2;
+    }
+}
+
+fn collateral_asset(env:&Env)->BytesN<32> {
+    let pool: Address = env.storage().persistent().get(&DataKey::ShieldedPool).unwrap();
+    let token: Address = env.storage().persistent().get(&DataKey::FeeToken)
+        .unwrap_or_else(|| panic!("collateral token not configured"));
+    let asset = ShieldedPoolClient::new(env, &pool).token_digest(&token);
+    let registry:Address=env.storage().persistent().get(&DataKey::IntentRegistry).unwrap();
+    if IntentRegistryClient::new(env,&registry).collateral_digest()!=asset {
+        panic!("collateral asset mismatch");
+    }
+    asset
 }
 
 fn expected_fee_config_hash(env: &Env) -> BytesN<32> {
@@ -937,6 +969,7 @@ mod tests {
             &intent_registry,
             &circuit(&env),
         );
+        client.configure_fee_token(&fixture_collateral_token(&env,&intent_registry));
 
         let filled = filled_intents(&env);
         client.settle(
@@ -975,6 +1008,68 @@ mod tests {
     }
 
     #[test]
+    fn measures_execution_capacity_under_default_resource_limits() {
+        for executions in 1..=4u8 {
+            let env=Env::default();env.mock_all_auths();
+            let id=env.register(BatchSettlement,());
+            let client=BatchSettlementClient::new(&env,&id);
+            let pool_id=setup_shielded_pool(&env,&id);
+            let registry_id=setup_intent_registry(&env,&id,&pool_id,false);
+            let registry=IntentRegistryClient::new(&env,&registry_id);
+            let ledger_id:Address=env.as_contract(&registry_id,||env.storage().persistent().get(&intent_registry::DataKey::ProofLedger).unwrap());
+            let ledger=ProofLedgerClient::new(&env,&ledger_id);
+            let batch=BytesN::from_array(&env,&[1;32]);let market=BytesN::from_array(&env,&[2;32]);
+            let root=ShieldedPoolClient::new(&env,&pool_id).secure_note_root();
+            let collateral=registry.collateral_digest();
+            let mut filled=filled_intents(&env);let mut nullifiers=spent_nullifiers(&env);
+            let mut payloads=payloads(&env,&filled);
+            for index in 2..executions*2 {
+                env.cost_estimate().budget().reset_default();
+                let intent=BytesN::from_array(&env,&[50+index;32]);
+                let payload=BytesN::from_array(&env,&[70+index;32]);
+                let nullifier=BytesN::from_array(&env,&[90+index;32]);
+                let change=BytesN::from_array(&env,&[0;32]);
+                let mut fields=Bytes::new(&env);super::append_field(&env,&mut fields,&collateral);
+                super::append_u128_field(&env,&mut fields,1);
+                for value in [&batch,&market,&intent,&root,&nullifier,&change,&payload]{super::append_field(&env,&mut fields,value);}
+                let validity=intent_registry::ProofMeta{circuit_id:BytesN::from_array(&env,&[40;32]),
+                    verifier_hash:BytesN::from_array(&env,&[41;32]),circuit_hash:BytesN::from_array(&env,&[43;32]),
+                    public_input_hash:env.crypto().sha256(&fields).to_bytes(),proof_digest:BytesN::from_array(&env,&[44;32])};
+                ledger.record(&registry.operator(),&validity.circuit_id,&validity.verifier_hash,&validity.public_input_hash,&validity.proof_digest);
+                registry.submit(&batch,&market,&intent,&payload,&root,&nullifier,&1,&change,&validity);
+                filled.push_back(intent);payloads.push_back(payload);nullifiers.push_back(nullifier);
+            }
+            let mut commitments=Vec::new(&env);let mut makers=Vec::new(&env);let mut takers=Vec::new(&env);
+            env.cost_estimate().budget().reset_default();
+            for index in 0..executions*2 {
+                let mut value=[0u8;32];value[31]=110+index;
+                commitments.push_back(BytesN::from_array(&env,&value));
+                if index%2==0{makers.push_back(filled.get_unchecked(index as u32));}
+                else{takers.push_back(filled.get_unchecked(index as u32));}
+            }
+            let zeros=zero_residuals(&env,&filled);let margins=zero_residual_margins(&env,&filled);
+            let changes=Vec::new(&env);
+            let mut proved=proof(&env);
+            proved.public_input_hash=super::batch_public_input_hash(&env,&batch,&market,&settlement_digest(&env),
+                &filled,&commitments,&changes,&nullifiers,&payloads,&zeros,&margins,&zeros,0,2,
+                &super::expected_fee_config_hash(&env),0,0,0,0,&makers,&takers);
+            client.init(&setup_governance(&env),&setup_proof_ledger(&env,Some(&proved)),
+                &setup_market(&env,&market,50_000_00000000,950,true),&setup_position_state(&env,&id),
+                &pool_id,&registry_id,&circuit(&env));
+            client.configure_fee_token(&fixture_collateral_token(&env,&registry_id));
+            env.cost_estimate().budget().reset_default();
+            let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||client.try_settle(&batch,&market,&settlement_digest(&env),&proved,&filled,&commitments,
+                &changes,&nullifiers,&payloads,&zeros,&margins,&zeros,&2,&0,&super::expected_fee_config_hash(&env),
+                &0,&0,&0,&0,&makers,&takers)));
+            let accepted=result.map(|value|value.is_ok()).unwrap_or(false);
+            let cpu=env.cost_estimate().budget().cpu_instruction_cost();
+            std::println!("default-budget executions={} accepted={} cpu={}",executions,accepted,cpu);
+            env.cost_estimate().budget().reset_default();
+            assert_eq!(accepted,executions<=2);
+        }
+    }
+
+    #[test]
     fn partial_fill_registers_cancellable_residual_margin_claim() {
         let env = Env::default();
         env.mock_all_auths();
@@ -992,7 +1087,8 @@ mod tests {
             [residual_payload.clone(), BytesN::from_array(&env, &[0; 32])],
         );
         let change = BytesN::from_array(&env, &[43; 32]);
-        let changes = Vec::from_array(&env, [change.clone()]);
+        let second_change=BytesN::from_array(&env,&[44;32]);
+        let changes = Vec::from_array(&env, [change.clone(),second_change.clone()]);
         let mut proved = proof(&env);
         proved.public_input_hash = super::batch_public_input_hash(
             &env,
@@ -1029,6 +1125,7 @@ mod tests {
             &registry_id,
             &circuit(&env),
         );
+        client.configure_fee_token(&fixture_collateral_token(&env,&registry_id));
         let source_sequence = registry.submission_sequence(&intent_a(&env));
         client.settle(
             &batch,
@@ -1093,9 +1190,7 @@ mod tests {
         pool.disable_legacy_notes();
         let registry_id = setup_intent_registry(&env, &id, &pool_id, false);
         let registry = IntentRegistryClient::new(&env, &registry_id);
-        let token = env
-            .register_stellar_asset_contract_v2(Address::generate(&env))
-            .address();
+        let token=fixture_collateral_token(&env,&registry_id);
         client.init(
             &governance_id,
             &ledger_id,
@@ -1254,9 +1349,7 @@ mod tests {
         );
         let pool_id = setup_shielded_pool(&env, &id);
         let registry = setup_intent_registry(&env, &id, &pool_id, false);
-        let token = env
-            .register_stellar_asset_contract_v2(Address::generate(&env))
-            .address();
+        let token=fixture_collateral_token(&env,&registry);
         StellarAssetClient::new(&env, &token).mint(&pool_id, &100);
         ShieldedPoolClient::new(&env, &pool_id).configure_fee_destinations(
             &Address::generate(&env),
@@ -1366,6 +1459,7 @@ mod tests {
             &intent_registry,
             &circuit(&env),
         );
+        client.configure_fee_token(&fixture_collateral_token(&env,&intent_registry));
 
         client.settle(
             &batch,
@@ -1460,6 +1554,7 @@ mod tests {
             &registry_id,
             &circuit(&env),
         );
+        client.configure_fee_token(&fixture_collateral_token(&env,&registry_id));
 
         client.settle(
             &batch,
@@ -2145,20 +2240,50 @@ mod tests {
         let registry_id = env.register(IntentRegistry, ());
         let registry = IntentRegistryClient::new(env, &registry_id);
         env.mock_all_auths();
-        registry.init(&Address::generate(env), settler);
+        let operator = Address::generate(env);
+        registry.init(&operator, settler);
         registry.configure_secure_pool(pool_id);
+        let governance_id = env.register(Governance, ());
+        let governance = GovernanceClient::new(env, &governance_id);
+        governance.init(&operator);
+        let validity_circuit = BytesN::from_array(env, &[40;32]);
+        let validity_verifier = BytesN::from_array(env, &[41;32]);
+        let token=env.register_stellar_asset_contract_v2(Address::generate(env)).address();
+        let collateral=ShieldedPoolClient::new(env,pool_id).token_digest(&token);
+        env.as_contract(&registry_id,||env.storage().instance().set(&symbol_short!("testtoken"),&token));
+        governance.set_verifier(&validity_circuit, &validity_verifier, &operator);
+        let ledger_id = env.register(ProofLedger, ());
+        let ledger = ProofLedgerClient::new(env, &ledger_id);
+        ledger.init(&governance_id);
+        registry.configure_validity(&governance_id, &ledger_id, &validity_circuit, &collateral);
         let root = ShieldedPoolClient::new(env, pool_id).secure_note_root();
         let batch = BytesN::from_array(env, &[1; 32]);
         let market = BytesN::from_array(env, &[2; 32]);
         let shares_a = BytesN::from_array(env, &[21; 32]);
         let shares_b = BytesN::from_array(env, &[22; 32]);
 
-        registry.submit(&batch, &market, &intent_a(env), &shares_a, &root, nullifier_a);
-        registry.submit(&batch, &market, &intent_b(env), &shares_b, &root, nullifier_b);
+        let change = BytesN::from_array(env, &[0;32]);
+        for (intent, shares, nullifier) in [(intent_a(env),shares_a,nullifier_a),(intent_b(env),shares_b,nullifier_b)] {
+            let mut public_inputs=Bytes::new(env);
+            super::append_field(env,&mut public_inputs,&collateral);
+            super::append_u128_field(env,&mut public_inputs,1);
+            for value in [&batch,&market,&intent,&root,nullifier,&change,&shares] {
+                super::append_field(env,&mut public_inputs,value);
+            }
+            let proof=intent_registry::ProofMeta {circuit_id:validity_circuit.clone(),
+                circuit_hash:BytesN::from_array(env,&[43;32]),verifier_hash:validity_verifier.clone(),
+                public_input_hash:env.crypto().sha256(&public_inputs).to_bytes(),proof_digest:BytesN::from_array(env,&[44;32])};
+            ledger.record(&operator,&proof.circuit_id,&proof.verifier_hash,&proof.public_input_hash,&proof.proof_digest);
+            registry.submit(&batch,&market,&intent,&shares,&root,nullifier,&1,&change,&proof);
+        }
         if cancel_first {
             registry.cancel(&intent_a(env));
         }
         registry_id
+    }
+
+    fn fixture_collateral_token(env:&Env,registry:&Address)->Address {
+        env.as_contract(registry,||env.storage().instance().get(&symbol_short!("testtoken")).unwrap())
     }
 
     fn setup_governance_with_verifier(env: &Env, verifier_hash: &BytesN<32>) -> Address {

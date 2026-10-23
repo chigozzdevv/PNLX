@@ -49,37 +49,62 @@ function hashFile(path: string): Hex {
   return `0x${hash}`;
 }
 
-function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): void {
-  const result = spawnSync(command, args, { cwd, encoding: "utf8", env });
-  if (result.status !== 0) {
-    const output = [result.error?.message, result.stdout, result.stderr].filter(Boolean).join("\n");
-    throw new Error(`${command} ${args.join(" ")} failed\n${output}`);
+const DEFAULT_NOIR_COMMAND_TIMEOUT_MS = 120_000;
+const MAX_NOIR_COMMAND_TIMEOUT_MS = 15 * 60_000;
+
+function commandTimeoutMs(env: NodeJS.ProcessEnv): number {
+  const value = Number(env.PNLX_NOIR_PROVER_TIMEOUT_MS ?? DEFAULT_NOIR_COMMAND_TIMEOUT_MS);
+  if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_NOIR_COMMAND_TIMEOUT_MS) {
+    throw new Error("PNLX_NOIR_PROVER_TIMEOUT_MS must be a positive integer no greater than 900000");
   }
+  return value;
 }
 
-function runAsync(
-  command: string,
-  args: string[],
-  cwd: string,
-  env: NodeJS.ProcessEnv = process.env,
+function terminateProcessGroup(pid: number | undefined): void {
+  if (!pid) return;
+  try { process.kill(process.platform === "win32" ? pid : -pid, "SIGKILL"); }
+  catch { /* The completed process group may already have exited. */ }
+}
+
+export function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): void {
+  const timeout = commandTimeoutMs(env);
+  let result: ReturnType<typeof spawnSync>;
+  try {
+    result = spawnSync(command, args, {
+      cwd, env, timeout, killSignal: "SIGKILL",
+      // Tool output can contain witness fields. Discard it rather than retaining or exposing it.
+      stdio: "ignore", maxBuffer: 65_536,
+    });
+  } catch { throw new Error("Noir prover command failed to start"); }
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+    throw new Error("Noir prover command deadline exceeded");
+  }
+  if (result.status !== 0) throw new Error("Noir prover command failed");
+}
+
+export async function runAsync(
+  command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
+  const timeout = commandTimeoutMs(env);
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, env });
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.setEncoding("utf8");
-    child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr?.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    child.on("error", reject);
-    child.on("close", (status) => {
-      if (status === 0) return resolve();
-      reject(new Error(`${command} ${args.join(" ")} failed\n${stdout}\n${stderr}`.trim()));
-    });
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, args, {
+        cwd, env, detached: process.platform !== "win32", stdio: "ignore",
+      });
+    } catch { reject(new Error("Noir prover command failed to start")); return; }
+    let completed = false;
+    const timer = setTimeout(() => finish(new Error("Noir prover command deadline exceeded")), timeout);
+    function finish(error?: Error): void {
+      if (completed) return;
+      completed = true;
+      clearTimeout(timer);
+      terminateProcessGroup(child.pid);
+      if (error) reject(error);
+      else resolve();
+    }
+    child.on("error", () => finish(new Error("Noir prover command failed to start")));
+    child.on("close", (status) => finish(status === 0 ? undefined : new Error("Noir prover command failed")));
   });
 }
 
@@ -93,9 +118,13 @@ function artifactName(circuit: CircuitId, name?: string): string {
 function tomlValue(value: ProverValue): string {
   if (Array.isArray(value)) return `[${value.map(tomlValue).join(", ")}]`;
   if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value === "bigint") return value.toString();
+  if (typeof value === "bigint") {
+    // TOML integers are signed 64-bit; Noir also accepts quoted decimal fields/u128s.
+    return value > 9_223_372_036_854_775_807n || value < -9_223_372_036_854_775_808n
+      ? JSON.stringify(value.toString()) : value.toString();
+  }
   if (typeof value === "number") return Math.trunc(value).toString();
-  if (/^-?\d+$/.test(value)) return value;
+  if (/^-?\d+$/.test(value)) return tomlValue(BigInt(value));
   return JSON.stringify(value);
 }
 

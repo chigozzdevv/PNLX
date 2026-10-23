@@ -3,6 +3,7 @@ import type { IntentRecord, IntentValidityRecord, IntentValidityWitness, TradeIn
 export interface CreateIntentInput {
   intent: TradeIntent;
   validity: IntentValidityRecord;
+  conditionalPolicy?: unknown;
 }
 
 export type ProveAndSubmitIntentInput = IntentValidityWitness;

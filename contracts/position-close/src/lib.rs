@@ -7,7 +7,7 @@ use position_state_interface::{AppendReceipt, PositionStateClient};
 use proof_ledger_interface::ProofLedgerClient;
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
-    contract, contractimpl, contracttype, Address, Bytes, BytesN, Env, IntoVal, Symbol, Val, Vec,
+    contract, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env, IntoVal, Symbol, Val, Vec,
     U256,
 };
 
@@ -21,6 +21,7 @@ const BN254_SCALAR_MODULUS_BE: [u8; 32] = [
 #[contracttype]
 pub enum DataKey {
     Close(BytesN<32>),
+    ClosedLedger(BytesN<32>),
     PositionSpent(BytesN<32>),
     ConditionalOrder,
     Governance,
@@ -28,6 +29,7 @@ pub enum DataKey {
     PositionState,
     ProofLedger,
     Circuit,
+    PairCircuit,
     SecurePool,
 }
 
@@ -57,6 +59,20 @@ pub struct CloseArgs {
 
 #[derive(Clone)]
 #[contracttype]
+pub struct PairCloseArgs {
+    pub market_id: BytesN<32>,
+    pub mark_price: i128,
+    pub liquidation: bool,
+    pub position_root: BytesN<32>,
+    pub position_commitments: Vec<BytesN<32>>,
+    pub position_nullifiers: Vec<BytesN<32>>,
+    pub close_commitments: Vec<BytesN<32>>,
+    pub new_position_commitments: Vec<BytesN<32>>,
+    pub margin_output_commitments: Vec<BytesN<32>>,
+}
+
+#[derive(Clone)]
+#[contracttype]
 pub struct PositionCloseMeta {
     pub market_id: BytesN<32>,
     pub mark_price: i128,
@@ -81,6 +97,25 @@ pub trait ShieldedPoolInterface {
 
 #[contractimpl]
 impl PositionClose {
+    pub fn configure_pair_circuit(env: Env, circuit_id: BytesN<32>) {
+        validate_hash(&env, &circuit_id);
+        let governance_id: Address = env.storage().persistent().get(&DataKey::Governance)
+            .unwrap_or_else(|| panic!("not initialized"));
+        GovernanceClient::new(&env, &governance_id).admin().require_auth();
+        if env.storage().persistent().has(&DataKey::PairCircuit) {
+            panic!("pair circuit already configured");
+        }
+        env.storage().persistent().set(&DataKey::PairCircuit, &circuit_id);
+    }
+
+    pub fn settle_pair_proven(env: Env, args: PairCloseArgs, proof: ProofMeta) {
+        settle_proven_pair(env, args, proof, false);
+    }
+
+    pub fn settle_pair_conditional_proven(env: Env, args: PairCloseArgs, proof: ProofMeta) {
+        settle_proven_pair(env, args, proof, true);
+    }
+
     pub fn configure_secure_pool(env: Env, pool: Address) {
         let governance_id: Address = env.storage().persistent().get(&DataKey::Governance)
             .unwrap_or_else(|| panic!("not initialized"));
@@ -200,6 +235,16 @@ impl PositionClose {
             .has(&DataKey::Close(close_commitment))
     }
 
+    pub fn closed_ledger(env: Env, close_commitment: BytesN<32>) -> u32 {
+        env.storage().persistent().get(&DataKey::ClosedLedger(close_commitment)).unwrap_or(0)
+    }
+
+    pub fn output_position_index(env: Env, close_commitment: BytesN<32>) -> u32 {
+        let meta:PositionCloseMeta=env.storage().persistent().get(&DataKey::Close(close_commitment))
+            .unwrap_or_else(||panic!("unknown close"));
+        meta.output_position_index
+    }
+
     pub fn is_position_spent(env: Env, position_nullifier: BytesN<32>) -> bool {
         env.storage()
             .persistent()
@@ -231,6 +276,103 @@ fn settle_pair(env: Env, trader: CloseArgs, maker: CloseArgs, conditional: bool)
     );
 }
 
+fn settle_proven_pair(env: Env, args: PairCloseArgs, proof: ProofMeta, conditional: bool) {
+    validate_hash(&env, &args.market_id);
+    validate_hash(&env, &args.position_root);
+    let arrays = [&args.position_commitments, &args.position_nullifiers,
+        &args.close_commitments, &args.new_position_commitments, &args.margin_output_commitments];
+    for values in arrays {
+        if values.len() != 2 { panic!("paired close requires two positions"); }
+        for value in values.iter() { validate_hash(&env, &value); }
+        if values.get_unchecked(0) == values.get_unchecked(1) {
+            panic!("paired close inputs overlap");
+        }
+    }
+    if args.mark_price <= 0 { panic!("invalid mark price"); }
+    validate_oracle_mark_price(&env, &args.market_id, args.mark_price);
+    let state_id: Address = env.storage().persistent().get(&DataKey::PositionState)
+        .unwrap_or_else(|| panic!("not initialized"));
+    let state = PositionStateClient::new(&env, &state_id);
+    let first = args.position_commitments.get_unchecked(0);
+    let second = args.position_commitments.get_unchecked(1);
+    let link = state.pair(&first).unwrap_or_else(|| panic!("position pair not registered"));
+    let reverse = state.pair(&second).unwrap_or_else(|| panic!("position pair not registered"));
+    if link.counterparty != second || reverse.counterparty != first
+        || link.market_id != args.market_id || reverse.market_id != args.market_id
+        || link.asset_digest != reverse.asset_digest {
+        panic!("position pair mismatch");
+    }
+    let market_id: Address = env.storage().persistent().get(&DataKey::MarketContract)
+        .unwrap_or_else(|| panic!("not initialized"));
+    let market = MarketClient::new(&env, &market_id);
+    let funding = market.funding_index(&args.market_id);
+    let maintenance = market.maintenance_rate(&args.market_id);
+    if maintenance <= 0 || maintenance > 1_000_000 || funding == i128::MIN {
+        panic!("invalid market risk configuration");
+    }
+    let pair_circuit: BytesN<32> = env.storage().persistent().get(&DataKey::PairCircuit)
+        .unwrap_or_else(|| panic!("pair circuit not configured"));
+    validate_proof_for_circuit(&env, &proof, &pair_circuit);
+    if proof.public_input_hash != pair_public_input_hash(&env, &args, &link.asset_digest,
+        funding.unsigned_abs(), funding < 0, maintenance as u128) {
+        panic!("public input mismatch");
+    }
+    if conditional {
+        if args.liquidation { panic!("conditional liquidation unsupported"); }
+        validate_conditional_trigger(&env, &args.market_id,
+            &args.position_nullifiers.get_unchecked(0), &args.close_commitments.get_unchecked(0));
+    }
+    let pool_id: Address = env.storage().persistent().get(&DataKey::SecurePool)
+        .unwrap_or_else(|| panic!("secure pool not configured"));
+    let writer = env.current_contract_address();
+    for i in 0..2 {
+        let close = args.close_commitments.get_unchecked(i);
+        let nullifier = args.position_nullifiers.get_unchecked(i);
+        if env.storage().persistent().has(&DataKey::Close(close.clone())) {
+            panic!("close already settled");
+        }
+        if env.storage().persistent().has(&DataKey::PositionSpent(nullifier.clone())) {
+            panic!("position already spent");
+        }
+        let position = args.position_commitments.get_unchecked(i);
+        let new_position = args.new_position_commitments.get_unchecked(i);
+        let output = args.margin_output_commitments.get_unchecked(i);
+        let appended = spend_and_append_position(&env, &args.position_root, &position,
+            &nullifier, &new_position);
+        authorize_as_writer(&env, pool_id.clone(), "append_secure_note",
+            Vec::from_array(&env, [writer.clone().into_val(&env), output.clone().into_val(&env)]));
+        ShieldedPoolClient::new(&env, &pool_id).append_secure_note(&writer, &output);
+        env.storage().persistent().set(&DataKey::Close(close.clone()), &PositionCloseMeta {
+            market_id: args.market_id.clone(), mark_price: args.mark_price,
+            position_commitment: position, position_nullifier: nullifier.clone(),
+            position_root: args.position_root.clone(), new_position_commitment: new_position,
+            output_position_index: appended.first_index, output_position_root: appended.root,
+            margin_output_commitment: output, proof: proof.clone(),
+        });
+        env.storage().persistent().set(&DataKey::ClosedLedger(close.clone()), &env.ledger().sequence());
+        env.events().publish((symbol_short!("pairclose"),close),nullifier.clone());
+        env.storage().persistent().set(&DataKey::PositionSpent(nullifier), &true);
+    }
+}
+
+fn pair_public_input_hash(env: &Env, args: &PairCloseArgs, asset_digest: &BytesN<32>,
+    funding_abs: u128, funding_negative: bool, maintenance: u128) -> BytesN<32> {
+    let mut fields = Bytes::new(env);
+    append_field(env, &mut fields, &args.market_id);
+    append_field(env, &mut fields, asset_digest);
+    append_u128_field(env, &mut fields, args.mark_price as u128);
+    append_u128_field(env, &mut fields, funding_abs);
+    append_u128_field(env, &mut fields, funding_negative as u128);
+    append_u128_field(env, &mut fields, maintenance);
+    append_u128_field(env, &mut fields, args.liquidation as u128);
+    append_field(env, &mut fields, &args.position_root);
+    for values in [&args.position_commitments, &args.position_nullifiers,
+        &args.close_commitments, &args.new_position_commitments, &args.margin_output_commitments] {
+        for value in values.iter() { append_field(env, &mut fields, &value); }
+    }
+    env.crypto().sha256(&fields).to_bytes()
+}
+
 fn settle_position_close(
     env: Env,
     market_id: BytesN<32>,
@@ -258,6 +400,7 @@ fn settle_position_close(
     validate_proof(&env, &proof);
     validate_public_inputs(
         &env,
+        &market_id,
         mark_price,
         &position_root,
         &position_commitment,
@@ -279,41 +422,9 @@ fn settle_position_close(
     if env.storage().persistent().has(&spent_key) {
         panic!("position already spent");
     }
-    let appended = spend_and_append_position(
-        &env,
-        &position_root,
-        &position_commitment,
-        &position_nullifier,
-        &new_position_commitment,
-    );
-    if let Some(pool_id) = env.storage().persistent().get::<_, Address>(&DataKey::SecurePool) {
-        let writer = env.current_contract_address();
-        authorize_as_writer(
-            &env,
-            pool_id.clone(),
-            "append_secure_note",
-            Vec::from_array(&env, [writer.clone().into_val(&env),
-                margin_output_commitment.clone().into_val(&env)]),
-        );
-        ShieldedPoolClient::new(&env, &pool_id).append_secure_note(&writer, &margin_output_commitment);
-    }
-
-    env.storage().persistent().set(
-        &close_key,
-        &PositionCloseMeta {
-            market_id,
-            mark_price,
-            position_commitment,
-            position_nullifier: position_nullifier.clone(),
-            position_root,
-            new_position_commitment,
-            output_position_index: appended.first_index,
-            output_position_root: appended.root,
-            margin_output_commitment,
-            proof,
-        },
-    );
-    env.storage().persistent().set(&spent_key, &true);
+    // V1 single-leg proofs cannot prove that a profit is funded by its counterparty.
+    // The combined proof is the supported settlement path for the current model.
+    panic!("paired settlement required");
 }
 
 fn spend_and_append_position(
@@ -411,18 +522,19 @@ fn validate_conditional_trigger(
 }
 
 fn validate_proof(env: &Env, proof: &ProofMeta) {
+    let circuit_id: BytesN<32> = env.storage().persistent().get(&DataKey::Circuit)
+        .unwrap_or_else(|| panic!("not initialized"));
+    validate_proof_for_circuit(env, proof, &circuit_id);
+}
+
+fn validate_proof_for_circuit(env: &Env, proof: &ProofMeta, circuit_id: &BytesN<32>) {
     validate_hash(env, &proof.circuit_id);
     validate_hash(env, &proof.circuit_hash);
     validate_hash(env, &proof.verifier_hash);
     validate_hash(env, &proof.public_input_hash);
     validate_hash(env, &proof.proof_digest);
 
-    let circuit_id: BytesN<32> = env
-        .storage()
-        .persistent()
-        .get(&DataKey::Circuit)
-        .unwrap_or_else(|| panic!("not initialized"));
-    if proof.circuit_id != circuit_id {
+    if proof.circuit_id != *circuit_id {
         panic!("circuit mismatch");
     }
 
@@ -436,7 +548,7 @@ fn validate_proof(env: &Env, proof: &ProofMeta) {
         panic!("paused");
     }
 
-    let expected = governance.verifier(&circuit_id);
+    let expected = governance.verifier(circuit_id);
     if proof.verifier_hash != expected {
         panic!("verifier mismatch");
     }
@@ -459,6 +571,7 @@ fn validate_proof(env: &Env, proof: &ProofMeta) {
 
 fn validate_public_inputs(
     env: &Env,
+    market_id: &BytesN<32>,
     mark_price: i128,
     position_root: &BytesN<32>,
     position_commitment: &BytesN<32>,
@@ -468,6 +581,9 @@ fn validate_public_inputs(
     margin_output_commitment: &BytesN<32>,
     proof: &ProofMeta,
 ) {
+    let market_address: Address = env.storage().persistent().get(&DataKey::MarketContract).unwrap();
+    let funding = MarketClient::new(env, &market_address).funding_index(market_id);
+    if funding == i128::MIN { panic!("invalid funding index"); }
     let expected = position_close_public_input_hash(
         env,
         mark_price as u128,
@@ -478,6 +594,9 @@ fn validate_public_inputs(
         close_commitment,
         new_position_commitment,
         margin_output_commitment,
+        market_id,
+        funding.unsigned_abs(),
+        funding < 0,
     );
     if proof.public_input_hash != expected {
         panic!("public input mismatch");
@@ -494,6 +613,9 @@ fn position_close_public_input_hash(
     close_commitment: &BytesN<32>,
     new_position_commitment: &BytesN<32>,
     margin_output_commitment: &BytesN<32>,
+    market_id: &BytesN<32>,
+    funding_abs: u128,
+    funding_negative: bool,
 ) -> BytesN<32> {
     let mut public_inputs = Bytes::new(env);
     append_u128_field(env, &mut public_inputs, mark_price);
@@ -504,6 +626,9 @@ fn position_close_public_input_hash(
     append_field(env, &mut public_inputs, close_commitment);
     append_field(env, &mut public_inputs, new_position_commitment);
     append_field(env, &mut public_inputs, margin_output_commitment);
+    append_field(env, &mut public_inputs, market_id);
+    append_u128_field(env, &mut public_inputs, funding_abs);
+    append_u128_field(env, &mut public_inputs, funding_negative as u128);
     env.crypto().sha256(&public_inputs).to_bytes()
 }
 
@@ -533,7 +658,7 @@ fn validate_hash(env: &Env, value: &BytesN<32>) {
 mod tests {
     extern crate std;
 
-    use super::{CloseArgs, PositionClose, PositionCloseClient, ProofMeta};
+    use super::{CloseArgs, PairCloseArgs, PositionClose, PositionCloseClient, ProofMeta};
     use conditional_order::{
         ConditionalOrder, ConditionalOrderClient as ConditionalOrderRegistryClient,
         ProofMeta as ConditionalProofMeta,
@@ -564,7 +689,79 @@ mod tests {
     }
 
     #[test]
-    fn records_position_close() {
+    fn combined_pair_settlement_is_atomic_and_bound_to_registered_pair_and_market() {
+        let env = Env::default();
+        env.budget().reset_unlimited();
+        env.ledger().with_mut(|ledger|ledger.sequence_number=114);
+        let id = env.register(PositionClose, ());
+        let client = PositionCloseClient::new(&env, &id);
+        let setup = setup_protocol(&env, &id, None, None);
+        let state = PositionStateClient::new(&env, &setup.position_state);
+        let first = position_commitment(&env);
+        let second = BytesN::from_array(&env, &[30; 32]);
+        let market = BytesN::from_array(&env, &[1; 32]);
+        let asset = BytesN::from_array(&env, &[31; 32]);
+        let root = state.append(&id, &second).root;
+        state.register_pair(&id, &first, &second, &market, &asset);
+        let pool_id = env.register(ShieldedPool, ());
+        let pool = PoolClient::new(&env, &pool_id);
+        pool.init(&setup.governance, &setup.proof_ledger,
+            &BytesN::from_array(&env, &[21; 32]), &BytesN::from_array(&env, &[22; 32]));
+        pool.configure_secure_note_circuits(&BytesN::from_array(&env, &[23; 32]),
+            &BytesN::from_array(&env, &[24; 32]));
+        pool.disable_legacy_notes();
+        pool.set_writer(&id, &true);
+        client.init(&setup.governance, &setup.proof_ledger, &setup.conditional_order,
+            &setup.market, &setup.position_state, &circuit(&env));
+        client.configure_secure_pool(&pool_id);
+        let pair_circuit = BytesN::from_array(&env, &[32; 32]);
+        client.configure_pair_circuit(&pair_circuit);
+        GovernanceClient::new(&env, &setup.governance).set_verifier(
+            &pair_circuit, &verifier(&env), &setup.position_authority);
+        let args = PairCloseArgs {
+            market_id: market, mark_price: mark_price(&env), liquidation: false,
+            position_root: root,
+            position_commitments: soroban_sdk::vec![&env, first.clone(), second.clone()],
+            position_nullifiers: soroban_sdk::vec![&env, BytesN::from_array(&env, &[33;32]), BytesN::from_array(&env, &[34;32])],
+            close_commitments: soroban_sdk::vec![&env, BytesN::from_array(&env, &[35;32]), BytesN::from_array(&env, &[36;32])],
+            new_position_commitments: soroban_sdk::vec![&env, BytesN::from_array(&env, &[37;32]), BytesN::from_array(&env, &[38;32])],
+            margin_output_commitments: soroban_sdk::vec![&env, BytesN::from_array(&env, &[39;32]), BytesN::from_array(&env, &[40;32])],
+        };
+        let proof = ProofMeta {
+            circuit_id: pair_circuit, circuit_hash: BytesN::from_array(&env, &[41;32]),
+            verifier_hash: verifier(&env), proof_digest: BytesN::from_array(&env, &[42;32]),
+            public_input_hash: super::pair_public_input_hash(&env, &args, &asset, 0, false, 100_000),
+        };
+        assert!(client.try_settle_pair_proven(&args, &proof).is_err());
+        record_position_proof(&env, &setup, &proof);
+        let mut tampered = args.clone();
+        tampered.liquidation = true;
+        assert!(client.try_settle_pair_proven(&tampered, &proof).is_err());
+        tampered = args.clone();
+        tampered.position_commitments.set(1, BytesN::from_array(&env, &[43;32]));
+        assert!(client.try_settle_pair_proven(&tampered, &proof).is_err());
+        assert!(client.try_settle_pair_conditional_proven(&args, &proof).is_err());
+        assert_eq!(pool.secure_note_count(), 0);
+        assert!(!state.is_commitment_spent(&first));
+        env.set_auths(&[]);
+        client.settle_pair_proven(&args, &proof);
+        assert_eq!(pool.secure_note_count(), 2);
+        assert!(state.is_commitment_spent(&first));
+        assert!(state.is_commitment_spent(&second));
+        for i in 0..2 {
+            assert!(client.is_settled(&args.close_commitments.get_unchecked(i)));
+            assert_eq!(client.closed_ledger(&args.close_commitments.get_unchecked(i)),114);
+            assert_eq!(client.output_position_index(&args.close_commitments.get_unchecked(i)),2+i);
+            assert!(client.is_position_spent(&args.position_nullifiers.get_unchecked(i)));
+            assert!(pool.has_commitment(&args.margin_output_commitments.get_unchecked(i)));
+        }
+        assert!(client.try_settle_pair_proven(&args, &proof).is_err());
+        assert_eq!(pool.secure_note_count(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "paired settlement required")]
+    fn single_leg_conditional_proof_cannot_release_collateral() {
         let env = Env::default();
         let id = env.register(PositionClose, ());
         let client = PositionCloseClient::new(&env, &id);
@@ -611,7 +808,8 @@ mod tests {
     }
 
     #[test]
-    fn records_manual_position_close_without_conditional_trigger() {
+    #[should_panic(expected = "paired settlement required")]
+    fn single_leg_manual_proof_cannot_release_collateral() {
         let env = Env::default();
         let id = env.register(PositionClose, ());
         let client = PositionCloseClient::new(&env, &id);
@@ -652,7 +850,8 @@ mod tests {
     }
 
     #[test]
-    fn close_registers_a_secure_note_at_the_same_time() {
+    #[should_panic(expected = "paired settlement required")]
+    fn single_leg_proof_cannot_append_secure_note() {
         let env = Env::default();
         let id = env.register(PositionClose, ());
         let client = PositionCloseClient::new(&env, &id);
@@ -686,7 +885,8 @@ mod tests {
     }
 
     #[test]
-    fn paired_close_spends_both_positions_at_one_mark() {
+    #[should_panic(expected = "paired settlement required")]
+    fn two_independent_proofs_do_not_establish_pair_conservation() {
         let env = Env::default();
         let id = env.register(PositionClose, ());
         let client = PositionCloseClient::new(&env, &id);
@@ -826,8 +1026,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "position already spent")]
-    fn rejects_duplicate_position_nullifier() {
+    #[should_panic(expected = "paired settlement required")]
+    fn legacy_close_must_use_combined_proof_before_spending() {
         let env = Env::default();
         let id = env.register(PositionClose, ());
         let client = PositionCloseClient::new(&env, &id);
@@ -1135,6 +1335,9 @@ mod tests {
                 close,
                 new_position,
                 margin_output,
+                &BytesN::from_array(env, &[1; 32]),
+                0,
+                false,
             ),
             proof_digest: BytesN::from_array(env, &[9; 32]),
         }
@@ -1206,6 +1409,7 @@ mod tests {
             verifier_hash: conditional_verifier(env),
             public_input_hash: conditional_order::conditional_close_public_input_hash(
                 env,
+                &BytesN::from_array(env, &[1; 32]),
                 mark_price(env) as u128,
                 nullifier,
                 close,

@@ -3,6 +3,9 @@ import {
   circuitPositionNullifier,
   digestToFieldHex,
   hashFields,
+  fieldHashPair,
+  fieldHex,
+  positionSecrets,
 } from "@pnlx/crypto";
 import type { Fill, Hex, PositionNote, PrivateMatchIntent } from "@pnlx/protocol-types";
 import { fillFees } from "@pnlx/market-math";
@@ -54,11 +57,12 @@ export class BatchMatcherService {
       const maker = long.sequence <= short.sequence ? long : short;
       const longDelta = maker === long ? fees.makerRebate : -fees.grossTakerFee;
       const shortDelta = maker === short ? fees.makerRebate : -fees.grossTakerFee;
-      const longFill = createFill(input, long, size, price, fills.length, longDelta);
-      const shortFill = createFill(input, short, size, price, fills.length + 1, shortDelta);
+      const reverse = (BigInt(fieldHashPair(long.intent.positionSeed, short.intent.positionSeed)) & 1n) === 1n;
+      const longFill = createFill(input, long, size, price, fills.length + (reverse ? 1 : 0), longDelta);
+      const shortFill = createFill(input, short, size, price, fills.length + (reverse ? 0 : 1), shortDelta);
       const execution = createExecution(long, short, size, price, longFill, shortFill, fees);
 
-      fills.push(longFill, shortFill);
+      fills.push(...(reverse ? [shortFill, longFill] : [longFill, shortFill]));
       executions.push(execution);
       spentNullifiers.add(long.intent.noteNullifier);
       spentNullifiers.add(short.intent.noteNullifier);
@@ -139,6 +143,8 @@ function createResiduals(input: MatchInput, orders: BookOrder[]): PrivateMatchIn
         noteChangeCommitment: ZERO_HEX,
         noteNullifier: residualNullifier(order),
         ownerCommitment: order.intent.ownerCommitment,
+        ownerDigest: order.intent.ownerDigest,
+        positionSeed: fieldHashPair(order.intent.positionSeed, residualCommitment(order)),
         signedSize: order.side === "long" ? order.remaining : -order.remaining,
         sourceIntentCommitment: order.intent.intentCommitment,
       };
@@ -227,11 +233,9 @@ function createFill(input: MatchInput, order: BookOrder, size: bigint, price: bi
     rho: `${order.intent.intentCommitment}:position:${fillIndex}`,
     blinding: `${order.intent.intentCommitment}:blinding:${fillIndex}`,
   };
-  const marketDigest = digestToFieldHex(`market:${position.marketId}`);
-  const ownerDigest = digestToFieldHex(`owner:${position.owner}`);
-  const rhoDigest = digestToFieldHex(`rho:${position.rho}`);
-  const blinding = digestToFieldHex(`blinding:${position.blinding}`);
-  const spendSecretDigest = digestToFieldHex(`spend:${position.owner}:${position.rho}`);
+  const marketDigest = fieldHex(BigInt(hashFields("market-id", [position.marketId])));
+  const ownerDigest = order.intent.ownerDigest;
+  const { rhoDigest, blinding, spendSecretDigest } = positionSecrets(order.intent.positionSeed, fillIndex);
   const positionCommitment = circuitPositionCommitment({
     blinding,
     entryPrice: position.entryPrice,
@@ -283,12 +287,7 @@ function residualCommitment(order: BookOrder): Hex {
 }
 
 function residualNullifier(order: BookOrder): Hex {
-  return hashFields("residual-nullifier", [
-    order.intent.intentCommitment,
-    order.filled,
-    order.remaining,
-    order.allocatedMargin,
-  ]);
+  return fieldHashPair(0x504e4c585245534e554cn, BigInt(residualCommitment(order)));
 }
 
 function ceilDiv(value: bigint, divisor: bigint): bigint {

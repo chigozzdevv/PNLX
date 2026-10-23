@@ -7,6 +7,8 @@ import {
   commitMargin,
   commitPosition,
   digestToFieldHex,
+  fieldHex,
+  hashFields,
   nullifier,
   secureMarginCommitment,
   secureMarginNullifier,
@@ -120,12 +122,16 @@ export function createCircuitPositionNote(input: {
   spendSecret: string;
   rho: string;
   blinding: string;
+  ownerDigest?: Hex;
+  rhoDigest?: Hex;
+  blindingDigest?: Hex;
+  spendSecretDigest?: Hex;
 }) {
-  const marketDigest = digestToFieldHex(`market:${input.marketId}`);
-  const ownerDigest = digestToFieldHex(`owner:${input.owner}`);
-  const rhoDigest = digestToFieldHex(`rho:${input.rho}`);
-  const blinding = digestToFieldHex(`blinding:${input.blinding}`);
-  const spendSecretDigest = digestToFieldHex(`spend:${input.spendSecret}`);
+  const marketDigest = fieldHex(BigInt(hashFields("market-id", [input.marketId])));
+  const ownerDigest = input.ownerDigest ?? digestToFieldHex(`owner:${input.owner}`);
+  const rhoDigest = input.rhoDigest ?? digestToFieldHex(`rho:${input.rho}`);
+  const blinding = input.blindingDigest ?? digestToFieldHex(`blinding:${input.blinding}`);
+  const spendSecretDigest = input.spendSecretDigest ?? digestToFieldHex(`spend:${input.spendSecret}`);
   const commitment = circuitPositionCommitment({
     blinding,
     entryPrice: input.entryPrice,

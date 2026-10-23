@@ -4,6 +4,7 @@ import { createSecureMarginNote, randomLabel } from "@/lib/private-note";
 import { backUpPrivateMarginNote } from "@/lib/private-note-backup";
 import {
   privateMarginNotes,
+  currentPrivateMarginNoteRuntimeScope,
   finalizePrivateMarginClaim,
   privateMarginNoteRuntimeScopeFromHealth,
   savePrivateMarginNote,
@@ -24,6 +25,8 @@ interface ClaimedResidual {
   amount: string;
   commitment: Hex;
 }
+
+const recoveries = new Map<string, Promise<StoredPrivateMarginNote | undefined>>();
 
 export async function recoverCancelledResiduals(input: {
   cancelledIntentCommitments: Hex[];
@@ -54,12 +57,32 @@ export async function recoverResidualClaim(input: {
   session: WalletSession;
 }): Promise<StoredPrivateMarginNote | undefined> {
   const health = await pnlxGet<PrivateMarginNoteRuntimeHealth>("/health", input.session.token);
-  setPrivateMarginNoteRuntimeScope(privateMarginNoteRuntimeScopeFromHealth(health));
+  const scope = privateMarginNoteRuntimeScopeFromHealth(health);
+  if (!scope) throw new Error("Private note runtime scope is unavailable");
+  setPrivateMarginNoteRuntimeScope(scope);
+  const key = `${scope}:${input.session.ownerCommitment.toLowerCase()}:${input.intentCommitment.toLowerCase()}`;
+  const active = recoveries.get(key);
+  if (active) return active;
+  const operation = recoverResidualClaimInScope(input, scope);
+  recoveries.set(key, operation);
+  try {
+    return await operation;
+  } finally {
+    if (recoveries.get(key) === operation) recoveries.delete(key);
+  }
+}
+
+async function recoverResidualClaimInScope(
+  input: Parameters<typeof recoverResidualClaim>[0],
+  scope: string,
+): Promise<StoredPrivateMarginNote | undefined> {
   const { intentCommitment, session } = input;
   const details = await pnlxPost<ResidualClaimDetails>(
     "/orders/residual-claim", { intentCommitment }, session.token,
   );
+  assertRecoveryScope(scope);
   const liveAmount = BigInt(details.amount);
+  if (liveAmount < 0n) throw new Error("Invalid residual recovery amount");
   const candidates = privateMarginNotes(session.ownerCommitment).filter(
     (note) => note.claimSourceIntentCommitment?.toLowerCase() === intentCommitment.toLowerCase(),
   );
@@ -77,9 +100,13 @@ export async function recoverResidualClaim(input: {
   if (existing && (BigInt(existing.amount) !== amount || existing.assetDigest.toLowerCase() !== details.tokenDigest.toLowerCase())) {
     throw new Error("The saved recovery note does not match the on-chain residual");
   }
+  if (details.claimedCommitment && existing) {
+    return finalizePrivateMarginClaim(intentCommitment, existing.commitment, session.ownerCommitment);
+  }
 
-  const note = existing ?? await makeClaimingNote(amount, details.tokenDigest, input);
+  const note = existing ?? await makeClaimingNote(amount, details.tokenDigest, input, scope);
   await (input.backUpNote ?? backUpPrivateMarginNote)(note, session);
+  assertRecoveryScope(scope);
   const provider = input.proofProvider ?? defaultClientProofProvider();
   if (!provider) throw new Error("Client proof provider is not configured");
   const depositProof = await registerProofBundle(
@@ -95,12 +122,14 @@ export async function recoverResidualClaim(input: {
     session.token,
   );
   assertDepositProof(depositProof, note);
+  assertRecoveryScope(scope);
   const claimed = await pnlxPost<ClaimedResidual>(
     "/orders/claim-residual", { intentCommitment, depositProof }, session.token,
   );
   if (claimed.commitment.toLowerCase() !== note.commitment.toLowerCase() || BigInt(claimed.amount) !== amount) {
     throw new Error("Recovery confirmation does not match the saved private note");
   }
+  assertRecoveryScope(scope);
   return finalizePrivateMarginClaim(intentCommitment, note.commitment, session.ownerCommitment);
 }
 
@@ -108,6 +137,7 @@ async function makeClaimingNote(
   amount: bigint,
   assetDigest: Hex,
   input: { intentCommitment: Hex; session: WalletSession },
+  runtimeScope: string,
 ): Promise<StoredPrivateMarginNote> {
   const circuitNote = await createSecureMarginNote({
     amount,
@@ -117,15 +147,23 @@ async function makeClaimingNote(
     rho: randomLabel("residual-rho"),
     spendSecret: randomLabel("residual-spend"),
   });
+  assertRecoveryScope(runtimeScope);
   return savePrivateMarginNote({
     ...circuitNote,
     amount: amount.toString(),
     claimSourceIntentCommitment: input.intentCommitment,
     noteFormat: "secure",
+    runtimeScope,
     ownerCommitment: input.session.ownerCommitment,
     status: "claiming",
     walletAddress: input.session.address,
   });
+}
+
+function assertRecoveryScope(scope: string): void {
+  if (currentPrivateMarginNoteRuntimeScope() !== scope) {
+    throw new Error("Private note runtime changed during recovery. Return to the original network and retry.");
+  }
 }
 
 function assertDepositProof(record: DepositNoteProofRecord, note: StoredPrivateMarginNote): void {

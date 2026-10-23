@@ -4,5 +4,6 @@ export * from "./field-merkle";
 export * from "./field";
 export * from "./hash";
 export * from "./merkle";
+export * from "./matching-payload";
 export * from "./nullifiers";
 export * from "./secure-margin-note";

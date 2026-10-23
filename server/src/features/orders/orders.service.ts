@@ -107,6 +107,7 @@ export class OrdersService {
   }
 
   replace(input: ReplaceOrderInput, authenticated?: string): ReplaceOrderResult {
+    if (this.onchain?.enabled) throw new Error("on-chain order replacement requires the durable async path");
     const order = this.executor.store.assertOrderCancellable(input.intentCommitment);
     assertOrderOwner(order, authenticated);
     const replacementOwner = ownerCommitment(input.replacement.intent.owner);
@@ -122,6 +123,50 @@ export class OrdersService {
       relayTxHash(relay, "cancel"),
     );
     const replacementIntent = this.intents.submitValidated(input.replacement);
+    return { cancelledOrder, replacementIntent };
+  }
+
+  async replaceDurable(input:ReplaceOrderInput,authenticated?:string):Promise<ReplaceOrderResult> {
+    const store = this.executor.store;
+    const order = store.orderLifecycle.get(input.intentCommitment);
+    if (!order) throw new Error("unknown order");
+    assertOrderOwner(order, authenticated);
+    if (ownerCommitment(input.replacement.intent.owner).toLowerCase() !== order.ownerCommitment.toLowerCase()) {
+      throw new Error("replacement owner does not match cancelled order");
+    }
+    const pending = store.pendingIntentSubmissions.get(input.replacement.validity.intentCommitment);
+    if (order.status === "cancelled" && pending?.replacementOf !== input.intentCommitment &&
+        !store.intents.has(input.replacement.validity.intentCommitment)) throw new Error("order already cancelled");
+    if (order.status !== "cancelled") store.assertOrderCancellable(input.intentCommitment);
+    const replacementIntent = await this.intents.submitDurable(input.replacement, authenticated, {
+      replacementOf: input.intentCommitment,
+      beforeSubmit: async () => {
+        if (store.orderLifecycle.get(input.intentCommitment)?.status === "cancelled") return;
+        store.assertOrderCancellable(input.intentCommitment);
+        let relay: ReturnType<OnchainRelayService["cancelIntent"]> | undefined;
+        if (this.onchain?.enabled) {
+          if (!this.onchain.isIntentActiveAsync || !this.onchain.isSecureNullifierSpentAsync) {
+            throw new Error("exact cancellation recovery readers are required");
+          }
+          let cancelError: unknown;
+          if (await this.onchain.isIntentActiveAsync(input.intentCommitment)) {
+            try {
+              relay = this.onchain.cancelIntent(input.intentCommitment);
+              this.intents.assertSubmittedIntentRelay(relay, "cancel");
+            } catch (error) { cancelError = error; }
+          }
+          const active = await this.onchain.isIntentActiveAsync(input.intentCommitment);
+          const source = store.intents.get(input.intentCommitment) ?? store.residualOrders.get(input.intentCommitment);
+          if (!source) throw new Error("cancelled source intent is unavailable");
+          const spent = await this.onchain.isSecureNullifierSpentAsync(source.noteNullifier);
+          if (active || spent) throw cancelError ?? new Error("replacement cancellation is unconfirmed or source collateral was spent");
+        } else if (this.env.intentRegistryOnchainRequired) throw new Error("intent registry requires on-chain relay");
+        store.cancelOrder(input.intentCommitment, relayTxHash(relay, "cancel"));
+        await (store as { flush?: () => Promise<void> }).flush?.();
+      },
+    });
+    const cancelledOrder = store.orderLifecycle.get(input.intentCommitment)!;
+    if (cancelledOrder.status !== "cancelled") throw new Error("replacement source cancellation requires reconciliation");
     return { cancelledOrder, replacementIntent };
   }
 }

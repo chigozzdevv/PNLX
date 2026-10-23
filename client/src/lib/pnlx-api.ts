@@ -1,5 +1,12 @@
 import { apiPath } from "@/lib/api-path";
 
+export class PnlxApiError extends Error {
+  constructor(message: string, readonly status: number, readonly submissionRejected = false) {
+    super(message);
+    this.name = "PnlxApiError";
+  }
+}
+
 export async function pnlxPost<T>(
   path: string,
   data: unknown,
@@ -57,7 +64,8 @@ async function pnlxRequest<T>(
       !/<\/?[a-z][^>]*>|<!doctype/i.test((body as { error: string }).error)
         ? (body as { error: string }).error
         : "Trading service temporarily unavailable";
-    throw new Error(message);
+    const submissionRejected = Boolean(body && typeof body === "object" && "submissionRejected" in body && body.submissionRejected === true);
+    throw new PnlxApiError(message, response.status, submissionRejected);
   }
 
   return body as T;

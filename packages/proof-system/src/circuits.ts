@@ -16,6 +16,7 @@ export type CircuitId =
   | "liquidation-check"
   | "margin-check"
   | "position-close"
+  | "position-close-pair"
   | "position-transition"
   | "withdraw";
 
@@ -43,6 +44,7 @@ export const CIRCUITS: CircuitDef[] = [
   { id: "liquidation-check", packageName: "liquidation_check", dir: "circuits/liquidation-check" },
   { id: "margin-check", packageName: "margin_check", dir: "circuits/margin-check" },
   { id: "position-close", packageName: "position_close", dir: "circuits/position-close" },
+  { id: "position-close-pair", packageName: "position_close_pair", dir: "circuits/position-close-pair" },
   { id: "position-transition", packageName: "position_transition", dir: "circuits/position-transition" },
   { id: "withdraw", packageName: "withdraw", dir: "circuits/withdraw" },
 ];

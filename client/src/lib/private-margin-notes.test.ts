@@ -4,8 +4,11 @@ import { describe, expect, test } from "bun:test";
 import type { Hex } from "@/types/trading";
 import {
   planPrivateMarginNoteAllocations,
+  lockPrivateMarginNote,
+  markPrivateMarginNoteSpent,
   findPrivateMarginRepairCandidate,
   privateMarginNotes,
+  privateMarginNoteRuntimeScopeFromHealth,
   privatePendingBalance,
   privateReservedBalance,
   privateSpendableBalance,
@@ -432,6 +435,100 @@ describe("private margin note allocation", () => {
   });
 });
 
+describe("private note storage boundaries", () => {
+  test("does not invent a shared storage scope when runtime identity is unavailable", () => {
+    expect(privateMarginNoteRuntimeScopeFromHealth({})).toBeUndefined();
+    expect(privateMarginNoteRuntimeScopeFromHealth({ stellar: { network: "testnet" } })).toBeUndefined();
+    expect(privateMarginNoteRuntimeScopeFromHealth({ runtime: { clientStorageScope: "test:explicit" } })).toBe("test:explicit");
+  });
+
+  test("preserves the secure format when a confirmed change note is saved again", () => withNoteStorage(() => {
+    setPrivateMarginNoteRuntimeScope("test:confirmed-change");
+    const pending = savePrivateMarginNote({ ...note("change", 25n), status: "pending" });
+    savePrivateMarginNote({ ...pending, noteFormat: undefined, status: "available" });
+    expect(privateMarginNotes(OWNER)[0]?.noteFormat).toBe("secure");
+    expect(privateSpendableBalance(OWNER)).toBe(25n);
+  }));
+  test("keeps equal commitments in distinct runtime scopes and reconciles only the active scope", () => withNoteStorage(() => {
+    const intentCommitment = `0x${"ab".repeat(32)}` as Hex;
+    setPrivateMarginNoteRuntimeScope("test:first");
+    const source = savePrivateMarginNote({ ...note("same", 20n), lockedByIntentCommitment: intentCommitment, status: "locked" });
+    setPrivateMarginNoteRuntimeScope("test:second");
+    savePrivateMarginNote({ ...source, amount: "30", runtimeScope: "test:second", status: "locked" });
+    reconcilePrivateMarginNotes({ orders: [{ intentCommitment, status: "cancelled" }] });
+    expect(privateSpendableBalance(OWNER)).toBe(30n);
+    markPrivateMarginNoteSpent(source.commitment);
+    setPrivateMarginNoteRuntimeScope("test:first");
+    expect(privateMarginNotes(OWNER)[0]?.status).toBe("locked");
+    expect(privateMarginNotes(OWNER)[0]?.amount).toBe("20");
+    lockPrivateMarginNote(source.commitment, intentCommitment);
+    setPrivateMarginNoteRuntimeScope("test:second");
+    expect(privateMarginNotes(OWNER)[0]?.status).toBe("spent");
+  }));
+
+  test("does not allocate legacy notes or expose them as spendable secure collateral", () => withNoteStorage(() => {
+    setPrivateMarginNoteRuntimeScope("test:secure-only");
+    const legacy = { ...note("legacy", 100n), noteFormat: undefined };
+    savePrivateMarginNote(legacy);
+    expect(privateSpendableBalance(OWNER)).toBe(0n);
+    expect(() => planPrivateMarginNoteAllocations({ amount: 1n, notes: [legacy], ownerCommitment: OWNER })).toThrow("Deposit private USDC");
+  }));
+
+  test("compares hex identifiers consistently while preserving excluded inputs", () => withNoteStorage(() => {
+    setPrivateMarginNoteRuntimeScope("test:hex-case");
+    const saved = savePrivateMarginNote({ ...note("case", 40n), commitment: `0x${"Ab".repeat(32)}` });
+    expect(selectWithdrawablePrivateMarginNote({ commitment: saved.commitment.toLowerCase() as Hex, ownerCommitment: OWNER }).commitment).toBe(saved.commitment);
+    expect(() => planPrivateMarginNoteAllocations({ amount: 1n, excludedCommitments: [saved.commitment.toLowerCase() as Hex], ownerCommitment: OWNER })).toThrow("Deposit private USDC");
+  }));
+
+  test("preserves unreadable note storage and prevents overwriting recovery material", () => withNoteStorage((storage) => {
+    setPrivateMarginNoteRuntimeScope("test:corrupt");
+    const raw = "[{private note recovery material";
+    storage.setItem("pnlx.private.margin-notes.v1", raw);
+    expect(() => privateMarginNotes(OWNER)).toThrow("Private note storage is unreadable");
+    expect(() => savePrivateMarginNote(note("new", 1n))).toThrow("Private note storage is unreadable");
+    expect(storage.getItem("pnlx.private.margin-notes.v1")).toBe(raw);
+  }));
+
+  test("rejects stale repair amounts instead of releasing a changed allocation", () => withNoteStorage(() => {
+    setPrivateMarginNoteRuntimeScope("test:repair-race");
+    const intentCommitment = `0x${"ab".repeat(32)}` as Hex;
+    const source = savePrivateMarginNote({ ...note("source", 40n), lockedByIntentCommitment: intentCommitment, status: "locked" });
+    savePrivateMarginNote({ ...note("change", 10n), lockedByIntentCommitment: intentCommitment, status: "pending" });
+    const candidate = findPrivateMarginRepairCandidate({ hasActiveOrders: false, hasCancelledOrder: true, hasOpenPositions: false, ownerCommitment: OWNER });
+    expect(candidate).toBeDefined();
+    savePrivateMarginNote({ ...source, amount: "50" });
+    expect(repairPrivateMarginNotes(candidate!)).toBe(false);
+    expect(privateMarginNotes(OWNER).find((entry) => entry.commitment === source.commitment)?.status).toBe("locked");
+  }));
+
+  test("does not resurrect consumed source collateral when residual evidence accompanies cancellation", () => withNoteStorage(() => {
+    setPrivateMarginNoteRuntimeScope("test:cancel-after-partial");
+    const intentCommitment = `0x${"ab".repeat(32)}` as Hex;
+    const source = savePrivateMarginNote({ ...note("source", 40n), lockedByIntentCommitment: intentCommitment, status: "locked" });
+    savePrivateMarginNote({ ...note("change", 10n), lockedByIntentCommitment: intentCommitment, status: "pending" });
+    reconcilePrivateMarginNotes({ orders: [
+      { intentCommitment, status: "cancelled" },
+      { intentCommitment: `0x${"cd".repeat(32)}`, sourceIntentCommitment: intentCommitment, status: "cancelled" },
+    ] });
+    expect(privateMarginNotes(OWNER).find((entry) => entry.commitment === source.commitment)?.status).toBe("spent");
+    expect(privateSpendableBalance(OWNER)).toBe(10n);
+  }));
+});
+
+function withNoteStorage(run: (storage: MemoryStorage) => void): void {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const storage = new MemoryStorage();
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    dispatchEvent: () => true, localStorage: storage, sessionStorage: new MemoryStorage(),
+  } });
+  try { run(storage); } finally {
+    setPrivateMarginNoteRuntimeScope(undefined);
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
+}
+
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>();
 
@@ -463,6 +560,7 @@ class MemoryStorage implements Storage {
 function note(label: string, amount: bigint): StoredPrivateMarginNote {
   const digest = label.charCodeAt(0).toString(16).padStart(2, "0").repeat(32);
   return {
+    noteFormat: "secure",
     amount: amount.toString(),
     assetDigest: ASSET,
     blinding: `0x${digest}` as Hex,

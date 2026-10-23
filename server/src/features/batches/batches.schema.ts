@@ -137,6 +137,8 @@ function parsePrivateMatchIntents(value: unknown): CommitExternalBatchSettlement
       noteChangeCommitment: optionalHex(body.noteChangeCommitment) ?? ZERO_HEX,
       noteNullifier: String(body.noteNullifier) as `0x${string}`,
       ownerCommitment: String(body.ownerCommitment) as `0x${string}`,
+      ownerDigest: String(body.ownerDigest) as `0x${string}`,
+      positionSeed: String(body.positionSeed) as `0x${string}`,
       signedSize: BigInt(String(body.signedSize)),
       sourceIntentCommitment: optionalHex(body.sourceIntentCommitment),
     };

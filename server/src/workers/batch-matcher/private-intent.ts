@@ -1,4 +1,4 @@
-import { hashFields } from "@pnlx/crypto";
+import { circuitMatchingPayloadCommitment, fieldHex, hashFields } from "@pnlx/crypto";
 import type { Hex, IntentRecord, PrivateMatchIntent, ResidualOrderRecord, TradeIntent } from "@pnlx/protocol-types";
 
 const ZERO_HEX = "0x0" as Hex;
@@ -8,6 +8,8 @@ export function privateMatchIntentFromTradeIntent(input: {
   intentCommitment: Hex;
   noteChangeCommitment: Hex;
   ownerCommitment: Hex;
+  ownerDigest: Hex;
+  positionSeed: Hex;
 }): PrivateMatchIntent {
   return {
     batchId: input.intent.batchId,
@@ -18,22 +20,16 @@ export function privateMatchIntentFromTradeIntent(input: {
     noteChangeCommitment: input.noteChangeCommitment,
     noteNullifier: input.intent.noteNullifier,
     ownerCommitment: input.ownerCommitment,
+    ownerDigest: input.ownerDigest,
+    positionSeed: input.positionSeed,
     signedSize: input.intent.side === "long" ? input.intent.size : -input.intent.size,
   };
 }
 
 export function matchingPayloadCommitment(payload: PrivateMatchIntent): Hex {
-  return hashFields("matching-payload", [
-    payload.intentCommitment,
-    payload.marketId,
-    payload.ownerCommitment,
-    payload.signedSize,
-    payload.limitPrice,
-    payload.margin,
-    payload.noteNullifier,
-    payload.noteChangeCommitment,
-    payload.sourceIntentCommitment ?? "0x0",
-  ]);
+  return circuitMatchingPayloadCommitment({ ...payload,
+    marketDigest: fieldHex(BigInt(hashFields("market-id", [payload.marketId]))),
+  });
 }
 
 export function assertPrivateMatchIntent(

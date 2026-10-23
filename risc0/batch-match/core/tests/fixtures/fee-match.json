@@ -17,8 +17,8 @@
     ],
     "margin_change_commitments": [],
     "matching_payload_commitments": [
-      "0x9de5ba56830534deac6a85f5fd9b0c476eef9e9b401d24f2072c7472ea3eec9a",
-      "0xf787ca6ece6eec25335c5e385ba1e3e6043571ded41965d734e0d2cdbdd3a0cf"
+      "0x1b4dd65f0ce94da637abd8463f46e0e2e5f0fd22d99ba1c532cdcca10845d3ae",
+      "0x0979b336fc2e005bd4a84e171ae75b07a929dc6b45c0e000df796d1b5aa63527"
     ],
     "residual_commitments": [
       "0x0",
@@ -33,10 +33,10 @@
       "0"
     ],
     "market_id": "xlm-usd-perp",
-    "match_transcript_digest": "0x18595e2ec55956d6201c040bca21184077b0dd406dfda1762f6e0a5771c6e45f",
+    "match_transcript_digest": "0x38bc1568e44d5fda79d3230cfd22264fda5e76614b9b95344e2393ac2b07ab76",
     "new_commitments": [
-      "0x1ed366fa30667de89cc2506d9c828f5c583ad4e362460f8aebad6955c9e62f65",
-      "0x0e8d34710e159828678d6657f4f1674efd24771a6366cd981e5ced6d443835b1"
+      "0x1d38097a5ddd3fd2da85eb7644fa9be5603137e369faa0d9c82cf5eb23edb79d",
+      "0x0547484efd42c9e7158e99b19d8714371315451393c4f05f24c10a9bb4af339d"
     ],
     "open_interest_delta": "2000000000",
     "order_updates": [
@@ -50,7 +50,7 @@
       }
     ],
     "residual_size": "0",
-    "settlement_digest": "0x2a944e46999d8133e4e2ec8997bc0b72b70a3efa9c0db7c30f604295fcb13f0c",
+    "settlement_digest": "0xbfe44e584af3503e7d64cc3630019a661c1c9722e8735d21abd391fb902cc758",
     "spent_nullifiers": [
       "0x10f562e7c271d6243a44f7deb0443b8506b8e3737f41dbe69b865b228335d108",
       "0xcb72ec372b88d893cc8133edf3050ac0700391eb870b845d0c144f94bc134356"
@@ -66,6 +66,8 @@
       "note_change_commitment": "0x0",
       "note_nullifier": "0x10f562e7c271d6243a44f7deb0443b8506b8e3737f41dbe69b865b228335d108",
       "owner_commitment": "0xf67df1481dfd399504be07f8667d5406abf9c9c9b3d3200c809c7f9fba310d3f",
+      "owner_digest": "0x21ffb42eed8edc8fea6630d0730b78a5a2df1787522ba4aa9544f2f9c11134dc",
+      "position_seed": "0x11e7f5f45dd0febcf1447f82fa50a2592f71d9ea6042e473c12a0a9c5d45b121",
       "signed_size": "1000000000"
     },
     {
@@ -77,6 +79,8 @@
       "note_change_commitment": "0x0",
       "note_nullifier": "0xcb72ec372b88d893cc8133edf3050ac0700391eb870b845d0c144f94bc134356",
       "owner_commitment": "0xf8d9dbf211fc1ac74bdfb35512eeeaa208fd7085e6bb5d17f2dea24b6b8b9dc1",
+      "owner_digest": "0x015a8aaa39c81529c7ee17c781db8cfcb846d71992f97dde0915bc9a8d0da334",
+      "position_seed": "0x127f58e66914b6494d564f46390e8f0e7a797919929b2630179728af8ad545f5",
       "signed_size": "-1000000000"
     }
   ],

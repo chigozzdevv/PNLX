@@ -200,6 +200,7 @@ describe("public and owner indexer", () => {
       proof: closeProof,
     });
     store.addPositionClose({
+      currentFundingIndex: market.fundingIndex,
       closeCommitment,
       marginOutputCommitment,
       marketId: market.marketId,
@@ -344,6 +345,7 @@ function intentRecord(
   proof: ProofMeta,
 ): IntentRecord {
   return {
+    assetDigest: digestToFieldHex("asset:usdc"), currentBatch: 1n,
     batchDigest: digestToFieldHex("batch:batch-indexer"),
     batchId: "batch-indexer",
     intentCommitment: hashFields("intent", [label]),

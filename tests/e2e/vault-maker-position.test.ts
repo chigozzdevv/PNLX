@@ -10,6 +10,7 @@ import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.servi
 import { prepareRisc0SettlementDraft } from "@/workers/risc0-matcher/risc0-proof";
 import type { VaultMakerAllocation } from "@/shared/vault-maker-backing";
 import { createProver } from "@/workers/prover/prover.worker";
+import {hostedPositionCloseWitness} from "@/features/position-closes/paired-position-witness";
 
 const maker = "GCB7PYWNYIRTSLTHGPX6OCIP256PPX2Q5TZOZSNCVRIWZJI7MU5COC7J";
 const vault = "CAU2RWJFKWZIRWLTO734X2BSVIAH22WHCIRRYIBLQPHIUPPFQ6U5MMTQ";
@@ -25,11 +26,13 @@ function matchedTrade() {
     { batchId, intentCommitment: clientIntent, limitPrice: 100_000_000n,
       margin: 200_000_000n, marketId: market.marketId, noteChangeCommitment: "0x0",
       noteNullifier: hashFields("client-nullifier", [1]),
-      ownerCommitment: hashFields("client-owner", [1]), signedSize: 1_000_000_000n },
+      ownerCommitment: hashFields("client-owner", [1]), ownerDigest: digestToFieldHex("owner:client"),
+      positionSeed: digestToFieldHex("private-fixture-seed:client"), signedSize: 1_000_000_000n },
     { batchId, intentCommitment: makerIntent, limitPrice: 100_000_000n,
       margin: 200_000_000n, marketId: market.marketId, noteChangeCommitment: "0x0",
       noteNullifier: hashFields("maker-nullifier", [1]),
-      ownerCommitment: ownerCommitment(maker), signedSize: -1_000_000_000n },
+      ownerCommitment: ownerCommitment(maker), ownerDigest: digestToFieldHex(`owner:${maker}`),
+      positionSeed: digestToFieldHex("private-fixture-seed:maker"), signedSize: -1_000_000_000n },
   ];
   const match = new BatchMatcherService().match({ batchId, market, intents });
   const settlement = { ...prepareRisc0SettlementDraft({ batchId, market, intents, match }),
@@ -59,6 +62,7 @@ function matchedTrade() {
   } as PositionLifecycleRecord;
   store.positionLifecycle.set(client.positionCommitment, closedClient);
   store.positionCloses.set(closeCommitment, {
+      currentFundingIndex: market.fundingIndex,
     marketId: market.marketId, markPrice: market.oraclePrice,
     positionCommitment: client.positionCommitment, positionNullifier: client.positionNullifier,
     positionRoot: hashFields("root", [1]), closeCommitment,
@@ -127,7 +131,7 @@ test("an open trader selects the exact vault-backed maker and their price PnL of
   })).toThrow("paired vault maker note is unavailable");
 });
 
-test("maker close proof uses the trader's mark and produces a recoverable note", () => {
+test("joint maker close uses the trader's mark and produces a recoverable note", () => {
   const { allocation, client, note, store } = matchedTrade();
   const openClient = { ...client, status: "open" as const, closeCommitment: undefined };
   store.positionLifecycle.set(client.positionCommitment, openClient);
@@ -138,18 +142,22 @@ test("maker close proof uses the trader's mark and produces a recoverable note",
   const prepared = preparePairedMakerClose({
     fundingIndex: 0n, makerNote: pair.makerNote,
     makerPosition: pair.makerPosition, markPrice: 99_000_000n,
-    prover: createProver(), store, traderCloseCommitment: hashFields("trader-close", [1]),
+    store, traderCloseCommitment: hashFields("trader-close", [1]),
   });
-  expect(prepared.close.markPrice).toBe(99_000_000n);
+  const trader=hostedPositionCloseWitness({store,position:openClient,assetDigest:note.assetDigest,
+    markPrice:99_000_000n,currentFundingIndex:0n,closeCommitment:hashFields("trader-close",[1])});
+  const combined=createProver().provePositionClosePair([trader.witness,prepared.witness],50_000n);
+  expect(combined.proof.circuitId).toBe("position-close-pair");
+  expect(prepared.witness.markPrice).toBe(99_000_000n);
   expect(prepared.note.amount).toBe("209500000");
-  expect(prepared.note.commitment).toBe(prepared.close.marginOutputCommitment);
+  expect(prepared.note.commitment).toBe(combined.positions[1].marginOutputCommitment);
   expect(prepared.note.spendSecretDigest).not.toBe(
     digestToFieldHex(`vault-maker-close-spend:${pair.makerPosition.positionNullifier}`));
   expect(prepared.note.closePositionCommitment).toBe(pair.makerPosition.positionCommitment);
   expect(() => preparePairedMakerClose({
     fundingIndex: 0n, makerNote: { ...pair.makerNote, spendSecretDigest: undefined },
     makerPosition: pair.makerPosition, markPrice: 99_000_000n,
-    prover: createProver(), store, traderCloseCommitment: hashFields("trader-close", [1]),
+    store, traderCloseCommitment: hashFields("trader-close", [1]),
   })).toThrow("vault maker note spend secret is unavailable");
 });
 
@@ -163,6 +171,7 @@ test("paired close records both lifecycle changes and output indices together", 
   const makerPosition = [...store.positionLifecycle.values()].find((position) =>
     position.ownerCommitment === ownerCommitment(maker))!;
   const traderClose = {
+      currentFundingIndex: 0n,
     marketId: client.marketId, markPrice: 99_000_000n,
     positionCommitment: client.positionCommitment,
     positionNullifier: client.positionNullifier,

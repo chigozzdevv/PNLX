@@ -5,6 +5,7 @@ export type OraclePriceSource = "hermes" | "onchain-market";
 
 export interface OracleConfig {
   apiKey?: string;
+  requestTimeoutMs?: number;
   hermesUrl: string;
   marketContractId?: string;
   maxAgeSeconds: number;

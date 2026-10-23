@@ -15,6 +15,8 @@ import {
   mod,
   secureMarginCommitment,
   secureMarginNullifier,
+  derivePositionSeed,
+  circuitMatchingPayloadCommitment,
 } from "@pnlx/crypto";
 import { isLiquidatable, PRICE_SCALE, RATE_SCALE, settleClose } from "@pnlx/market-math";
 import {
@@ -37,6 +39,7 @@ import type {
   IntentValidityRecord,
   LiquidationRecord,
   PositionCloseRecord,
+  PairedPositionCloseRecord,
   ProofMeta,
   SecureDepositNoteWitness,
   WithdrawalRecord,
@@ -58,6 +61,14 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const ZERO_HEX = "0x0" as Hex;
+
+interface PositionClosePairProofPlan {
+  inputs: [PositionCloseProofInput, PositionCloseProofInput];
+  maintenanceRate: bigint;
+  liquidation: boolean;
+  publicInputs: Hex;
+  artifactOptions: ProofArtifactOptions;
+}
 
 export class ProverService implements Prover {
   private readonly artifacts = new Map<string, ProofArtifact>();
@@ -383,6 +394,18 @@ export class ProverService implements Prover {
   }
 
   proveConditionalClose(input: ConditionalCloseProofInput): ConditionalOrderRecord {
+    const plan = this.conditionalCloseProofPlan(input);
+    const artifact = buildProofArtifact(this.root, "conditional-close", plan.artifactOptions);
+    return { ...plan.record, proof: this.bindArtifact("conditional-close", plan.publicInputs, artifact) };
+  }
+
+  async proveConditionalCloseAsync(input: ConditionalCloseProofInput): Promise<ConditionalOrderRecord> {
+    const plan = this.conditionalCloseProofPlan(input);
+    const artifact = await buildProofArtifactAsync(this.root, "conditional-close", plan.artifactOptions);
+    return { ...plan.record, proof: this.bindArtifact("conditional-close", plan.publicInputs, artifact) };
+  }
+
+  private conditionalCloseProofPlan(input: ConditionalCloseProofInput) {
     if (!input.reduceOnly) throw new Error("conditional close must be reduce-only");
     if (input.size <= 0n) throw new Error("close size must be positive");
     if (input.triggerPrice <= 0n) throw new Error("trigger price must be positive");
@@ -402,7 +425,7 @@ export class ProverService implements Prover {
       closeCommitment,
       input.markPrice,
     ]);
-    const artifact = buildProofArtifact(this.root, "conditional-close", {
+    const artifactOptions: ProofArtifactOptions = {
       name: artifactName("conditional-close", [
         input.positionNullifier,
         closeCommitment,
@@ -421,17 +444,13 @@ export class ProverService implements Prover {
         salt_digest: field(binding.saltDigest),
         zero_value: 0n,
       },
-    });
-
-    const proof = this.bindArtifact("conditional-close", publicInputs, artifact);
-
-    return {
+    };
+    return { artifactOptions, publicInputs, record: {
       marketId: input.marketId,
       markPrice: input.markPrice,
       positionNullifier: input.positionNullifier,
       closeCommitment,
-      proof,
-    };
+    } };
   }
 
   proveWithdrawal(input: WithdrawalProofInput): WithdrawalRecord {
@@ -596,6 +615,9 @@ export class ProverService implements Prover {
 
   proveLiquidation(input: LiquidationProofInput): LiquidationRecord {
     this.validatePositionOpening(input);
+    const expectedFunding = input.size * (input.currentFundingIndex - input.fundingIndex) / PRICE_SCALE *
+      (input.side === "long" ? 1n : -1n);
+    if (input.fundingPayment !== expectedFunding) throw new Error("invalid funding payment");
     const funding = signedFundingWitness(input.fundingPayment);
     const liquidatable = isLiquidatable({
       side: input.side,
@@ -617,6 +639,9 @@ export class ProverService implements Prover {
       input.positionCommitment,
       input.positionNullifier,
       input.rewardCommitment,
+      input.marketDigest,
+      signedParts(input.currentFundingIndex).abs,
+      signedParts(input.currentFundingIndex).isNegative,
     ]);
     const artifact = buildProofArtifact(this.root, "liquidation-check", {
       name: artifactName("liquidation", [input.positionNullifier, input.markPrice]),
@@ -626,7 +651,11 @@ export class ProverService implements Prover {
         entry_price: input.entryPrice,
         mark_price: input.markPrice,
         margin: input.margin,
-        funding_index: input.fundingIndex,
+        funding_index: mod(input.fundingIndex),
+        funding_index_abs: signedParts(input.fundingIndex).abs,
+        funding_index_is_negative: signedParts(input.fundingIndex).isNegative,
+        current_funding_index_abs: signedParts(input.currentFundingIndex).abs,
+        current_funding_index_is_negative: signedParts(input.currentFundingIndex).isNegative,
         funding_payment_abs: funding.abs,
         funding_is_credit: funding.isCredit,
         maintenance_rate: input.maintenanceRate,
@@ -651,6 +680,7 @@ export class ProverService implements Prover {
 
     return {
       marketId: input.marketId,
+      currentFundingIndex: input.currentFundingIndex,
       markPrice: input.markPrice,
       maintenanceRate: input.maintenanceRate,
       positionCommitment: input.positionCommitment,
@@ -661,6 +691,139 @@ export class ProverService implements Prover {
     };
   }
 
+  provePositionClosePair(
+    inputs: [PositionCloseProofInput, PositionCloseProofInput], maintenanceRate: bigint, liquidation = false,
+  ): PairedPositionCloseRecord {
+    const plan = this.positionClosePairProofPlan(inputs, maintenanceRate, liquidation);
+    const artifact = buildProofArtifact(this.root, "position-close-pair", plan.artifactOptions);
+    return this.recordPositionClosePair(plan, artifact);
+  }
+
+  async provePositionClosePairAsync(
+    inputs: [PositionCloseProofInput, PositionCloseProofInput], maintenanceRate: bigint, liquidation = false,
+  ): Promise<PairedPositionCloseRecord> {
+    const plan = this.positionClosePairProofPlan(inputs, maintenanceRate, liquidation);
+    const artifact = await buildProofArtifactAsync(this.root, "position-close-pair", plan.artifactOptions);
+    return this.recordPositionClosePair(plan, artifact);
+  }
+
+  private positionClosePairProofPlan(
+    inputs: [PositionCloseProofInput, PositionCloseProofInput], maintenanceRate: bigint, liquidation: boolean,
+  ): PositionClosePairProofPlan {
+    inputs = inputs.map((input) => ({ ...input,
+      pathSiblings: [...input.pathSiblings], pathIndices: [...input.pathIndices],
+    })) as [PositionCloseProofInput, PositionCloseProofInput];
+    const [first, second] = inputs;
+    if (maintenanceRate <= 0n || maintenanceRate > RATE_SCALE) {
+      throw new Error("invalid maintenance rate");
+    }
+    if (first.marketId !== second.marketId || first.marketDigest !== second.marketDigest ||
+      first.markPrice !== second.markPrice || first.currentFundingIndex !== second.currentFundingIndex ||
+      first.positionRoot !== second.positionRoot || first.size !== second.size ||
+      first.entryPrice !== second.entryPrice || first.fundingIndex !== second.fundingIndex ||
+      first.marginOutputAssetDigest !== second.marginOutputAssetDigest || first.side === second.side) {
+      throw new Error("paired positions must have opposite sides and the same source economics");
+    }
+    if (field(first.marketDigest) !== field(hashFields("market-id", [first.marketId]))) {
+      throw new Error("paired position market binding mismatch");
+    }
+    for (const key of ["positionCommitment", "positionNullifier", "closeCommitment",
+      "newPositionCommitment", "marginOutputCommitment"] as const) {
+      if (inputs[0][key] === inputs[1][key]) throw new Error("paired close inputs overlap");
+    }
+    const collateral = first.margin + second.margin;
+    let distressed = false;
+    for (const input of inputs) {
+      this.validatePositionOpening(input);
+      if (input.size <= 0n || input.closeSize !== input.size || input.entryPrice <= 0n ||
+        input.markPrice <= 0n || input.margin < 0n || input.fee !== 0n || input.remainingMargin !== 0n) {
+        throw new Error("invalid full paired close");
+      }
+      if (membershipRoot(input.positionCommitment, input.pathSiblings, input.pathIndices) !== input.positionRoot) {
+        throw new Error("position root mismatch");
+      }
+      const pnl = input.size * (input.markPrice - input.entryPrice) / PRICE_SCALE *
+        (input.side === "long" ? 1n : -1n);
+      const funding = input.size * (input.currentFundingIndex - input.fundingIndex) / PRICE_SCALE *
+        (input.side === "long" ? 1n : -1n);
+      if (input.fundingPayment !== funding) throw new Error("invalid funding payment");
+      const equity = input.margin + pnl - funding;
+      const payout = equity < 0n ? 0n : equity > collateral ? collateral : equity;
+      if (input.marginOutputAmount !== payout || input.newMargin !== payout) {
+        throw new Error("invalid paired close payout");
+      }
+      const maintenance = input.size * input.markPrice / PRICE_SCALE * maintenanceRate / RATE_SCALE;
+      distressed ||= equity <= 0n || equity < maintenance;
+      if (input.newPositionCommitment !== circuitPositionCommitment({
+        side: input.side, size: 0n, entryPrice: input.entryPrice, margin: 0n,
+        fundingIndex: input.fundingIndex, marketDigest: input.marketDigest, ownerDigest: input.ownerDigest,
+        rhoDigest: input.newPositionRhoDigest, blinding: input.newPositionBlinding,
+        spendSecretDigest: input.spendSecretDigest,
+      })) throw new Error("new position commitment mismatch");
+      if (input.marginOutputCommitment !== secureMarginCommitment({
+        amount: payout, assetDigest: input.marginOutputAssetDigest, ownerDigest: input.ownerDigest,
+        rhoDigest: input.marginOutputRhoDigest, blinding: input.marginOutputBlinding,
+        spendSecretDigest: input.marginOutputSpendSecretDigest,
+      })) throw new Error("margin output commitment mismatch");
+    }
+    if (inputs[0].marginOutputAmount + inputs[1].marginOutputAmount !== collateral) {
+      throw new Error("paired close does not conserve collateral");
+    }
+    if (liquidation && !distressed) throw new Error("position pair is not liquidatable");
+    const current = signedParts(first.currentFundingIndex);
+    const old = signedParts(first.fundingIndex);
+    const publicInputs = publicInputDigest("position-close-pair", [first.marketDigest,
+      first.marginOutputAssetDigest, first.markPrice, current.abs, current.isNegative,
+      maintenanceRate, liquidation, first.positionRoot,
+      ...inputs.map(input => input.positionCommitment), ...inputs.map(input => input.positionNullifier),
+      ...inputs.map(input => input.closeCommitment), ...inputs.map(input => input.newPositionCommitment),
+      ...inputs.map(input => input.marginOutputCommitment)]);
+    const artifactOptions: ProofArtifactOptions = {
+      name: artifactName("position-close-pair", [first.positionNullifier, second.positionNullifier, first.markPrice, liquidation]),
+      inputs: {
+        market_digest: field(first.marketDigest), asset_digest: field(first.marginOutputAssetDigest),
+        mark_price: first.markPrice, current_funding_index_abs: current.abs,
+        current_funding_index_is_negative: current.isNegative, maintenance_rate: maintenanceRate,
+        liquidation, position_root: field(first.positionRoot),
+        position_commitments: inputs.map(input => field(input.positionCommitment)),
+        position_nullifiers: inputs.map(input => field(input.positionNullifier)),
+        close_commitments: inputs.map(input => field(input.closeCommitment)),
+        new_position_commitments: inputs.map(input => field(input.newPositionCommitment)),
+        margin_output_commitments: inputs.map(input => field(input.marginOutputCommitment)),
+        is_long: inputs.map(input => input.side === "long"), size: first.size,
+        entry_price: first.entryPrice, funding_index: mod(first.fundingIndex),
+        funding_index_abs: old.abs, funding_index_is_negative: old.isNegative,
+        margins: inputs.map(input => input.margin), owner_digests: inputs.map(input => field(input.ownerDigest)),
+        rhos: inputs.map(input => field(input.rhoDigest)), blindings: inputs.map(input => field(input.blinding)),
+        spend_secret_digests: inputs.map(input => field(input.spendSecretDigest)),
+        output_amounts: inputs.map(input => input.marginOutputAmount),
+        new_position_rhos: inputs.map(input => field(input.newPositionRhoDigest)),
+        new_position_blindings: inputs.map(input => field(input.newPositionBlinding)),
+        output_rhos: inputs.map(input => field(input.marginOutputRhoDigest)),
+        output_blindings: inputs.map(input => field(input.marginOutputBlinding)),
+        output_spend_secrets: inputs.map(input => field(input.marginOutputSpendSecretDigest)),
+        path_siblings: inputs.map(input => input.pathSiblings.map(field)),
+        path_indices: inputs.map(input => input.pathIndices),
+      },
+    };
+    return { inputs, maintenanceRate, liquidation, publicInputs, artifactOptions };
+  }
+
+  private recordPositionClosePair(plan: PositionClosePairProofPlan, artifact: ProofArtifact): PairedPositionCloseRecord {
+    const { inputs, maintenanceRate, liquidation, publicInputs } = plan;
+    const [first, second] = inputs;
+    const proof = this.bindArtifact("position-close-pair", publicInputs, artifact);
+    const positionRecord = (input: PositionCloseProofInput): PositionCloseRecord => ({
+      marketId: input.marketId, markPrice: input.markPrice, currentFundingIndex: input.currentFundingIndex,
+      positionRoot: input.positionRoot, positionCommitment: input.positionCommitment,
+      positionNullifier: input.positionNullifier, closeCommitment: input.closeCommitment,
+      newPositionCommitment: input.newPositionCommitment, marginOutputCommitment: input.marginOutputCommitment, proof,
+    });
+    return {marketId: first.marketId, markPrice: first.markPrice, assetDigest: first.marginOutputAssetDigest,
+      currentFundingIndex: first.currentFundingIndex, maintenanceRate, liquidation,
+      positionRoot: first.positionRoot, positions: [positionRecord(first), positionRecord(second)], proof};
+  }
+
   provePositionClose(input: PositionCloseProofInput): PositionCloseRecord {
     this.validatePositionOpening(input);
     if (input.size <= 0n) throw new Error("position size must be positive");
@@ -668,7 +831,10 @@ export class ProverService implements Prover {
     if (input.closeSize !== input.size) throw new Error("position close must cover the full position");
     if (input.entryPrice <= 0n) throw new Error("entry price must be positive");
     if (input.markPrice <= 0n) throw new Error("mark price must be positive");
-    if (input.fee < 0n) throw new Error("fee cannot be negative");
+    if (input.fee !== 0n) throw new Error("close fee must be zero");
+    const expectedFunding = input.size * (input.currentFundingIndex - input.fundingIndex) / PRICE_SCALE *
+      (input.side === "long" ? 1n : -1n);
+    if (input.fundingPayment !== expectedFunding) throw new Error("invalid funding payment");
     const funding = signedFundingWitness(input.fundingPayment);
 
     const settlement = settleClose({
@@ -728,6 +894,9 @@ export class ProverService implements Prover {
       input.closeCommitment,
       input.newPositionCommitment,
       input.marginOutputCommitment,
+      input.marketDigest,
+      signedParts(input.currentFundingIndex).abs,
+      signedParts(input.currentFundingIndex).isNegative,
     ]);
     const artifact = buildProofArtifact(this.root, "position-close", {
       name: artifactName("position-close", [
@@ -742,7 +911,11 @@ export class ProverService implements Prover {
         entry_price: input.entryPrice,
         mark_price: input.markPrice,
         margin: input.margin,
-        funding_index: input.fundingIndex,
+        funding_index: mod(input.fundingIndex),
+        funding_index_abs: signedParts(input.fundingIndex).abs,
+        funding_index_is_negative: signedParts(input.fundingIndex).isNegative,
+        current_funding_index_abs: signedParts(input.currentFundingIndex).abs,
+        current_funding_index_is_negative: signedParts(input.currentFundingIndex).isNegative,
         funding_payment_abs: funding.abs,
         funding_is_credit: funding.isCredit,
         fee: input.fee,
@@ -777,6 +950,7 @@ export class ProverService implements Prover {
 
     return {
       marketId: input.marketId,
+      currentFundingIndex: input.currentFundingIndex,
       markPrice: input.markPrice,
       positionCommitment: input.positionCommitment,
       positionNullifier: input.positionNullifier,
@@ -973,16 +1147,23 @@ function intentValidityProofPlan(input: IntentValidityProofInput): IntentValidit
   if (intentCommitment !== binding.intentCommitment) {
     throw new Error("intent commitment binding mismatch");
   }
+  const positionSeed = derivePositionSeed(input.spendSecretDigest, binding.nonceDigest, binding.saltDigest);
+  const matchingPayloadCommitment = circuitMatchingPayloadCommitment({
+    intentCommitment, marketDigest: binding.marketDigest, ownerDigest: input.ownerDigest,
+    signedSize: input.intent.side === "long" ? input.intent.size : -input.intent.size,
+    limitPrice: input.intent.limitPrice, margin: input.intent.margin,
+    noteNullifier: input.intent.noteNullifier, noteChangeCommitment: input.noteChangeCommitment, positionSeed,
+  });
   const publicInputs = publicInputDigest("intent-validity", [
+    input.assetDigest,
     input.currentBatch,
     binding.batchDigest,
     binding.marketDigest,
-    binding.ownerCommitmentField,
     intentCommitment,
     input.marginRoot,
-    input.noteCommitment,
     input.intent.noteNullifier,
     input.noteChangeCommitment,
+    matchingPayloadCommitment,
   ]);
   return {
     artifactOptions: {
@@ -1020,10 +1201,16 @@ function intentValidityProofPlan(input: IntentValidityProofInput): IntentValidit
         change_rho_digest: field(input.changeRhoDigest),
         change_blinding: field(input.changeBlinding),
         zero_commitment: 0n,
+        position_seed: field(positionSeed),
+        matching_payload_commitment: field(matchingPayloadCommitment),
       },
     },
     publicInputs,
     record: {
+      assetDigest: input.assetDigest,
+      ownerDigest: input.ownerDigest,
+      positionSeed,
+      matchingPayloadCommitment,
       batchDigest: binding.batchDigest,
       currentBatch: input.currentBatch,
       expiryBatch: input.expiryBatch,

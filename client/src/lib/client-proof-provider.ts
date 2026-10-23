@@ -12,6 +12,7 @@ export interface DepositNoteProofRecord {
 }
 
 export interface IntentValidityRecord {
+  assetDigest: Hex;
   batchDigest: Hex;
   currentBatch: string;
   expiryBatch: string;
@@ -21,11 +22,15 @@ export interface IntentValidityRecord {
   noteChangeCommitment: Hex;
   noteCommitment: Hex;
   noteNullifier: Hex;
+  ownerDigest: Hex;
   ownerCommitmentField: Hex;
+  positionSeed: Hex;
+  matchingPayloadCommitment: Hex;
   proof: ServerProofMeta;
 }
 
 export interface PositionCloseRecord {
+  currentFundingIndex: bigint;
   closeCommitment: Hex;
   marginOutputCommitment: Hex;
   marketId: string;
@@ -105,6 +110,7 @@ export interface ClientProofProvider {
     blinding: Hex;
     closeCommitment: Hex;
     closeSize: bigint;
+    currentFundingIndex: bigint;
     entryPrice: bigint;
     fee: bigint;
     fundingIndex: bigint;

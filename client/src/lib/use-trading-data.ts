@@ -11,6 +11,7 @@ import {
 import { protocolBaseToDisplay, protocolUsdcToDisplay } from "@/lib/asset-units";
 import { apiPath } from "@/lib/api-path";
 import { pnlxGet } from "@/lib/pnlx-api";
+import { restorePrivateCloseOutputNote } from "@/lib/private-close-recovery";
 import { backUpPrivateOpening, restorePrivateOpenings } from "@/lib/private-note-backup";
 import { setPrivateNoteBackupWarning } from "@/lib/wallet-auth";
 import {
@@ -347,6 +348,9 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
         proofVerificationTxHash: position.proofVerificationTxHash,
         privateState: opening
           ? {
+              ownerDigest: opening.ownerDigest,
+              positionSeed: opening.positionSeed,
+              fillIndex: opening.fillIndex,
               entryFee: opening.entryFee,
               entryPrice: opening.entryPrice,
               fundingIndex: opening.fundingIndex,
@@ -526,12 +530,20 @@ async function decryptPrivateOpenings(
   accountEvents: ServerAccountEvent[],
 ): Promise<Array<Extract<PrivateAccountEventPayload, { kind: "position-opening" }>>> {
   const payloads = await Promise.all(
-    accountEvents.map((event) =>
-      decryptAccountEvent<PrivateAccountEventPayload>(
+    accountEvents.filter((event) => event.ownerCommitment.toLowerCase() === session.ownerCommitment.toLowerCase()).map(async (event) => {
+      const payload = await decryptAccountEvent<PrivateAccountEventPayload>(
         session.ownerCommitment,
         event.ciphertext,
-      ).catch(() => undefined)
-    ),
+      ).catch(() => undefined);
+      if (payload) {
+        try {
+          await restorePrivateCloseOutputNote(session, payload, event.ownerCommitment);
+        } catch {
+          setPrivateNoteBackupWarning("A settled position refund could not be recovered. Reconnect your wallet.");
+        }
+      }
+      return payload;
+    }),
   );
 
   return payloads.filter(

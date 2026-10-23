@@ -1,8 +1,9 @@
+import { matchingPayloadCommitment, privateMatchIntentFromTradeIntent } from "@/workers/batch-matcher/private-intent";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { commitIntent, hashFields, intentBindingFields } from "@pnlx/crypto";
+import { commitIntent, hashFields, intentBindingFields, ownerCommitment } from "@pnlx/crypto";
 import { PRICE_SCALE } from "@pnlx/market-math";
 import type { BatchSettlement, Hex, IntentValidityRecord, MarketConfig, PrivateMatchIntent, ProofMeta, TradeIntent } from "@pnlx/protocol-types";
 import { createMarginNote } from "@pnlx/sdk";
@@ -380,6 +381,14 @@ function createIntentValidity(
   ]);
   executor.store.recordProof(proof);
   return {
+    assetDigest: hashFields("asset", ["usdc"]),
+    ownerDigest: hashFields("fixture-owner-digest", [intent.owner]),
+    positionSeed: hashFields("fixture-position-seed", [intent.nonce]),
+    matchingPayloadCommitment: matchingPayloadCommitment(privateMatchIntentFromTradeIntent({
+      intent, intentCommitment, noteChangeCommitment: "0x0", ownerCommitment: ownerCommitment(intent.owner),
+      ownerDigest: hashFields("fixture-owner-digest", [intent.owner]),
+      positionSeed: hashFields("fixture-position-seed", [intent.nonce]),
+    })),
     batchDigest: binding.batchDigest,
     currentBatch: 1n,
     expiryBatch: 10n,
@@ -410,6 +419,8 @@ function recoveredIntent(
     noteChangeCommitment: "0x0",
     noteNullifier: hashFields("nullifier", [id]),
     ownerCommitment: hashFields("owner", [id]),
+    ownerDigest: hashFields("fixture-owner-digest", [id]),
+    positionSeed: hashFields("fixture-position-seed", [id]),
     signedSize: side === "long" ? size : -size,
   };
 }

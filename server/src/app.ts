@@ -7,6 +7,7 @@ import { registerDisclosuresRoute } from "@/features/disclosures/disclosures.rou
 import { registerFundingRoute } from "@/features/funding/funding.route";
 import { registerHealthRoute } from "@/features/health/health.route";
 import { registerIntentsRoute } from "@/features/intents/intents.route";
+import { IntentsService } from "@/features/intents/intents.service";
 import { registerLiquidationAutomationRoute } from "@/features/liquidation-automation/liquidation-automation.route";
 import { registerLiquidationsRoute } from "@/features/liquidations/liquidations.route";
 import { registerLiquidityVaultRoute } from "@/features/liquidity-vault/liquidity-vault.route";
@@ -28,6 +29,9 @@ import { Router } from "@/shared/http/router";
 import { AuthService } from "@/features/auth/auth.service";
 import { LiquidationAutomationService } from "@/features/liquidation-automation/liquidation-automation.service";
 import { LiquidationsService } from "@/features/liquidations/liquidations.service";
+import { PositionClosesService } from "@/features/position-closes/position-closes.service";
+import { ConditionalOrdersService } from "@/features/conditional-orders/conditional-orders.service";
+import { ProtectionKeeperService } from "@/workers/protection-keeper/protection-keeper.service";
 import { createExecutor, createExecutorAsync } from "@/workers/executor/executor.worker";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import { createBatchExecutor } from "@/workers/batch-executor/batch-executor.worker";
@@ -48,8 +52,10 @@ export interface AppRuntime {
   executor: ExecutorService;
   fundingEngine: FundingEngineService;
   liquidationAutomation: LiquidationAutomationService;
+  protectionKeeper: ProtectionKeeperService;
   liquidityHistory?: LiquidityVaultHistory;
   router: Router;
+  recoverPendingIntents: () => Promise<{ recovered: number; pending: number }>;
 }
 
 export function createApp(): Router {
@@ -69,10 +75,13 @@ export function createAppRuntime(): AppRuntime {
 export async function createAppRuntimeAsync(): Promise<AppRuntime> {
   const env = loadEnv();
   const executor = await createExecutorForEnvAsync(env);
-  return buildAppRuntime(env, executor);
+  const runtime = buildAppRuntime(env, executor, false);
+  await runtime.recoverPendingIntents();
+  startRuntimeWorkers(runtime, env);
+  return runtime;
 }
 
-function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorService): AppRuntime {
+function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorService, startWorkers = true): AppRuntime {
   const auth = new AuthService(env.stellarNetworkPassphrase, env.authSessionSecret);
   const router = new Router({
     authenticate: (request) => auth.authenticateRequest(request),
@@ -181,17 +190,18 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
     {
       batchIdPrefix: env.batchExecutorPrefix,
       intervalMs: env.batchExecutorIntervalMs,
-      refreshMarketOracle: (marketId) =>
+      refreshMarketOracle: (marketId, signal) =>
         markets.refreshFromOracle(
           { marketId },
           env.protocolAdminAddresses[0] ?? deployment?.sourceAddress,
+          signal,
         ).then(() => undefined),
       sampleFundingPremium: (marketId, sampledAt) => {
         if (env.fundingPremiumMode === "impact-twap") {
           fundingEngine.sampleOnce({ marketId, sampledAt });
         }
       },
-      settlementsOnchainRequired: env.settlementsOnchainRequired,
+      settlementsOnchainRequired: env.settlementsOnchainRequired || Boolean(onchain?.enabled),
     },
     onchain,
     makerLiquidity,
@@ -200,9 +210,20 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
   const liquidationAutomation = new LiquidationAutomationService(executor, liquidations, {
     intervalMs: env.liquidationAutomationIntervalMs,
   });
+  const protectionKeeper = new ProtectionKeeperService(executor,
+    new PositionClosesService(executor,prover,onchain,env),
+    new ConditionalOrdersService(executor,prover,env,onchain),onchain,env.liquidationAutomationIntervalMs);
 
   registerAuthRoute(router, auth);
-  registerHealthRoute(router, env, onchain, executor.store);
+  registerHealthRoute(router, env, onchain, executor.store,()=>({
+    protection:{enabled:env.liquidationAutomationEnabled,...protectionKeeper.status,
+      fresh:env.liquidationAutomationEnabled && protectionKeeper.status.lastCompletedAt>0 &&
+        Date.now()-protectionKeeper.status.lastCompletedAt<Math.max(30_000,env.liquidationAutomationIntervalMs*3)},
+    pendingPairedCloses:[...executor.store.pendingPairedCloses.values()].filter((run)=>!run.retired).length,
+    archivedPairedCloses:[...executor.store.pendingPairedCloses.values()].filter((run)=>run.retired).length,
+    pendingIntentSubmissions:executor.store.pendingIntentSubmissions.size,
+    schedulerOwnership:"single-active-process-required",
+  }));
   registerAccountKeysRoute(router, executor);
   registerAccountEventsRoute(router, executor);
   registerPortfolioRoute(router, executor);
@@ -218,7 +239,7 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
   registerOrdersRoute(router, executor, prover, env, onchain, {
     witnessRoutesEnabled: env.serverWitnessRoutesEnabled,
   });
-  registerBatchesRoute(router, executor, env, onchain);
+  registerBatchesRoute(router, executor, env, onchain, batchExecutor);
   registerProofsRoute(router, prover, {
     witnessRoutesEnabled: env.serverWitnessRoutesEnabled,
   });
@@ -245,17 +266,20 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
     witnessRoutesEnabled: env.serverWitnessRoutesEnabled,
   });
 
-  if (env.fundingEngineEnabled) {
-    fundingEngine.start();
-  }
-  if (env.batchExecutorEnabled) {
-    batchExecutor.start();
-  }
-  if (env.liquidationAutomationEnabled) {
-    liquidationAutomation.start();
-  }
+  const intents = new IntentsService(executor, prover, onchain, env);
+  const runtime = { batchExecutor, executor, fundingEngine, liquidationAutomation, protectionKeeper, liquidityHistory, router,
+    recoverPendingIntents: () => intents.recoverPendingIntents() };
+  if (startWorkers) startRuntimeWorkers(runtime, env);
+  return runtime;
+}
 
-  return { batchExecutor, executor, fundingEngine, liquidationAutomation, liquidityHistory, router };
+function startRuntimeWorkers(runtime: AppRuntime, env: ReturnType<typeof loadEnv>): void {
+  if (env.fundingEngineEnabled) runtime.fundingEngine.start();
+  if (env.batchExecutorEnabled) runtime.batchExecutor.start();
+  if (env.liquidationAutomationEnabled) {
+    runtime.liquidationAutomation.start();
+    runtime.protectionKeeper.start();
+  }
 }
 
 function createExecutorForEnv(env: ReturnType<typeof loadEnv>): ExecutorService {

@@ -18,6 +18,7 @@ export class HealthController {
     private readonly env: ServerEnv,
     private readonly onchain?: Pick<OnchainRelayService, "enabled" | "tokenDigest">,
     private readonly persistence?: PersistenceStatusProvider,
+    private readonly operations?: () => unknown,
   ) {}
 
   get(): Response {
@@ -32,6 +33,7 @@ export class HealthController {
     return json({
       ok: persistenceStatus?.healthy ?? true,
       service: "pnlx-server",
+      ...(this.operations ? { operations: this.operations() } : {}),
       runtime: {
         clientStorageScope: clientStorageScope(this.env),
       },
@@ -42,6 +44,9 @@ export class HealthController {
       },
       privacy: {
         serverWitnessRoutesEnabled: this.env.serverWitnessRoutesEnabled,
+        hostedPairedCloseWitnessRoutesEnabled: true,
+        operatorWitnessVisibility: true,
+        thresholdEncryptedMatching: false,
       },
       governance: {
         protocolAdminCount: this.env.protocolAdminAddresses.length,

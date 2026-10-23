@@ -2,7 +2,7 @@ import { createDecipheriv, createECDH, createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
-import { hashFields } from "@pnlx/crypto";
+import { hashFields, digestToFieldHex } from "@pnlx/crypto";
 import type { BatchSettlement, PrivateMatchIntent } from "@pnlx/protocol-types";
 import { recoverPositionOpeningEventsForOwner } from "@/features/account-keys/account-key-recovery";
 import { ProtocolStore } from "@/shared/state/store";
@@ -20,6 +20,8 @@ function feeMatchInput() {
     intentCommitment: hashFields("intent", [index + 1]),
     noteNullifier: hashFields("nullifier", [index + 1]),
     ownerCommitment: hashFields("owner", [index + 1]),
+    ownerDigest: digestToFieldHex(`fee-owner:${index}`),
+    positionSeed: digestToFieldHex(`fee-position-seed:${index}`),
     noteChangeCommitment: "0x0" as const,
     limitPrice: 100_000_000n,
     margin: 200_000_000n,
@@ -56,7 +58,7 @@ test("partial-fill proof binds the exact residual margin across TypeScript and R
     typeof value === "bigint" ? value.toString() : value))).toEqual(fixture);
   expect(request.expected.residual_margins).toEqual(["100000000", "0"]);
   expect(batchSettlementPublicInputHash(draft as BatchSettlement))
-    .toBe("0x197e5489ed23851445e3fcc24d3de7de8dc0ed2ffaa46682db8443535f62fa85");
+    .toBe("0x5f5861cea88d366910de609a2f37c27a46f6ffc92acfa79619124cd9b19578ef");
 });
 
 test("recovered private position openings preserve each side's fee", () => {

@@ -11,6 +11,7 @@ import type {
   LiquidationRecord,
   MarketConfig,
   PositionCloseRecord,
+  PairedPositionCloseRecord,
   ProofMeta,
   WithdrawalRecord,
 } from "@pnlx/protocol-types";
@@ -56,6 +57,7 @@ export interface OraclePublisherConfig {
 }
 
 export interface OraclePriceRelayInput {
+  signal?: AbortSignal;
   assetAddress?: string;
   assetSymbol: string;
   assetType: "other" | "stellar";
@@ -95,6 +97,11 @@ export interface AssetDepositRelayInput {
 
 export interface OnchainRelay {
   readonly enabled: boolean;
+  marketPriceAsync?(marketId: string): Promise<bigint>;
+  marketFundingIndexAsync?(marketId: string): Promise<bigint>;
+  isConditionalTriggeredAsync?(marketId: string, positionNullifier: Hex, closeCommitment: Hex): Promise<boolean>;
+  isPositionCloseSettledAsync?(closeCommitment: Hex): Promise<boolean>;
+  positionCloseAppendIndexAsync?(closeCommitment: Hex): Promise<number>;
   secureNoteSnapshot?(cached?: Hex[]): { commitments: Hex[]; root: Hex };
   assetBalance(token: string, account: string, source?: string): bigint;
   deposit(commitment: Hex): OnchainRelayResult;
@@ -106,10 +113,14 @@ export interface OnchainRelay {
   publishOraclePriceAsync?(input: OraclePriceRelayInput): Promise<OnchainRelayResult>;
   positionRoot?(): Hex;
   positionRootAsync?(): Promise<Hex>;
+  batchPositionAppendIndexAsync?(batchId: string, marketId: string): Promise<number>;
   isBatchSettled?(batchId: string, marketId: string, settlementDigest?: Hex): boolean;
   isBatchSettledAsync?(batchId: string, marketId: string, settlementDigest?: Hex): Promise<boolean>;
   isIntentRegistered?(intentCommitment: Hex): boolean;
   isIntentRegisteredAsync?(intentCommitment: Hex): Promise<boolean>;
+  intentMatchingPayloadCommitmentAsync?(intentCommitment:Hex):Promise<Hex>;
+  isIntentActiveAsync?(intentCommitment:Hex):Promise<boolean>;
+  isSecureNullifierSpentAsync?(noteNullifier:Hex):Promise<boolean>;
   intentSubmissionSequence?(intentCommitment: Hex): bigint;
   intentSubmissionSequenceAsync?(intentCommitment: Hex): Promise<bigint>;
   isMarketActive?(marketId: string): boolean;
@@ -121,11 +132,13 @@ export interface OnchainRelay {
   claimedResidual(intentCommitment: Hex): Hex | undefined;
   claimResidual(intentCommitment: Hex, commitment: Hex, proof: ProofMeta): OnchainRelayResult;
   upsertMarket(record: MarketConfig, config: OnchainMarketConfig): OnchainRelayResult;
-  upsertMarketAsync?(record: MarketConfig, config: OnchainMarketConfig): Promise<OnchainRelayResult>;
+  upsertMarketAsync?(record: MarketConfig, config: OnchainMarketConfig, signal?: AbortSignal): Promise<OnchainRelayResult>;
   settleBatch(record: BatchSettlement): OnchainRelayResult;
   settleBatchAsync?(record: BatchSettlement): Promise<OnchainRelayResult>;
   registerConditionalOrder(record: ConditionalOrderCommitment): OnchainRelayResult;
+  registerConditionalOrderAsync?(record: ConditionalOrderCommitment): Promise<OnchainRelayResult>;
   triggerConditionalClose(record: ConditionalOrderRecord): OnchainRelayResult;
+  triggerConditionalCloseAsync?(record: ConditionalOrderRecord): Promise<OnchainRelayResult>;
   settlePositionClose(record: PositionCloseRecord): OnchainRelayResult;
   settleManualPositionClose(record: PositionCloseRecord): OnchainRelayResult;
   settlePairedPositionClose(
@@ -133,6 +146,7 @@ export interface OnchainRelay {
     maker: PositionCloseRecord,
     conditional: boolean,
   ): OnchainRelayResult;
+  settleProvenPositionPair?(pair: PairedPositionCloseRecord, conditional: boolean): OnchainRelayResult;
   withdraw(record: WithdrawalRecord): OnchainRelayResult;
   withdrawAsset(record: AssetWithdrawalRecord): OnchainRelayResult;
   liquidate(record: LiquidationRecord): OnchainRelayResult;

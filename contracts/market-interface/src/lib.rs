@@ -19,6 +19,7 @@ pub trait MarketInterface {
         new_index: i128,
     );
     fn funding_index(env: Env, market_id: BytesN<32>) -> i128;
+    fn maintenance_rate(env: Env, market_id: BytesN<32>) -> i128;
     fn is_active(env: Env, market_id: BytesN<32>) -> bool;
     fn mark_price(env: Env, market_id: BytesN<32>) -> MarketPrice;
 }

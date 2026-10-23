@@ -37,8 +37,10 @@ test("persists a private residual note before claim and reuses it after a failed
   let backedUpCommitment: Hex | undefined;
   let claimedCommitment: Hex | undefined;
   let proofCommitment: Hex | undefined;
+  let proofCalls = 0;
   const provider = {
-    depositNote: async (input: { amount: bigint; commitment: Hex; tokenDigest: Hex }) => {
+    secureDepositNote: async (input: { amount: bigint; commitment: Hex; tokenDigest: Hex }) => {
+      proofCalls += 1;
       proofCommitment = input.commitment;
       return {
         artifact: { proof: proofMeta(), proofBase64: "AA==", publicInputsBase64: "AA==", vkBase64: "AA==" },
@@ -75,7 +77,9 @@ test("persists a private residual note before claim and reuses it after a failed
   expect(privateSpendableBalance(session.ownerCommitment)).toBe(0n);
 
   failClaim = false;
-  const recovered = await recover();
+  const [recovered, concurrent] = await Promise.all([recover(), recover()]);
+  expect(concurrent?.commitment).toBe(recovered?.commitment);
+  expect(proofCalls).toBe(2);
   expect(recovered?.commitment).toBe(pending.commitment);
   expect(recovered?.status).toBe("available");
   expect(privateSpendableBalance(session.ownerCommitment)).toBe(5_000_000n);
@@ -91,6 +95,7 @@ test("persists a private residual note before claim and reuses it after a failed
   expect(confirmed?.commitment).toBe(pending.commitment);
   expect(privateMarginNotes(session.ownerCommitment).find((note) => note.commitment === unused.commitment)?.status).toBe("spent");
   expect(privatePendingBalance(session.ownerCommitment)).toBe(0n);
+  expect(proofCalls).toBe(2);
 });
 
 function proofMeta() {

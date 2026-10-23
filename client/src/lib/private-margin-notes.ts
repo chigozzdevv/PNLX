@@ -84,12 +84,13 @@ export function privateSpendableBalance(ownerCommitment?: Hex): bigint {
 
 export function privateReservedBalance(ownerCommitment?: Hex): bigint {
   const notes = privateMarginNotes(ownerCommitment);
-  const pendingChangeByIntent = new Map<Hex, bigint>();
+  const pendingChangeByIntent = new Map<string, bigint>();
   for (const note of notes) {
     if (note.status !== "pending" || !note.lockedByIntentCommitment) continue;
+    const key = intentCommitmentKey(note.lockedByIntentCommitment);
     pendingChangeByIntent.set(
-      note.lockedByIntentCommitment,
-      (pendingChangeByIntent.get(note.lockedByIntentCommitment) ?? 0n) + BigInt(note.amount),
+      key,
+      (pendingChangeByIntent.get(key) ?? 0n) + BigInt(note.amount),
     );
   }
 
@@ -98,7 +99,7 @@ export function privateReservedBalance(ownerCommitment?: Hex): bigint {
     .reduce((total, note) => {
       const amount = BigInt(note.amount);
       const pendingChange = note.lockedByIntentCommitment
-        ? (pendingChangeByIntent.get(note.lockedByIntentCommitment) ?? 0n)
+        ? (pendingChangeByIntent.get(intentCommitmentKey(note.lockedByIntentCommitment)) ?? 0n)
         : 0n;
       const reserved = amount > pendingChange ? amount - pendingChange : 0n;
       return total + reserved;
@@ -123,6 +124,7 @@ export function findPrivateMarginRepairCandidate(
 
   const source = sources[0];
   const change = changes[0];
+  if (!sameHex(source.assetDigest, change.assetDigest)) return undefined;
   const intentCommitment = source.lockedByIntentCommitment;
   if (!intentCommitment || !change.lockedByIntentCommitment) return undefined;
   if (source.commitment === change.commitment) return undefined;
@@ -145,11 +147,17 @@ export function findPrivateMarginRepairCandidate(
 
 export function repairPrivateMarginNotes(candidate: PrivateMarginRepairCandidate): boolean {
   const notes = readPrivateMarginNotes();
-  const source = notes.find((note) => note.commitment === candidate.sourceCommitment);
-  const change = notes.find((note) => note.commitment === candidate.changeCommitment);
+  const scope = currentPrivateMarginNoteRuntimeScope();
+  if (!scope) return false;
+  const source = notes.find((note) => isCurrentNote(note, scope) && sameHex(note.commitment, candidate.sourceCommitment));
+  const change = notes.find((note) => isCurrentNote(note, scope) && sameHex(note.commitment, candidate.changeCommitment));
   if (
     !source ||
     !change ||
+    !sameHex(source.ownerCommitment, change.ownerCommitment) ||
+    !sameHex(source.assetDigest, change.assetDigest) ||
+    BigInt(source.amount) !== candidate.sourceAmount ||
+    BigInt(change.amount) !== candidate.changeAmount ||
     source.status !== "locked" ||
     change.status !== "pending" ||
     !source.lockedByIntentCommitment ||
@@ -162,7 +170,7 @@ export function repairPrivateMarginNotes(candidate: PrivateMarginRepairCandidate
 
   const now = Date.now();
   writeNotes(notes.map((note) => {
-    if (note.commitment === candidate.sourceCommitment) {
+    if (note === source) {
       return {
         ...note,
         lockedByIntentCommitment: undefined,
@@ -170,7 +178,7 @@ export function repairPrivateMarginNotes(candidate: PrivateMarginRepairCandidate
         updatedAt: now,
       };
     }
-    if (note.commitment === candidate.changeCommitment) {
+    if (note === change) {
       return {
         ...note,
         status: "spent" as const,
@@ -188,7 +196,7 @@ export function privateMarginNotes(ownerCommitment?: Hex): StoredPrivateMarginNo
   return readPrivateMarginNotes()
     .filter((note) => note.runtimeScope === scope)
     .filter((note) => note.noteFormat === "secure")
-    .filter((note) => !ownerCommitment || note.ownerCommitment === ownerCommitment);
+    .filter((note) => !ownerCommitment || sameHex(note.ownerCommitment, ownerCommitment));
 }
 
 export function hasLocallyStoredPrivateMarginNotes(ownerCommitment: Hex): boolean {
@@ -223,6 +231,7 @@ export function privateMarginNoteRuntimeScopeFromHealth(
 ): string | undefined {
   const serverScope = normalizeRuntimeScope(health.runtime?.clientStorageScope);
   if (serverScope) return serverScope;
+  if (!health.stellar?.network || !health.custody?.collateralAsset?.tokenContract) return undefined;
 
   return normalizeRuntimeScope([
     "pnlx",
@@ -239,13 +248,13 @@ function readPrivateMarginNotes(): StoredPrivateMarginNote[] {
   if (!raw) return [];
 
   try {
-    const parsed = JSON.parse(raw) as unknown[];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) throw new Error("Private note storage is not a list");
     return parsed
       .map(normalizeNote)
       .filter((note): note is StoredPrivateMarginNote => Boolean(note));
-  } catch {
-    window.localStorage.removeItem(STORAGE_KEY);
-    return [];
+  } catch (cause) {
+    throw new Error("Private note storage is unreadable. Preserve this browser's data and restore its encrypted backup before continuing.", { cause });
   }
 }
 
@@ -254,16 +263,22 @@ export function savePrivateMarginNote(
     Partial<Pick<StoredPrivateMarginNote, "createdAt" | "status" | "updatedAt">>,
 ): StoredPrivateMarginNote {
   const now = Date.now();
+  const scope = normalizeRuntimeScope(input.runtimeScope) ?? currentPrivateMarginNoteRuntimeScope();
+  if (!scope) throw new Error("Private note runtime scope is unavailable");
+  const notes = readPrivateMarginNotes();
+  const existing = notes.find((note) => note.runtimeScope === scope && sameHex(note.commitment, input.commitment));
   const note: StoredPrivateMarginNote = {
     ...input,
-    createdAt: input.createdAt ?? now,
-    runtimeScope: input.runtimeScope ?? currentPrivateMarginNoteRuntimeScope(),
+    createdAt: input.createdAt ?? existing?.createdAt ?? now,
+    noteFormat: input.noteFormat ?? existing?.noteFormat,
+    runtimeScope: scope,
     status: input.status ?? "available",
     updatedAt: input.updatedAt ?? now,
   };
   writeNotes([
     note,
-    ...readPrivateMarginNotes().filter((existing) => existing.commitment !== note.commitment),
+    ...notes.filter((existing) =>
+      existing.runtimeScope !== scope || !sameHex(existing.commitment, note.commitment)),
   ]);
   return note;
 }
@@ -275,6 +290,7 @@ export function finalizePrivateMarginClaim(
 ): StoredPrivateMarginNote {
   const notes = readPrivateMarginNotes();
   const scope = currentPrivateMarginNoteRuntimeScope();
+  if (!scope) throw new Error("Private note runtime scope is unavailable");
   const target = notes.find((note) =>
     note.runtimeScope === scope &&
     note.commitment.toLowerCase() === commitment.toLowerCase() &&
@@ -318,12 +334,13 @@ export function planPrivateMarginNoteAllocations(input: {
   ownerCommitment: Hex;
 }): PrivateMarginNoteAllocation[] {
   if (input.amount <= 0n) throw new Error("Private margin must be positive");
-  const excludedCommitments = new Set(input.excludedCommitments ?? []);
+  const excludedCommitments = new Set([...(input.excludedCommitments ?? [])].map((value) => value.toLowerCase()));
   const candidates = (input.notes ?? privateMarginNotes(input.ownerCommitment))
-    .filter((note) => note.ownerCommitment === input.ownerCommitment)
+    .filter((note) => note.noteFormat === "secure")
+    .filter((note) => sameHex(note.ownerCommitment, input.ownerCommitment))
     .filter((note) => note.status === "available")
-    .filter((note) => !excludedCommitments.has(note.commitment))
-    .filter((note) => !input.assetDigest || note.assetDigest === input.assetDigest)
+    .filter((note) => !excludedCommitments.has(note.commitment.toLowerCase()))
+    .filter((note) => !input.assetDigest || sameHex(note.assetDigest, input.assetDigest))
     .sort((left, right) => compareBigInt(BigInt(left.amount), BigInt(right.amount)));
   const sufficient = candidates.find((note) => BigInt(note.amount) >= input.amount);
   if (sufficient) return [{ amount: input.amount, note: sufficient }];
@@ -352,8 +369,8 @@ export function selectWithdrawablePrivateMarginNote(input: {
 }): StoredPrivateMarginNote {
   const candidates = privateMarginNotes(input.ownerCommitment)
     .filter((note) => note.status === "available")
-    .filter((note) => !input.assetDigest || note.assetDigest === input.assetDigest)
-    .filter((note) => !input.commitment || note.commitment === input.commitment)
+    .filter((note) => !input.assetDigest || sameHex(note.assetDigest, input.assetDigest))
+    .filter((note) => !input.commitment || sameHex(note.commitment, input.commitment))
     .sort((left, right) => compareBigInt(BigInt(right.amount), BigInt(left.amount)));
   const note = candidates[0];
   if (note) return note;
@@ -362,9 +379,17 @@ export function selectWithdrawablePrivateMarginNote(input: {
 }
 
 export function lockPrivateMarginNote(commitment: Hex, intentCommitment: Hex): void {
+  const scope = currentPrivateMarginNoteRuntimeScope();
+  if (!scope) throw new Error("Private note runtime scope is unavailable");
+  const notes = readPrivateMarginNotes();
+  const target = notes.find((note) => isCurrentNote(note, scope) && sameHex(note.commitment, commitment));
+  if (!target || (target.status !== "available" &&
+      !(target.status === "locked" && target.lockedByIntentCommitment && sameHex(target.lockedByIntentCommitment, intentCommitment)))) {
+    throw new Error("Private margin input is already reserved or unavailable");
+  }
   writeNotes(
-    readPrivateMarginNotes().map((note) =>
-      note.commitment === commitment
+    notes.map((note) =>
+      isCurrentNote(note, scope) && sameHex(note.commitment, commitment)
         ? {
             ...note,
             lockedByIntentCommitment: intentCommitment,
@@ -377,9 +402,11 @@ export function lockPrivateMarginNote(commitment: Hex, intentCommitment: Hex): v
 }
 
 export function markPrivateMarginNoteSpent(commitment: Hex): void {
+  const scope = currentPrivateMarginNoteRuntimeScope();
+  if (!scope) throw new Error("Private note runtime scope is unavailable");
   writeNotes(
     readPrivateMarginNotes().map((note) =>
-      note.commitment === commitment
+      isCurrentNote(note, scope) && sameHex(note.commitment, commitment)
         ? {
             ...note,
             status: "spent" as const,
@@ -403,10 +430,12 @@ export function reconcilePrivateMarginNotes(input: {
   orders: ReconciledPrivateMarginOrder[];
 }): void {
   const notes = readPrivateMarginNotes();
-  const orderStatus = reconciledOrderStatuses(input.orders, notes);
+  const scope = currentPrivateMarginNoteRuntimeScope();
+  if (!scope) return;
+  const orderStatus = reconciledOrderStatuses(input.orders, notes.filter((note) => isCurrentNote(note, scope)));
   let changed = false;
   const next = notes.map((note) => {
-    if (!note.lockedByIntentCommitment) return note;
+    if (!isCurrentNote(note, scope) || !note.lockedByIntentCommitment) return note;
     const status = orderStatus.get(intentCommitmentKey(note.lockedByIntentCommitment));
     if (!status) return note;
 
@@ -519,10 +548,11 @@ function setReconciledOrderStatus(
 
 function reconciliationStatusPriority(status: ReconciledOrderStatus): number {
   switch (status) {
-    case "cancelled":
     case "filled":
-      return 3;
+      return 4;
     case "partially-filled":
+      return 3;
+    case "cancelled":
       return 2;
     case "open":
       return 1;
@@ -535,6 +565,14 @@ function intentCommitmentKey(intentCommitment: Hex): string {
 
 function noteNullifierKey(noteNullifier: Hex): string {
   return noteNullifier.toLowerCase();
+}
+
+function sameHex(left: Hex, right: Hex): boolean {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
+function isCurrentNote(note: StoredPrivateMarginNote, scope: string): boolean {
+  return note.runtimeScope === scope && note.noteFormat === "secure";
 }
 
 function writeNotes(notes: StoredPrivateMarginNote[]): void {
@@ -558,6 +596,10 @@ function normalizeNote(value: unknown): StoredPrivateMarginNote | undefined {
     !note.spendSecretDigest ||
     !note.walletAddress
   ) {
+    return undefined;
+  }
+  if (!/^\d+$/.test(String(note.amount)) || BigInt(note.amount) <= 0n) return undefined;
+  if (note.status !== undefined && !["available", "locked", "pending", "claiming", "spent"].includes(note.status)) {
     return undefined;
   }
   return {

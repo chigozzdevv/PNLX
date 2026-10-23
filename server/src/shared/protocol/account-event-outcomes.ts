@@ -19,6 +19,9 @@ import {
 import { encryptAccountEventPayload } from "@/shared/protocol/account-event-encryption";
 
 export interface PositionOpeningAccountEventPayload {
+  ownerDigest?: Hex;
+  positionSeed?: Hex;
+  fillIndex?: number;
   entryFee?: bigint;
   entryPrice: bigint;
   fundingIndex: bigint;
@@ -82,12 +85,14 @@ export function createPositionCloseAccountEvent(
   position: PositionLifecycleRecord,
   publicKey: string,
   createdAt = Date.now(),
+  closeOutputNote?: Record<string, string | number | undefined>,
 ): AccountEventRecord {
   const ciphertext = encryptAccountEventPayload(
     {
       kind: "position-close",
       position: lifecyclePayload(position),
       positionClose: record,
+      ...(closeOutputNote ? { closeOutputNote } : {}),
     },
     publicKey,
   );

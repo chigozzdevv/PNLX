@@ -8,9 +8,10 @@ export function LandingHero() {
         <h1>
           <span className="landing-hero-line">Trade perps with</span>
           <span className="landing-hero-line">
-            fully private <HeroRotator />.
+            proof-backed <HeroRotator />.
           </span>
         </h1>
+        <p>Testnet prototype. PNLX operators and hosted proving services can access order and position data.</p>
       </div>
       <div className="landing-app-preview landing-trade-ui-preview" aria-label="PNLX trading interface preview">
         <Image

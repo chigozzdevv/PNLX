@@ -30,8 +30,8 @@ export function LandingVerifiabilitySection() {
       <div className="landing-verifiable-copy">
         <h2>How PNLX stays verifiable.</h2>
         <p>
-          Private execution does not remove public verification. PNLX keeps trader state hidden while commitments, ZK
-          proofs, and Soroban settlement make every accepted state transition checkable.
+          Commitments, ZK proofs, and Soroban settlement support public verification of accepted state transitions.
+          The current operator and hosted provers can access the underlying trading inputs.
         </p>
 
         <ul className="landing-verifiable-list" aria-label="PNLX trust layer">

@@ -152,6 +152,8 @@ function intent(label: string, signedSize: bigint, limitPrice: bigint): PrivateM
     noteChangeCommitment: "0x0",
     noteNullifier: hashFields("nullifier", [label]),
     ownerCommitment: hashFields("owner", [label]),
+    ownerDigest: hashFields("fixture-owner-digest", [label]),
+    positionSeed: hashFields("fixture-position-seed", [label]),
     signedSize,
   };
 }

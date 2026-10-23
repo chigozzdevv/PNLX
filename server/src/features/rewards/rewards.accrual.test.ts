@@ -1,3 +1,4 @@
+import { hashFields } from "@pnlx/crypto";
 import { describe, expect, test } from "bun:test";
 import { fillFees, PRICE_SCALE } from "@pnlx/market-math";
 import type { BatchSettlement, Hex, IntentRecord, PrivateMatchIntent } from "@pnlx/protocol-types";
@@ -22,7 +23,8 @@ function addFill(store: ProtocolStore, number: number, makerOwner = MAKER): Batc
       margin: 100n * 10_000_000n, marketId: "xlm-usd-perp",
       noteChangeCommitment: `0x${"00".repeat(32)}` as Hex,
       noteNullifier: `0x${"66".repeat(32)}` as Hex,
-      ownerCommitment: owner, signedSize } satisfies PrivateMatchIntent;
+      ownerCommitment: owner, ownerDigest: hashFields("fixture-owner-digest", [owner]),
+      positionSeed: hashFields("fixture-position-seed", [id]), signedSize } satisfies PrivateMatchIntent;
     store.privateMatchIntents.set(id, payload);
     store.intents.set(id, { batchId: payload.batchId, intentCommitment: id,
       marketId: payload.marketId, matchingPayloadCommitment: matchingPayloadCommitment(payload),

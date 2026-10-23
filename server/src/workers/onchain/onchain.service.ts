@@ -11,6 +11,7 @@ import type {
   LiquidationRecord,
   MarketConfig,
   PositionCloseRecord,
+  PairedPositionCloseRecord,
   ProofMeta,
   WithdrawalRecord,
 } from "@pnlx/protocol-types";
@@ -56,6 +57,32 @@ export class OnchainRelayService implements OnchainRelay {
   marketPrice(marketId: string): bigint {
     if (!this.config.enabled) throw new Error("on-chain relay is disabled");
     return this.currentMarketPrice(marketId);
+  }
+
+  async marketPriceAsync(marketId: string): Promise<bigint> {
+    return (await this.marketPriceSnapshotAsync(marketId)).price;
+  }
+
+  marketFundingIndex(marketId: string): bigint {
+    if (!this.config.enabled) throw new Error("on-chain relay is disabled");
+    const result = this.relayer.read({kind:"market",payload:{
+      contractId:contractId(this.deployment(),"market"),functionName:"funding_index",
+      args:["--market_id",marketKey(marketId)],send:"no",
+    }});
+    const value = (result.stdout ?? result.output).trim().replace(/^"|"$/g, "");
+    if (!/^-?\d+$/.test(value)) throw new Error("invalid on-chain funding index");
+    return BigInt(value);
+  }
+
+  async marketFundingIndexAsync(marketId: string): Promise<bigint> {
+    if (!this.config.enabled) throw new Error("on-chain relay is disabled");
+    const result = await this.relayer.readAsync({ kind: "market", payload: {
+      contractId: contractId(this.deployment(), "market"), functionName: "funding_index",
+      args: ["--market_id", marketKey(marketId)], send: "no",
+    } });
+    const value = (result.stdout ?? result.output).trim().replace(/^"|"$/g, "");
+    if (!/^-?\d+$/.test(value)) throw new Error("invalid on-chain funding index");
+    return BigInt(value);
   }
 
   async marketPriceSnapshotAsync(marketId: string): Promise<{ price: bigint; timestamp: number }> {
@@ -197,6 +224,7 @@ export class OnchainRelayService implements OnchainRelay {
     if (!this.config.enabled) return empty();
     return {
       relays: [
+        this.invokeProofVerifier(record.proof),
         this.invoke("intent", "intent-registry", "submit", [
           "--batch_id",
           bytes32(batchKey(record.batchId)),
@@ -210,6 +238,9 @@ export class OnchainRelayService implements OnchainRelay {
           bytes32(record.marginRoot),
           "--note_nullifier",
           bytes32(record.noteNullifier),
+          "--current_batch", record.currentBatch.toString(),
+          "--note_change_commitment", bytes32(record.noteChangeCommitment),
+          "--proof", proofArg(record.proof),
         ]),
       ],
     };
@@ -219,6 +250,7 @@ export class OnchainRelayService implements OnchainRelay {
     if (!this.config.enabled) return empty();
     return {
       relays: [
+        await this.invokeProofVerifierAsync(record.proof),
         await this.invokeAsync("intent", "intent-registry", "submit", [
           "--batch_id",
           bytes32(batchKey(record.batchId)),
@@ -232,6 +264,9 @@ export class OnchainRelayService implements OnchainRelay {
           bytes32(record.marginRoot),
           "--note_nullifier",
           bytes32(record.noteNullifier),
+          "--current_batch", record.currentBatch.toString(),
+          "--note_change_commitment", bytes32(record.noteChangeCommitment),
+          "--proof", proofArg(record.proof),
         ]),
       ],
     };
@@ -304,7 +339,7 @@ export class OnchainRelayService implements OnchainRelay {
         send: "no",
       },
     });
-    return result.output.trim().toLowerCase().includes("true");
+    return parseStrictBoolean(result.stdout ?? result.output, "intent registration status");
   }
 
   intentSubmissionSequence(intentCommitment: Hex): bigint {
@@ -354,7 +389,36 @@ export class OnchainRelayService implements OnchainRelay {
         send: "no",
       },
     });
-    return result.output.trim().toLowerCase().includes("true");
+    return parseStrictBoolean(result.stdout ?? result.output, "intent registration status");
+  }
+
+  async isIntentActiveAsync(intentCommitment: Hex): Promise<boolean> {
+    if (!this.config.enabled) throw new Error("intent status requires on-chain relay");
+    const result = await this.relayer.readAsync({ kind: "intent", payload: {
+      args: ["--intent_commitment", bytes32(intentCommitment)],
+      contractId: contractId(this.deployment(), "intent-registry"), functionName: "is_active_intent", send: "no",
+    } });
+    return parseStrictBoolean(result.stdout ?? result.output, "intent active status");
+  }
+
+  async intentMatchingPayloadCommitmentAsync(intentCommitment: Hex): Promise<Hex> {
+    if (!this.config.enabled) throw new Error("intent payload requires on-chain relay");
+    const result = await this.relayer.readAsync({ kind: "intent", payload: {
+      args: ["--intent_commitment", bytes32(intentCommitment)],
+      contractId: contractId(this.deployment(), "intent-registry"), functionName: "matching_payload_commitment", send: "no",
+    } });
+    const payload = (result.stdout ?? result.output).trim().replace(/^"|"$/g, "");
+    if (!/^(?:0x)?[0-9a-f]{64}$/i.test(payload)) throw new Error("invalid intent matching payload commitment");
+    return `0x${payload.replace(/^0x/i, "").toLowerCase()}`;
+  }
+
+  async isSecureNullifierSpentAsync(noteNullifier: Hex): Promise<boolean> {
+    if (!this.config.enabled) throw new Error("secure nullifier status requires on-chain relay");
+    const result = await this.relayer.readAsync({ kind: "contract-invoke", payload: {
+      args: ["--nullifier", bytes32(noteNullifier)],
+      contractId: contractId(this.deployment(), "shielded-pool"), functionName: "is_spent", send: "no",
+    } });
+    return parseStrictBoolean(result.stdout ?? result.output, "secure nullifier status");
   }
 
   isMarketActive(marketId: string): boolean {
@@ -410,12 +474,12 @@ export class OnchainRelayService implements OnchainRelay {
     };
   }
 
-  async upsertMarketAsync(record: MarketConfig, config: OnchainMarketConfig): Promise<OnchainRelayResult> {
+  async upsertMarketAsync(record: MarketConfig, config: OnchainMarketConfig, signal?: AbortSignal): Promise<OnchainRelayResult> {
     if (!this.config.enabled) return empty();
     const { args, functionName } = marketUpsertInvocation(this.deployment(), record, config);
 
     return {
-      relays: [await this.invokeAsync("market", "market", functionName, args)],
+      relays: [await this.invokeAsync("market", "market", functionName, args, false, signal)],
     };
   }
 
@@ -496,7 +560,7 @@ export class OnchainRelayService implements OnchainRelay {
             "--timestamp",
             String(input.timestamp),
           ],
-        })],
+        }, input.signal)],
       };
     }
 
@@ -522,7 +586,7 @@ export class OnchainRelayService implements OnchainRelay {
           "--timestamp",
           String(input.timestamp),
         ],
-      }));
+      }, input.signal));
     }
     return { relays };
   }
@@ -651,7 +715,7 @@ export class OnchainRelayService implements OnchainRelay {
         send: "no",
       },
     });
-    return result.output.trim().toLowerCase().includes("true");
+    return strictBatchSettlementStatus(result.stdout);
   }
 
   async isBatchSettledAsync(batchId: string, marketId: string, settlementDigest?: Hex): Promise<boolean> {
@@ -672,7 +736,29 @@ export class OnchainRelayService implements OnchainRelay {
         send: "no",
       },
     });
-    return result.output.trim().toLowerCase().includes("true");
+    return strictBatchSettlementStatus(result.stdout);
+  }
+
+  async batchPositionAppendIndexAsync(batchId: string, marketId: string): Promise<number> {
+    if (!this.config.enabled) throw new Error("batch append index requires on-chain relay");
+    const result = await this.relayer.readAsync({
+      kind: "batch-settlement",
+      payload: {
+        args: ["--batch_id", bytes32(batchKey(batchId)), "--market_id", marketKey(marketId)],
+        contractId: contractId(this.deployment(), "batch-settlement"),
+        functionName: "settlement_meta", send: "no",
+      },
+    });
+    let metadata: unknown;
+    try { metadata = JSON.parse(result.stdout ?? result.output); }
+    catch { throw new Error("invalid batch settlement metadata"); }
+    if (Array.isArray(metadata) && metadata.length === 1) metadata = metadata[0];
+    if (metadata && typeof metadata === "object" && "Some" in metadata) metadata = (metadata as { Some: unknown }).Some;
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) throw new Error("batch settlement metadata is missing");
+    const raw = (metadata as Record<string, unknown>).first_position_index;
+    const index = typeof raw === "number" ? raw : typeof raw === "string" && /^\d+$/.test(raw) ? Number(raw) : NaN;
+    if (!Number.isSafeInteger(index) || index < 0 || index > 0xffff_ffff) throw new Error("invalid batch position append index");
+    return index;
   }
 
   positionRoot(): Hex {
@@ -750,6 +836,14 @@ export class OnchainRelayService implements OnchainRelay {
     };
   }
 
+  async registerConditionalOrderAsync(record: ConditionalOrderCommitment): Promise<OnchainRelayResult> {
+    if (!this.config.enabled) return empty();
+    return { relays: [await this.invokeAsync("conditional-order", "conditional-order", "register", [
+      "--market_id", marketKey(record.marketId), "--position_nullifier", bytes32(record.positionNullifier),
+      "--close_commitment", bytes32(record.closeCommitment),
+    ])] };
+  }
+
   triggerConditionalClose(record: ConditionalOrderRecord): OnchainRelayResult {
     if (!this.config.enabled) return empty();
     this.assertCurrentMarketPrice(record.marketId, record.markPrice, "conditional close");
@@ -772,6 +866,24 @@ export class OnchainRelayService implements OnchainRelay {
         ], record.marketId, record.markPrice, "conditional close"),
       ],
     };
+  }
+
+  async triggerConditionalCloseAsync(record: ConditionalOrderRecord): Promise<OnchainRelayResult> {
+    if (!this.config.enabled) return empty();
+    await this.assertCurrentMarketPriceAsync(record.marketId, record.markPrice, "conditional close");
+    const proofVerification = await this.invokeProofVerifierAsync(record.proof);
+    await this.assertCurrentMarketPriceAsync(record.marketId, record.markPrice, "conditional close");
+    try {
+      const trigger = await this.invokeAsync("conditional-close", "conditional-order", "trigger", [
+        "--market_id", marketKey(record.marketId), "--position_nullifier", bytes32(record.positionNullifier),
+        "--close_commitment", bytes32(record.closeCommitment), "--mark_price", record.markPrice.toString(),
+        "--proof", proofArg(record.proof),
+      ]);
+      return { relays: [proofVerification, trigger] };
+    } catch (error) {
+      await this.assertCurrentMarketPriceAsync(record.marketId, record.markPrice, "conditional close");
+      throw error;
+    }
   }
 
   settlePositionClose(record: PositionCloseRecord): OnchainRelayResult {
@@ -807,6 +919,97 @@ export class OnchainRelayService implements OnchainRelay {
     };
   }
 
+  settleProvenPositionPair(pair: PairedPositionCloseRecord, conditional: boolean): OnchainRelayResult {
+    if (!this.config.enabled) return empty();
+    if (pair.positions.some(position => position.marketId !== pair.marketId ||
+      position.markPrice !== pair.markPrice || position.currentFundingIndex !== pair.currentFundingIndex ||
+      position.positionRoot !== pair.positionRoot || position.proof.publicInputHash !== pair.proof.publicInputHash)) {
+      throw new Error("paired close record mismatch");
+    }
+    if (pair.proof.circuitId !== "position-close-pair") throw new Error("combined paired close proof required");
+    this.assertCurrentMarketPrice(pair.marketId, pair.markPrice, "paired position close");
+    const proofVerification = this.invokeProofVerifier(pair.proof);
+    this.assertCurrentMarketPrice(pair.marketId, pair.markPrice, "paired position close");
+    const args = JSON.stringify({
+      market_id: marketKey(pair.marketId), mark_price: pair.markPrice.toString(),
+      liquidation: pair.liquidation, position_root: bytes32(pair.positionRoot),
+      position_commitments: pair.positions.map(position => bytes32(position.positionCommitment)),
+      position_nullifiers: pair.positions.map(position => bytes32(position.positionNullifier)),
+      close_commitments: pair.positions.map(position => bytes32(position.closeCommitment)),
+      new_position_commitments: pair.positions.map(position => bytes32(position.newPositionCommitment)),
+      margin_output_commitments: pair.positions.map(position => bytes32(position.marginOutputCommitment)),
+    });
+    return {relays: [proofVerification,
+      this.invokeWithMarketPriceGuard("position-close", "position-close",
+        conditional ? "settle_pair_conditional_proven" : "settle_pair_proven", [
+          "--args", args, "--proof", proofArg(pair.proof),
+        ], pair.marketId, pair.markPrice, "paired position close")]};
+  }
+
+  async settleJournaledPositionPair(pair: PairedPositionCloseRecord, conditional: boolean,
+    beforeSubmit:(prepared:{txHash:Hex;xdr:string})=>Promise<void>,
+    prepared?:{txHash:Hex;xdr:string}):Promise<OnchainRelayResult> {
+    if(!this.config.enabled)return empty();
+    if(pair.proof.circuitId!=="position-close-pair" || pair.positions.some((position)=>
+      position.marketId!==pair.marketId || position.markPrice!==pair.markPrice ||
+      position.currentFundingIndex!==pair.currentFundingIndex || position.positionRoot!==pair.positionRoot ||
+      position.proof.publicInputHash!==pair.proof.publicInputHash))throw new Error("paired close record mismatch");
+    const proofVerification=prepared?undefined:await this.invokeProofVerifierAsync(pair.proof);
+    const args=JSON.stringify({market_id:marketKey(pair.marketId),mark_price:pair.markPrice.toString(),
+      liquidation:pair.liquidation,position_root:bytes32(pair.positionRoot),
+      position_commitments:pair.positions.map((position)=>bytes32(position.positionCommitment)),
+      position_nullifiers:pair.positions.map((position)=>bytes32(position.positionNullifier)),
+      close_commitments:pair.positions.map((position)=>bytes32(position.closeCommitment)),
+      new_position_commitments:pair.positions.map((position)=>bytes32(position.newPositionCommitment)),
+      margin_output_commitments:pair.positions.map((position)=>bytes32(position.marginOutputCommitment))});
+    const relay=await this.relayer.relayJournaled({kind:"position-close",payload:{
+      contractId:contractId(this.deployment(),"position-close"),
+      functionName:conditional?"settle_pair_conditional_proven":"settle_pair_proven",
+      args:["--args",args,"--proof",proofArg(pair.proof)],send:"yes",
+    }},beforeSubmit,prepared);
+    return {relays:[...(proofVerification?[proofVerification]:[]),relay]};
+  }
+
+  positionPairTransactionStatus(txHash:Hex):Promise<"SUCCESS"|"FAILED"|"NOT_FOUND"> {
+    return this.relayer.readTransactionStatus(txHash);
+  }
+
+  async positionCloseSettlementTransaction(closeCommitment:Hex):Promise<Hex> {
+    if(!this.config.enabled)throw new Error("close receipt lookup requires on-chain relay");
+    const closeContract=contractId(this.deployment(),"position-close");
+    const result=await this.relayer.readAsync({kind:"position-close",payload:{
+      contractId:closeContract,functionName:"closed_ledger",args:["--close_commitment",bytes32(closeCommitment)],send:"no",
+    }});
+    const raw=(result.stdout ?? result.output).trim().replace(/^"|"$/g,"");
+    const ledger=Number(raw);
+    if(!/^\d+$/.test(raw)||!Number.isSafeInteger(ledger)||ledger<=0)throw new Error("close settlement ledger is unavailable");
+    const txHash=await this.relayer.findContractEventTransaction(closeContract,ledger,closeCommitment);
+    if(await this.relayer.readTransactionStatus(txHash)!=="SUCCESS")throw new Error("close receipt is not confirmed successful");
+    return txHash;
+  }
+
+  isConditionalTriggered(marketId: string, positionNullifier: Hex, closeCommitment: Hex): boolean {
+    if (!this.config.enabled) throw new Error("conditional trigger status requires on-chain relay");
+    const result = this.relayer.read({ kind: "contract-invoke", payload: {
+      args: ["--market_id", marketKey(marketId), "--position_nullifier", bytes32(positionNullifier),
+        "--close_commitment", bytes32(closeCommitment)],
+      contractId: contractId(this.deployment(), "conditional-order"), functionName: "is_triggered_for", send: "no",
+    } });
+    const status = result.output.trim().replace(/^"|"$/g, "");
+    if (status !== "true" && status !== "false") throw new Error("invalid conditional trigger status");
+    return status === "true";
+  }
+
+  async isConditionalTriggeredAsync(marketId: string, positionNullifier: Hex, closeCommitment: Hex): Promise<boolean> {
+    if (!this.config.enabled) throw new Error("conditional trigger status requires on-chain relay");
+    const result = await this.relayer.readAsync({ kind: "contract-invoke", payload: {
+      args: ["--market_id", marketKey(marketId), "--position_nullifier", bytes32(positionNullifier),
+        "--close_commitment", bytes32(closeCommitment)],
+      contractId: contractId(this.deployment(), "conditional-order"), functionName: "is_triggered_for", send: "no",
+    } });
+    return parseAuthoritativeBoolean(result.stdout, "conditional trigger status");
+  }
+
   isPositionCloseSettled(closeCommitment: Hex): boolean {
     if (!this.config.enabled) throw new Error("position close status requires on-chain relay");
     const result = this.relayer.read({
@@ -823,6 +1026,43 @@ export class OnchainRelayService implements OnchainRelay {
       throw new Error("invalid position close settlement status");
     }
     return status === "true";
+  }
+
+  async isPositionCloseSettledAsync(closeCommitment: Hex): Promise<boolean> {
+    if (!this.config.enabled) throw new Error("position close status requires on-chain relay");
+    const result = await this.relayer.readAsync({ kind: "contract-invoke", payload: {
+      args: ["--close_commitment", bytes32(closeCommitment)],
+      contractId: contractId(this.deployment(), "position-close"), functionName: "is_settled", send: "no",
+    } });
+    return parseAuthoritativeBoolean(result.stdout, "position close settlement status");
+  }
+
+  positionCloseAppendIndex(closeCommitment:Hex):number {
+    if(!this.config.enabled)throw new Error("position close index requires on-chain relay");
+    const result=this.relayer.read({kind:"contract-invoke",payload:{
+      contractId:contractId(this.deployment(),"position-close"),functionName:"output_position_index",
+      args:["--close_commitment",bytes32(closeCommitment)],send:"no",
+    }});
+    const encoded=(result.stdout ?? result.output).trim();
+    const raw=encoded.startsWith('"')?JSON.parse(encoded):encoded;
+    if(!/^\d+$/.test(String(raw)))throw new Error("invalid position close append index");
+    const index=Number(raw);
+    if(!Number.isSafeInteger(index)||index<0||index>0xffffffff)throw new Error("invalid position close append index");
+    return index;
+  }
+
+  async positionCloseAppendIndexAsync(closeCommitment: Hex): Promise<number> {
+    if (!this.config.enabled) throw new Error("position close index requires on-chain relay");
+    const result = await this.relayer.readAsync({ kind: "contract-invoke", payload: {
+      contractId: contractId(this.deployment(), "position-close"), functionName: "output_position_index",
+      args: ["--close_commitment", bytes32(closeCommitment)], send: "no",
+    } });
+    const encoded = (result.stdout ?? result.output).trim();
+    const raw = encoded.startsWith('"') ? JSON.parse(encoded) : encoded;
+    if (!/^\d+$/.test(String(raw))) throw new Error("invalid position close append index");
+    const index = Number(raw);
+    if (!Number.isSafeInteger(index) || index < 0 || index > 0xffff_ffff) throw new Error("invalid position close append index");
+    return index;
   }
 
   private settlePositionCloseWith(
@@ -1078,6 +1318,7 @@ export class OnchainRelayService implements OnchainRelay {
     functionName: string,
     args: string[],
     verifier = false,
+    signal?: AbortSignal,
   ) {
     return this.invokePayloadAsync(kind, {
       args,
@@ -1085,7 +1326,7 @@ export class OnchainRelayService implements OnchainRelay {
         ? verifierId(this.deployment(), contractName)
         : contractId(this.deployment(), contractName),
       functionName,
-    });
+    }, signal);
   }
 
   private invokeWithMarketPriceGuard(
@@ -1115,6 +1356,13 @@ export class OnchainRelayService implements OnchainRelay {
       throw new Error(
         `${operation} mark price mismatch: proof ${expectedPrice}, on-chain ${currentPrice}`,
       );
+    }
+  }
+
+  private async assertCurrentMarketPriceAsync(marketId: string, expectedPrice: bigint, operation: string): Promise<void> {
+    const currentPrice = await this.marketPriceAsync(marketId);
+    if (currentPrice !== expectedPrice) {
+      throw new Error(`${operation} mark price mismatch: proof ${expectedPrice}, on-chain ${currentPrice}`);
     }
   }
 
@@ -1162,8 +1410,9 @@ export class OnchainRelayService implements OnchainRelay {
       send?: "default" | "no" | "yes";
       source?: string;
     },
+    signal?: AbortSignal,
   ) {
-    return this.relayer.relayAsync({ kind, payload });
+    return this.relayer.relayAsync({ kind, payload, signal });
   }
 
   private depositAssetPayload(input: AssetDepositRelayInput, buildOnly = false) {
@@ -1330,6 +1579,29 @@ function parseHex32(output: string, label: string): Hex {
   const match = output.match(/(?:0x)?([0-9a-fA-F]{64})/);
   if (!match) throw new Error(`${label} did not return bytes32`);
   return `0x${match[1].toLowerCase()}`;
+}
+
+function parseStrictBoolean(output: string, label: string): boolean {
+  const value = output.trim().replace(/^"|"$/g, "");
+  if (value !== "true" && value !== "false") throw new Error(`invalid ${label}`);
+  return value === "true";
+}
+
+function parseAuthoritativeBoolean(stdout: string | undefined, label: string): boolean {
+  if (stdout === undefined) throw new Error(`invalid ${label}`);
+  let value: unknown;
+  try { value = JSON.parse(stdout); } catch { throw new Error(`invalid ${label}`); }
+  if (typeof value !== "boolean") throw new Error(`invalid ${label}`);
+  return value;
+}
+
+function strictBatchSettlementStatus(stdout: string | undefined): boolean {
+  if (typeof stdout !== "string") throw new Error("invalid batch settlement status");
+  let value: unknown;
+  try { value = JSON.parse(stdout); }
+  catch { throw new Error("invalid batch settlement status"); }
+  if (typeof value !== "boolean") throw new Error("invalid batch settlement status");
+  return value;
 }
 
 function parseInteger(output: string, label: string): bigint {

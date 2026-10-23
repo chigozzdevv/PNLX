@@ -7,11 +7,14 @@ import {
   defaultClientProofProvider,
   registerProofBundle,
   type ClientProofProvider,
+  type IntentValidityRecord,
 } from "@/lib/client-proof-provider";
-import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
+import { storePendingConditionalStrategy as persistConditionalStrategy } from "@/lib/conditional-orders";
+import { pnlxGet, pnlxPost, PnlxApiError } from "@/lib/pnlx-api";
 import { createSecureMarginNote, randomLabel } from "@/lib/private-note";
 import { backUpExistingPrivateMarginNotes, backUpPrivateMarginNote, unlockPrivateNoteBackup } from "@/lib/private-note-backup";
 import {
+  currentPrivateMarginNoteRuntimeScope,
   lockPrivateMarginNote,
   markPrivateMarginNoteSpent,
   privateMarginNoteRuntimeScopeFromHealth,
@@ -25,9 +28,8 @@ import {
 } from "@/lib/private-margin-notes";
 import { usdcToProtocolAmount } from "@/lib/asset-units";
 import { RATE_SCALE, TAKER_FEE_PPM } from "@pnlx/market-math";
-import type { Hex, MarketDisplay, ServerIntentRecord, Side } from "@/types/trading";
+import type { Hex, MarketDisplay, ServerIntentRecord, ServerPortfolioSnapshot, Side } from "@/types/trading";
 import type { WalletSession } from "@/lib/wallet-auth";
-import type { ServerProofMeta } from "@/types/trading";
 
 const PRICE_SCALE = 100_000_000n;
 const LEVERAGE_SCALE = 1_000_000n;
@@ -336,7 +338,7 @@ async function submitCustodySharedTradeIntent(
   };
 }
 
-async function submitCustodyIntentFragment(
+export async function submitCustodyIntentFragment(
   input: SubmitTradeIntentInput & {
     allocation: PrivateMarginNoteAllocation;
     batchId: string;
@@ -353,6 +355,9 @@ async function submitCustodyIntentFragment(
   const proofProvider = input.proofProvider ?? defaultClientProofProvider();
   if (!proofProvider) throw new Error("Client proof provider is not configured");
   const { amount: margin, note } = input.allocation;
+  let reservedIntentCommitment: Hex | undefined;
+  let pendingChangeCommitment: Hex | undefined;
+  if (!note.runtimeScope || note.runtimeScope !== currentPrivateMarginNoteRuntimeScope()) throw new Error("Private margin runtime changed before submission");
   try {
     const noteAmount = BigInt(note.amount);
     const changeAmount = noteAmount - margin;
@@ -412,17 +417,24 @@ async function submitCustodyIntentFragment(
       input.session.token,
     );
     const validityRecord = normalizeIntentValidity(validity);
+    if (note.runtimeScope !== currentPrivateMarginNoteRuntimeScope()) throw new Error("Private margin runtime changed during proving");
+    const conditionalPolicy = prepareConditionalIntentPolicy(validityRecord.intentCommitment, input);
     if (changeNote) {
       const pending = savePendingPrivateMarginChange({
         amount: changeNote.amount.toString(), assetDigest: changeNote.assetDigest,
         blinding: changeNote.blinding, commitment: changeNote.commitment,
         noteNullifier: changeNote.noteNullifier, ownerCommitment: input.session.ownerCommitment,
+        lockedByIntentCommitment: validityRecord.intentCommitment,
+        runtimeScope: note.runtimeScope,
         noteFormat: "secure",
         ownerDigest: changeNote.ownerDigest, rhoDigest: changeNote.rhoDigest,
         spendSecretDigest: changeNote.spendSecretDigest, walletAddress: input.session.address,
       });
+      pendingChangeCommitment = changeNote.commitment;
       await backUpPrivateMarginNote(pending, input.session);
     }
+    lockPrivateMarginNote(note.commitment, validityRecord.intentCommitment);
+    reservedIntentCommitment = validityRecord.intentCommitment;
     markProgress(input, "matching");
     const response = await pnlxPost<IntentSubmitResponse>(
       "/intents",
@@ -438,31 +450,43 @@ async function submitCustodyIntentFragment(
           currentBatch: validityRecord.currentBatch.toString(),
           expiryBatch: validityRecord.expiryBatch.toString(),
         },
+        conditionalPolicy,
       },
       input.session.token,
     );
     const submittedIntent = intentRecordFromResponse(response);
-    if (changeNote) {
-      savePendingPrivateMarginChange({
-        amount: changeNote.amount.toString(),
-        assetDigest: changeNote.assetDigest,
-        blinding: changeNote.blinding,
-        commitment: changeNote.commitment,
-        lockedByIntentCommitment: submittedIntent.intentCommitment,
-        noteNullifier: changeNote.noteNullifier,
-        ownerCommitment: input.session.ownerCommitment,
-        ownerDigest: changeNote.ownerDigest,
-        rhoDigest: changeNote.rhoDigest,
-        spendSecretDigest: changeNote.spendSecretDigest,
-        walletAddress: input.session.address,
-      });
+    if (submittedIntent.intentCommitment.toLowerCase() !== validityRecord.intentCommitment.toLowerCase() ||
+        submittedIntent.ownerCommitment.toLowerCase() !== input.session.ownerCommitment.toLowerCase() ||
+        submittedIntent.marketId !== input.market.marketId) {
+      throw new Error("Intent submission confirmation does not match the authorized order");
     }
-    lockPrivateMarginNote(note.commitment, submittedIntent.intentCommitment);
-    storePendingConditionalStrategy(submittedIntent.intentCommitment, input);
     return submittedIntent;
   } catch (error) {
-    if (isRecoverablePrivateMarginNoteError(error)) markPrivateMarginNoteSpent(note.commitment);
+    if (note.runtimeScope !== currentPrivateMarginNoteRuntimeScope()) throw error;
+    if (reservedIntentCommitment) {
+      if (error instanceof PnlxApiError && error.submissionRejected) {
+        reconcilePrivateMarginNotes({ orders: [{ intentCommitment: reservedIntentCommitment, status: "cancelled" }] });
+      } else {
+        await reconcileAmbiguousIntentSubmission(input.session, reservedIntentCommitment);
+      }
+    } else {
+      if (pendingChangeCommitment) markPrivateMarginNoteSpent(pendingChangeCommitment);
+      if (isRecoverablePrivateMarginNoteError(error)) markPrivateMarginNoteSpent(note.commitment);
+    }
     throw error;
+  }
+}
+
+async function reconcileAmbiguousIntentSubmission(session: WalletSession, intentCommitment: Hex): Promise<void> {
+  try {
+    const { portfolio } = await pnlxGet<{ portfolio: ServerPortfolioSnapshot }>(
+      `/portfolio?ownerCommitment=${encodeURIComponent(session.ownerCommitment)}`, session.token,
+    );
+    if (portfolio.ownerCommitment.toLowerCase() !== session.ownerCommitment.toLowerCase()) return;
+    const orders = portfolio.orders.filter((order) => order.intentCommitment.toLowerCase() === intentCommitment.toLowerCase());
+    reconcilePrivateMarginNotes({ orders });
+  } catch {
+    // Absence or an unavailable service cannot prove an accepted intent was rejected.
   }
 }
 
@@ -657,30 +681,9 @@ function normalizeConditionalStrategy(
   };
 }
 
-function normalizeIntentValidity(input: {
-  batchDigest: Hex;
-  currentBatch: string;
-  expiryBatch: string;
-  intentCommitment: Hex;
-  marketDigest: Hex;
-  marginRoot: Hex;
-  noteChangeCommitment: Hex;
-  noteCommitment: Hex;
-  noteNullifier: Hex;
-  ownerCommitmentField: Hex;
-  proof: ServerProofMeta;
-}): {
-  batchDigest: Hex;
+function normalizeIntentValidity(input: IntentValidityRecord): Omit<IntentValidityRecord, "currentBatch" | "expiryBatch"> & {
   currentBatch: bigint;
   expiryBatch: bigint;
-  intentCommitment: Hex;
-  marketDigest: Hex;
-  marginRoot: Hex;
-  noteChangeCommitment: Hex;
-  noteCommitment: Hex;
-  noteNullifier: Hex;
-  ownerCommitmentField: Hex;
-  proof: ServerProofMeta;
 } {
   return {
     ...input,
@@ -735,14 +738,28 @@ function storePendingConditionalStrategy(
     protocolSize: bigint;
   },
 ): void {
-  if (typeof window === "undefined" || !input.conditionalStrategy) return;
-  const key = "pnlx.private.conditional-strategies";
-  const existing = window.localStorage.getItem(key);
-  const strategies = existing ? JSON.parse(existing) as unknown[] : [];
-  window.localStorage.setItem(key, JSON.stringify([
-    ...strategies,
-    {
-      createdAt: Date.now(),
+  prepareConditionalIntentPolicy(intentCommitment, input);
+}
+
+export interface ConditionalIntentPolicy {
+  stopLossPrice?: string;
+  stopLossSalt?: string;
+  takeProfitPrice?: string;
+  takeProfitSalt?: string;
+}
+
+export function prepareConditionalIntentPolicy(
+  intentCommitment: Hex,
+  input: SubmitTradeIntentInput & {
+    conditionalStrategy: PendingConditionalStrategyInput | null;
+    entryPriceProtocol: bigint;
+    limitPriceProtocol: bigint;
+    marginProtocol: bigint;
+    protocolSize: bigint;
+  },
+): ConditionalIntentPolicy | undefined {
+  if (typeof window === "undefined" || !input.conditionalStrategy) return undefined;
+  const strategy = persistConditionalStrategy({
       entryLimitPrice: input.entryPriceProtocol.toString(),
       intentCommitment,
       leverage: input.leverage,
@@ -751,9 +768,14 @@ function storePendingConditionalStrategy(
       ownerCommitment: input.session.ownerCommitment,
       side: input.side,
       size: input.protocolSize.toString(),
-      status: "pending-position",
       stopLossPrice: input.conditionalStrategy.stopLossPrice?.toString() ?? null,
       takeProfitPrice: input.conditionalStrategy.takeProfitPrice?.toString() ?? null,
-    },
-  ]));
+  });
+  if (!strategy) throw new Error("Private conditional policy could not be persisted");
+  return {
+    stopLossPrice: strategy.stopLossPrice ?? undefined,
+    stopLossSalt: strategy.stopLossSalt ?? undefined,
+    takeProfitPrice: strategy.takeProfitPrice ?? undefined,
+    takeProfitSalt: strategy.takeProfitSalt ?? undefined,
+  };
 }

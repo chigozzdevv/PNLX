@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -29,6 +29,8 @@ describe("batch capacity diagnostics", () => {
       intentCommitment: hashFields("capacity-intent", [index]),
       noteNullifier: hashFields("capacity-nullifier", [index]),
       ownerCommitment: hashFields("capacity-owner", [index]),
+      ownerDigest: hashFields("fixture-owner-digest", [index]),
+      positionSeed: hashFields("fixture-position-seed", [index]),
       noteChangeCommitment: "0x0" as const,
       limitPrice: 100_000_000n,
       margin: (signedSize < 0n ? -signedSize : signedSize) * 100n,
@@ -129,4 +131,24 @@ describe("RISC0 Groth16 proof artifacts", () => {
     writeFileSync(requestPath, JSON.stringify({ expires_at: now - 1, request_id: requestId }));
     expect(resumableBoundlessRequest(requestPath)).toBeUndefined();
   });
+});
+
+test("rejects a two-execution proof before deployment checks, witness files, or paid proving", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pnlx-budget-before-proving-"));
+  const market = { marketId: "budget", fundingIndex: 0n, oraclePrice: 100_000_000n,
+    initialMarginRate: 100_000n, maintenanceMarginRate: 50_000n, maxLeverage: 10n };
+  const intents = [1n, 1n, -1n, -1n].map((signedSize, index) => ({
+    batchId: "budget", marketId: market.marketId, signedSize, limitPrice: 100_000_000n, margin: 100n,
+    noteChangeCommitment: "0x0" as const, noteNullifier: hashFields("budget-nullifier", [index]),
+    intentCommitment: hashFields("budget-intent", [index]), ownerCommitment: hashFields("budget-owner", [index]),
+    ownerDigest: hashFields("budget-owner-field", [index]), positionSeed: hashFields("budget-seed", [index]),
+  }));
+  const match = new BatchMatcherService().match({ batchId: "budget", intents, market });
+  expect(match.executions).toHaveLength(2);
+  expect(match.fills).toHaveLength(4);
+  try {
+    await expect(createRisc0BatchSettlement({ batchId: "budget", intents, market, match }, root))
+      .rejects.toThrow("batch relay budget supports at most 1 matched execution");
+    expect(existsSync(join(root, ".pnlx"))).toBe(false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

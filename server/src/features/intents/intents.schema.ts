@@ -31,6 +31,7 @@ export function parseIntent(input: IntentBody): CreateIntentInput {
   return {
     intent: parseTradeIntent(intentInput),
     validity: parseIntentValidityRecord(requiredObject(input.validity, "validity")),
+    conditionalPolicy: input.conditionalPolicy,
   };
 }
 
@@ -61,6 +62,10 @@ export const parseProveAndSubmitIntent = parseIntentValidityWitness as (
 
 export function parseIntentValidityRecord(input: IntentBody): IntentValidityRecord {
   return {
+    assetDigest: String(input.assetDigest) as Hex,
+    ownerDigest: String(input.ownerDigest) as Hex,
+    positionSeed: String(input.positionSeed) as Hex,
+    matchingPayloadCommitment: String(input.matchingPayloadCommitment) as Hex,
     batchDigest: String(input.batchDigest) as Hex,
     currentBatch: BigInt(String(input.currentBatch)),
     expiryBatch: BigInt(String(input.expiryBatch)),
@@ -77,6 +82,8 @@ export function parseIntentValidityRecord(input: IntentBody): IntentValidityReco
 
 export function parseIntentRecord(input: IntentBody): IntentRecord {
   return {
+    assetDigest: String(input.assetDigest) as Hex,
+    currentBatch: BigInt(String(input.currentBatch)),
     batchDigest: String(input.batchDigest) as Hex,
     batchId: String(input.batchId),
     intentCommitment: String(input.intentCommitment) as Hex,

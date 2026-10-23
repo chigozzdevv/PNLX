@@ -8,7 +8,7 @@ import type {
   UpsertAccountKeyInput,
   UpsertAccountKeyResult,
 } from "@/features/account-keys/account-keys.model";
-import { recoverPositionOpeningEventsForOwner } from "@/features/account-keys/account-key-recovery";
+import { recoverConfirmedCloseOutputEventsForOwner, recoverPositionOpeningEventsForOwner } from "@/features/account-keys/account-key-recovery";
 
 export class AccountKeysService {
   constructor(private readonly executor: ExecutorService) {}
@@ -51,6 +51,9 @@ export class AccountKeysService {
       input.ownerCommitment,
       input.publicKey,
     );
+    const closeRecovery = recoverConfirmedCloseOutputEventsForOwner(this.executor.store, input.ownerCommitment, input.publicKey);
+    recovery.events.push(...closeRecovery.events);
+    recovery.skipped.push(...closeRecovery.skipped);
     for (const event of recovery.events) {
       this.executor.store.addAccountEvent(event);
     }
@@ -60,5 +63,11 @@ export class AccountKeysService {
       repairedEventCount: recovery.events.length,
       skipped: recovery.skipped,
     };
+  }
+
+  async recoverDurable(input: RecoverAccountKeyInput, authenticated?: string): Promise<RecoverAccountKeyResult> {
+    const result = this.recover(input, authenticated);
+    await (this.executor.store as { flush?: () => Promise<void> }).flush?.();
+    return result;
   }
 }

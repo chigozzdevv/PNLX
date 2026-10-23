@@ -4,6 +4,7 @@ import {
   ownerCommitment,
   secureMarginCommitment,
   secureMarginNullifier,
+  commitIntent,
 } from "@pnlx/crypto";
 import type {
   BatchSettlement,
@@ -13,7 +14,7 @@ import type {
   PrivateMatchIntent,
   TradeIntent,
 } from "@pnlx/protocol-types";
-import { assertSubmittedRelay } from "@/shared/protocol/onchain-submission";
+import {IntentsService} from "@/features/intents/intents.service";
 import {
   claimMakerNote,
   readMakerNotes,
@@ -26,7 +27,7 @@ import {
 } from "@/shared/vault-maker-backing";
 import type { ServerEnv } from "@/config/env";
 import type { ExecutorService } from "@/workers/executor/executor.service";
-import type { OnchainRelay, OnchainRelayResult } from "@/workers/onchain/onchain.model";
+import type { OnchainRelay } from "@/workers/onchain/onchain.model";
 import type { ProverService } from "@/workers/prover/prover.service";
 
 const ZERO_HEX = "0x0" as Hex;
@@ -56,12 +57,25 @@ type MakerNoteAllocation = {
   size: bigint;
 };
 
+export function makerQuoteForIntent(payload: Pick<PrivateMatchIntent,"signedSize"|"limitPrice">,
+  referencePrice: bigint, spreadBps=0n): bigint | undefined {
+  if(referencePrice<=0n || spreadBps<0n || spreadBps>=10_000n)throw new Error("invalid maker price policy");
+  const buys=payload.signedSize>0n;
+  const quote=buys ? (referencePrice*(10_000n+spreadBps)+9_999n)/10_000n :
+    referencePrice*(10_000n-spreadBps)/10_000n;
+  if(quote<=0n || (buys ? payload.limitPrice<quote : payload.limitPrice>quote))return undefined;
+  const deviation=payload.limitPrice>referencePrice ? payload.limitPrice-referencePrice : referencePrice-payload.limitPrice;
+  if(deviation*10_000n>referencePrice*200n)return undefined;
+  return quote;
+}
+
 export interface MakerLiquidityRunResult {
   created: number;
   skipped: number;
 }
 
 export class MakerLiquidityService {
+  private readonly intents:IntentsService;
   constructor(
     private readonly executor: ExecutorService,
     private readonly prover: ProverService,
@@ -74,7 +88,8 @@ export class MakerLiquidityService {
       readSeriesPrincipal: (series: number) => Promise<bigint>;
       vault: string;
     },
-  ) {}
+    private readonly claimNote:typeof claimMakerNote=claimMakerNote,
+  ) {this.intents=new IntentsService(executor,prover,onchain,env);}
 
   async ensureForMarket(input: {
     batchId: string;
@@ -83,8 +98,11 @@ export class MakerLiquidityService {
     if (this.env.makerWalletAddress && input.marketId !== "xlm-usd-perp") {
       return { created: 0, skipped: 0 };
     }
+    await this.intents.recoverPendingIntents();
     let notes = normalizeMakerNotes(await readMakerNotes());
-    const unlocked = unlockStaleMakerLocks(notes, this.executor.store.intents);
+    const knownIntents=new Map(this.executor.store.intents);
+    for(const pending of this.executor.store.pendingIntentSubmissions.values())knownIntents.set(pending.intentCommitment,pending.prepared.record);
+    const unlocked = unlockStaleMakerLocks(notes, knownIntents);
     if (unlocked.changed) {
       await saveMakerNotes(unlocked.notes.filter((note, index) => note !== notes[index]));
       notes = unlocked.notes;
@@ -116,6 +134,7 @@ export class MakerLiquidityService {
     let skipped = 0;
     let currentNotes = notes;
     for (const clientIntent of openClientIntents) {
+      created += await this.resumePendingMakerIntents(clientIntent,currentNotes,backing);
       if (hasLockedMakerForSource(currentNotes, clientIntent.intentCommitment)) {
         skipped += 1;
         continue;
@@ -125,6 +144,9 @@ export class MakerLiquidityService {
         skipped += 1;
         continue;
       }
+      const market=this.executor.store.markets.get(input.marketId);
+      const quote=market ? makerQuoteForIntent(payload,market.oraclePrice) : undefined;
+      if(quote===undefined){skipped+=1;continue;}
       const makerNotes = this.env.makerWalletAddress
         ? eligibleVaultMakerNotes(currentNotes, backing!.allocations, {
             asset: backing!.asset,
@@ -133,7 +155,7 @@ export class MakerLiquidityService {
             maker: this.env.makerWalletAddress.trim().toUpperCase(),
             vault: backing!.vault,
           })
-        : eligibleMakerNotes(currentNotes);
+        : eligibleMakerNotes(currentNotes.filter(note=>!note.vaultAllocationId));
       const allocations = selectMakerNoteAllocations(
         makerNotes.filter((note) => this.executor.store.marginCommitments.has(note.commitment)),
         payload,
@@ -151,6 +173,7 @@ export class MakerLiquidityService {
           note: allocation.note,
           payload,
           size: allocation.size,
+          quotePrice: quote,
         });
         if (!record) {
           skipped += 1;
@@ -169,6 +192,61 @@ export class MakerLiquidityService {
     }
 
     return { created, skipped };
+  }
+
+  private async resumePendingMakerIntents(
+    source:IntentRecord,
+    notes:StoredMakerNote[],
+    backing?:Awaited<ReturnType<MakerLiquidityService["currentVaultBacking"]>>,
+  ):Promise<number> {
+    const store=this.executor.store;
+    if(store.orderLifecycle.get(source.intentCommitment)?.status!=="open")return 0;
+    const payload=store.privateMatchIntents.get(source.intentCommitment);
+    const market=store.markets.get(source.marketId);
+    const quote=payload&&market?makerQuoteForIntent(payload,market.oraclePrice):undefined;
+    if(quote===undefined)return 0;
+    // Revalidate backing while retaining the exact already-proved order and private seed.
+    const candidates=notes.map(note=>note.status==="locked"?{...note,status:"available" as const}:note);
+    const eligible=this.env.makerWalletAddress
+      ? backing?eligibleVaultMakerNotes(candidates,backing.allocations,{
+          asset:backing.asset,deployedPrincipal:backing.deployedPrincipal,
+          seriesPrincipals:backing.seriesPrincipals,maker:this.env.makerWalletAddress.trim().toUpperCase(),
+          vault:backing.vault,
+        }):[]
+      :eligibleMakerNotes(candidates.filter(note=>!note.vaultAllocationId));
+    const allowed=new Set(eligible.map(note=>note.commitment));
+    let resumed=0;
+    for(let index=0;index<notes.length;index++) {
+      const note=notes[index]!;
+      if(!allowed.has(note.commitment))continue;
+      const expectedNonce=`${source.intentCommitment}:${note.commitment}:maker-nonce`;
+      const pending=note.status==="locked"&&note.sourceIntentCommitment===source.intentCommitment&&
+        note.lockedByIntentCommitment?store.pendingIntentSubmissions.get(note.lockedByIntentCommitment):
+        note.status==="available"?[...store.pendingIntentSubmissions.values()].find(item=>
+          item.validity.noteCommitment===note.commitment&&item.intent.nonce===expectedNonce):undefined;
+      if(!pending)continue;
+      const {intent,validity}=pending;
+      const expectedSalt=`${source.intentCommitment}:${note.commitment}:maker-salt`;
+      if(pending.replacementOf||pending.conditionalPolicy||intent.owner!==note.walletAddress||
+        intent.marketId!==source.marketId||intent.nonce!==expectedNonce||intent.salt!==expectedSalt||
+        intent.noteNullifier!==note.noteNullifier||validity.noteCommitment!==note.commitment||
+        validity.assetDigest!==note.assetDigest||validity.ownerDigest!==note.ownerDigest||
+        pending.prepared.record.ownerCommitment!==noteOwnerCommitment(note)||
+        intent.margin<=0n||intent.margin>BigInt(note.amount)||intent.margin>payload!.margin||
+        intent.size<=0n||intent.size>(payload!.signedSize<0n?-payload!.signedSize:payload!.signedSize)||
+        intent.side!==(payload!.signedSize>=0n?"short":"long")||intent.limitPrice!==quote)continue;
+      try {
+        await this.intents.submitDurable({intent,validity},intent.owner,{beforeSubmit:async()=>{
+          if(store.orderLifecycle.get(source.intentCommitment)?.status!=="open")throw new MakerNoteClaimUnavailable();
+          if(!await this.claimNote(note.commitment,pending.intentCommitment,source.intentCommitment,
+            note.vaultAllocationId))throw new MakerNoteClaimUnavailable();
+        }});
+        notes[index]={...note,status:"locked",lockedByIntentCommitment:pending.intentCommitment,
+          sourceIntentCommitment:source.intentCommitment};
+        resumed++;
+      }catch(error){if(!(error instanceof MakerNoteClaimUnavailable))throw error;}
+    }
+    return resumed;
   }
 
   private async currentVaultBacking(): Promise<{
@@ -200,31 +278,7 @@ export class MakerLiquidityService {
     if (filled.size === 0) return;
 
     const notes = normalizeMakerNotes(await readMakerNotes());
-    const next: StoredMakerNote[] = [];
-    for (const note of notes) {
-      if (!note.lockedByIntentCommitment || !filled.has(note.lockedByIntentCommitment)) {
-        next.push(note);
-        continue;
-      }
-
-      next.push({
-        ...note,
-        status: "spent",
-        updatedAt: Date.now(),
-      });
-      const makerPayload = this.executor.store.privateMatchIntents.get(
-        note.lockedByIntentCommitment,
-      );
-      if (!makerPayload || !note.sourceIntentCommitment) continue;
-      const change = buildMakerChangeNote(
-        note,
-        makerPayload.margin,
-        note.sourceIntentCommitment,
-      );
-      if (change && !next.some((candidate) => candidate.commitment === change.commitment)) {
-        next.push(change);
-      }
-    }
+    const next = finalizedMakerNotes(notes, filled, this.executor.store.privateMatchIntents);
     const previous = new Map(notes.map((note) => [note.commitment, note]));
     await saveMakerNotes(next.filter((note) => previous.get(note.commitment) !== note));
   }
@@ -236,6 +290,7 @@ export class MakerLiquidityService {
     note: StoredMakerNote;
     payload: PrivateMatchIntent;
     size: bigint;
+    quotePrice: bigint;
   }): Promise<IntentRecord | undefined> {
     const size = input.size;
     const side = input.payload.signedSize >= 0n ? "short" : "long";
@@ -257,7 +312,7 @@ export class MakerLiquidityService {
     const membershipProof = this.executor.store.marginMembershipProof(input.note.commitment);
     const intent: TradeIntent = {
       batchId: input.batchId,
-      limitPrice: input.payload.limitPrice,
+      limitPrice: input.quotePrice,
       margin: input.margin,
       marketId: input.clientIntent.marketId,
       nonce: `${input.clientIntent.intentCommitment}:${input.note.commitment}:maker-nonce`,
@@ -267,7 +322,13 @@ export class MakerLiquidityService {
       side,
       size,
     };
-    const validity = await this.prover.proveIntentValidityAsync({
+    const intentCommitment=commitIntent(intent);
+    const local=this.executor.store.intents.get(intentCommitment);
+    if(local) {
+      return this.executor.store.orderLifecycle.get(intentCommitment)?.status==="open"?local:undefined;
+    }
+    const pending=this.executor.store.pendingIntentSubmissions.get(intentCommitment);
+    const validity = pending?.validity ?? await this.prover.proveIntentValidityAsync({
       intent,
       assetDigest: input.note.assetDigest,
       blinding: input.note.blinding,
@@ -286,58 +347,13 @@ export class MakerLiquidityService {
       spendSecretDigest: input.note.spendSecretDigest,
     }) as IntentValidityRecord;
 
-    this.executor.store.recordProof(validity.proof);
-    const prepared = this.executor.prepareIntent({ intent, validity });
-    if (!await claimMakerNote(
-      input.note.commitment,
-      prepared.record.intentCommitment,
-      input.clientIntent.intentCommitment,
-      input.note.vaultAllocationId,
-    )) return undefined;
-    const { alreadyRegistered, relay } = await this.submitIntentOnchain(prepared.record);
-    if (this.env.intentRegistryOnchainRequired) {
-      if (!this.onchain?.enabled) throw new Error("intent registry requires on-chain relay");
-      if (!alreadyRegistered) assertSubmittedRelay(relay, "submit");
-    }
-    const submissionTxHash = relay?.relays.find(
-      (item) => item.functionName === "submit" && item.submitted,
-    )?.txHash;
-    const submissionSequence = this.onchain?.enabled
-      ? this.onchain.intentSubmissionSequenceAsync
-        ? await this.onchain.intentSubmissionSequenceAsync(prepared.record.intentCommitment)
-        : this.onchain.intentSubmissionSequence?.(prepared.record.intentCommitment)
-      : undefined;
-    if (this.env.intentRegistryOnchainRequired && submissionSequence === undefined) {
-      throw new Error("confirmed maker submission sequence is required");
-    }
-    return this.executor.commitPreparedIntent({
-      ...prepared,
-      record: {
-        ...prepared.record,
-        ...(submissionTxHash ? { submissionTxHash } : {}),
-        ...(submissionSequence ? { submissionSequence } : {}),
-      },
-    });
-  }
-
-  private async submitIntentOnchain(record: IntentRecord): Promise<{
-    alreadyRegistered: boolean;
-    relay?: OnchainRelayResult;
-  }> {
     try {
-      return {
-        alreadyRegistered: false,
-        relay: this.onchain?.submitIntentAsync
-          ? await this.onchain.submitIntentAsync(record)
-          : this.onchain?.submitIntent(record),
-      };
+      return await this.intents.submitDurable({intent,validity},intent.owner,{beforeSubmit:async()=>{
+        if(!await this.claimNote(input.note.commitment,validity.intentCommitment,
+          input.clientIntent.intentCommitment,input.note.vaultAllocationId))throw new MakerNoteClaimUnavailable();
+      }});
     } catch (error) {
-      const alreadyRegistered = this.onchain?.isIntentRegisteredAsync
-        ? await this.onchain.isIntentRegisteredAsync(record.intentCommitment)
-        : this.onchain?.isIntentRegistered?.(record.intentCommitment);
-      if (alreadyRegistered) {
-        return { alreadyRegistered: true };
-      }
+      if(error instanceof MakerNoteClaimUnavailable)return undefined;
       throw error;
     }
   }
@@ -348,6 +364,7 @@ export class MakerLiquidityService {
       if (note.status !== "locked" || !note.lockedByIntentCommitment || !note.sourceIntentCommitment) {
         return note;
       }
+      if(this.executor.store.pendingIntentSubmissions.has(note.lockedByIntentCommitment))return note;
       if (this.executor.store.orderLifecycle.get(note.sourceIntentCommitment)?.status === "open") {
         return note;
       }
@@ -404,6 +421,32 @@ export class MakerLiquidityService {
       await (store as { flush(): Promise<void> }).flush();
     }
   }
+}
+
+class MakerNoteClaimUnavailable extends Error {
+  constructor(){super("maker note is reserved by another intent");}
+}
+
+export function finalizedMakerNotes(
+  notes: StoredMakerNote[], filled: Set<Hex>, payloads: ReadonlyMap<Hex, PrivateMatchIntent>,
+): StoredMakerNote[] {
+  const existing = new Set(notes.map((note) => note.commitment));
+  const next: StoredMakerNote[] = [];
+  for (const note of notes) {
+    if (!note.lockedByIntentCommitment || !filled.has(note.lockedByIntentCommitment)) {
+      next.push(note);
+      continue;
+    }
+    next.push(note.status === "spent" ? note : { ...note, status: "spent", updatedAt: Date.now() });
+    const payload = payloads.get(note.lockedByIntentCommitment);
+    if (!payload || !note.sourceIntentCommitment) continue;
+    const change = buildMakerChangeNote(note, payload.margin, note.sourceIntentCommitment);
+    if (change && !existing.has(change.commitment)) {
+      next.push(change);
+      existing.add(change.commitment);
+    }
+  }
+  return next;
 }
 
 function normalizeMakerNotes(notes: StoredMakerNoteRecord[]): StoredMakerNote[] {

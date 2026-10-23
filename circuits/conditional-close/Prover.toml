@@ -1,11 +1,11 @@
 is_long = true
 is_take_profit = true
 reduce_only = true
-market_digest = 10
-trigger_price = 55000000000
-mark_price = 56000000000
+market_digest = "0x03678951e980c933f6cccfa73453762ddfe8c569e0a54cc10f55ae35bc3332ce"
+trigger_price = 55
+mark_price = 56
 size = 1
-position_nullifier = 12
-close_commitment = "0x10999b37c0b9abfe9ad2c59c288b7a1323b9fd77eac06ada6666c41b9d5eca63"
-salt_digest = 14
+position_nullifier = "0x000000000000000000000000000000000000000000000000000000000000000c"
+close_commitment = "0x195c5eef3a47ed41bb994e3bb8ea6a67e9391458380c97063f286c612e56169a"
+salt_digest = "0x000000000000000000000000000000000000000000000000000000000000000e"
 zero_value = 0

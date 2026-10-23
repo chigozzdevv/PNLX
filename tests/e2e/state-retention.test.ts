@@ -50,3 +50,16 @@ describe("batch execution run retention", () => {
     expect(store.batchExecutionRuns.has(entries[10][0])).toBe(true);
   });
 });
+
+test("keeps unresolved financial attempts through retention and snapshot reload", () => {
+  const store = new ProtocolStore();
+  const attempted = { ...run(-1), status: "failed" as const, submissionAttempted: true };
+  store.addBatchExecutionRun(attempted);
+  for (let index = 0; index < BATCH_EXECUTION_RUN_RETENTION + 5; index += 1) store.addBatchExecutionRun(run(index));
+  expect(store.batchExecutionRuns.has(attempted.runId)).toBe(true);
+  const snapshot = snapshotProtocolStore(store);
+  expect(snapshot.batchExecutionRuns?.some(([id]) => id === attempted.runId)).toBe(true);
+  const restored = new ProtocolStore();
+  applyProtocolStoreSnapshot(restored, snapshot);
+  expect(restored.batchExecutionRuns.get(attempted.runId)?.submissionAttempted).toBe(true);
+});

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ownerCommitment } from "@pnlx/crypto";
+import { hashFields, ownerCommitment } from "@pnlx/crypto";
 import { fillFees, notional, PRICE_SCALE } from "@pnlx/market-math";
 import type { BatchSettlement, Hex, IntentRecord, PositionCloseRecord, PositionLifecycleRecord, PrivateMatchIntent } from "@pnlx/protocol-types";
 import { PointsService } from "@/features/points/points.service";
@@ -30,6 +30,8 @@ function fixture(): { store: ProtocolStore; settlement: BatchSettlement } {
       noteChangeCommitment: `0x${"00".repeat(32)}`,
       noteNullifier: `0x${"66".repeat(32)}`,
       ownerCommitment: intent.ownerCommitment,
+      ownerDigest: hashFields("fixture-owner-digest", [intent.ownerCommitment]),
+      positionSeed: hashFields("fixture-position-seed", [intent.intentCommitment]),
       signedSize: intent.signedSize,
     } satisfies PrivateMatchIntent;
     store.privateMatchIntents.set(intent.intentCommitment, payload);

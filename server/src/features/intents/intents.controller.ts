@@ -8,11 +8,11 @@ export class IntentsController {
 
   async create(request: Request): Promise<Response> {
     const body = await readJson<Record<string, unknown>>(request);
-    return json(this.intents.submit(parseIntent(body), authenticatedAddress(request)), 201);
+    return json(await this.intents.submitDurable(parseIntent(body), authenticatedAddress(request)), 201);
   }
 
   async proveAndSubmit(request: Request): Promise<Response> {
     const body = await readJson<Record<string, unknown>>(request);
-    return json(this.intents.proveAndSubmit(parseProveAndSubmitIntent(body), authenticatedAddress(request)), 201);
+    return json(await this.intents.proveAndSubmitDurable(parseProveAndSubmitIntent(body), authenticatedAddress(request)), 201);
   }
 }

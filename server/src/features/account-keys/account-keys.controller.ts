@@ -24,7 +24,7 @@ export class AccountKeysController {
     const body = await readJson<Record<string, unknown>>(request);
     return json(
       {
-        accountKeyRecovery: this.accountKeys.recover(
+        accountKeyRecovery: await this.accountKeys.recoverDurable(
           parseAccountKey(body),
           authenticatedAddress(request),
         ),

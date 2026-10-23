@@ -93,6 +93,8 @@ export class ExecutorService implements PnlxExecutor {
       intentCommitment,
       noteChangeCommitment: input.validity.noteChangeCommitment,
       ownerCommitment: ownerCommitment(input.intent.owner),
+      ownerDigest: input.validity.ownerDigest,
+      positionSeed: input.validity.positionSeed,
     });
     this.assertIntentRisk(privateMatchIntent);
     const record = {
@@ -101,6 +103,8 @@ export class ExecutorService implements PnlxExecutor {
       marketDigest: binding.marketDigest,
       marketId: input.intent.marketId,
       marginRoot: input.validity.marginRoot,
+      assetDigest: input.validity.assetDigest,
+      currentBatch: input.validity.currentBatch,
       noteChangeCommitment: input.validity.noteChangeCommitment,
       ownerCommitmentField: binding.ownerCommitmentField,
       ownerCommitment: privateMatchIntent.ownerCommitment,
@@ -109,6 +113,9 @@ export class ExecutorService implements PnlxExecutor {
       proof: input.validity.proof,
       noteNullifier: input.intent.noteNullifier,
     };
+    if (record.matchingPayloadCommitment !== input.validity.matchingPayloadCommitment) {
+      throw new Error("intent matching payload proof mismatch");
+    }
 
     return { privateMatchIntent, record };
   }

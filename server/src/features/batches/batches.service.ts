@@ -4,6 +4,8 @@ import type { ServerEnv } from "@/config/env";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
 import type { OnchainRelayResult } from "@/workers/onchain/onchain.model";
+import { BatchExecutorService } from "@/workers/batch-executor/batch-executor.service";
+import { createMatcher } from "@/workers/matcher/matcher.worker";
 import type { CommitExternalBatchSettlementRequest, SettleBatchRequest } from "@/features/batches/batches.model";
 
 export class BatchesService {
@@ -18,6 +20,7 @@ export class BatchesService {
     > = {
       settlementsOnchainRequired: false,
     },
+    private batchExecutor?: BatchExecutorService,
   ) {}
 
   assertAuthorized(authenticated?: string): void {
@@ -28,6 +31,7 @@ export class BatchesService {
 
   async settle(input: SettleBatchRequest, authenticated?: string): Promise<BatchSettlement> {
     this.assertAuthorized(authenticated);
+    if (this.requiresJournal()) return this.journaledExecutor().settleRequestedBatch(input);
     const settlement = await this.executor.createBatchSettlementAsync(input);
     const relay = await this.settleOnchain(settlement);
     return this.executor.commitBatchSettlement(withOnchainTransactions(settlement, relay));
@@ -38,6 +42,7 @@ export class BatchesService {
     authenticated?: string,
   ): Promise<BatchSettlement> {
     this.assertAuthorized(authenticated);
+    if (this.requiresJournal()) return this.journaledExecutor().commitExternalTranscript(input);
     this.executor.validateExternalBatchSettlement(input);
     const relay = await this.settleOnchain(input.settlement);
     return this.executor.commitExternalBatchSettlement({
@@ -51,6 +56,15 @@ export class BatchesService {
   private async settleOnchain(settlement: BatchSettlement): Promise<OnchainRelayResult | undefined> {
     if (this.onchain?.settleBatchAsync) return this.onchain.settleBatchAsync(settlement);
     return this.onchain?.settleBatch(settlement);
+  }
+
+  private requiresJournal(): boolean {
+    return this.settlementConfig.settlementsOnchainRequired || Boolean(this.onchain?.enabled);
+  }
+
+  private journaledExecutor(): BatchExecutorService {
+    return this.batchExecutor ??= new BatchExecutorService(this.executor, createMatcher(this.executor),
+      { intervalMs: 5_000, settlementsOnchainRequired: true }, this.onchain);
   }
 }
 

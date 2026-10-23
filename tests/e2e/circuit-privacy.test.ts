@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 const PRIVATE_FIELDS = new Map([
   [
     "conditional-close",
-    ["is_long", "is_take_profit", "market_digest", "trigger_price", "size", "salt_digest"],
+    ["is_long", "is_take_profit", "trigger_price", "size", "salt_digest"],
   ],
   ["deposit-note", ["owner_digest", "rho_digest", "blinding"]],
   ["disclosure", ["value", "salt_digest", "path_siblings", "path_indices"]],
@@ -32,7 +32,6 @@ const PRIVATE_FIELDS = new Map([
       "funding_index",
       "funding_payment_abs",
       "funding_is_credit",
-      "market_digest",
       "owner_digest",
       "rho_digest",
       "blinding",
@@ -57,7 +56,6 @@ const PRIVATE_FIELDS = new Map([
       "new_margin",
       "remaining_margin",
       "margin_output_amount",
-      "market_digest",
       "owner_digest",
       "rho_digest",
       "blinding",
@@ -90,6 +88,13 @@ const PRIVATE_FIELDS = new Map([
 ]);
 
 describe("circuit privacy boundary", () => {
+  test("publicly binds market identity while retaining private strategy and spending witnesses", () => {
+    for (const circuit of ["conditional-close", "intent-validity", "liquidation-check", "position-close", "position-close-pair"]) {
+      const source = readFileSync(join(process.cwd(), "circuits", circuit, "src/main.nr"), "utf8");
+      expect(source).toContain("market_digest: pub Field");
+      expect(source).not.toContain("spend_secret_digest: pub");
+    }
+  });
   test("keeps sensitive witness fields private", () => {
     for (const [circuit, fields] of PRIVATE_FIELDS) {
       const source = readFileSync(join(process.cwd(), "circuits", circuit, "src/main.nr"), "utf8");

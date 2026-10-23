@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { hashFields } from "@pnlx/crypto";
 import type { ProofArtifact } from "@pnlx/proof-system";
 import type { BatchSettlement, Hex, ProofMeta } from "@pnlx/protocol-types";
 import { assertBatchSettlementCapacity, batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
+import { assertBatchExecutionBudget } from "@/shared/protocol/batch-budget";
 import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
 import { matchTranscriptDigest } from "@/workers/batch-matcher/match-transcript";
 import { matchingPayloadCommitment } from "@/workers/batch-matcher/private-intent";
@@ -50,6 +51,7 @@ export async function createRisc0BatchSettlement(
 ): Promise<Risc0BatchSettlementResult> {
   const draft = prepareRisc0SettlementDraft(input);
   assertBatchSettlementCapacity(draft, input.match.executions.length);
+  assertBatchExecutionBudget(input.match.executions.length);
   assertRisc0DeploymentImageId(root);
   const proverOutput = await runRisc0Prover(root, input, draft);
   if (proverOutput.image_id !== RISC0_BATCH_MATCH_IMAGE_ID) {
@@ -204,35 +206,53 @@ function normalizeHex(value: Hex): Hex {
   return value.startsWith("0x") ? (`0x${value.slice(2).toLowerCase()}` as Hex) : value;
 }
 
-async function runRisc0Prover(
+const PRIVATE_PROVER_RUNS = new Map<string, { digest: Hex; work: Promise<Risc0ProverOutput> }>();
+
+export async function runRisc0Prover(
   root: string,
   input: SettlementProofInput,
   draft: Omit<BatchSettlement, "proof">,
+  runProver = runBoundlessProver,
 ): Promise<Risc0ProverOutput> {
   const proofDir = join(root, ".pnlx", "risc0", safeName(`${input.batchId}-${input.market.marketId}`));
-  const inputPath = join(proofDir, "input.json");
-  mkdirSync(proofDir, { recursive: true });
-  writeFileSync(
-    inputPath,
-    `${JSON.stringify(toProverInput(input, draft), bigintReplacer, 2)}\n`,
-  );
-
-  const expectedSelector = expectedRisc0Selector(root);
-  const cachedOutput = readRisc0ProverOutput(
-    join(proofDir, "proof.json"),
-    expectedSelector,
-  );
-  if (cachedOutput) return cachedOutput;
-
-  const result = await runBoundlessProver(root, inputPath, proofDir);
-  if (result.status !== 0) {
-    const output = [result.error, result.stdout, result.stderr].filter(Boolean).join("\n");
-    throw new Error(`Boundless RISC0 Groth16 batch prover failed\n${output}`);
+  const digest = inputHash(input);
+  const active = PRIVATE_PROVER_RUNS.get(proofDir);
+  if (active) {
+    if (active.digest !== digest) throw new Error("conflicting prover witness; reconciliation required");
+    return active.work;
   }
-
-  const output = readRisc0ProverOutput(result.metadataPath, expectedSelector);
-  if (!output) throw new Error(`RISC0 proof metadata was not written: ${result.metadataPath}`);
-  return output;
+  const work = Promise.resolve().then(async () => {
+    for (const path of [join(root, ".pnlx"), join(root, ".pnlx", "risc0"), proofDir]) {
+      mkdirSync(path, { recursive: true, mode: 0o700 });
+      if (!lstatSync(path).isDirectory()) throw new Error("prover directory must not be a symlink");
+      chmodSync(path, 0o700);
+    }
+    const inputPath = join(proofDir, "input.json");
+    try {
+      // Remove a previous interrupted run's scratch input, including on cache hits.
+      rmSync(inputPath, { force: true });
+      const expectedSelector = expectedRisc0Selector(root);
+      const cachedOutput = readRisc0ProverOutput(join(proofDir, "proof.json"), expectedSelector);
+      if (cachedOutput) return cachedOutput;
+      writeFileSync(inputPath, `${JSON.stringify(toProverInput(input, draft), bigintReplacer, 2)}\n`, {
+        flag: "wx", mode: 0o600,
+      });
+      const result = await runProver(root, inputPath, proofDir);
+      if (result.status !== 0) {
+        const reason = result.error === "prover deadline exceeded" ? result.error : "prover execution failed";
+        // Child output can contain witness data or input URLs. Never send it to API errors/logs.
+        throw new Error(`Boundless RISC0 Groth16 batch prover failed: ${reason} (status ${result.status ?? "unknown"})`);
+      }
+      const output = readRisc0ProverOutput(result.metadataPath, expectedSelector);
+      if (!output) throw new Error("RISC0 proof metadata was not written");
+      return output;
+    } finally {
+      rmSync(inputPath, { force: true });
+    }
+  });
+  PRIVATE_PROVER_RUNS.set(proofDir, { digest, work });
+  try { return await work; }
+  finally { if (PRIVATE_PROVER_RUNS.get(proofDir)?.work === work) PRIVATE_PROVER_RUNS.delete(proofDir); }
 }
 
 function readRisc0ProverOutput(
@@ -331,86 +351,65 @@ function batchMatchImageId(): Hex {
   return value.imageId.toLowerCase() as Hex;
 }
 
-function runBoundlessProver(root: string, inputPath: string, proofDir: string): Promise<ProverRun> {
+export function runBoundlessProver(
+  root: string, inputPath: string, proofDir: string,
+  runtime: { command?: { command: string; args: string[] }; timeoutMs?: number } = {},
+): Promise<ProverRun> {
+  const timeoutMs = runtime.timeoutMs ?? Number(process.env.PNLX_RISC0_PROVER_TIMEOUT_MS ?? 65 * 60_000);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error("invalid RISC0 prover deadline");
   return new Promise((resolve) => {
     const metadataPath = join(proofDir, "proof.json");
     const request = resumableBoundlessRequest(join(proofDir, "request.json"));
-    const target = boundlessProverCommand(root, inputPath, proofDir);
-    const child = spawn(
-      target.command,
-      target.args,
-      {
-        cwd: root,
-        env: {
-          ...process.env,
-          ...(request
-            ? {
-              BOUNDLESS_REQUEST_EXPIRES_AT: String(request.expiresAt),
-              BOUNDLESS_REQUEST_ID: request.requestId,
-            }
-            : {}),
-          BOUNDLESS_IGNORE_PREFLIGHT: process.env.BOUNDLESS_IGNORE_PREFLIGHT ?? "1",
-          PATH: risc0ToolPath(process.env.HOME || "", process.env.PATH),
-          PNLX_EXPECTED_BATCH_MATCH_IMAGE_ID: RISC0_BATCH_MATCH_IMAGE_ID,
-          RISC0_DEV_MODE: "0",
-        },
+    const target = runtime.command ?? boundlessProverCommand(root, inputPath, proofDir);
+    const child = spawn(target.command, target.args, {
+      cwd: root,
+      detached: process.platform !== "win32",
+      env: {
+        ...process.env,
+        ...(request ? {
+          BOUNDLESS_REQUEST_EXPIRES_AT: String(request.expiresAt),
+          BOUNDLESS_REQUEST_ID: request.requestId,
+        } : {}),
+        BOUNDLESS_IGNORE_PREFLIGHT: process.env.BOUNDLESS_IGNORE_PREFLIGHT ?? "1",
+        PATH: risc0ToolPath(process.env.HOME || "", process.env.PATH),
+        PNLX_EXPECTED_BATCH_MATCH_IMAGE_ID: RISC0_BATCH_MATCH_IMAGE_ID,
+        RISC0_DEV_MODE: "0",
       },
-    );
+    });
     let stdout = "";
     let stderr = "";
-    let error: string | undefined;
     let resolved = false;
-    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = setTimeout(() => finish({
+      error: "prover deadline exceeded", metadataPath, stderr, stdout, status: null,
+    }), timeoutMs);
     const completionTimer = setInterval(() => {
-      if (!risc0ProofMetadataReady(metadataPath)) return;
-      resolveOnce({
-        error,
-        metadataPath,
-        stderr,
-        stdout,
-        status: 0,
-      });
-      stopCompletedChild();
+      if (risc0ProofMetadataReady(metadataPath)) finish({ metadataPath, stderr, stdout, status: 0 });
     }, 250);
     completionTimer.unref?.();
 
-    function resolveOnce(result: ProverRun): void {
+    function finish(result: ProverRun): void {
       if (resolved) return;
       resolved = true;
+      clearTimeout(deadline);
       clearInterval(completionTimer);
+      // Cargo can spawn the host binary; terminate the whole local process group.
+      if (child.exitCode === null && child.signalCode === null) {
+        try {
+          if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
+          else child.kill("SIGKILL");
+        } catch { child.kill("SIGKILL"); }
+      }
       resolve(result);
-    }
-
-    function stopCompletedChild(): void {
-      if (child.exitCode !== null || child.signalCode !== null) return;
-      child.kill("SIGTERM");
-      forceKillTimer = setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-      }, 2_000);
-      forceKillTimer.unref?.();
     }
 
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr?.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    child.on("error", (cause) => {
-      error = cause.message;
-    });
-    child.on("close", (status) => {
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      resolveOnce({
-        error,
-        metadataPath: stdout.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? join(proofDir, "proof.json"),
-        stderr,
-        stdout,
-        status,
-      });
-    });
+    child.stdout?.on("data", (chunk: string) => { stdout = (stdout + chunk).slice(-16_384); });
+    child.stderr?.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-16_384); });
+    child.on("error", () => finish({
+      error: "prover process failed to start", metadataPath, stderr, stdout, status: null,
+    }));
+    child.on("close", (status) => finish({ metadataPath, stderr, stdout, status }));
   });
 }
 
@@ -548,6 +547,8 @@ export function toProverInput(input: SettlementProofInput, draft: Omit<BatchSett
       note_change_commitment: intent.noteChangeCommitment,
       note_nullifier: intent.noteNullifier,
       owner_commitment: intent.ownerCommitment,
+      owner_digest: intent.ownerDigest,
+      position_seed: intent.positionSeed,
       signed_size: intent.signedSize,
       source_intent_commitment: intent.sourceIntentCommitment,
     })),

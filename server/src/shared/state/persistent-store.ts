@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type {
   AccountEventRecord,
@@ -30,6 +31,9 @@ import {
   retainedBatchExecutionRuns,
   type MarketSettlementVolumeRecord,
 } from "@/shared/state/store";
+import type { DelegatedConditionalPolicy } from "@/shared/protocol/delegated-policies";
+import type { PendingPairedClose } from "@/shared/protocol/paired-close-journal";
+import type { PendingIntentSubmission } from "@/shared/protocol/intent-submission-journal";
 
 const ZERO_HEX = "0x0" as Hex;
 
@@ -39,6 +43,9 @@ interface ProtocolStoreSnapshot {
   batchExecutionRuns: [Hex, BatchExecutionRunRecord][];
   conditionalCloses: [Hex, ConditionalOrderRecord][];
   conditionalOrders: [Hex, ConditionalOrderCommitment][];
+  delegatedPolicies?: [Hex, DelegatedConditionalPolicy][];
+  pendingPairedCloses?: [Hex, PendingPairedClose][];
+  pendingIntentSubmissions?: [Hex, PendingIntentSubmission][];
   disclosures: [Hex, DisclosureRecord][];
   fundingUpdates: [string, FundingUpdateRecord][];
   intents: [string, IntentRecord][];
@@ -123,6 +130,18 @@ export class FileProtocolStore extends ProtocolStore {
     this.persist(() => super.addIntent(record, privateMatchIntent));
   }
 
+  override restoreConfirmedIntent(record: IntentRecord, privateMatchIntent: PrivateMatchIntent): void {
+    this.persist(() => super.restoreConfirmedIntent(record, privateMatchIntent));
+  }
+
+  override addPendingIntentSubmission(record: PendingIntentSubmission): void {
+    this.persist(() => super.addPendingIntentSubmission(record));
+  }
+
+  override removePendingIntentSubmission(intentCommitment: Hex): void {
+    this.persist(() => super.removePendingIntentSubmission(intentCommitment));
+  }
+
   override updateIntentSubmissionTxHash(intentCommitment: Hex, submissionTxHash: Hex): IntentRecord {
     return this.persist(() => super.updateIntentSubmissionTxHash(intentCommitment, submissionTxHash));
   }
@@ -172,6 +191,22 @@ export class FileProtocolStore extends ProtocolStore {
 
   override addConditionalOrder(record: ConditionalOrderCommitment): void {
     this.persist(() => super.addConditionalOrder(record));
+  }
+
+  override addDelegatedConditionalPolicy(record: DelegatedConditionalPolicy): void {
+    this.persist(() => super.addDelegatedConditionalPolicy(record));
+  }
+
+  override addPendingPairedClose(record: PendingPairedClose): void {
+    this.persist(() => super.addPendingPairedClose(record));
+  }
+
+  override removePendingPairedClose(journalKey: Hex): void {
+    this.persist(() => super.removePendingPairedClose(journalKey));
+  }
+
+  override updatePendingPairedClose(record: PendingPairedClose): void {
+    this.persist(() => super.updatePendingPairedClose(record));
   }
 
   override addConditionalClose(record: ConditionalOrderRecord): void {
@@ -226,12 +261,16 @@ export class FileProtocolStore extends ProtocolStore {
   private load(): void {
     if (!existsSync(this.path)) return;
 
+    chmodSync(this.path, 0o600);
     const snapshot = parseSnapshot(readFileSync(this.path, "utf8"));
     this.marginCommitments.clear();
     this.positionCommitments.clear();
     this.spentNullifiers.clear();
     this.intents.clear();
     this.residualOrders.clear();
+    this.delegatedPolicies.clear();
+    this.pendingPairedCloses.clear();
+    this.pendingIntentSubmissions.clear();
     this.orderLifecycle.clear();
     this.positionLifecycle.clear();
     this.markets.clear();
@@ -268,6 +307,18 @@ export class FileProtocolStore extends ProtocolStore {
       });
     }
     for (const [key, value] of snapshot.residualOrders ?? []) this.residualOrders.set(key, value);
+    for (const [key, value] of snapshot.delegatedPolicies ?? []) {
+      if (key.toLowerCase() !== value.intentCommitment.toLowerCase()) throw new Error("delegated conditional snapshot key mismatch");
+      super.addDelegatedConditionalPolicy(value);
+    }
+    for (const [key, value] of snapshot.pendingPairedCloses ?? []) {
+      if (key.toLowerCase() !== value.journalKey.toLowerCase()) throw new Error("paired close journal snapshot key mismatch");
+      super.addPendingPairedClose(value);
+    }
+    for (const [key, value] of snapshot.pendingIntentSubmissions ?? []) {
+      if (key !== value.intentCommitment) throw new Error("prepared intent snapshot key mismatch");
+      super.addPendingIntentSubmission(value);
+    }
     for (const [key, value] of snapshot.privateMatchIntents ?? []) {
       this.privateMatchIntents.set(key, {
         ...value,
@@ -313,6 +364,9 @@ export class FileProtocolStore extends ProtocolStore {
       accountEncryptionKeys: [...this.accountEncryptionKeys.entries()],
       conditionalCloses: [...this.conditionalCloses.entries()],
       conditionalOrders: [...this.conditionalOrders.entries()],
+      delegatedPolicies: [...this.delegatedPolicies.entries()],
+      pendingPairedCloses: [...this.pendingPairedCloses.entries()],
+      pendingIntentSubmissions: [...this.pendingIntentSubmissions.entries()],
       disclosures: [...this.disclosures.entries()],
       fundingUpdates: [...this.fundingUpdates.entries()],
       liquidationAutomationJobs: [...this.liquidationAutomationJobs.entries()],
@@ -335,10 +389,20 @@ export class FileProtocolStore extends ProtocolStore {
       withdrawals: [...this.withdrawals.entries()],
     };
 
-    mkdirSync(dirname(this.path), { recursive: true });
-    const tempPath = `${this.path}.tmp`;
-    writeFileSync(tempPath, JSON.stringify(snapshot, bigintReplacer, 2));
-    renameSync(tempPath, this.path);
+    const directory = dirname(this.path);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const tempPath = `${this.path}.${randomUUID()}.tmp`;
+    const descriptor = openSync(tempPath, "wx", 0o600);
+    try {
+      try {
+        writeFileSync(descriptor, JSON.stringify(snapshot, bigintReplacer, 2));
+        fsyncSync(descriptor);
+      } finally { closeSync(descriptor); }
+      renameSync(tempPath, this.path);
+      const directoryDescriptor = openSync(directory, "r");
+      try { fsyncSync(directoryDescriptor); }
+      finally { closeSync(directoryDescriptor); }
+    } finally { rmSync(tempPath, { force: true }); }
   }
 }
 

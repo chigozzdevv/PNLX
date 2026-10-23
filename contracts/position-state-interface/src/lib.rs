@@ -10,8 +10,19 @@ pub struct AppendReceipt {
     pub root: BytesN<32>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct PositionPair {
+    pub counterparty: BytesN<32>,
+    pub market_id: BytesN<32>,
+    pub asset_digest: BytesN<32>,
+}
+
 #[contractclient(name = "PositionStateClient")]
 pub trait PositionStateInterface {
+    fn pair(env: Env, position_commitment: BytesN<32>) -> Option<PositionPair>;
+    fn register_pair(env: Env, writer: Address, first: BytesN<32>, second: BytesN<32>,
+        market_id: BytesN<32>, asset_digest: BytesN<32>);
     fn current_root(env: Env) -> BytesN<32>;
     fn leaf_count(env: Env) -> u32;
     fn tree_depth(env: Env) -> u32;

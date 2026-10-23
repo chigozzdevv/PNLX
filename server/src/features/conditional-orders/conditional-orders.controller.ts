@@ -1,4 +1,5 @@
 import { json, readJson } from "@/shared/http/json";
+import { authenticatedAddress } from "@/shared/http/auth-context";
 import {
   parseConditionalOrder,
   parseConditionalOrderRegistration,
@@ -33,6 +34,6 @@ export class ConditionalOrdersController {
 
   async execute(request: Request): Promise<Response> {
     const body = await readJson<Record<string, unknown>>(request);
-    return json(this.conditionalOrders.execute(parseExecuteConditionalClose(body)), 201);
+    return json(await this.conditionalOrders.execute(parseExecuteConditionalClose(body),authenticatedAddress(request)), 201);
   }
 }

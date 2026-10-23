@@ -14,6 +14,7 @@ export function parseLiquidation(input: LiquidationBody): CreateLiquidationInput
     size: BigInt(String(input.size)),
     entryPrice: BigInt(String(input.entryPrice)),
     markPrice: BigInt(String(input.markPrice)),
+    currentFundingIndex: BigInt(String(input.currentFundingIndex)),
     margin: BigInt(String(input.margin)),
     fundingPayment: BigInt(String(input.fundingPayment)),
     fundingIndex: BigInt(String(input.fundingIndex)),
@@ -32,6 +33,7 @@ export function parseProvenLiquidation(input: LiquidationBody): CreateProvenLiqu
   return {
     marketId: String(input.marketId),
     markPrice: BigInt(String(input.markPrice)),
+    currentFundingIndex: BigInt(String(input.currentFundingIndex)),
     maintenanceRate: BigInt(String(input.maintenanceRate)),
     positionCommitment: String(input.positionCommitment) as `0x${string}`,
     positionNullifier: String(input.positionNullifier) as `0x${string}`,

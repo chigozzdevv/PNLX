@@ -4,6 +4,8 @@ import { hashToField, mod } from "./field";
 
 export const FIELD_MERKLE_DEPTH = 8;
 export const POSITION_MERKLE_DEPTH = 20;
+export const POSITION_DOMAIN = 0x504e4c58504f534954494f4en;
+export const POSITION_ENTROPY_DOMAIN = 0x504e4c58454e54524f5059n;
 
 export interface CircuitMarginNoteInput {
   amount: bigint;
@@ -78,7 +80,31 @@ export function circuitPositionCommitment(input: CircuitPositionNoteInput): Hex 
     fieldHashPair(input.margin, input.fundingIndex),
     fieldHashPair(input.ownerDigest, fieldHashPair(input.rhoDigest, input.blinding)),
   );
-  return fieldHashPair(left, right);
+  if (toField(input.spendSecretDigest) === 0n) throw new Error("position spending authority is required");
+  return fieldHashPair(POSITION_DOMAIN, fieldHashPair(left, fieldHashPair(right, input.spendSecretDigest)));
+}
+
+export function positionEntropyDigest(seed: Hex): Hex {
+  if (toField(seed) === 0n) throw new Error("private position seed is required");
+  return fieldHashPair(POSITION_ENTROPY_DOMAIN, seed);
+}
+
+export function derivePositionSeed(spendSecretDigest: Hex, nonceDigest: Hex, saltDigest: Hex): Hex {
+  if (toField(spendSecretDigest) === 0n) throw new Error("note spending authority is required");
+  return fieldHashPair(spendSecretDigest, fieldHashPair(nonceDigest, saltDigest));
+}
+
+export function positionSecrets(seed: Hex, fillIndex: number): {
+  rhoDigest: Hex; blinding: Hex; spendSecretDigest: Hex;
+} {
+  if (!Number.isSafeInteger(fillIndex) || fillIndex < 0) throw new Error("invalid position output index");
+  positionEntropyDigest(seed);
+  const scoped = fieldHashPair(seed, BigInt(fillIndex));
+  return {
+    rhoDigest: fieldHashPair(0x504e4c5852484fn, scoped),
+    blinding: fieldHashPair(0x504e4c58424c494e44n, scoped),
+    spendSecretDigest: fieldHashPair(0x504e4c585350454e44n, scoped),
+  };
 }
 
 export function circuitPositionNullifier(

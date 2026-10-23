@@ -2,66 +2,86 @@ import { spawnSync } from "node:child_process";
 import { hashFields } from "@pnlx/crypto";
 import { PRICE_SCALE } from "@pnlx/market-math";
 import type { Hex } from "@pnlx/protocol-types";
+import { readStellarCommandAsync } from "@/workers/relayer/relayer.service";
 import { hermesEndpoint } from "@/shared/http/hermes";
 import type { CommandResult } from "@/workers/relayer/relayer.model";
 import type { OracleConfig, OracleMarketPriceInput, OraclePrice, PythPriceResponse } from "@/workers/oracle/oracle.model";
 
 export class OracleService {
-  constructor(private readonly config: OracleConfig) {}
+  constructor(private readonly config: OracleConfig) {
+    if (config.requestTimeoutMs !== undefined && (!Number.isSafeInteger(config.requestTimeoutMs) || config.requestTimeoutMs <= 0)) {
+      throw new Error("oracle request timeout must be a positive safe integer");
+    }
+  }
 
-  async latestMarket(input: OracleMarketPriceInput): Promise<OraclePrice> {
+  async latestMarket(input: OracleMarketPriceInput, signal?: AbortSignal): Promise<OraclePrice> {
+    throwIfAborted(signal);
     if (this.config.priceSource === "onchain-market") {
-      return this.latestOnchainMarket(input.marketId, input.feedId);
+      if (this.config.runCommand) return this.latestOnchainMarket(input.marketId, input.feedId, signal);
+      return withOracleDeadline(this.timeoutMs(), signal, async (boundedSignal) => {
+        const output = await readStellarCommandAsync(this.onchainCommand(input.marketId), this.timeoutMs(), boundedSignal);
+        return this.onchainPrice(output, input.feedId);
+      });
     }
-    return this.latest(input.feedId);
+    return this.latest(input.feedId, signal);
   }
 
-  async latest(feedId: Hex): Promise<OraclePrice> {
-    const normalizedFeedId = feedId.replace(/^0x/i, "");
-    const url = hermesEndpoint(this.config.hermesUrl, "/v2/updates/price/latest");
-    url.searchParams.append("ids[]", normalizedFeedId);
+  private timeoutMs(): number { return this.config.requestTimeoutMs ?? 15_000; }
 
-    const response = await fetch(url, {
-      headers: {
-        ...(this.config.apiKey
-          ? { authorization: `Bearer ${this.config.apiKey}` }
-          : {}),
-      },
+  async latest(feedId: Hex, signal?: AbortSignal): Promise<OraclePrice> {
+    return withOracleDeadline(this.timeoutMs(), signal, async (boundedSignal) => {
+      const normalizedFeedId = feedId.replace(/^0x/i, "");
+      const url = hermesEndpoint(this.config.hermesUrl, "/v2/updates/price/latest");
+      url.searchParams.append("ids[]", normalizedFeedId);
+
+      const response = await fetch(url, {
+        signal: boundedSignal,
+        headers: {
+          ...(this.config.apiKey
+            ? { authorization: `Bearer ${this.config.apiKey}` }
+            : {}),
+        },
+      });
+      if (!response.ok) {
+        throw new Error(`pyth price fetch failed: ${response.status}`);
+      }
+
+      const body = (await response.json()) as PythPriceResponse;
+      if (!Array.isArray(body.parsed)) throw new Error("invalid pyth price response");
+      const parsed = body.parsed.find((entry) => entry.id.replace(/^0x/i, "") === normalizedFeedId);
+      if (!parsed) throw new Error("pyth feed missing from response");
+
+      if (!Number.isSafeInteger(parsed.price.publish_time) || parsed.price.publish_time < 0) throw new Error("invalid pyth publish time");
+      if (!Number.isInteger(parsed.price.expo) || Math.abs(parsed.price.expo) > 30) throw new Error("invalid pyth price exponent");
+      const price = scalePythPrice(BigInt(parsed.price.price), parsed.price.expo);
+      const confidence = scalePythPrice(BigInt(parsed.price.conf), parsed.price.expo);
+      if (price <= 0n) throw new Error("pyth price must be positive");
+      if (confidence < 0n) throw new Error("pyth confidence must not be negative");
+      const confidenceBps = (confidence * 10_000n) / abs(price);
+      const age = Math.floor(Date.now() / 1000) - parsed.price.publish_time;
+
+      if (age < -5) throw new Error("pyth price is from the future");
+      if (age > this.config.maxAgeSeconds) throw new Error("pyth price is stale");
+      if (confidenceBps > this.config.maxConfidenceBps) {
+        throw new Error("pyth confidence interval too wide");
+      }
+
+      return {
+        confidence,
+        confidenceBps,
+        feedId,
+        price,
+        publishTime: parsed.price.publish_time,
+        source: "hermes",
+      };
     });
-    if (!response.ok) {
-      throw new Error(`pyth price fetch failed: ${response.status}`);
-    }
-
-    const body = (await response.json()) as PythPriceResponse;
-    const parsed = body.parsed.find((entry) => entry.id.replace(/^0x/i, "") === normalizedFeedId);
-    if (!parsed) throw new Error("pyth feed missing from response");
-
-    const price = scalePythPrice(BigInt(parsed.price.price), parsed.price.expo);
-    const confidence = scalePythPrice(BigInt(parsed.price.conf), parsed.price.expo);
-    const confidenceBps = (confidence * 10_000n) / abs(price);
-    const age = Math.floor(Date.now() / 1000) - parsed.price.publish_time;
-
-    if (price <= 0n) throw new Error("pyth price must be positive");
-    if (age > this.config.maxAgeSeconds) throw new Error("pyth price is stale");
-    if (confidenceBps > this.config.maxConfidenceBps) {
-      throw new Error("pyth confidence interval too wide");
-    }
-
-    return {
-      confidence,
-      confidenceBps,
-      feedId,
-      price,
-      publishTime: parsed.price.publish_time,
-      source: "hermes",
-    };
   }
 
-  latestOnchainMarket(marketId: string, feedId: Hex): OraclePrice {
+  private onchainCommand(marketId: string): string[] {
     const contractId = this.config.marketContractId?.trim();
     if (!contractId) throw new Error("MARKET_CONTRACT_ID is required for on-chain oracle reads");
 
-    const command = [
+    return [
       "stellar",
       "contract",
       "invoke",
@@ -79,8 +99,19 @@ export class OracleService {
       "--market_id",
       bytes32(hashFields("market-id", [marketId])),
     ];
-    const runCommand = this.config.runCommand ?? defaultCommandRunner;
-    const output = runCommand(command[0], command.slice(1));
+  }
+
+  latestOnchainMarket(marketId: string, feedId: Hex, signal?: AbortSignal): OraclePrice {
+    throwIfAborted(signal);
+    const command = this.onchainCommand(marketId);
+    const output = this.config.runCommand
+      ? this.config.runCommand(command[0], command.slice(1))
+      : defaultCommandRunner(command[0], command.slice(1), this.timeoutMs());
+    throwIfAborted(signal);
+    return this.onchainPrice(output, feedId);
+  }
+
+  private onchainPrice(output: CommandResult, feedId: Hex): OraclePrice {
     if (output.status !== 0) {
       throw new Error(`on-chain oracle read failed: ${output.stderr || output.stdout || output.status}`);
     }
@@ -119,11 +150,11 @@ function networkArgs(config: OracleConfig): string[] {
   ];
 }
 
-function defaultCommandRunner(command: string, args: string[]): CommandResult {
-  const result = spawnSync(command, args, { encoding: "utf8" });
+function defaultCommandRunner(command: string, args: string[], timeoutMs: number): CommandResult {
+  const result = spawnSync(command, args, { encoding: "utf8", timeout: timeoutMs, killSignal: "SIGKILL" });
   return {
     status: result.status,
-    stderr: result.stderr,
+    stderr: [result.stderr, result.error?.message].filter(Boolean).join("\n"),
     stdout: result.stdout,
   };
 }
@@ -178,6 +209,7 @@ function numberLike(value: unknown): bigint | undefined {
 }
 
 function validateOnchainPrice(price: ParsedOnchainMarketPrice, maxAgeSeconds: number): void {
+  if (!Number.isSafeInteger(price.timestamp) || price.timestamp < 0) throw new Error("invalid on-chain oracle timestamp");
   const now = Math.floor(Date.now() / 1000);
   if (price.timestamp > now) throw new Error("on-chain oracle price is from the future");
   if (now - price.timestamp > maxAgeSeconds) throw new Error("on-chain oracle price is stale");
@@ -185,4 +217,30 @@ function validateOnchainPrice(price: ParsedOnchainMarketPrice, maxAgeSeconds: nu
 
 function bytes32(value: Hex | string): string {
   return value.startsWith("0x") ? value.slice(2) : value;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error("oracle operation aborted");
+}
+
+async function withOracleDeadline<T>(
+  timeoutMs: number, signal: AbortSignal | undefined, work: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  throwIfAborted(signal);
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let abort!: () => void;
+  const deadline = new Promise<never>((_, reject) => {
+    abort = () => { controller.abort(); reject(new Error("oracle operation aborted")); };
+    signal?.addEventListener("abort", abort, { once: true });
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error("oracle request deadline exceeded"));
+    }, timeoutMs);
+  });
+  try { return await Promise.race([work(controller.signal), deadline]); }
+  finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+  }
 }

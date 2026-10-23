@@ -78,11 +78,18 @@ export interface MatcherGateway {
 }
 
 export interface RemoteMatcherConfig {
+  jobTimeoutMs?: number;
+  pollIntervalMs?: number;
+  requestTimeoutMs?: number;
+  readRetries?: number;
   token?: string;
   url: string;
 }
 
 export interface PrivatePositionOpeningEvent {
+  ownerDigest?: Hex;
+  positionSeed?: Hex;
+  fillIndex?: number;
   entryFee?: bigint;
   entryPrice: bigint;
   fundingIndex: bigint;

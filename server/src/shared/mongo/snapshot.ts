@@ -17,6 +17,9 @@ export const NORMALIZED_SNAPSHOT_FIELDS = [
   ["batchExecutionRuns", "batch_runs"],
   ["conditionalCloses", "conditional_closes"],
   ["conditionalOrders", "conditional_orders"],
+  ["delegatedPolicies", "delegated_policies"],
+  ["pendingPairedCloses", "pending_paired_closes"],
+  ["pendingIntentSubmissions", "pending_intent_submissions"],
   ["disclosures", "disclosures"],
   ["fundingUpdates", "funding_updates"],
   ["fundingPremiumSamples", "funding_premium_samples"],
@@ -132,7 +135,8 @@ export function normalizedSnapshotFromRecords(
   const snapshot: Partial<ProtocolStoreSnapshot> = {};
   for (const [field] of NORMALIZED_SNAPSHOT_FIELDS) {
     const values = [...(records[field] ?? [])].sort((left, right) => left.ordinal - right.ordinal);
-    const expected = expectedCounts[field];
+    const isAddedField = field === "delegatedPolicies" || field === "pendingPairedCloses" || field === "pendingIntentSubmissions";
+    const expected = isAddedField && expectedCounts[field] === undefined ? 0 : expectedCounts[field];
     if (!Number.isSafeInteger(expected) || expected! < 0) {
       throw new Error(`normalized protocol snapshot is missing count for ${field}`);
     }
