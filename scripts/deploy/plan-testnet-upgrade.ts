@@ -36,7 +36,7 @@ const circuits=circuitIds.map(id=>{
 function treeHash(path:string):string {
   const result=createHash("sha256");
   const walk=(directory:string):string[]=>readdirSync(directory,{withFileTypes:true})
-    .flatMap(entry=>entry.name==="target"||entry.name==="test_snapshots"||entry.name===".git"?[]:entry.isDirectory()?walk(join(directory,entry.name)):
+    .flatMap(entry=>entry.name==="target"||entry.name==="test_snapshots"||entry.name===".git"||entry.name===".DS_Store"?[]:entry.isDirectory()?walk(join(directory,entry.name)):
       entry.isFile()?[join(directory,entry.name)]:[]).sort();
   for(const file of walk(path)){result.update(file.slice(path.length+1));result.update("\0");result.update(readFileSync(file));result.update("\0");}
   return `0x${result.digest("hex")}`;
