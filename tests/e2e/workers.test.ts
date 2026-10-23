@@ -678,7 +678,7 @@ describe("support workers", () => {
     expect(executor.store.orderLifecycle.has(validity.intentCommitment)).toBe(false);
   });
 
-  test("order cancellations do not update local lifecycle without submitted registry tx when required", () => {
+  test("order cancellations do not update local lifecycle without submitted registry tx when required", async () => {
     const executor = createExecutor();
     const intent = backedIntent("intent-finality-cancel", executor);
     const validity = intentValidity(executor, intent);
@@ -686,7 +686,10 @@ describe("support workers", () => {
     const record = executor.submitIntent({ intent, validity });
     const onchain = {
       enabled: true,
-      cancelIntent() {
+      isIntentActiveAsync: async () => true,
+      isIntentCancelledAsync: async () => false,
+      isSecureNullifierSpentAsync: async () => false,
+      async cancelIntentAsync() {
         return { relays: [unsubmittedRelay("intent", "cancel")] };
       },
     };
@@ -697,13 +700,13 @@ describe("support workers", () => {
       { intentRegistryOnchainRequired: true },
     );
 
-    expect(() => orders.cancel({ intentCommitment: record.intentCommitment })).toThrow(
+    await expect(orders.cancelDurable({ intentCommitment: record.intentCommitment })).rejects.toThrow(
       "cancel transaction was not submitted",
     );
     expect(executor.store.orderLifecycle.get(record.intentCommitment)?.status).toBe("open");
   });
 
-  test("cancels settlement-created residuals through the registry", () => {
+  test("cancels settlement-created residuals through the registry", async () => {
     const executor = createExecutor();
     const residual = {
       batchId: "settled-batch",
@@ -720,7 +723,10 @@ describe("support workers", () => {
     let relayed = false;
     const onchain = {
       enabled: true,
-      cancelIntent() {
+      isIntentActiveAsync: async () => !relayed,
+      isIntentCancelledAsync: async () => relayed,
+      isSecureNullifierSpentAsync: async () => false,
+      async cancelIntentAsync() {
         relayed = true;
         return { relays: [{ functionName: "cancel", submitted: true, txHash: hashFields("tx", ["residual-cancel"]) }] };
       },
@@ -732,7 +738,7 @@ describe("support workers", () => {
       { intentRegistryOnchainRequired: true },
     );
 
-    expect(orders.cancel({ intentCommitment: residual.intentCommitment }).order.status).toBe("cancelled");
+    expect((await orders.cancelDurable({ intentCommitment: residual.intentCommitment })).order.status).toBe("cancelled");
     expect(relayed).toBe(true);
   });
 

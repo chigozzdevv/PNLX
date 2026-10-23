@@ -284,6 +284,13 @@ export class OnchainRelayService implements OnchainRelay {
     };
   }
 
+  async cancelIntentAsync(intentCommitment: Hex): Promise<OnchainRelayResult> {
+    if (!this.config.enabled) return empty();
+    return { relays: [await this.invokeAsync("intent", "intent-registry", "cancel", [
+      "--intent_commitment", bytes32(intentCommitment),
+    ])] };
+  }
+
   residualMargin(intentCommitment: Hex): bigint {
     if (!this.config.enabled) throw new Error("residual claim requires on-chain relay");
     const result = this.relayer.read({
@@ -398,7 +405,16 @@ export class OnchainRelayService implements OnchainRelay {
       args: ["--intent_commitment", bytes32(intentCommitment)],
       contractId: contractId(this.deployment(), "intent-registry"), functionName: "is_active_intent", send: "no",
     } });
-    return parseStrictBoolean(result.stdout ?? result.output, "intent active status");
+    return parseAuthoritativeBoolean(result.stdout, "intent active status");
+  }
+
+  async isIntentCancelledAsync(intentCommitment: Hex): Promise<boolean> {
+    if (!this.config.enabled) throw new Error("intent cancellation status requires on-chain relay");
+    const result = await this.relayer.readAsync({ kind: "intent", payload: {
+      args: ["--intent_commitment", bytes32(intentCommitment)],
+      contractId: contractId(this.deployment(), "intent-registry"), functionName: "is_cancelled", send: "no",
+    } });
+    return parseAuthoritativeBoolean(result.stdout, "intent cancellation status");
   }
 
   async intentMatchingPayloadCommitmentAsync(intentCommitment: Hex): Promise<Hex> {
@@ -418,7 +434,7 @@ export class OnchainRelayService implements OnchainRelay {
       args: ["--nullifier", bytes32(noteNullifier)],
       contractId: contractId(this.deployment(), "shielded-pool"), functionName: "is_spent", send: "no",
     } });
-    return parseStrictBoolean(result.stdout ?? result.output, "secure nullifier status");
+    return parseAuthoritativeBoolean(result.stdout, "secure nullifier status");
   }
 
   isMarketActive(marketId: string): boolean {

@@ -149,7 +149,8 @@ describe("prepared intent write-ahead recovery", () => {
       } }),
       isIntentActiveAsync: async (commitment: Hex) => commitment === old.intentCommitment ? oldActive : true,
       isSecureNullifierSpentAsync: async () => false,
-      cancelIntent() {
+      isIntentCancelledAsync: async () => !oldActive,
+      async cancelIntentAsync() {
         expect(new FileProtocolStore(path).pendingIntentSubmissions.size).toBe(1);
         oldActive = false;
         throw new Error("cancel response was lost");

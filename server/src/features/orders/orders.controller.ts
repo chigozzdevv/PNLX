@@ -8,7 +8,7 @@ export class OrdersController {
 
   async cancel(request: Request): Promise<Response> {
     const body = await readJson<Record<string, unknown>>(request);
-    return json(this.orders.cancel(parseCancelOrder(body), authenticatedAddress(request)));
+    return json(await this.orders.cancelDurable(parseCancelOrder(body), authenticatedAddress(request)));
   }
 
   async claimResidual(request: Request): Promise<Response> {
