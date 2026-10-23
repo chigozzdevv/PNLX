@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { circuitKey, loadCircuit, type CircuitId } from "@pnlx/proof-system";
+import { RISC0_BATCH_MATCH_CIRCUIT_KEY, RISC0_BATCH_MATCH_IMAGE_ID, RISC0_STELLAR_VERIFIER_HASH,
+  RISC0_STELLAR_VERIFIER_PARAMETERS_HASH } from "@/workers/risc0-matcher/risc0-proof";
 
 // This program only prints a review plan. It has no transaction execution path.
 if (process.argv.includes("--execute")) throw new Error("This planner cannot submit transactions");
@@ -48,6 +50,7 @@ if (!guest || guest.sourceHash!==guestSourceHash || !/^0x[0-9a-f]{64}$/.test(gue
 } else if(guest.developmentMode!==false || guest.receiptVerified!==true) {
   blockers.push("Independently verify a fresh production RISC0 receipt for the rebuilt guest with development mode disabled");
 }
+if(guest && guest.imageId!==RISC0_BATCH_MATCH_IMAGE_ID)blockers.push("Guest evidence image differs from the pinned runtime image");
 const snapshotPath=arg("--snapshot");
 const snapshot=snapshotPath?JSON.parse(readFileSync(resolve(snapshotPath),"utf8")):undefined;
 if (!snapshot || snapshot.network!=="testnet" || !Number.isSafeInteger(snapshot.ledger) ||
@@ -66,11 +69,12 @@ if (!snapshot || snapshot.network!=="testnet" || !Number.isSafeInteger(snapshot.
     if(!/^0x[0-9a-f]{64}$/.test(snapshot[field]??"")) blockers.push(`Missing snapshot ${field}`);
   }
 }
-const contractNames=["market","position-state","intent-registry","batch-settlement","conditional-order","position-close","liquidation"];
+const contractNames=["market","position-state","intent-registry","batch-settlement","conditional-order","position-close","liquidation","risc0-proof-verifier"];
 const contracts=contractNames.map(name=>{
   const path=join(root,"contracts/target/stellar",`${name.replaceAll("-","_")}.wasm`);
   if(!existsSync(path))blockers.push(`${name}: build current contract WASM`);
-  return {name,address:deployment.contracts[name],wasmPath:path,wasmHash:existsSync(path)?hash(path):undefined};
+  return {name,address:name==="risc0-proof-verifier"?deployment.verifiers["batch-match-risc0-verifier"]:
+    deployment.contracts[name],wasmPath:path,wasmHash:existsSync(path)?hash(path):undefined};
 });
 const contractSourceHash=treeHash(join(root,"contracts"));
 const contractEvidencePath=arg("--contract-build-evidence");
@@ -109,8 +113,12 @@ for(const circuit of circuits){
   steps.push({purpose:`Bind ${circuit.id} governance verifier`,command:invoke(governance,admin,"set_verifier",[
     "--circuit_id",bare(circuit.circuitKey),"--verifier_hash",bare(circuit.vkHash),"--authority",verifier])});
 }
-steps.push({purpose:"Bind the rebuilt matcher image; old receipts must stop being accepted",command:invoke(
-  deployment.verifiers["batch-match-risc0-verifier"],upgrade,"set_image_id",["--image_id",bare(guest?.imageId??"<REBUILT_IMAGE_ID>")])});
+steps.push({purpose:"Atomically rotate the matcher image and recorded-proof namespace",command:invoke(
+  deployment.verifiers["batch-match-risc0-verifier"],upgrade,"set_image_id",[
+    "--image_id",bare(RISC0_BATCH_MATCH_IMAGE_ID),"--verifier_hash",bare(RISC0_STELLAR_VERIFIER_HASH)])});
+steps.push({purpose:"Retire old recorded matcher receipts by activating the image-bound verifier identity",command:invoke(
+  governance,admin,"set_verifier",["--circuit_id",bare(RISC0_BATCH_MATCH_CIRCUIT_KEY),
+    "--verifier_hash",bare(RISC0_STELLAR_VERIFIER_HASH),"--authority",deployment.verifiers["batch-match-risc0-verifier"]])});
 steps.push({purpose:"Configure immutable registry validity composition after verifying it is unset",command:invoke(
   deployment.contracts["intent-registry"],admin,"configure_validity",["--governance",governance,"--proof_ledger",
     deployment.contracts["proof-ledger"],"--circuit_id",bare(circuitKey("intent-validity")),"--collateral_digest",
@@ -119,5 +127,6 @@ steps.push({purpose:"Configure immutable combined-close circuit after verifying 
   deployment.contracts["position-close"],admin,"configure_pair_circuit",["--circuit_id",bare(circuitKey("position-close-pair"))])});
 process.stdout.write(JSON.stringify({planOnly:true,network:"testnet",activationBlocked:blockers.length>0,blockers,
   deploymentFingerprint:hash(join(root,"deployments/testnet.json")),guestSourceHash,contractSourceHash,circuits,contracts,steps,
+  risc0:{imageId:RISC0_BATCH_MATCH_IMAGE_ID,parametersHash:RISC0_STELLAR_VERIFIER_PARAMETERS_HASH,verifierHash:RISC0_STELLAR_VERIFIER_HASH},
   activationRequires:"Independent reviewer confirms live state equals the snapshot, writer/token/pool bindings, upgraded WASM/VKs/image, encrypted backup restore, paired close+gap liquidation+withdrawal smoke, and user-approved legacy recovery. Unpause is intentionally omitted.",
 },null,2)+"\n");

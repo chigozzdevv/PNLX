@@ -19,9 +19,19 @@ export const RISC0_BATCH_MATCH_CIRCUIT_KEY = hashFields("circuit-key", [
   "risc0-batch-match-append-tree",
 ]);
 export const RISC0_BATCH_MATCH_CIRCUIT_HASH = sourceHash("risc0/batch-match");
-export const RISC0_STELLAR_VERIFIER_HASH = fileHash(
+export const RISC0_STELLAR_VERIFIER_PARAMETERS_HASH = fileHash(
   "vendor/stellar-risc0-verifier/contracts/groth16-verifier/parameters.json",
 );
+export const RISC0_STELLAR_VERIFIER_HASH = risc0VerifierIdentity(
+  RISC0_STELLAR_VERIFIER_PARAMETERS_HASH, RISC0_BATCH_MATCH_IMAGE_ID,
+);
+
+export function risc0VerifierIdentity(parametersHash:Hex,imageId:Hex):Hex {
+  for(const value of [parametersHash,imageId]) {
+    if(!/^0x[0-9a-f]{64}$/i.test(value)||BigInt(value)===0n)throw new Error("invalid RISC0 verifier identity input");
+  }
+  return hashFields("risc0-verifier-epoch",[parametersHash.toLowerCase(),imageId.toLowerCase()]);
+}
 
 interface Risc0ProverOutput {
   boundless_request_id?: Hex;
@@ -86,7 +96,7 @@ export async function createRisc0BatchSettlement(
     proofPath: proverOutput.seal_path,
     publicInputsHash: proverOutput.journal_digest,
     publicInputsPath: proverOutput.journal_path,
-    vkHash: RISC0_STELLAR_VERIFIER_HASH,
+    vkHash: RISC0_STELLAR_VERIFIER_PARAMETERS_HASH,
     vkPath: join(root, "vendor/stellar-risc0-verifier/contracts/groth16-verifier/parameters.json"),
     witnessHash: inputHash(input),
   };

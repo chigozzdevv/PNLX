@@ -106,11 +106,20 @@ impl Risc0ProofVerifier {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
-    pub fn set_image_id(env: Env, image_id: BytesN<32>) {
+    pub fn set_image_id(env: Env, image_id: BytesN<32>, verifier_hash: BytesN<32>) {
         validate_hash(&env, &image_id);
+        validate_hash(&env, &verifier_hash);
         let governance = GovernanceClient::new(&env, &Self::governance(env.clone()));
         governance.upgrade_authority().require_auth();
+        if image_id != Self::image_id(env.clone())
+            && verifier_hash == Self::verifier_hash(env.clone())
+        {
+            panic!("new image requires a new verifier identity");
+        }
         env.storage().instance().set(&DataKey::ImageId, &image_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::VerifierHash, &verifier_hash);
     }
 
     pub fn governance(env: Env) -> Address {
@@ -164,6 +173,7 @@ fn validate_hash(env: &Env, value: &BytesN<32>) {
 mod test {
     use super::*;
     use governance::{Governance, GovernanceClient};
+    use proof_ledger::{ProofLedger, ProofLedgerClient};
     use soroban_sdk::testutils::Address as _;
 
     #[test]
@@ -195,6 +205,7 @@ mod test {
         let client = Risc0ProofVerifierClient::new(&env, &contract);
         let original = BytesN::from_array(&env, &[7; 32]);
         let replacement = BytesN::from_array(&env, &[8; 32]);
+        let replacement_verifier = BytesN::from_array(&env, &[9; 32]);
         client.init(
             &governance_id,
             &Address::generate(&env),
@@ -203,12 +214,92 @@ mod test {
             &original,
             &BytesN::from_array(&env, &[2; 32]),
         );
-        assert!(client.try_set_image_id(&replacement).is_err());
+        assert!(client
+            .try_set_image_id(&replacement, &replacement_verifier)
+            .is_err());
         assert_eq!(client.image_id(), original);
         governance.set_upgrade_authority(&upgrade_authority);
-        client.set_image_id(&replacement);
+        env.set_auths(&[]);
+        assert!(client
+            .try_set_image_id(&replacement, &replacement_verifier)
+            .is_err());
+        assert_eq!(client.image_id(), original);
+        env.mock_all_auths();
+        client.set_image_id(&replacement, &replacement_verifier);
         assert_eq!(client.image_id(), replacement);
+        assert_eq!(client.verifier_hash(), replacement_verifier);
         assert!(!governance.paused());
+    }
+
+    #[test]
+    fn image_rotation_rejects_reusing_the_recorded_proof_namespace() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let governance_id = env.register(Governance, ());
+        let governance = GovernanceClient::new(&env, &governance_id);
+        governance.init(&Address::generate(&env));
+        governance.set_upgrade_authority(&Address::generate(&env));
+        let contract = env.register(Risc0ProofVerifier, ());
+        let client = Risc0ProofVerifierClient::new(&env, &contract);
+        let original = BytesN::from_array(&env, &[7; 32]);
+        let verifier = BytesN::from_array(&env, &[2; 32]);
+        let replacement = BytesN::from_array(&env, &[8; 32]);
+        client.init(
+            &governance_id,
+            &Address::generate(&env),
+            &Address::generate(&env),
+            &BytesN::from_array(&env, &[1; 32]),
+            &original,
+            &verifier,
+        );
+        assert!(client.try_set_image_id(&replacement, &verifier).is_err());
+        assert!(client
+            .try_set_image_id(&replacement, &BytesN::from_array(&env, &[0; 32]))
+            .is_err());
+        assert_eq!(client.image_id(), original);
+        assert_eq!(client.verifier_hash(), verifier);
+    }
+
+    #[test]
+    fn rotating_the_image_invalidates_old_recorded_receipts_without_erasing_them() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let governance_id = env.register(Governance, ());
+        let governance = GovernanceClient::new(&env, &governance_id);
+        governance.init(&Address::generate(&env));
+        governance.set_upgrade_authority(&Address::generate(&env));
+        let ledger_id = env.register(ProofLedger, ());
+        let ledger = ProofLedgerClient::new(&env, &ledger_id);
+        ledger.init(&governance_id);
+        let contract = env.register(Risc0ProofVerifier, ());
+        let client = Risc0ProofVerifierClient::new(&env, &contract);
+        let circuit = BytesN::from_array(&env, &[1; 32]);
+        let original_image = BytesN::from_array(&env, &[7; 32]);
+        let replacement_image = BytesN::from_array(&env, &[8; 32]);
+        let original_verifier = BytesN::from_array(&env, &[2; 32]);
+        let replacement_verifier = BytesN::from_array(&env, &[9; 32]);
+        let public = BytesN::from_array(&env, &[3; 32]);
+        let proof = BytesN::from_array(&env, &[4; 32]);
+        client.init(
+            &governance_id,
+            &ledger_id,
+            &Address::generate(&env),
+            &circuit,
+            &original_image,
+            &original_verifier,
+        );
+        governance.set_verifier(&circuit, &original_verifier, &contract);
+        ledger.record(&contract, &circuit, &original_verifier, &public, &proof);
+        assert!(ledger.has_proof(&circuit, &original_verifier, &public, &proof));
+
+        client.set_image_id(&replacement_image, &replacement_verifier);
+        governance.set_verifier(&circuit, &replacement_verifier, &contract);
+        assert_eq!(client.verifier_hash(), governance.verifier(&circuit));
+        assert!(ledger.has_proof(&circuit, &original_verifier, &public, &proof));
+        assert!(!ledger.has_proof(&circuit, &governance.verifier(&circuit), &public, &proof));
+        assert!(client
+            .try_verify_and_record(&Bytes::new(&env), &original_image, &public, &proof)
+            .is_err());
     }
 
     #[test]
