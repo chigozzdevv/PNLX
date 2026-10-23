@@ -54,7 +54,9 @@ async function main() {
     assert(args.includes("--writers-paused"), "stop-all-api-matcher-funding-and-maker-writers-first");
     assert(args.includes("--backup-confirmed"), "full-mongo-env-runtime-and-recovery-backup-required");
   }
-  const mod = (path: string) => import(join(root, path));
+  const moduleCode=(path:string)=>path.replace(/[^a-zA-Z0-9]+/g,"-").toLowerCase().replace(/^-|-$/g,"");
+  const mod = async(path:string)=>{try{return await import(join(root,path));}catch{fail(`old-module-import-${moduleCode(path)}`);}};
+  phase="old-module-imports";
   const [{ loadEnv }, crypto, { MongoProtocolStore }, { ExecutorService },
     { createOnchainRelay }, { loadDeploymentRegistry }, { reconstructPositionOpening },makerNotes] = await Promise.all([
     mod("server/src/config/env.ts"), mod("packages/crypto/src/index.ts"), mod("server/src/shared/mongo/store.ts"),
@@ -62,10 +64,14 @@ async function main() {
     mod("server/src/workers/onchain/deployment.ts"), mod("server/src/features/account-keys/account-key-recovery.ts"),
     mod("server/src/shared/maker-note-store.ts"),
   ]);
-  const fresh=(path:string)=>import(join(stagingRoot,path));
+  const fresh=async(path:string)=>{try{return await import(join(stagingRoot,path));}catch{fail(`staging-module-import-${moduleCode(path)}`);}};
+  phase="staging-module-imports";
+  let mongodbModulePath:string;
+  try{mongodbModulePath=Bun.resolveSync("mongodb",join(root,"server/src"));}catch{fail("old-mongodb-package-resolution-failed");}
   const [{RelayerService},proofTools,freshCrypto,{MongoClient}]=await Promise.all([
     fresh("server/src/workers/relayer/relayer.service.ts"),fresh("scripts/proof/legacy-position-close-pair.ts"),
-    fresh("packages/crypto/src/index.ts"),mod("node_modules/mongodb/lib/index.js")]);
+    fresh("packages/crypto/src/index.ts"),import(mongodbModulePath).catch(()=>fail("old-mongodb-package-import-failed"))]);
+  phase="configuration";
   const env = loadEnv();
   assert(env.stellarNetwork === "testnet" && env.stellarOnchainRelay && env.stellarRelayerMode === "stellar-cli" &&
     env.mongodbUri && env.collateralTokenContract, "testnet-custody-and-mongo-configuration-required");
@@ -74,9 +80,11 @@ async function main() {
   const positionState = deployment.contracts["position-state"];
   assert(pool && positionState && deployment.contracts["position-close"], "deployment-bindings-unavailable");
   const deploymentFingerprint = hash(readFileSync(resolve(root, env.stellarDeploymentFile)));
+  phase="mongo-state";
   store = await MongoProtocolStore.connect({ uri: env.mongodbUri, database: env.mongodbDatabase,
     collection: env.mongodbCollection, documentId: env.stellarNetwork });
   const executor = new ExecutorService({}, store);
+  phase="chain-state-inspection";
 
   const commandTimeout = Number.isFinite(env.stellarCommandTimeoutMs) ? Math.min(env.stellarCommandTimeoutMs, 120_000) : 120_000;
   const oneSendRunner = (command: string, commandArgs: string[]) => {
