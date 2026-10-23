@@ -28,6 +28,7 @@ export function createMatcherApp(options: MatcherAppOptions = {}): Router {
   const jobs = MatcherJobService.memory((input) =>
     Promise.resolve(persistentMatcher.createSettlementTranscript(input))
   );
+  registerMatcherHealthRoute(router, options.token);
 
   router.add("POST", "/match/jobs", async (request) => {
     assertMatcherAuth(request, options.token);
@@ -66,6 +67,7 @@ export async function createMatcherAppAsync(options: MatcherAppOptions = {}): Pr
   const jobs = options.mongo
     ? await MatcherJobService.connect(options.mongo, processJob)
     : MatcherJobService.memory(processJob);
+  registerMatcherHealthRoute(router, options.token);
 
   router.add("POST", "/match/jobs", async (request) => {
     assertMatcherAuth(request, options.token);
@@ -90,6 +92,18 @@ export async function createMatcherAppAsync(options: MatcherAppOptions = {}): Pr
   }, { public: true });
 
   return router;
+}
+
+function registerMatcherHealthRoute(router: Router, token: string | undefined): void {
+  router.add("GET", "/health", (request) => {
+    assertMatcherAuth(request, token);
+    return json({
+      ok: true,
+      service: "pnlx-matcher",
+      scope: "service-liveness",
+      proofExecutionChecked: false,
+    });
+  }, { public: true });
 }
 
 function createRequestMatcher(
