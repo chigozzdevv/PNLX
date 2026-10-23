@@ -213,6 +213,39 @@ export class ProtocolStore {
     return finalized;
   }
 
+  confirmPendingAssetDeposit(
+    commitment: Hex,
+    confirmation: NonNullable<PendingAssetDepositRecord["confirmedRecovery"]>,
+    commitments: Hex[],
+  ): PendingAssetDepositRecord {
+    const pending = this.pendingAssetDeposits.get(commitment);
+    if (!pending || !pending.preparedTxHash || pending.preparedTxHash !== confirmation.txHash) {
+      throw new Error("confirmed deposit does not match the durable prepared transaction");
+    }
+    if (!Number.isSafeInteger(confirmation.ledger) || confirmation.ledger <= 0 ||
+        !Number.isSafeInteger(confirmation.observedAt) || confirmation.observedAt <= 0 ||
+        !confirmation.network || !/^0x[0-9a-f]{64}$/i.test(confirmation.networkPassphraseHash)) {
+      throw new Error("invalid confirmed deposit receipt");
+    }
+    const previous = pending.confirmedRecovery;
+    if ((pending.txHash && pending.txHash !== confirmation.txHash) || (previous &&
+        (previous.txHash !== confirmation.txHash || previous.ledger !== confirmation.ledger ||
+         previous.network !== confirmation.network || previous.networkPassphraseHash !== confirmation.networkPassphraseHash))) {
+      throw new Error("confirmed deposit receipt conflicts with existing finalization");
+    }
+    if (new Set(commitments).size !== commitments.length || !commitments.includes(commitment) ||
+        [...this.marginCommitments].some((value, index) => commitments[index] !== value)) {
+      throw new Error("confirmed secure note snapshot does not extend local membership");
+    }
+    if (previous && pending.finalizedAt) return pending;
+    this.replaceMarginCommitments(commitments);
+    this.recordProof(pending.depositProof.proof);
+    const finalized = { ...pending, finalizedAt: pending.finalizedAt ?? Date.now(),
+      txHash: confirmation.txHash, confirmedRecovery: { ...confirmation } };
+    this.pendingAssetDeposits.set(commitment, finalized);
+    return finalized;
+  }
+
   addMarket(market: MarketConfig): void {
     if (this.markets.has(market.marketId)) throw new Error("market already exists");
     this.markets.set(market.marketId, market);

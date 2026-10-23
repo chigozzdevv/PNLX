@@ -2,6 +2,7 @@ import { createCircuitMarginCommitment, fieldHashPair } from "@/lib/private-note
 import { secureMarginCommitment, secureMarginNullifier } from "@pnlx/crypto/secure-margin-commitment";
 import type { PrivateAccountEventPayload } from "@/lib/account-encryption";
 import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
+import { recoverPendingPrivateMarginDeposits } from "@/lib/deposit-recovery";
 import {
   currentPrivateMarginNoteRuntimeScope,
   hasLocallyStoredPrivateMarginNotes,
@@ -233,7 +234,8 @@ export async function syncPrivateMarginNoteBackup(session: WalletSession): Promi
   const scope = privateMarginNoteRuntimeScopeFromHealth(health);
   setPrivateMarginNoteRuntimeScope(scope);
   await migrateLocalPrivateMarginNotes(session, scope);
-  return restorePrivateMarginNotes(session);
+  const recovered = await recoverPendingPrivateMarginDeposits(session);
+  return recovered + await restorePrivateMarginNotes(session);
 }
 
 async function migrateLocalPrivateMarginNotes(session: WalletSession, scope?: string): Promise<void> {

@@ -25,6 +25,9 @@ export function registerNotesRoute(
   router.add("POST", "/notes/deposit-asset/finalize", (request) =>
     controller.finalizeDepositAsset(request),
   );
+  router.add("POST", "/notes/deposit-asset/recover-confirmed", (request) =>
+    controller.recoverConfirmedDepositAsset(request),
+  );
   router.add("POST", "/notes/withdraw/proven", (request) => controller.withdrawProven(request));
   router.add("POST", "/notes/withdraw-asset/proven", (request) => controller.withdrawAssetProven(request));
   if (env.serverWitnessRoutesEnabled) {

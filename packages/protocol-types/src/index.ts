@@ -197,8 +197,17 @@ export interface DepositNoteRecord {
   proof: ProofMeta;
 }
 
+export interface ConfirmedAssetDepositRecovery {
+  txHash: Hex;
+  ledger: number;
+  network: string;
+  networkPassphraseHash: Hex;
+  observedAt: number;
+}
+
 export interface PendingAssetDepositRecord {
   amount: bigint;
+  confirmedRecovery?: ConfirmedAssetDepositRecovery;
   commitment: Hex;
   createdAt: number;
   depositProof: DepositNoteRecord;

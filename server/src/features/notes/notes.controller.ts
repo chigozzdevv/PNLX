@@ -4,6 +4,7 @@ import {
   parseAssetDepositNote,
   parseDepositNote,
   parseFinalizeAssetDeposit,
+  parseRecoverConfirmedAssetDeposit,
   parseProvenAssetDepositNote,
   parseProvenWithdrawAssetNote,
   parseProvenWithdrawNote,
@@ -35,7 +36,7 @@ export class NotesController {
   async prepareDepositAsset(request: Request): Promise<Response> {
     const body = await readJson<Record<string, string>>(request);
     return json(
-      this.notes.prepareDepositAsset(parseAssetDepositNote(body), authenticatedAddress(request)),
+      await this.notes.prepareDepositAssetDurable(parseAssetDepositNote(body), authenticatedAddress(request)),
       201,
     );
   }
@@ -43,7 +44,7 @@ export class NotesController {
   async prepareDepositAssetProven(request: Request): Promise<Response> {
     const body = await readJson<Record<string, string>>(request);
     return json(
-      this.notes.prepareDepositAssetProven(
+      await this.notes.prepareDepositAssetProvenDurable(
         parseProvenAssetDepositNote(body),
         authenticatedAddress(request),
       ),
@@ -83,6 +84,13 @@ export class NotesController {
       },
       201,
     );
+  }
+
+  async recoverConfirmedDepositAsset(request: Request): Promise<Response> {
+    const body = await readJson<Record<string, unknown>>(request);
+    return json({ note: await this.notes.recoverConfirmedDepositAsset(
+      parseRecoverConfirmedAssetDeposit(body), authenticatedAddress(request),
+    ) });
   }
 
   async withdraw(request: Request): Promise<Response> {

@@ -1,6 +1,7 @@
 import { pnlxGet, pnlxPost } from "@/lib/pnlx-api";
 import { createSecureMarginNote, randomLabel, type CircuitMarginNote } from "@/lib/private-note";
 import { signWalletTransaction, type WalletSession } from "@/lib/wallet-auth";
+import { recoverWalletAssetDeposit } from "@/lib/deposit-recovery";
 import type { Hex, ServerProofMeta } from "@/types/trading";
 import {
   registerProofBundle,
@@ -59,6 +60,7 @@ interface PrepareAssetDepositResponse {
 
 interface FinalizeAssetDepositResponse {
   note: {
+    confirmedRecovery?: { txHash: Hex; ledger: number };
     commitment: Hex;
     marginRoot: Hex;
     membershipProof: {
@@ -212,8 +214,20 @@ export async function signRelayAndFinalizePreparedDeposit(input: {
   prepared: PrepareAssetDepositResponse;
   session: WalletSession;
 }): Promise<FinalizeAssetDepositResponse["note"]> {
-  const relay = await signAndRelayPreparedDeposit(input);
-  return finalizeWalletAssetDeposit({ ...input, relay });
+  try {
+    const relay = await signAndRelayPreparedDeposit(input);
+    return await finalizeWalletAssetDeposit({ ...input, relay });
+  } catch (error) {
+    try {
+      return await recoverWalletAssetDeposit({
+        commitment: input.prepared.pendingDeposit.commitment,
+        expectedTxHash: input.prepared.pendingDeposit.preparedTxHash,
+        session: input.session,
+      });
+    } catch {
+      throw error;
+    }
+  }
 }
 
 function normalizeDepositProof(proof: DepositNoteProofRecord): DepositProof {

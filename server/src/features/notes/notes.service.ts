@@ -1,6 +1,8 @@
 import { assertAuthenticatedAccount } from "@/shared/http/auth-context";
 import { contractPublicInputHash, publicField, publicU128 } from "@pnlx/proof-system";
-import { hashFields } from "@pnlx/crypto";
+import { hashFields, secureMarginRoot } from "@pnlx/crypto";
+import { withPositionMutation } from "@/shared/protocol/position-mutation";
+import { depositRecoveryNetworkHash, StellarConfirmedDepositRecovery, type ConfirmedDepositRecoveryReader } from "@/features/notes/confirmed-deposit-recovery";
 import type { ServerEnv } from "@/config/env";
 import type { DepositNoteRecord, DepositNoteWitness, Hex, PendingAssetDepositRecord } from "@pnlx/protocol-types";
 import type { ExecutorService } from "@/workers/executor/executor.service";
@@ -12,6 +14,8 @@ import type {
   DepositNoteInput,
   DepositNoteResult,
   FinalizeAssetDepositInput,
+  RecoverConfirmedAssetDepositInput,
+  RecoveredAssetDepositNoteResult,
   PrepareAssetDepositResult,
   ProvenAssetDepositNoteInput,
   ProvenWithdrawAssetNoteInput,
@@ -33,6 +37,7 @@ export class NotesService {
     private readonly env: ServerEnv,
     private readonly onchain?: OnchainRelayService,
     private readonly relayer?: Pick<RelayerService, "find">,
+    private readonly depositRecovery?: ConfirmedDepositRecoveryReader,
   ) {}
 
   deposit(input: DepositNoteInput): DepositNoteResult {
@@ -110,6 +115,18 @@ export class NotesService {
     };
   }
 
+  async prepareDepositAssetDurable(input: AssetDepositNoteInput, authenticated?: string): Promise<PrepareAssetDepositResult> {
+    const prepared = this.prepareDepositAsset(input, authenticated);
+    await this.flushStore();
+    return prepared;
+  }
+
+  async prepareDepositAssetProvenDurable(input: ProvenAssetDepositNoteInput, authenticated?: string): Promise<PrepareAssetDepositResult> {
+    const prepared = this.prepareDepositAssetProven(input, authenticated);
+    await this.flushStore();
+    return prepared;
+  }
+
   finalizeDepositAsset(
     input: FinalizeAssetDepositInput,
     authenticated?: string,
@@ -137,6 +154,54 @@ export class NotesService {
       onchain: { relays: [relay] },
       token: input.token,
     };
+  }
+
+  async recoverConfirmedDepositAsset(
+    input: RecoverConfirmedAssetDepositInput,
+    authenticated?: string,
+  ): Promise<RecoveredAssetDepositNoteResult> {
+    if (!authenticated) throw new Error("authenticated deposit owner is required");
+    return withPositionMutation(this.executor.store, async () => {
+      const store = this.executor.store, pending = store.pendingAssetDeposits.get(input.commitment);
+      if (!pending) throw new Error("pending asset deposit not found");
+      if (typeof pending.from !== "string" || !pending.from.trim()) {
+        throw new Error("pending asset deposit owner is missing");
+      }
+      assertAuthenticatedAccount(authenticated, pending.from, "deposit owner");
+      this.requireOnchain();
+      this.assertCollateralToken(pending.token);
+      if (!pending.preparedTxHash || !/^0x[0-9a-f]{64}$/i.test(pending.preparedTxHash) ||
+          !/^0x[0-9a-f]{64}$/i.test(pending.preparedXdrDigest) ||
+          pending.tokenDigest !== pending.depositProof.tokenDigest) {
+        throw new Error("pending deposit lacks a valid prepared transaction binding");
+      }
+      this.assertDepositProof(pending);
+      let confirmation = pending.confirmedRecovery;
+      if (pending.finalizedAt && confirmation) {
+        if (confirmation.txHash !== pending.preparedTxHash || pending.txHash !== pending.preparedTxHash ||
+            confirmation.network !== this.env.stellarNetwork ||
+            confirmation.networkPassphraseHash !== depositRecoveryNetworkHash(this.env.stellarNetworkPassphrase) ||
+            !store.marginCommitments.has(pending.commitment) || !store.hasProof(pending.depositProof.proof)) {
+          throw new Error("confirmed deposit recovery record is inconsistent");
+        }
+        store.confirmPendingAssetDeposit(pending.commitment, confirmation, [...store.marginCommitments]);
+      } else {
+        const observed = await (this.depositRecovery ?? new StellarConfirmedDepositRecovery(this.env))
+          .read(pending, [...store.marginCommitments]);
+        confirmation = observed.confirmation;
+        if (confirmation.network !== this.env.stellarNetwork ||
+            confirmation.networkPassphraseHash !== depositRecoveryNetworkHash(this.env.stellarNetworkPassphrase) ||
+            secureMarginRoot(observed.commitments) !== observed.root) {
+          throw new Error("confirmed deposit recovery network or membership mismatch");
+        }
+        store.confirmPendingAssetDeposit(pending.commitment, confirmation, observed.commitments);
+      }
+      await this.flushStore();
+      const membershipProof = store.marginMembershipProof(pending.commitment);
+      return { amount: pending.amount, commitment: pending.commitment, depositProof: pending.depositProof,
+        from: pending.from, token: pending.token, membershipProof, membershipRoot: membershipProof.root,
+        marginRoot: store.marginRoot(), onchain: {relays: []}, confirmedRecovery: confirmation };
+    });
   }
 
   depositAsset(input: AssetDepositNoteInput, authenticated?: string): AssetDepositNoteResult {
@@ -248,6 +313,10 @@ export class NotesService {
     this.executor.store.recordProof(input.proof);
     this.executor.store.addWithdrawal(input);
     return input;
+  }
+
+  private async flushStore(): Promise<void> {
+    await (this.executor.store as {flush?:()=>Promise<void>}).flush?.();
   }
 
   private requireOnchain(): OnchainRelayService {

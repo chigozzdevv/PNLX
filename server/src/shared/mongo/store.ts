@@ -147,6 +147,14 @@ export class MongoProtocolStore extends ProtocolStore {
     return this.persist(() => super.finalizePendingAssetDeposit(commitment, relay));
   }
 
+  override confirmPendingAssetDeposit(
+    commitment: Hex,
+    confirmation: NonNullable<PendingAssetDepositRecord["confirmedRecovery"]>,
+    commitments: Hex[],
+  ): PendingAssetDepositRecord {
+    return this.persist(() => super.confirmPendingAssetDeposit(commitment, confirmation, commitments));
+  }
+
   override addMarket(market: MarketConfig): void {
     this.persist(() => super.addMarket(market));
   }

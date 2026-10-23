@@ -1,7 +1,6 @@
 import {
-  finalizeWalletAssetDeposit,
   prepareWalletAssetDeposit,
-  signAndRelayPreparedDeposit,
+  signRelayAndFinalizePreparedDeposit,
 } from "@/lib/custody-deposit";
 import {
   defaultClientProofProvider,
@@ -13,8 +12,10 @@ import { storePendingConditionalStrategy as persistConditionalStrategy } from "@
 import { pnlxGet, pnlxPost, PnlxApiError } from "@/lib/pnlx-api";
 import { createSecureMarginNote, randomLabel } from "@/lib/private-note";
 import { backUpExistingPrivateMarginNotes, backUpPrivateMarginNote, unlockPrivateNoteBackup } from "@/lib/private-note-backup";
+import { confirmRecoveredPrivateMarginDeposit } from "@/lib/deposit-recovery";
 import {
   currentPrivateMarginNoteRuntimeScope,
+  confirmPrivateMarginDeposit,
   lockPrivateMarginNote,
   markPrivateMarginNoteSpent,
   privateMarginNoteRuntimeScopeFromHealth,
@@ -532,28 +533,12 @@ export async function depositPrivateMargin(input: DepositPrivateMarginInput): Pr
     });
     await backUpPrivateMarginNote(pending, input.session);
     markProgress(input, "signing");
-    const relay = await signAndRelayPreparedDeposit({
+    const finalized = await signRelayAndFinalizePreparedDeposit({
       prepared: prepared.prepared,
       session: input.session,
     });
-    await finalizeWalletAssetDeposit({
-      prepared: prepared.prepared,
-      relay,
-      session: input.session,
-    });
-    savePrivateMarginNote({
-      amount: prepared.note.amount.toString(),
-      assetDigest: prepared.note.assetDigest,
-      blinding: prepared.note.blinding,
-      commitment: prepared.note.commitment,
-      noteNullifier: prepared.note.noteNullifier,
-      noteFormat: "secure",
-      ownerCommitment: input.session.ownerCommitment,
-      ownerDigest: prepared.note.ownerDigest,
-      rhoDigest: prepared.note.rhoDigest,
-      spendSecretDigest: prepared.note.spendSecretDigest,
-      walletAddress: input.session.address,
-    });
+    if (finalized.confirmedRecovery) await confirmRecoveredPrivateMarginDeposit(pending, input.session);
+    else confirmPrivateMarginDeposit(pending);
     commitments.push(prepared.note.commitment);
   }
   markProgress(input, "done");

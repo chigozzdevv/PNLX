@@ -53,6 +53,12 @@ export interface FinalizeAssetDepositInput extends ProvenAssetDepositNoteInput {
   relayId: Hex;
 }
 
+export interface RecoverConfirmedAssetDepositInput { commitment: Hex; }
+
+export interface RecoveredAssetDepositNoteResult extends AssetDepositNoteResult {
+  confirmedRecovery: NonNullable<PendingAssetDepositRecord["confirmedRecovery"]>;
+}
+
 export interface PrepareAssetDepositResult {
   action: PreparedOnchainAction;
   depositProof: DepositNoteRecord;

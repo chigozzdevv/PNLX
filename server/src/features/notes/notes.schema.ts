@@ -2,6 +2,7 @@ import type {
   AssetDepositNoteInput,
   DepositNoteInput,
   FinalizeAssetDepositInput,
+  RecoverConfirmedAssetDepositInput,
   ProvenAssetDepositNoteInput,
   ProvenWithdrawAssetNoteInput,
   ProvenWithdrawNoteInput,
@@ -53,6 +54,13 @@ export function parseFinalizeAssetDeposit(input: Record<string, unknown>): Final
     ...parseProvenAssetDepositNote(input),
     relayId: required(input.relayId, "relayId") as `0x${string}`,
   };
+}
+
+export function parseRecoverConfirmedAssetDeposit(input: Record<string, unknown>): RecoverConfirmedAssetDepositInput {
+  if (typeof input.commitment !== "string" || !/^0x[0-9a-f]{64}$/i.test(input.commitment)) {
+    throw new Error("valid deposit commitment is required");
+  }
+  return { commitment: input.commitment.toLowerCase() as `0x${string}` };
 }
 
 export function parseWithdrawNote(input: Record<string, unknown>): WithdrawNoteInput {

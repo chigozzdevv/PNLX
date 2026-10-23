@@ -94,6 +94,21 @@ export class FileProtocolStore extends ProtocolStore {
     return this.persist(() => super.finalizePendingAssetDeposit(commitment, relay));
   }
 
+  override confirmPendingAssetDeposit(
+    commitment: Hex,
+    confirmation: NonNullable<PendingAssetDepositRecord["confirmedRecovery"]>,
+    commitments: Hex[],
+  ): PendingAssetDepositRecord {
+    const pending = this.pendingAssetDeposits.get(commitment), margins = [...this.marginCommitments], proofs = [...this.proofs];
+    try { return this.persist(() => super.confirmPendingAssetDeposit(commitment, confirmation, commitments)); }
+    catch (error) {
+      this.marginCommitments.clear(); for (const value of margins) this.marginCommitments.add(value);
+      this.proofs.clear(); for (const value of proofs) this.proofs.add(value);
+      if (pending) this.pendingAssetDeposits.set(commitment, pending);
+      throw error;
+    }
+  }
+
   override addMarket(market: MarketConfig): void {
     this.persist(() => super.addMarket(market));
   }

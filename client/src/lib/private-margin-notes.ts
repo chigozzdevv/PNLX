@@ -283,6 +283,20 @@ export function savePrivateMarginNote(
   return note;
 }
 
+export function confirmPrivateMarginDeposit(expected: StoredPrivateMarginNote): boolean {
+  const scope = currentPrivateMarginNoteRuntimeScope();
+  if (!scope || expected.runtimeScope !== scope) return false;
+  const notes = readPrivateMarginNotes();
+  const current = notes.find((note) => note.runtimeScope === scope &&
+    sameHex(note.commitment, expected.commitment) && sameHex(note.ownerCommitment, expected.ownerCommitment));
+  if (!current || current.status !== "pending" || current.lockedByIntentCommitment ||
+      current.claimSourceIntentCommitment || current.walletAddress !== expected.walletAddress ||
+      current.amount !== expected.amount || current.noteNullifier !== expected.noteNullifier ||
+      current.updatedAt !== expected.updatedAt || current.createdAt !== expected.createdAt) return false;
+  writeNotes(notes.map((note) => note === current ? { ...note, status: "available" as const, updatedAt: Date.now() } : note));
+  return true;
+}
+
 export function finalizePrivateMarginClaim(
   intentCommitment: Hex,
   commitment: Hex,
