@@ -16,6 +16,16 @@ const cli27 = (signing: string = hash, explorer: string = signing) => output("nu
   "✅ Transaction submitted successfully!",
   `🔗 https://stellar.expert/explorer/testnet/tx/${explorer.replace(/^0x/, "")}`,
 ].join("\n") + "\n");
+const txSend27 = () => output(JSON.stringify({ v1: { tx: {
+  source_account: "source-account",
+  operations: [{ body: { invoke_host_function: { host_function: { invoke_contract: {
+    contract_address: "proof-verifier", function_name: "verify_and_record", args: [],
+  } }, auth: [] } } }],
+  ext: { resources: { footprint: { read_only: [
+    { contract_code: { hash: other.slice(2) } },
+    { contract_code: { hash: "c".repeat(64) } },
+  ], read_write: [] } } },
+}, signatures: [] } }), `ℹ️ Transaction hash is ${hash.slice(2)}\nhttps://stellar.expert/explorer/testnet/tx/${hash.slice(2)}\n`);
 
 describe("unambiguous Stellar transaction hashes", () => {
   for (const asynchronous of [false, true]) {
@@ -33,6 +43,25 @@ describe("unambiguous Stellar transaction hashes", () => {
     test(`${mode} accepts the actual CLI27 null stdout and emoji signing/explorer stderr`, async () => {
       const service = await relay(cli27());
       expect(await service.run()).toMatchObject({ submitted: true, txHash: hash });
+      expect(service.calls()).toBe(1);
+    });
+
+    test(`${mode} ignores contract-code footprint hashes in CLI27 transaction-envelope stdout`, async () => {
+      const service = await relay(txSend27());
+      expect(await service.run()).toMatchObject({ submitted: true, txHash: hash });
+      expect(service.calls()).toBe(1);
+    });
+
+    test(`${mode} accepts generic hash only at the result root or known transaction wrappers`, async () => {
+      for (const value of [{ hash }, { result: { hash } }, { response: { transaction: { hash } } }]) {
+        const service = await relay(output(JSON.stringify(value)));
+        expect((await service.run()).txHash).toBe(hash);
+      }
+      const envelope = txSend27();
+      const conflicting = JSON.parse(envelope.stdout);
+      conflicting.v1.tx.transactionHash = other;
+      const service = await relay(output(JSON.stringify(conflicting), envelope.stderr));
+      await expect(service.run()).rejects.toThrow("did not return a transaction hash");
       expect(service.calls()).toBe(1);
     });
 
@@ -71,8 +100,11 @@ describe("unambiguous Stellar transaction hashes", () => {
       for (const result of [
         output(JSON.stringify({ proofDigest: hash, vkHash: hash })),
         output(JSON.stringify([hash], null, 2), "ℹ️ Simulation complete\n"),
+        output(JSON.stringify({ footprint: { contract_code: { hash } } })),
+        output(`ℹ️ Simulation complete\n  "hash": "${hash}",\n`),
         output(`arbitrary proof bytes ${hash}`),
         output("null", `🔗 https://stellar.expert/explorer/testnet/tx/${hash.slice(2)}`),
+        output(txSend27().stdout, `https://stellar.expert/explorer/testnet/tx/${hash.slice(2)}\n`),
         output("null", `🔗 https://stellar.expert.evil.test/explorer/testnet/tx/${hash.slice(2)}`),
       ]) {
         const service = await relay(result);
@@ -88,12 +120,12 @@ describe("unambiguous Stellar transaction hashes", () => {
     });
   }
 
-  test("signed envelope submission accepts CLI27 output only for its precomputed exact hash", () => {
+  test("signed envelope submission accepts CLI27 envelope stdout only for its precomputed exact hash", () => {
     let sends = 0;
     const service = new RelayerService(config, (_program, args) => {
       if (args[1] === "hash") return output(`"${hash}"`, "ℹ️ Hashing transaction\n");
       sends += 1;
-      return cli27();
+      return txSend27();
     });
     expect(service.submitSignedXdr({ xdr: "signed-envelope", expectedTxHash: hash })).toMatchObject({ submitted: true, txHash: hash });
     expect(sends).toBe(1);
@@ -111,7 +143,7 @@ describe("unambiguous Stellar transaction hashes", () => {
       if (args[1] === "sign") return output(xdrs.signed);
       if (args[1] === "hash") return output(`"${hash}"`, "ℹ️ Hashing transaction\n");
       expect(saved).toEqual({ txHash: hash, xdr: xdrs.signed });
-      return cli27(hash, conflicting ? other : hash);
+      return conflicting ? cli27(hash, other) : txSend27();
     });
     let failure: unknown;
     try { await service.relayJournaled(request, async prepared => { saved = prepared; }); }

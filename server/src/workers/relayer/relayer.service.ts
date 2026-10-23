@@ -824,7 +824,7 @@ function parseTxHash(...outputs: string[]): `0x${string}` | undefined {
         const progress = line.replace(/^[^a-z0-9"'\[\{]+/i, "");
         const labelled = progress.match(/^(?:["']?(?:transaction hash|signing transaction|txHash|transactionHash|transaction_hash|tx_hash)["']?)(?:\s*[:=]\s*|\s+is\s+|\s+)["']?((?:0x)?[0-9a-f]{64})["']?\s*,?$/i);
         if (labelled) add(labelled[1]);
-        const jsonField = line.match(/^"(?:hash|txHash|transactionHash|transaction_hash|tx_hash)"\s*:\s*"((?:0x)?[0-9a-f]{64})"\s*,?$/i);
+        const jsonField = line.match(/^"(?:txHash|transactionHash|transaction_hash|tx_hash)"\s*:\s*"((?:0x)?[0-9a-f]{64})"\s*,?$/i);
         if (jsonField) add(jsonField[1]);
         try {
           const url = new URL(progress);
@@ -842,15 +842,18 @@ function parseTxHash(...outputs: string[]): `0x${string}` | undefined {
   return [...explorerHashes].every((value) => value === hash) ? hash : undefined;
 }
 
-function collectJsonTxHashes(value: unknown, add: (value: unknown) => void): void {
+function collectJsonTxHashes(value: unknown, add: (value: unknown) => void, transactionResult = true): void {
   if (Array.isArray(value)) {
-    for (const item of value) collectJsonTxHashes(item, add);
+    for (const item of value) collectJsonTxHashes(item, add, false);
     return;
   }
   if (!value || typeof value !== "object") return;
   const record = value as Record<string, unknown>;
-  for (const key of ["hash", "txHash", "transactionHash", "transaction_hash", "tx_hash"]) add(record[key]);
-  for (const nested of Object.values(record)) collectJsonTxHashes(nested, add);
+  if (transactionResult) add(record.hash);
+  for (const key of ["txHash", "transactionHash", "transaction_hash", "tx_hash"]) add(record[key]);
+  for (const [key, nested] of Object.entries(record)) {
+    collectJsonTxHashes(nested, add, transactionResult && ["result", "transaction", "response"].includes(key));
+  }
 }
 
 function parseBuiltXdr(output: string): string | undefined {
