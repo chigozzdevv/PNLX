@@ -24,7 +24,7 @@ const recipient = () => { const value = createECDH("prime256v1"); value.generate
 const publicKey = (value: ReturnType<typeof recipient>) => value.getPublicKey().toString("base64url");
 const env = { conditionalOrdersOnchainRequired: false, settlementsOnchainRequired: true };
 
-async function confirmedFixture(markPrice = 95_000_000n) {
+async function confirmedFixture(markPrice = 95_000_000n, legacyFunding = false) {
   const root = mkdtempSync(join(tmpdir(), "pnlx-confirmed-close-"));
   const path = join(root, "store.json");
   const store = new FileProtocolStore(path);
@@ -36,6 +36,13 @@ async function confirmedFixture(markPrice = 95_000_000n) {
     intentCommitment: key(`intent-${index}`), noteNullifier: key(`note-${index}`), ownerCommitment: ownerCommitment(owners[index]!),
     ownerDigest: key(`owner-${index}`), positionSeed: key(`seed-${index}`), noteChangeCommitment: "0x0",
     limitPrice: market.oraclePrice, margin: 200_000_000n, signedSize: side * 1_000_000_000n }));
+  if (legacyFunding) {
+    const funding = { amount: intents[0]!.margin, assetDigest: key("asset"), ownerDigest: digestToFieldHex(`owner:${intents[0]!.ownerCommitment}`),
+      blinding: key("legacy-funding-blinding"), rhoDigest: key("legacy-funding-rho"), spendSecretDigest: key("legacy-funding-secret") };
+    store.addMarginCommitment(secureMarginCommitment(funding));
+    intents[0]!.ownerDigest = funding.ownerDigest;
+    intents[0]!.noteNullifier = secureMarginNullifier(funding);
+  }
   store.markets.set(market.marketId, market);
   const match = new BatchMatcherService().match({ batchId: "recovery", market, intents });
   const settlement = { ...prepareRisc0SettlementDraft({ batchId: "recovery", market, intents, match }), proof: proof("batch-match") };
@@ -114,6 +121,27 @@ function decrypt(ciphertext: string, keyPair: ReturnType<typeof recipient>): { k
 }
 
 describe("confirmed paired output recovery", () => {
+  test("a legacy-funded V2 position retains the exact wallet binding through keeper close and key rotation", async () => {
+    const f = await confirmedFixture(95_000_000n, true);
+    try {
+      const fresh = recipient(), restarted = new FileProtocolStore(f.path);
+      const result = await new AccountKeysService({ store: restarted } as never).recoverDurable({ algorithm: "ecdh-p256-aes-gcm",
+        ownerCommitment: f.owner, publicKey: publicKey(fresh) }, f.owners[0]);
+      expect(result.repairedEventCount).toBe(1);
+      expect(result.skipped).toEqual([]);
+      const payloads = [...new FileProtocolStore(f.path).accountEvents.values()].filter(item => item.ownerCommitment === f.owner)
+        .flatMap(event => { try { return [decrypt(event.ciphertext, fresh)]; } catch { return []; } });
+      expect(payloads).toHaveLength(1);
+      const payload = payloads[0]!;
+      expect(payload.kind).toBe("position-close");
+      expect(payload.closeOutputNote.ownerDigest).toBe(digestToFieldHex(`owner:${f.owner}`));
+      expect(payload.closeOutputNote.ownerDigest).not.toBe(digestToFieldHex(`owner:${f.owners[0]}`));
+      const note = payload.closeOutputNote;
+      expect(secureMarginCommitment({ amount: BigInt(note.amount!), assetDigest: note.assetDigest as Hex,
+        ownerDigest: note.ownerDigest as Hex, rhoDigest: note.rhoDigest as Hex, blinding: note.blinding as Hex,
+        spendSecretDigest: note.spendSecretDigest as Hex })).toBe(note.commitment as Hex);
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
   test("offline close retains the exact secure output across restart and authenticated key rotation", async () => {
     const f = await confirmedFixture();
     try {

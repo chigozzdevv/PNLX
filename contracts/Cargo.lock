@@ -1003,6 +1003,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "legacy-pair-exit"
+version = "0.1.0"
+dependencies = [
+ "governance",
+ "governance-interface",
+ "market",
+ "market-interface",
+ "oracle-interface",
+ "position-state",
+ "position-state-interface",
+ "proof-ledger",
+ "proof-ledger-interface",
+ "shielded-pool",
+ "soroban-sdk",
+ "test-oracle",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -24,6 +24,23 @@ interface MakerNote {
   [key: string]: string | number | undefined;
 }
 
+export function proveMakerNoteWithdrawal(
+  prover: Pick<ReturnType<typeof createProver>, "proveSecureWithdrawal">,
+  note: MakerNote,
+  membership: { indices: boolean[]; root: Hex; siblings: Hex[] },
+  recipient: Hex,
+  assetDigest: Hex,
+) {
+  const amount = BigInt(note.amount);
+  return prover.proveSecureWithdrawal({
+    assetDigest, blinding: note.blinding, changeBlinding: "0x0", changeRhoDigest: "0x0",
+    noteAmount: amount, noteCommitment: note.commitment, nullifier: note.noteNullifier,
+    ownerDigest: note.ownerDigest, pathIndices: membership.indices, pathSiblings: membership.siblings,
+    recipient, rhoDigest: note.rhoDigest, root: membership.root,
+    spendSecretDigest: note.spendSecretDigest, tokenDigest: assetDigest, withdrawAmount: amount,
+  });
+}
+
 if (import.meta.main) {
   await withdrawMakerNotes(process.argv.slice(2));
 }
@@ -193,24 +210,7 @@ export async function withdrawMakerNotes(argv: string[]): Promise<void> {
     } };
     if (!membership?.membershipProof) throw new Error(`maker note ${note.commitment} has no membership proof`);
     const amount = BigInt(note.amount);
-    const withdrawal = prover.proveWithdrawal({
-      assetDigest: note.assetDigest,
-      blinding: note.blinding,
-      changeBlinding: "0x0",
-      changeRhoDigest: "0x0",
-      noteAmount: amount,
-      noteCommitment: note.commitment,
-      nullifier: note.noteNullifier,
-      ownerDigest: note.ownerDigest,
-      pathIndices: membership.membershipProof.indices,
-      pathSiblings: membership.membershipProof.siblings,
-      recipient: recipientDigest,
-      rhoDigest: note.rhoDigest,
-      root: membership.membershipProof.root,
-      spendSecretDigest: note.spendSecretDigest,
-      tokenDigest: assetDigest,
-      withdrawAmount: amount,
-    });
+    const withdrawal = proveMakerNoteWithdrawal(prover, note, membership.membershipProof, recipientDigest, assetDigest);
     await post(app, "/notes/withdraw-asset/proven", {
       ...withdrawal,
       recipientAddress: maker,

@@ -14,6 +14,31 @@ import { loadDeploymentRegistry } from "@/workers/onchain/deployment";
 import { createRelayer } from "@/workers/relayer/relayer.worker";
 import { assertSuccessfulTransaction } from "./register-vault-maker-note";
 import {applyVaultPrincipalReceipt} from "@/shared/vault-principal-receipts";
+import { LegacyExitRecoveryService } from "@/features/notes/legacy-exit-recovery";
+import type { ProtocolStore } from "@/shared/state/store";
+
+export async function assertMakerPositionCloseOrigin(
+  store: Pick<ProtocolStore, "positionLifecycle" | "positionCloses">,
+  input: { positionCommitment: Hex; noteCommitment: Hex; closeTxHash: string; maker: string },
+  legacyRecovery: Pick<LegacyExitRecoveryService, "verifyCloseOutput">,
+): Promise<void> {
+  const position = store.positionLifecycle.get(input.positionCommitment);
+  const close = position?.closeCommitment ? store.positionCloses.get(position.closeCommitment) : undefined;
+  if (!position || position.status !== "closed" || position.ownerCommitment !== ownerCommitment(input.maker) ||
+      position.marginOutputCommitment !== input.noteCommitment || close?.settlementTxHash !== input.closeTxHash ||
+      close.positionCommitment !== position.positionCommitment || close.positionNullifier !== position.positionNullifier ||
+      close.marginOutputCommitment !== input.noteCommitment) {
+    throw new Error("maker loss or recovery is not bound to a confirmed paired close");
+  }
+  if (close.proof.circuitId === "position-close-pair") return;
+  if (close.proof.circuitId !== "legacy-position-close-pair") {
+    throw new Error("maker close proof is not a supported paired close");
+  }
+  const confirmed = await legacyRecovery.verifyCloseOutput(input.closeTxHash as Hex, close.closeCommitment, input.noteCommitment);
+  if (confirmed.positionCommitment !== position.positionCommitment || confirmed.positionNullifier !== position.positionNullifier) {
+    throw new Error("legacy maker close does not match its immutable funded helper source");
+  }
+}
 
 interface PositionSettlement {
   _id: string;
@@ -84,23 +109,19 @@ export async function settleVaultMakerPosition(input: {
     throw new Error("confirmed maker close output must be recovered before vault settlement");
   }
   const returned=makerCloseRecoveryAmount(note);
-  await assertSuccessfulTransaction(env.stellarRpcUrl, input.closeTxHash);
-  const executor=await createExecutorAsync({mongo:{collection:env.mongodbCollection,database:env.mongodbDatabase,
-    documentId:env.stellarNetwork,ensureIndexes:false,uri:env.mongodbUri},privateMatchingRequired:env.privateMatchingRequired});
-  try {
-    const position=executor.store.positionLifecycle.get(input.positionCommitment);
-    const close=position?.closeCommitment?executor.store.positionCloses.get(position.closeCommitment):undefined;
-    if(!position||position.status!=="closed"||position.ownerCommitment!==ownerCommitment(allocation.maker)||
-      position.marginOutputCommitment!==input.noteCommitment||close?.settlementTxHash!==input.closeTxHash||
-      close.proof.circuitId!=="position-close-pair")throw new Error("maker loss or recovery is not bound to a confirmed paired close");
-  }finally{await (executor.store as {close?:()=>Promise<void>}).close?.();}
-
   const relayer = createRelayer({ config: {
     commandTimeoutMs: env.stellarCommandTimeoutMs,
     mode: "stellar-cli", network: env.stellarNetwork,
     networkPassphrase: env.stellarNetworkPassphrase,
     rpcUrl: env.stellarRpcUrl, source: input.operatorSource,
   } });
+  await assertSuccessfulTransaction(env.stellarRpcUrl, input.closeTxHash);
+  const executor=await createExecutorAsync({mongo:{collection:env.mongodbCollection,database:env.mongodbDatabase,
+    documentId:env.stellarNetwork,ensureIndexes:false,uri:env.mongodbUri},privateMatchingRequired:env.privateMatchingRequired});
+  try {
+    await assertMakerPositionCloseOrigin(executor.store, { ...input, maker: allocation.maker },
+      new LegacyExitRecoveryService(env, relayer, deployment.contracts["legacy-pair-exit"]));
+  }finally{await (executor.store as {close?:()=>Promise<void>}).close?.();}
   const readAmount = async (contractId: string, method: string, args: string[]): Promise<bigint> => {
     const result = await relayer.readAsync({ kind: "contract-invoke", payload: {
       args, contractId, functionName: method, send: "no",

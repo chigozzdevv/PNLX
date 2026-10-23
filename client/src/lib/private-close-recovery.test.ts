@@ -9,7 +9,7 @@ import type { WalletSession } from "@/lib/wallet-auth";
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalFetch = globalThis.fetch;
 const session: WalletSession = { address: "GTEST", expiresAt: Date.now() + 60_000, ownerCommitment: "0xabc", token: "test" };
-let status: { known: boolean; spent: boolean; activeIntentCommitment?: string };
+let status: { known: boolean; spent: boolean; activeIntentCommitment?: string; legacyExit?: unknown };
 let statusReads: number;
 beforeEach(() => {
   const localStorage = storage();
@@ -101,10 +101,79 @@ test("rejects wrong owner, tampered opening and output commitment substitution",
   expect(privateMarginNotes(session.ownerCommitment)).toHaveLength(0);
 });
 
+test("legacy refunds require the exact confirmed helper output and retain spent and active-order status", async () => {
+  const payload = await legacyOutputPayload();
+  status.legacyExit = { ...payload.legacyExit, confirmed: true,
+    positionCommitment: payload.positionClose.positionCommitment, positionNullifier: payload.positionClose.positionNullifier };
+  status.activeIntentCommitment = "0xabcd";
+  expect(await restorePrivateCloseOutputNote(session, payload, session.ownerCommitment)).toBe(true);
+  const note = privateMarginNotes(session.ownerCommitment)[0];
+  expect(note.ownerDigest).toBe(payload.closeOutputNote.ownerDigest);
+  expect(note.status).toBe("locked");
+  expect(note.lockedByIntentCommitment).toBe("0xabcd");
+  markPrivateMarginNoteSpent(note.commitment);
+  expect(await restorePrivateCloseOutputNote(session, payload, session.ownerCommitment)).toBe(false);
+  expect(privateMarginNotes(session.ownerCommitment)[0].status).toBe("spent");
+  expect(statusReads).toBe(1);
+});
+
+test("legacy kind rejects missing or mismatched helper confirmation", async () => {
+  const payload = await legacyOutputPayload();
+  const expected = { ...payload.legacyExit, confirmed: true,
+    positionCommitment: payload.positionClose.positionCommitment, positionNullifier: payload.positionClose.positionNullifier };
+  for (const proof of [undefined, { ...expected, confirmed: false }, { ...expected, transactionHash: `0x${"99".repeat(32)}` },
+    { ...expected, helperContractId: "COTHER" }, { ...expected, outputIndex: 1 },
+    { ...expected, positionCommitment: `0x${"88".repeat(32)}` }, { ...expected, positionNullifier: `0x${"77".repeat(32)}` }]) {
+    status.legacyExit = proof;
+    await expect(restorePrivateCloseOutputNote(session, payload, session.ownerCommitment)).rejects.toThrow("helper confirmation");
+    expect(privateMarginNotes(session.ownerCommitment)).toHaveLength(0);
+  }
+  status.legacyExit = expected;
+  status.spent = true;
+  expect(await restorePrivateCloseOutputNote(session, payload, session.ownerCommitment)).toBe(false);
+  expect(privateMarginNotes(session.ownerCommitment)[0].status).toBe("spent");
+});
+
+test("an ordinary V2 refund can retain either exact wallet binding after reuse of a legacy note", async () => {
+  const legacy = await legacyOutputPayload();
+  const ordinary = { ...legacy, kind: "position-close" as const };
+  expect(await restorePrivateCloseOutputNote(session, ordinary, session.ownerCommitment)).toBe(true);
+  expect(privateMarginNotes(session.ownerCommitment)[0].ownerDigest).toBe(legacy.closeOutputNote.ownerDigest);
+  expect(statusReads).toBe(1);
+  markPrivateMarginNoteSpent(legacy.closeOutputNote.commitment);
+  expect(await restorePrivateCloseOutputNote(session, ordinary, session.ownerCommitment)).toBe(false);
+  const wrong = await createSecureMarginNote({ amount: 100n, assetDigest: "0x01", blinding: "third-binding",
+    owner: "another-wallet", rho: "third-rho", spendSecret: "third-private" });
+  await expect(restorePrivateCloseOutputNote(session, { kind: "position-close",
+    closeOutputNote: { ...wrong, amount: "100" }, positionClose: { ...ordinary.positionClose,
+      marginOutputCommitment: wrong.commitment } }, session.ownerCommitment)).rejects.toThrow("note owner mismatch");
+  expect(statusReads).toBe(1);
+});
+
+test("legacy event rejects substituted source and helper metadata before querying status", async () => {
+  const payload = await legacyOutputPayload();
+  await expect(restorePrivateCloseOutputNote(session, { ...payload,
+    legacyExit: { ...payload.legacyExit, outputIndex: 2 as never } }, session.ownerCommitment)).rejects.toThrow("Invalid legacy");
+  await expect(restorePrivateCloseOutputNote(session, { ...payload,
+    positionClose: { ...payload.positionClose, closeCommitment: `0x${"66".repeat(32)}` } }, session.ownerCommitment)).rejects.toThrow("source does not match");
+  expect(statusReads).toBe(0);
+});
+
 async function outputPayload(): Promise<PrivateAccountEventPayload> {
   const note = await createSecureMarginNote({ amount: 100n, assetDigest: "0x01", blinding: "blind", owner: session.address, rho: "rho", spendSecret: "private" });
   return { kind: "position-close", closeOutputNote: { ...note, amount: note.amount.toString() },
     positionClose: { marginOutputCommitment: note.commitment, positionCommitment: "0x02", positionNullifier: "0x03" } };
+}
+
+async function legacyOutputPayload(): Promise<Extract<PrivateAccountEventPayload, { kind: "legacy-position-close" }>> {
+  const note = await createSecureMarginNote({ amount: 100n, assetDigest: "0x01", blinding: "legacy-blind",
+    owner: session.ownerCommitment, rho: "legacy-rho", spendSecret: "legacy-private" });
+  const closeCommitment = `0x${"11".repeat(32)}` as const;
+  return { kind: "legacy-position-close", closeOutputNote: { ...note, amount: note.amount.toString() },
+    legacyExit: { helperContractId: "CBDBUPESYVEB5YIBMFK5TJOW54RHMUYNL7C47TLM6DHTUCEKJGK57UBK",
+      transactionHash: `0x${"22".repeat(32)}`, closeCommitment, outputIndex: 0 },
+    positionClose: { closeCommitment, marginOutputCommitment: note.commitment,
+      positionCommitment: `0x${"33".repeat(32)}`, positionNullifier: `0x${"44".repeat(32)}` } };
 }
 
 function storage() {

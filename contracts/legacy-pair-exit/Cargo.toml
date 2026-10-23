@@ -1,0 +1,25 @@
+[package]
+name = "legacy-pair-exit"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+governance-interface = { path = "../governance-interface" }
+market-interface = { path = "../market-interface" }
+position-state-interface = { path = "../position-state-interface" }
+proof-ledger-interface = { path = "../proof-ledger-interface" }
+
+[dev-dependencies]
+oracle-interface = { path = "../oracle-interface" }
+governance = { path = "../governance" }
+market = { path = "../market" }
+test-oracle = { path = "../test-oracle" }
+position-state = { path = "../position-state" }
+proof-ledger = { path = "../proof-ledger" }
+shielded-pool = { path = "../shielded-pool" }
+soroban-sdk = { workspace = true, features = ["testutils"] }

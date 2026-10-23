@@ -8,6 +8,7 @@ import { json, readJson } from "@/shared/http/json";
 import type { Router } from "@/shared/http/router";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { RelayerService } from "@/workers/relayer/relayer.service";
+import { parseLegacyExitBinding, type LegacyExitRecoveryService } from "@/features/notes/legacy-exit-recovery";
 
 interface EncryptedNoteBackup {
   _id: string;
@@ -62,6 +63,7 @@ async function withPoolReadSlot<T>(read: () => Promise<T>): Promise<T> {
 export function registerNoteBackupRoutes(
   router: Router, executor: ExecutorService, env: ServerEnv,
   relayer?: RelayerService, poolId?: string,
+  legacyExitRecovery?: LegacyExitRecoveryService,
 ): void {
   function account(request: Request): Hex {
     const address = authenticatedAddress(request);
@@ -183,7 +185,12 @@ export function registerNoteBackupRoutes(
       const note = item as Record<string, unknown>;
       const commitment = parseHex(note.commitment, "commitment");
       const nullifier = parseHex(note.nullifier, "nullifier");
-      return { commitment, nullifier };
+      const legacyExit = note.legacyExit === undefined ? undefined : parseLegacyExitBinding(note.legacyExit);
+      if (legacyExit) {
+        if (!legacyExitRecovery) throw new Error("Legacy exit helper recovery is unavailable");
+        legacyExitRecovery.assertTrustedBinding(legacyExit);
+      }
+      return { commitment, nullifier, legacyExit };
     });
     const candidates = requests.filter(({ commitment, nullifier }) =>
       executor.store.marginCommitments.has(commitment) && !executor.store.spentNullifiers.has(nullifier));
@@ -191,7 +198,7 @@ export function registerNoteBackupRoutes(
       rateLimit(`note-status:${owner}`, candidates.length, 256);
       rateLimit("note-status:global", candidates.length, 1_024);
     }
-    const notes = await Promise.all(requests.map(async ({ commitment, nullifier }) => {
+    const notes = await Promise.all(requests.map(async ({ commitment, nullifier, legacyExit }) => {
       const storedKnown = executor.store.marginCommitments.has(commitment);
       const storedSpent = executor.store.spentNullifiers.has(nullifier);
       let onchain: [boolean, boolean] | undefined;
@@ -202,10 +209,13 @@ export function registerNoteBackupRoutes(
           return [known, spent];
         });
       }
+      const confirmedLegacyExit = legacyExit && storedKnown
+        ? await withPoolReadSlot(() => legacyExitRecovery!.verifyOutput(legacyExit, commitment)) : undefined;
       return {
         commitment,
         known: storedKnown && (onchain?.[0] ?? true),
         spent: storedSpent || (onchain?.[1] ?? false),
+        ...(confirmedLegacyExit ? { legacyExit: confirmedLegacyExit } : {}),
         activeIntentCommitment: [...executor.store.intents.values()].find((intent) =>
           intent.noteNullifier.toLowerCase() === nullifier &&
           intent.ownerCommitment.toLowerCase() === owner.toLowerCase() &&
@@ -226,7 +236,7 @@ async function readPoolBoolean(
     kind: "contract-invoke",
     payload: { args: [arg, value.slice(2)], contractId: poolId, functionName, send: "no" },
   });
-  const output = result.output.trim();
+  const output = (result.stdout ?? result.output).trim();
   if (output === "true" || output === '"true"') return true;
   if (output === "false" || output === '"false"') return false;
   throw new Error("Shielded pool note status is unavailable");

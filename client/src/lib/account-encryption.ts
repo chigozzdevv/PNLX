@@ -69,9 +69,23 @@ export type PrivateAccountEventPayload =
       [key: string]: unknown;
     }
   | {
+      kind: "legacy-position-close";
+      legacyExit: LegacyExitReceiptBinding;
+      closeOutputNote: PrivateCloseOutputNote;
+      positionClose: { closeCommitment: `0x${string}`; marginOutputCommitment: `0x${string}`;
+        positionCommitment: `0x${string}`; positionNullifier: `0x${string}` };
+    }
+  | {
       kind: "residual-order";
       [key: string]: unknown;
     };
+
+export interface LegacyExitReceiptBinding {
+  helperContractId: string;
+  transactionHash: `0x${string}`;
+  closeCommitment: `0x${string}`;
+  outputIndex: 0 | 1;
+}
 
 export interface PrivateCloseOutputNote {
   amount: string;

@@ -19,6 +19,7 @@ members = [
   "test-oracle",
   "liquidation",
   "position-close",
+  "legacy-pair-exit",
   "disclosure-verifier",
   "governance",
   "governance-interface",

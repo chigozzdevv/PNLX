@@ -17,6 +17,7 @@ import { registerMarketsRoute } from "@/features/markets/markets.route";
 import { MarketsService } from "@/features/markets/markets.service";
 import { registerNotesRoute } from "@/features/notes/notes.route";
 import { registerNoteBackupRoutes } from "@/features/notes/note-backups";
+import { LegacyExitRecoveryService } from "@/features/notes/legacy-exit-recovery";
 import { registerOrdersRoute } from "@/features/orders/orders.route";
 import { registerPositionClosesRoute } from "@/features/position-closes/position-closes.route";
 import { registerPortfolioRoute } from "@/features/portfolio/portfolio.route";
@@ -224,13 +225,14 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
     pendingIntentSubmissions:executor.store.pendingIntentSubmissions.size,
     schedulerOwnership:"single-active-process-required",
   }));
-  registerAccountKeysRoute(router, executor);
+  const legacyExitRecovery = new LegacyExitRecoveryService(env, relayer, deployment?.contracts["legacy-pair-exit"]);
+  registerAccountKeysRoute(router, executor, legacyExitRecovery);
   registerAccountEventsRoute(router, executor);
   registerPortfolioRoute(router, executor);
   registerPointsRoute(router, executor.store, env.makerWalletAddress);
   registerRewardsRoute(router, relayer, executor.store, env, deployment);
   registerNotesRoute(router, executor, prover, env, onchain, relayer);
-  registerNoteBackupRoutes(router, executor, env, relayer, deployment?.contracts["shielded-pool"]);
+  registerNoteBackupRoutes(router, executor, env, relayer, deployment?.contracts["shielded-pool"], legacyExitRecovery);
   registerMarketsRoute(router, executor, oracle, env, onchain, markets);
   registerFundingRoute(router, executor, env, fundingEngine);
   registerIntentsRoute(router, executor, prover, env, onchain, {

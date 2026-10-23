@@ -17,6 +17,7 @@ export type CircuitId =
   | "margin-check"
   | "position-close"
   | "position-close-pair"
+  | "legacy-position-close-pair"
   | "position-transition"
   | "withdraw";
 
@@ -55,7 +56,9 @@ function hashFile(path: string): Hex {
 }
 
 export function loadCircuit(root: string, id: CircuitId): CircuitMeta {
-  const circuit = CIRCUITS.find((item) => item.id === id);
+  const circuit = id === "legacy-position-close-pair"
+    ? { id, packageName: "legacy_position_close_pair", dir: "circuits/legacy-position-close-pair" }
+    : CIRCUITS.find((item) => item.id === id);
   if (!circuit) throw new Error(`unknown circuit: ${id}`);
 
   const nargo = readFileSync(join(root, circuit.dir, "Nargo.toml"), "utf8");

@@ -9,9 +9,10 @@ import type {
   UpsertAccountKeyResult,
 } from "@/features/account-keys/account-keys.model";
 import { recoverConfirmedCloseOutputEventsForOwner, recoverPositionOpeningEventsForOwner } from "@/features/account-keys/account-key-recovery";
+import type { LegacyExitRecoveryService } from "@/features/notes/legacy-exit-recovery";
 
 export class AccountKeysService {
-  constructor(private readonly executor: ExecutorService) {}
+  constructor(private readonly executor: ExecutorService, private readonly legacyExitRecovery?: LegacyExitRecoveryService) {}
 
   upsert(input: UpsertAccountKeyInput, authenticated?: string): UpsertAccountKeyResult {
     assertAuthenticatedOwnerCommitment(authenticated, input.ownerCommitment, "ownerCommitment");
@@ -66,7 +67,12 @@ export class AccountKeysService {
   }
 
   async recoverDurable(input: RecoverAccountKeyInput, authenticated?: string): Promise<RecoverAccountKeyResult> {
+    assertAuthenticatedOwnerCommitment(authenticated, input.ownerCommitment, "ownerCommitment");
+    const legacyRecovery = await this.legacyExitRecovery?.recoverEvents(this.executor.store, input.ownerCommitment, input.publicKey);
     const result = this.recover(input, authenticated);
+    for (const event of legacyRecovery?.events ?? []) this.executor.store.addAccountEvent(event);
+    result.repairedEventCount += legacyRecovery?.events.length ?? 0;
+    result.skipped.push(...(legacyRecovery?.skipped ?? []));
     await (this.executor.store as { flush?: () => Promise<void> }).flush?.();
     return result;
   }
