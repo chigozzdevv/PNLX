@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -54,6 +54,37 @@ async function withFixture(work: (f: ReturnType<typeof fixture>) => Promise<void
 }
 
 describe("RISC0 private witness lifecycle", () => {
+  test("new Boundless requests force authenticated S3 despite public uploader settings", async () => {
+    await withFixture(async (f) => {
+      const previousUploader = process.env.STORAGE_UPLOADER;
+      const previousForceCargo = process.env.PNLX_RISC0_FORCE_CARGO_RUN;
+      const binary = join(f.root, "risc0/batch-match/target/release/pnlx-risc0-batch-match-prover");
+      const launch = join(f.proofDir, "launch.json");
+      mkdirSync(join(binary, ".."), { recursive: true });
+      mkdirSync(f.proofDir, { recursive: true });
+      writeFileSync(binary, `#!${process.execPath}\nimport { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(launch)}, JSON.stringify(process.argv.slice(2)));\n`);
+      chmodSync(binary, 0o700);
+      process.env.STORAGE_UPLOADER = "pinata";
+      process.env.PNLX_RISC0_FORCE_CARGO_RUN = "0";
+      try {
+        const result = await runBoundlessProver(f.root, f.inputPath, f.proofDir, { timeoutMs: 2_000 });
+        expect(result.status).toBe(0);
+        expect(JSON.parse(readFileSync(launch, "utf8"))).toEqual([
+          f.inputPath, f.proofDir, "--storage-uploader", "s3", "--s3-presigned", "false", "--s3-public-url", "false",
+        ]);
+        writeFileSync(join(f.proofDir, "request.json"), JSON.stringify({ request_id: "0x1234", expires_at: Math.floor(Date.now() / 1000) + 60 }));
+        const resumed = await runBoundlessProver(f.root, f.inputPath, f.proofDir, { timeoutMs: 2_000 });
+        expect(resumed.status).toBe(0);
+        expect(JSON.parse(readFileSync(launch, "utf8"))).toEqual([f.inputPath, f.proofDir, "--storage-uploader", "none"]);
+      } finally {
+        if (previousUploader === undefined) delete process.env.STORAGE_UPLOADER;
+        else process.env.STORAGE_UPLOADER = previousUploader;
+        if (previousForceCargo === undefined) delete process.env.PNLX_RISC0_FORCE_CARGO_RUN;
+        else process.env.PNLX_RISC0_FORCE_CARGO_RUN = previousForceCargo;
+      }
+    });
+  });
+
   test("cached artifacts never recreate input and remove an interrupted scratch file", async () => {
     await withFixture(async (f) => {
       f.output();
