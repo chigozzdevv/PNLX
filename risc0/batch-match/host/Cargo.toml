@@ -7,7 +7,9 @@ version.workspace = true
 [dependencies]
 alloy = { version = "1.0.34", default-features = false, features = ["signer-local"] }
 anyhow.workspace = true
-boundless-market = { version = "2.0.1", default-features = false }
+aws-config = { version = "1.6", default-features = false, features = ["default-https-client", "rt-tokio", "behavior-version-latest"] }
+aws-sdk-s3 = { version = "1.34", default-features = false, features = ["default-https-client", "rt-tokio"] }
+boundless-market = { version = "2.0.1", default-features = false, features = ["s3"] }
 clap = { version = "4.5", features = ["derive", "env", "string"] }
 hex.workspace = true
 pnlx-risc0-batch-match-core = { path = "../core" }
