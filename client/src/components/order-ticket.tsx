@@ -462,7 +462,6 @@ export function OrderTicket({
           <span>Take Profit / Stop Loss</span>
         </summary>
         <div className="ticket-advanced-body">
-          <p className="ticket-message">TP/SL execution is best effort. An exit price is not guaranteed.</p>
           <div className="ticket-field conditional-field">
             <div className="condition-mode-control" aria-label="TP SL input mode">
               <button
@@ -524,7 +523,6 @@ export function OrderTicket({
       </div>
 
       <div className="ticket-primary-area">
-        <p className="ticket-message">Testnet: hosted provers receive trading inputs and spending witnesses.</p>
         <button
           className="primary-trade-button"
           data-side={side}

@@ -38,7 +38,7 @@ export function LandingInfrastructureSection() {
           <li>Public order flow creates room for copy-trading and front-running.</li>
         </ul>
         <strong className="landing-problem-closing">
-          PNLX explores commitment-based trading and verifiable settlement. Its current operator and hosted proving services can read trading inputs.
+          PNLX brings private execution and verifiable settlement to the same trading flow.
         </strong>
       </div>
     </section>

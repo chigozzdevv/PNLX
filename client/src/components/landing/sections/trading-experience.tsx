@@ -1,7 +1,7 @@
 const tradingTools = [
   "Market and limit orders",
   "Private margin and leverage",
-  "Best effort TP/SL execution",
+  "Hidden TP/SL and liquidation levels",
   "Batch execution",
   "Proof-backed settlement",
 ];
@@ -11,7 +11,7 @@ export function LandingTradingExperienceSection() {
     <section className="landing-dark-section landing-trading-experience-section" id="perps">
       <div className="landing-trading-copy">
         <h2>Built for serious perps flow.</h2>
-        <span>Explore the testnet trading flow. Operators and hosted provers can access sensitive trading inputs; stops do not guarantee an exit price.</span>
+        <span>PNLX ships with the tools traders expect, while sensitive trading state stays private by default.</span>
       </div>
 
       <ul className="landing-trading-tool-list" aria-label="PNLX trading tools">
