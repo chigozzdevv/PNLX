@@ -22,7 +22,7 @@
       "name": "@pnlx/client",
       "version": "0.1.0",
       "dependencies": {
-        "@pnlx/survey": "file:../packages/survey",
+        "@pnlx/survey": "workspace:*",
         "@stellar/freighter-api": "^6.0.1",
         "@tailwindcss/postcss": "^4.3.1",
         "@zkpassport/poseidon2": "0.6.2",
