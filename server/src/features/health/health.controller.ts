@@ -119,7 +119,7 @@ export class HealthController {
         proofEngine: {
           boundless: {
             privateKeyConfigured: this.env.boundlessPrivateKeyConfigured,
-            s3BucketConfigured: this.env.boundlessS3BucketConfigured,
+            ipfsStorageConfigured: this.env.pinataJwtConfigured,
             rpcConfigured: this.env.boundlessRpcConfigured,
           },
           devMode: this.env.risc0DevMode,
@@ -258,8 +258,8 @@ function matchingReadinessIssues(env: ServerEnv): string[] {
   if (!env.boundlessPrivateKeyConfigured) {
     issues.push("BOUNDLESS_PRIVATE_KEY is required for RISC0 proving");
   }
-  if (!env.boundlessS3BucketConfigured) {
-    issues.push("S3_BUCKET is required for authenticated Boundless witness storage");
+  if (!env.pinataJwtConfigured) {
+    issues.push("PINATA_JWT is required for durable Boundless proof artifacts");
   }
   if (env.risc0DevMode) {
     issues.push("RISC0_DEV_MODE must be disabled for production proving");

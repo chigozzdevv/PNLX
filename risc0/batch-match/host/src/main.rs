@@ -16,8 +16,6 @@ use std::{env, fs, path::PathBuf, str::FromStr, time::Duration};
 use tracing_subscriber::{filter::LevelFilter, prelude::*, EnvFilter};
 use url::Url;
 
-mod witness_storage;
-
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_BATCH_MATCH_CYCLES: u64 = 100_000_000;
 const DEFAULT_LOCK_COLLATERAL_ZKC_WEI: &str = "20000000000000000000";
@@ -154,10 +152,6 @@ async fn main() -> Result<()> {
 async fn run(args: Args, program: GuestProgram) -> Result<()> {
     reject_dev_mode()?;
     program.verify_pin()?;
-    let existing = existing_request()?;
-    if !args.preflight_only && existing.is_none() {
-        witness_storage::validate_config(&args.storage_config)?;
-    }
     let input_path = args.input_path.as_ref().expect("validated input path");
     let output_dir = args
         .output_dir
@@ -177,16 +171,10 @@ async fn run(args: Args, program: GuestProgram) -> Result<()> {
         return Ok(());
     }
 
-    let storage_config = if existing.is_some() {
-        StorageUploaderConfig::default()
-    } else {
-        witness_storage::verify_bucket(&args.storage_config).await?;
-        args.storage_config
-    };
     let client = Client::builder()
         .with_rpc_url(required_url(args.rpc_url)?)
         .with_deployment(args.deployment)
-        .with_uploader_config(&storage_config)
+        .with_uploader_config(&args.storage_config)
         .await?
         .config_storage_layer(|config| config.inline_input_max_bytes(0))
         .with_funding_mode(FundingMode::AvailableBalance)
@@ -195,7 +183,7 @@ async fn run(args: Args, program: GuestProgram) -> Result<()> {
         .await
         .context("failed to build Boundless client")?;
 
-    let fulfillment = if let Some((request_id, expires_at)) = existing {
+    let fulfillment = if let Some((request_id, expires_at)) = existing_request()? {
         tracing::info!("Fetching fulfilled Boundless request {:x}", request_id);
         client
             .wait_for_request_fulfillment(request_id, POLL_INTERVAL, expires_at)
@@ -204,9 +192,7 @@ async fn run(args: Args, program: GuestProgram) -> Result<()> {
     } else {
         let env = GuestEnv::builder()
             .write(&request)
-            .context("encode zkVM input for Boundless")?
-            .build_env();
-        let input_digest = hex::encode(Sha256::digest(env.encode()?));
+            .context("encode zkVM input for Boundless")?;
         let proof_request = client
             .new_request()
             .with_program(program.bytes.clone())
@@ -217,13 +203,7 @@ async fn run(args: Args, program: GuestProgram) -> Result<()> {
             .with_offer(default_offer()?)
             .with_groth16_proof();
 
-        let proof_request = client.build_request(proof_request).await?;
-        witness_storage::validate_input(
-            &proof_request.input,
-            storage_config.s3_bucket.as_deref().expect("validated S3 bucket"),
-            &input_digest,
-        )?;
-        let (request_id, expires_at) = client.submit_request(&proof_request).await?;
+        let (request_id, expires_at) = client.submit(proof_request).await?;
         write_request_metadata(output_dir, request_id, expires_at)?;
         tracing::info!("Boundless batch-match request {:x} submitted", request_id);
         client
@@ -453,15 +433,6 @@ fn batch_match_cycles() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn accepts_private_s3_flags_used_by_the_matcher() {
-        let args = Args::try_parse_from([
-            "prover", "input.json", "output", "--storage-uploader", "s3", "--s3-bucket",
-            "pnlx-test-witnesses", "--s3-presigned", "false", "--s3-public-url", "false",
-        ]).unwrap();
-        assert!(witness_storage::validate_config(&args.storage_config).is_ok());
-    }
 
     #[test]
     fn configured_program_uses_its_actual_image_and_rejects_a_wrong_pin() {

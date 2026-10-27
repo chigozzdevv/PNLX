@@ -678,13 +678,11 @@ describe("server api", () => {
     const previousBoundlessRpc = process.env.BOUNDLESS_RPC_URL;
     const previousBoundlessKey = process.env.BOUNDLESS_PRIVATE_KEY;
     const previousPinataJwt = process.env.PINATA_JWT;
-    const previousS3Bucket = process.env.S3_BUCKET;
     process.env.PRIVATE_MATCHING_REQUIRED = "true";
     process.env.MATCHER_SERVICE_URL = "https://matcher.pnlx.local";
     process.env.BOUNDLESS_RPC_URL = "https://boundless-rpc.pnlx.local";
     process.env.BOUNDLESS_PRIVATE_KEY = "test-boundless-key";
-    delete process.env.PINATA_JWT;
-    process.env.S3_BUCKET = "pnlx-test-witnesses";
+    process.env.PINATA_JWT = "test-pinata-jwt";
     try {
       const app = createApp();
       const healthResponse = await app.handle(new Request("http://pnlx.local/health"));
@@ -694,7 +692,7 @@ describe("server api", () => {
       expect(matching.readyForPrivateMatching).toBe(true);
       expect(matching.proofEngine).toEqual({
         boundless: {
-          s3BucketConfigured: true,
+          ipfsStorageConfigured: true,
           privateKeyConfigured: true,
           rpcConfigured: true,
         },
@@ -703,19 +701,12 @@ describe("server api", () => {
         proofSystem: "risc0-groth16",
       });
       expect(matching.issues).toEqual([]);
-      delete process.env.S3_BUCKET;
-      process.env.PINATA_JWT = "test-pinata-jwt";
-      const missingBucket = await createApp().handle(new Request("http://pnlx.local/health"));
-      const unavailable = await missingBucket.json() as { matching: { readyForPrivateMatching: boolean; issues: string[] } };
-      expect(unavailable.matching.readyForPrivateMatching).toBe(false);
-      expect(unavailable.matching.issues).toContain("S3_BUCKET is required for authenticated Boundless witness storage");
     } finally {
       restoreEnv("PRIVATE_MATCHING_REQUIRED", previousRequired);
       restoreEnv("MATCHER_SERVICE_URL", previousMatcherUrl);
       restoreEnv("BOUNDLESS_RPC_URL", previousBoundlessRpc);
       restoreEnv("BOUNDLESS_PRIVATE_KEY", previousBoundlessKey);
       restoreEnv("PINATA_JWT", previousPinataJwt);
-      restoreEnv("S3_BUCKET", previousS3Bucket);
     }
   });
 

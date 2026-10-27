@@ -370,7 +370,7 @@ export function runBoundlessProver(
   return new Promise((resolve) => {
     const metadataPath = join(proofDir, "proof.json");
     const request = resumableBoundlessRequest(join(proofDir, "request.json"));
-    const target = runtime.command ?? boundlessProverCommand(root, inputPath, proofDir, Boolean(request));
+    const target = runtime.command ?? boundlessProverCommand(root, inputPath, proofDir);
     const child = spawn(target.command, target.args, {
       cwd: root,
       detached: process.platform !== "win32",
@@ -427,14 +427,10 @@ function boundlessProverCommand(
   root: string,
   inputPath: string,
   proofDir: string,
-  resume: boolean,
 ): { command: string; args: string[] } {
-  const args = resume
-    ? [inputPath, proofDir, "--storage-uploader", "none"]
-    : [inputPath, proofDir, "--storage-uploader", "s3", "--s3-presigned", "false", "--s3-public-url", "false"];
   const binary = join(root, "risc0/batch-match/target/release/pnlx-risc0-batch-match-prover");
   if (process.env.PNLX_RISC0_FORCE_CARGO_RUN !== "1" && prebuiltProverIsFresh(root, binary)) {
-    return { args, command: binary };
+    return { args: [inputPath, proofDir], command: binary };
   }
   return {
     args: [
@@ -443,7 +439,8 @@ function boundlessProverCommand(
       "--manifest-path",
       join(root, "risc0/batch-match/host/Cargo.toml"),
       "--",
-      ...args,
+      inputPath,
+      proofDir,
     ],
     command: "cargo",
   };
