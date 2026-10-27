@@ -14,7 +14,8 @@
     "@pnlx/protocol-types": "workspace:*",
     "@pnlx/sdk": "workspace:*",
     "@pnlx/server": "workspace:*",
-    "@pnlx/survey": "workspace:*"
+    "@pnlx/survey": "workspace:*",
+    "mongodb": "^6.21.0"
   },
   "scripts": {
     "build:contracts": "stellar contract build --manifest-path contracts/Cargo.toml --out-dir contracts/target/stellar --locked --optimize=false",
