@@ -9,7 +9,7 @@ export interface ServerEnv {
   batchExecutorIntervalMs: number;
   batchExecutorPrefix: string;
   boundlessPrivateKeyConfigured: boolean;
-  pinataJwtConfigured: boolean;
+  boundlessS3BucketConfigured: boolean;
   boundlessRpcConfigured: boolean;
   assetCustodyRequired: boolean;
   collateralAsset: string;
@@ -118,7 +118,7 @@ export function loadEnv(options: { validateRuntime?: boolean } = {}): ServerEnv 
     batchExecutorIntervalMs: Number(value("BATCH_EXECUTOR_INTERVAL_MS", "5000")),
     batchExecutorPrefix: value("BATCH_EXECUTOR_PREFIX", "auto"),
     boundlessPrivateKeyConfigured: Boolean(value("BOUNDLESS_PRIVATE_KEY", "")),
-    pinataJwtConfigured: Boolean(value("PINATA_JWT", "")),
+    boundlessS3BucketConfigured: Boolean(value("S3_BUCKET", "").trim()),
     boundlessRpcConfigured: Boolean(value("BOUNDLESS_RPC_URL", "")),
     assetCustodyRequired: booleanValue("ASSET_CUSTODY_REQUIRED", persistentByDefault),
     collateralAsset: value("COLLATERAL_ASSET", ""),
