@@ -13,7 +13,8 @@
     "@pnlx/proof-system": "workspace:*",
     "@pnlx/protocol-types": "workspace:*",
     "@pnlx/sdk": "workspace:*",
-    "@pnlx/server": "workspace:*"
+    "@pnlx/server": "workspace:*",
+    "@pnlx/survey": "workspace:*"
   },
   "scripts": {
     "build:contracts": "stellar contract build --manifest-path contracts/Cargo.toml --out-dir contracts/target/stellar --locked --optimize=false",
@@ -55,6 +56,7 @@
     "rewards:keepalive": "bun scripts/operations/keepalive-rewards.ts",
     "rewards:process": "bun scripts/operations/process-reward-requests.ts",
     "state:migrate-mongo": "bun scripts/operations/migrate-protocol-state.ts",
+    "survey:export": "bun scripts/operations/export-survey.ts",
     "test": "bun test",
     "test:circuits": "bash scripts/ci/test-noir.sh",
     "test:client": "bun test client/src",

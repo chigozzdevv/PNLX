@@ -11,6 +11,7 @@
         "@pnlx/protocol-types": "workspace:*",
         "@pnlx/sdk": "workspace:*",
         "@pnlx/server": "workspace:*",
+        "@pnlx/survey": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "^1.3.14",
@@ -21,6 +22,7 @@
       "name": "@pnlx/client",
       "version": "0.1.0",
       "dependencies": {
+        "@pnlx/survey": "file:../packages/survey",
         "@stellar/freighter-api": "^6.0.1",
         "@tailwindcss/postcss": "^4.3.1",
         "@zkpassport/poseidon2": "0.6.2",
@@ -68,6 +70,10 @@
       "name": "@pnlx/sdk",
       "version": "0.1.0",
     },
+    "packages/survey": {
+      "name": "@pnlx/survey",
+      "version": "0.1.0",
+    },
     "server": {
       "name": "@pnlx/server",
       "version": "0.1.0",
@@ -77,6 +83,7 @@
         "@pnlx/proof-system": "workspace:*",
         "@pnlx/protocol-types": "workspace:*",
         "@pnlx/sdk": "workspace:*",
+        "@pnlx/survey": "workspace:*",
         "mongodb": "^6.21.0",
       },
     },
@@ -255,6 +262,8 @@
     "@pnlx/sdk": ["@pnlx/sdk@workspace:packages/sdk"],
 
     "@pnlx/server": ["@pnlx/server@workspace:server"],
+
+    "@pnlx/survey": ["@pnlx/survey@workspace:packages/survey"],
 
     "@rtsao/scc": ["@rtsao/scc@1.1.0", "", {}, "sha512-zt6OdqaDoOnJ1ZYsCYGt9YmWzDXl4vQdKTyJev62gFhRGKdx7mcT54V9KIjg+d2wi9EXsPvAPKe7i7WjfVWB8g=="],
 

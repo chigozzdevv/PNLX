@@ -1,6 +1,7 @@
 import { registerAccountKeysRoute } from "@/features/account-keys/account-keys.route";
 import { registerAccountEventsRoute } from "@/features/account-events/account-events.route";
 import { registerAuthRoute } from "@/features/auth/auth.route";
+import { registerSurveyRoute } from "@/features/survey/survey.route";
 import { registerBatchesRoute } from "@/features/batches/batches.route";
 import { registerConditionalOrdersRoute } from "@/features/conditional-orders/conditional-orders.route";
 import { registerDisclosuresRoute } from "@/features/disclosures/disclosures.route";
@@ -216,6 +217,7 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
     new ConditionalOrdersService(executor,prover,env,onchain),onchain,env.liquidationAutomationIntervalMs);
 
   registerAuthRoute(router, auth);
+  registerSurveyRoute(router, { uri: env.mongodbUri, database: env.mongodbDatabase });
   registerHealthRoute(router, env, onchain, executor.store,()=>({
     protection:{enabled:env.liquidationAutomationEnabled,...protectionKeeper.status,
       fresh:env.liquidationAutomationEnabled && protectionKeeper.status.lastCompletedAt>0 &&

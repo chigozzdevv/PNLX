@@ -25,6 +25,7 @@ COPY packages/market-math/package.json packages/market-math/package.json
 COPY packages/proof-system/package.json packages/proof-system/package.json
 COPY packages/protocol-types/package.json packages/protocol-types/package.json
 COPY packages/sdk/package.json packages/sdk/package.json
+COPY packages/survey/package.json packages/survey/package.json
 
 RUN bun install --frozen-lockfile
 

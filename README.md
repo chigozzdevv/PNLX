@@ -156,6 +156,22 @@ bun run client:dev
 
 ## 6. Testing & Verification
 
+### Trader survey
+
+The public survey is available at `/survey`. Its anonymous `POST /survey/responses` endpoint uses the API server's existing `MONGODB_URI` and `MONGODB_DATABASE` settings. Responses are stored in the separate `survey_responses` collection, outside protocol checkpoints. The frontend uses the same `NEXT_PUBLIC_PNLX_API_URL` as the trading app. Deploy both the client and API changes before sharing the survey.
+
+Questions branch around past trading experience. Optional contact details are saved only when a respondent selects a follow-up purpose. There is no public response-list or export endpoint. Request identifiers prevent duplicate records on retries; they do not establish unique respondents. Spam checks use short-lived, process-local counters and a hidden field; they are not a substitute for gateway rate limits if the public form is targeted.
+
+Export responses to a spreadsheet-compatible CSV from a trusted shell with database access:
+
+```sh
+bun run survey:export --output /private/tmp/pnlx-survey.csv
+```
+
+Contact details are excluded by default. Add `--include-contact` only for the selected follow-ups. Exports refuse to overwrite existing files, use owner-only permissions and escape spreadsheet formulas. Keep CSV files out of Git and restrict spreadsheet sharing; free-text answers can still contain information respondents chose to share. A `?utm_source=community-name` survey link records the recruitment source without collecting the referring URL.
+
+### Test commands
+
 Run the entire E2E and unit test suites:
 ```sh
 # Run all unit/package tests

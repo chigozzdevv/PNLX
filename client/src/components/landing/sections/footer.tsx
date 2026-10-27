@@ -6,6 +6,7 @@ const footerLinks = [
   { label: "Perps", href: "#perps" },
   { label: "Protocol", href: "#protocol" },
   { label: "Questions", href: "#questions" },
+  { label: "Survey", href: "/survey" },
   { label: "Launch App", href: "/trade" },
 ];
 
