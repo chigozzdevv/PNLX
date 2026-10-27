@@ -19,7 +19,11 @@ test("RISC0 receipt identity binds the guest image independently of unchanged ro
     .update(readFileSync("vendor/stellar-risc0-verifier/contracts/groth16-verifier/parameters.json")).digest("hex")}`);
   expect(RISC0_STELLAR_VERIFIER_HASH).toBe(risc0VerifierIdentity(RISC0_STELLAR_VERIFIER_PARAMETERS_HASH,RISC0_BATCH_MATCH_IMAGE_ID));
   expect(RISC0_STELLAR_VERIFIER_HASH).not.toBe(RISC0_STELLAR_VERIFIER_PARAMETERS_HASH);
-  const verifier=createDeployManifest(process.cwd()).verifiers.find(entry=>entry.circuitId==="batch-match")!;
+  // Identity metadata must not depend on artifacts built by other tests.
+  const verifier=createDeployManifest(process.cwd(),{
+    requireContracts:false,
+    requireVerifierKeys:false,
+  }).verifiers.find(entry=>entry.circuitId==="batch-match")!;
   expect(verifier.imageId).toBe(RISC0_BATCH_MATCH_IMAGE_ID);
   expect(verifier.verifierHash).toBe(RISC0_STELLAR_VERIFIER_HASH);
 });
