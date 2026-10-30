@@ -35,6 +35,7 @@ async function proxyProver(request: NextRequest, context: RouteContext): Promise
       cache: "no-store",
       headers,
       method: request.method,
+      signal: request.signal,
     });
   } catch {
     return Response.json({ error: "Proof service temporarily unavailable" }, { status: 502 });
@@ -61,5 +62,6 @@ function responseHeaders(source: Headers): Headers {
   const headers = new Headers();
   copyHeader(source, headers, "content-type");
   copyHeader(source, headers, "cache-control");
+  copyHeader(source, headers, "retry-after");
   return headers;
 }

@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { hashFields } from "@pnlx/crypto";
 import type { BatchSettlement, Hex, PrivateMatchIntent } from "@pnlx/protocol-types";
 import { RelayerService } from "@/workers/relayer/relayer.service";
 import { OracleService } from "@/workers/oracle/oracle.service";
 import { MarketsService } from "@/features/markets/markets.service";
 import { assertPositionMutationReady } from "@/shared/protocol/position-mutation";
-import { ProtocolStore } from "@/shared/state/store";
+import { BATCH_EXECUTION_RUN_RETENTION, ProtocolStore, retainedBatchExecutionRuns } from "@/shared/state/store";
+import { FileProtocolStore } from "@/shared/state/persistent-store";
 import { BatchExecutorService } from "@/workers/batch-executor/batch-executor.service";
 import { capacityBoundedIntentCommitments } from "@/workers/batch-executor/batch-capacity";
 import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
@@ -17,8 +21,7 @@ import type { ExternalBatchSettlementTranscript } from "@/workers/executor/execu
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const key = (name: string): Hex => hashFields("worker-resilience", [name]);
 
-function fixture(marketIds = ["test-market"]) {
-  const store = new ProtocolStore();
+function fixture(marketIds = ["test-market"], store = new ProtocolStore()) {
   let commits = 0;
   for (const marketId of marketIds) store.markets.set(marketId, {
     marketId, fundingIndex: 0n, oraclePrice: 100_000_000n,
@@ -68,12 +71,431 @@ function fixture(marketIds = ["test-market"]) {
         batchId: input.batchId, marketId: input.marketId,
         settlementDigest: key(`settlement-${input.batchId}`),
         orderUpdates: match.orderUpdates, aggregateVolume: match.aggregateVolume,
+        spentNullifiers: match.spentNullifiers,
         fillCount: match.fills.length, proof: {},
       },
     } as unknown as ExternalBatchSettlementTranscript;
   };
   return { add, executor, store, transcript, commits: () => commits };
 }
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+describe("same-market proof pipeline", () => {
+  const marketId = "xlm-usd-perp";
+  function twoPairs(f: ReturnType<typeof fixture>) {
+    for (const [label, side] of [["one-long", 1n], ["one-short", -1n], ["two-long", 1n], ["two-short", -1n]] as const) {
+      f.add(marketId, label, side);
+    }
+  }
+  function mirrorResiduals(f: ReturnType<typeof fixture>) {
+    const commit = f.executor.commitExternalBatchSettlement.bind(f.executor);
+    f.executor.commitExternalBatchSettlement = (transcript) => {
+      const ids = transcript.settlement.orderUpdates.map((update) => update.intentCommitment);
+      const match = new BatchMatcherService().match({ batchId: transcript.settlement.batchId,
+        market: f.store.markets.get(marketId)!, intents: ids.map((id) => f.store.privateMatchIntents.get(id)!) });
+      const result = commit(transcript);
+      for (const residual of match.residuals) {
+        const source = residual.sourceIntentCommitment!;
+        const sequence = f.store.intents.get(source)?.submissionSequence ?? f.store.residualOrders.get(source)?.submissionSequence;
+        f.store.privateMatchIntents.set(residual.intentCommitment, residual);
+        f.store.residualOrders.set(residual.intentCommitment, { ...residual, sourceIntentCommitment: source,
+          submissionSequence: sequence, createdAt: 0, updatedAt: 0 } as never);
+        f.store.orderLifecycle.set(residual.intentCommitment, { batchId: residual.batchId, marketId,
+          intentCommitment: residual.intentCommitment, ownerCommitment: residual.ownerCommitment,
+          createdAt: 0, updatedAt: 0, status: "open" });
+      }
+      return result;
+    };
+  }
+
+  test("a partial first match waits for its inherited-priority residual before selecting the later trader", async () => {
+    const f = fixture([marketId]);
+    const earlier = f.add(marketId, "priority-earlier-A", 2n);
+    f.add(marketId, "priority-maker-one", -1n);
+    const later = f.add(marketId, "priority-later-B", 1n);
+    const makerTwo = f.add(marketId, "priority-maker-two", -1n);
+    mirrorResiduals(f);
+    const calls: CreateExternalSettlementInput[] = [];
+    const worker = new BatchExecutorService(f.executor as never, { createSettlementTranscript(input) {
+      calls.push(input); return f.transcript(input);
+    } });
+    await worker.runOnce();
+    expect(calls).toHaveLength(1); expect(calls[0]!.intentCommitments).toContain(earlier.intentCommitment);
+    expect(calls[0]!.intentCommitments).not.toContain(later.intentCommitment);
+    const residual = [...f.store.residualOrders.values()][0]!;
+    expect(residual.sourceIntentCommitment).toBe(earlier.intentCommitment);
+    expect(residual.submissionSequence).toBe(f.store.intents.get(earlier.intentCommitment)?.submissionSequence);
+    await worker.runOnce();
+    expect(calls).toHaveLength(2);
+    expect(new Set(calls[1]!.intentCommitments)).toEqual(new Set([residual.intentCommitment, makerTwo.intentCommitment]));
+    expect(f.store.orderLifecycle.get(later.intentCommitment)?.status).toBe("open");
+  });
+
+  test("a recovered second slot cannot newly relay past a partial predecessor but can reconcile an already landed result", async () => {
+    for (const alreadyLanded of [false, true]) {
+      const f = fixture([marketId]);
+      const earlier = f.add(marketId, `recovered-priority-A-${alreadyLanded}`, 2n);
+      const makerOne = f.add(marketId, `recovered-priority-S1-${alreadyLanded}`, -1n);
+      const later = f.add(marketId, `recovered-priority-B-${alreadyLanded}`, 1n);
+      const makerTwo = f.add(marketId, `recovered-priority-S2-${alreadyLanded}`, -1n);
+      mirrorResiduals(f);
+      const startedAt = 100, batchId = "old-priority-pipeline";
+      const firstInput = { batchId, marketId, intentCommitments: [earlier.intentCommitment, makerOne.intentCommitment] };
+      const first = f.transcript(firstInput); f.executor.commitExternalBatchSettlement(first);
+      const firstId = key(`recovered-priority-first-${alreadyLanded}`);
+      f.store.batchExecutionRuns.set(firstId, { ...firstInput, runId: firstId, startedAt, status: "settled",
+        settlementDigest: first.settlement.settlementDigest });
+      const secondInput = { batchId: `${batchId}-p2`, marketId, intentCommitments: [later.intentCommitment, makerTwo.intentCommitment] };
+      const second = f.transcript(secondInput), secondId = key(`recovered-priority-second-${alreadyLanded}`);
+      f.store.batchExecutionRuns.set(secondId, { ...secondInput, runId: secondId, startedAt,
+        status: "failed", phase: "batch-settlement", submissionAttempted: alreadyLanded,
+        settlementDigest: second.settlement.settlementDigest, settlementTranscript: second });
+      let sends = 0;
+      const result = await new BatchExecutorService(f.executor as never, { createSettlementTranscript() {
+        throw new Error("saved second-slot proof must not be regenerated");
+      } }, { intervalMs: 1000, settlementsOnchainRequired: true }, {
+        isBatchSettled: () => alreadyLanded, positionRoot: () => f.store.positionMembershipRoot(),
+        batchPositionAppendIndexAsync: async () => 0, settleBatch() { sends++; },
+      } as never).runOnce();
+      expect(sends).toBe(0);
+      if (alreadyLanded) expect(result.results[0]!.record.status).toBe("settled");
+      else {
+        expect(result.results[0]!.record.reason).toContain("requires priority reconciliation");
+        expect(f.store.orderLifecycle.get(later.intentCommitment)?.status).toBe("open");
+      }
+    }
+  });
+
+  test("durably reserves two disjoint XLM jobs before proving and commits the first without waiting for the second proof", async () => {
+    const f = fixture([marketId]); twoPairs(f);
+    const gates = [deferred(), deferred()];
+    const calls: CreateExternalSettlementInput[] = [];
+    let durable: Array<{ batchId: string; ids?: Hex[] }> = [];
+    Object.assign(f.store, { async flush() {
+      durable = [...f.store.batchExecutionRuns.values()].map((record) => ({ batchId: record.batchId, ids: record.intentCommitments }));
+    } });
+    const worker = new BatchExecutorService(f.executor as never, { async createSettlementTranscript(input) {
+      expect(durable.filter((record) => record.ids?.length === 2)).toHaveLength(2);
+      expect(durable.find((record) => record.batchId === input.batchId)?.ids).toEqual(input.intentCommitments);
+      const index = calls.push(input) - 1;
+      await gates[index]!.promise;
+      return f.transcript(input);
+    } });
+    const work = worker.runOnce();
+    try {
+      await wait(10);
+      expect(calls).toHaveLength(2);
+      expect(new Set(calls.flatMap((input) => input.intentCommitments!)).size).toBe(4);
+      const nullifiers = calls.flatMap((input) => input.intentCommitments!.map((id) => f.store.privateMatchIntents.get(id)!.noteNullifier));
+      expect(new Set(nullifiers).size).toBe(4);
+      expect(f.commits()).toBe(0);
+      gates[0]!.resolve();
+      await wait(10);
+      expect(f.commits()).toBe(1);
+    } finally { for (const gate of gates) gate.resolve(); }
+    const result = await work;
+    expect(f.commits()).toBe(2);
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]!.record.status).toBe("settled");
+  });
+
+  test("persists an out-of-order ready proof but keeps launch-order settlement through stalled confirmation", async () => {
+    const f = fixture([marketId]); twoPairs(f);
+    const proofs = [deferred(), deferred()], confirmation = deferred();
+    const calls: CreateExternalSettlementInput[] = [], sends: string[] = [], committed: string[] = [];
+    const landed = new Set<string>();
+    const commit = f.executor.commitExternalBatchSettlement.bind(f.executor);
+    f.executor.commitExternalBatchSettlement = (transcript) => { committed.push(transcript.settlement.batchId); return commit(transcript); };
+    const worker = new BatchExecutorService(f.executor as never, { async createSettlementTranscript(input) {
+      const index = calls.push(input) - 1; await proofs[index]!.promise; return f.transcript(input);
+    } }, { intervalMs: 1000, settlementsOnchainRequired: true }, {
+      positionRoot: () => f.store.positionMembershipRoot(),
+      batchPositionAppendIndexAsync: async () => f.store.positionCommitments.size,
+      async isBatchSettledAsync(batchId: string) {
+        if (batchId === calls[0]?.batchId && landed.has(batchId)) await confirmation.promise;
+        return landed.has(batchId);
+      },
+      settleBatch(settlement: BatchSettlement) {
+        sends.push(settlement.batchId); landed.add(settlement.batchId);
+        return { relays: [{ functionName: "verify_and_record", submitted: true, txHash: key(settlement.batchId) }] };
+      },
+    } as never);
+    const work = worker.runOnce();
+    try {
+      await wait(10); expect(calls).toHaveLength(2);
+      proofs[1]!.resolve(); await wait(10);
+      expect([...f.store.batchExecutionRuns.values()].find((record) => record.batchId === calls[1]!.batchId)?.settlementTranscript).toBeDefined();
+      expect(sends).toEqual([]);
+      proofs[0]!.resolve(); await wait(10);
+      expect(sends).toEqual([calls[0]!.batchId]); expect(committed).toEqual([]);
+    } finally { proofs.forEach((proof) => proof.resolve()); confirmation.resolve(); }
+    await work;
+    expect(sends).toEqual(calls.map((input) => input.batchId));
+    expect(committed).toEqual(sends);
+  });
+
+  test("keeps shared maker input at one job and accepts an explicit concurrency-one configuration", async () => {
+    for (const sharedMaker of [true, false]) {
+      const f = fixture([marketId]);
+      if (sharedMaker) {
+        f.add(marketId, "shared-long-one", 1n); f.add(marketId, "shared-long-two", 1n); f.add(marketId, "shared-maker", -2n);
+      } else twoPairs(f);
+      let proofs = 0;
+      const worker = new BatchExecutorService(f.executor as never, { createSettlementTranscript(input) {
+        proofs++; return f.transcript(input);
+      } }, { intervalMs: 1000, ...(sharedMaker ? {} : { proofPipelineConcurrency: 1 as const }) });
+      await worker.runOnce(); expect(proofs).toBe(1);
+      expect(f.commits()).toBe(1);
+    }
+    expect(() => new BatchExecutorService(fixture().executor as never, {} as never,
+      { intervalMs: 1000, proofPipelineConcurrency: 3 as never })).toThrow("must be 1 or 2");
+  });
+
+  test("excludes shared nullifiers across markets", async () => {
+    const f = fixture(["a", "b"]);
+    const a = f.add("a", "cross-a-long", 1n); f.add("a", "cross-a-short", -1n);
+    const b = f.add("b", "cross-b-long", 1n); f.add("b", "cross-b-short", -1n);
+    b.noteNullifier = a.noteNullifier;
+    Object.assign(f.store.intents.get(b.intentCommitment)!, { noteNullifier: a.noteNullifier });
+    const gate = deferred(), calls: string[] = [];
+    const worker = new BatchExecutorService(f.executor as never, { async createSettlementTranscript(input) {
+      calls.push(input.marketId); await gate.promise; return f.transcript(input);
+    } });
+    const work = worker.runOnce();
+    try { await wait(10); expect(calls).toEqual(["a"]); } finally { gate.resolve(); }
+    await work; expect(f.commits()).toBe(1);
+  });
+
+  test("a residual cannot race its reserved ancestor even with a different note nullifier", async () => {
+    const f = fixture([marketId]);
+    const source = f.add(marketId, "ancestor-source", 1n); f.add(marketId, "ancestor-maker-one", -1n);
+    const residual = f.add(marketId, "ancestor-residual", 1n); f.add(marketId, "ancestor-maker-two", -1n);
+    residual.sourceIntentCommitment = source.intentCommitment;
+    f.store.residualOrders.set(residual.intentCommitment, { ...residual, sourceIntentCommitment: source.intentCommitment } as never);
+    let proofs = 0;
+    await new BatchExecutorService(f.executor as never, { createSettlementTranscript(input) {
+      proofs++; return f.transcript(input);
+    } }).runOnce();
+    expect(proofs).toBe(1);
+  });
+
+  test("cancellation while proving prevents relay and requires production evidence before freeing the other input", async () => {
+    const f = fixture([marketId]);
+    const a = f.add(marketId, "cancel-long", 1n), b = f.add(marketId, "cancel-short", -1n);
+    const gate = deferred(); let sends = 0, proofs = 0;
+    const landed = new Set<string>();
+    let cancellationConfirmed = false;
+    const relay = {
+      positionRoot: () => f.store.positionMembershipRoot(), batchPositionAppendIndexAsync: async () => 0,
+      isBatchSettled: (batchId: string) => landed.has(batchId),
+      async isIntentCancelledAsync() {
+        if (!cancellationConfirmed) throw new Error("cancellation RPC unavailable");
+        return true;
+      },
+      settleBatch(settlement: BatchSettlement) { sends++; landed.add(settlement.batchId);
+        return { relays: [{ functionName: "verify_and_record", submitted: true, txHash: key("cancel-proof") }] }; },
+    };
+    const config = { intervalMs: 1000, settlementsOnchainRequired: true };
+    const worker = new BatchExecutorService(f.executor as never, { async createSettlementTranscript(input) {
+      proofs++; await gate.promise; return f.transcript(input);
+    } }, config, relay as never);
+    const work = worker.runOnce();
+    await wait(5); f.store.orderLifecycle.get(a.intentCommitment)!.status = "cancelled"; gate.resolve();
+    expect((await work).results[0]!.record.status).toBe("failed"); expect(sends).toBe(0);
+    const freshA = f.add(marketId, "cancel-new-long", 1n); f.add(marketId, "cancel-new-short", -1n);
+    const restored = () => new BatchExecutorService(f.executor as never, { createSettlementTranscript(input) {
+      proofs++; return f.transcript(input);
+    } }, config, relay as never);
+    await restored().runOnce();
+    expect(proofs).toBe(1); expect(sends).toBe(0);
+    expect(f.store.orderLifecycle.get(freshA.intentCommitment)?.status).toBe("open");
+    cancellationConfirmed = true;
+    f.store.privateMatchIntents.delete(b.intentCommitment);
+    await restored().runOnce(); expect(proofs).toBe(1); expect(sends).toBe(0);
+    f.store.privateMatchIntents.set(b.intentCommitment, b);
+    await restored().runOnce(); expect(proofs).toBe(2); expect(sends).toBe(1);
+    expect(f.store.orderLifecycle.get(b.intentCommitment)?.status).toBe("filled");
+    expect([...f.store.batchExecutionRuns.values()].some((record) => record.status === "skipped" && record.reason?.includes("provably inactive"))).toBe(true);
+  });
+
+  test("development state can retire a cancelled unsubmitted batch without stranding its active maker", async () => {
+    const f = fixture([marketId]);
+    const a = f.add(marketId, "dev-cancel-long", 1n), b = f.add(marketId, "dev-cancel-maker", -1n);
+    const gate = deferred();
+    const work = new BatchExecutorService(f.executor as never, { async createSettlementTranscript(input) {
+      await gate.promise; return f.transcript(input);
+    } }).runOnce();
+    await wait(5); f.store.orderLifecycle.get(a.intentCommitment)!.status = "cancelled"; gate.resolve();
+    expect((await work).results[0]!.record.status).toBe("skipped");
+    expect(f.commits()).toBe(0); expect(f.store.orderLifecycle.get(b.intentCommitment)?.status).toBe("open");
+    f.add(marketId, "dev-cancel-new-long", 1n);
+    await new BatchExecutorService(f.executor as never, { createSettlementTranscript: f.transcript }).runOnce();
+    expect(f.commits()).toBe(1); expect(f.store.orderLifecycle.get(b.intentCommitment)?.status).toBe("filled");
+  });
+
+  test("authoritative inactivity never releases an attempted settlement journal", async () => {
+    const f = fixture([marketId]); const a = f.add(marketId, "attempted-cancel-long", 1n), b = f.add(marketId, "attempted-cancel-short", -1n);
+    f.store.orderLifecycle.get(a.intentCommitment)!.status = "cancelled";
+    const id = key("attempted-cancel-job");
+    f.store.batchExecutionRuns.set(id, { runId: id, batchId: "attempted-cancel-job", marketId,
+      startedAt: 1, phase: "batch-settlement", status: "failed", submissionAttempted: true,
+      intentCommitments: [a.intentCommitment, b.intentCommitment], settlementDigest: key("attempted-cancel-digest") });
+    let proofs = 0;
+    await new BatchExecutorService(f.executor as never, { createSettlementTranscript(input) { proofs++; return f.transcript(input); } },
+      { intervalMs: 1000, settlementsOnchainRequired: true }, { isIntentCancelledAsync: async () => true } as never).runOnce();
+    expect(proofs).toBe(0); expect(f.store.batchExecutionRuns.get(id)?.status).toBe("failed");
+    expect(f.store.batchExecutionRuns.get(id)?.submissionAttempted).toBe(true);
+  });
+
+  test("late cancellation evidence cannot retire a journal that became attempted during the read", async () => {
+    const f = fixture([marketId]); const a = f.add(marketId, "race-cancel-long", 1n), b = f.add(marketId, "race-cancel-maker", -1n);
+    const input = { batchId: "race-cancel-job", marketId, intentCommitments: [a.intentCommitment, b.intentCommitment] };
+    const transcript = f.transcript(input), id = key("race-cancel-job"), gate = deferred();
+    f.store.orderLifecycle.get(a.intentCommitment)!.status = "cancelled";
+    const reserved = { runId: id, ...input, startedAt: 1, status: "failed" as const, phase: "proving" as const };
+    f.store.batchExecutionRuns.set(id, reserved);
+    let reads = 0, proofs = 0;
+    const work = new BatchExecutorService(f.executor as never, { createSettlementTranscript(value) { proofs++; return f.transcript(value); } },
+      { intervalMs: 1000, settlementsOnchainRequired: true }, {
+        async isIntentCancelledAsync() { reads++; await gate.promise; return true; },
+      } as never).runOnce();
+    await wait(5); expect(reads).toBe(1);
+    f.store.batchExecutionRuns.set(id, { ...reserved, submissionAttempted: true,
+      settlementDigest: transcript.settlement.settlementDigest, settlementTranscript: transcript });
+    gate.resolve(); await work;
+    expect(proofs).toBe(0); expect(f.store.batchExecutionRuns.get(id)?.status).toBe("failed");
+    expect(f.store.batchExecutionRuns.get(id)?.submissionAttempted).toBe(true);
+  });
+
+  test("a malformed returned transcript retains its proving reservation for exact retry instead of selecting new orders", async () => {
+    const f = fixture([marketId]); f.add(marketId, "malformed-long", 1n); f.add(marketId, "malformed-short", -1n);
+    const calls: CreateExternalSettlementInput[] = [];
+    const first = new BatchExecutorService(f.executor as never, { createSettlementTranscript(input) {
+      calls.push(input); const value = f.transcript(input); value.settlement.orderUpdates = value.settlement.orderUpdates.slice(0, 1); return value;
+    } });
+    expect((await first.runOnce()).results[0]!.record.status).toBe("failed");
+    const reserved = [...f.store.batchExecutionRuns.values()][0]!;
+    expect(reserved.phase).toBe("proving"); expect(reserved.intentCommitments).toHaveLength(2);
+    const fresh = f.add(marketId, "malformed-new-long", 1n); f.add(marketId, "malformed-new-short", -1n);
+    await new BatchExecutorService(f.executor as never, { createSettlementTranscript(input) { calls.push(input); return f.transcript(input); } }).runOnce();
+    expect(calls).toHaveLength(2); expect(calls[1]).toEqual(calls[0]);
+    expect(f.commits()).toBe(1); expect(f.store.orderLifecycle.get(fresh.intentCommitment)?.status).toBe("open");
+  });
+
+  test("File restart retries the original timed-out job and reuses the other ready transcript without expanding the reservation set", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pnlx-proof-pipeline-"));
+    try {
+      const path = join(root, "state.json");
+      const f = fixture([marketId], new FileProtocolStore(path)); twoPairs(f);
+      const calls: CreateExternalSettlementInput[] = [];
+      await new BatchExecutorService(f.executor as never, { createSettlementTranscript(input) {
+        calls.push(input); if (calls.length === 1) throw new Error("remote matcher job deadline exceeded"); return f.transcript(input);
+      } }).runOnce();
+      expect(calls).toHaveLength(2); expect(f.commits()).toBe(0);
+      const next = fixture([marketId], new FileProtocolStore(path));
+      const fresh = next.add(marketId, "restart-fresh-long", 1n); next.add(marketId, "restart-fresh-short", -1n);
+      const retries: CreateExternalSettlementInput[] = [];
+      const worker = new BatchExecutorService(next.executor as never, { createSettlementTranscript(input) {
+        retries.push(input); return next.transcript(input);
+      } });
+      expect((await worker.runOnce()).results[0]!.record.status).toBe("settled");
+      expect(retries).toEqual([calls[0]!]); expect(next.commits()).toBe(2);
+      expect(next.store.orderLifecycle.get(fresh.intentCommitment)?.status).toBe("open");
+      await worker.runOnce(); expect(next.commits()).toBe(3); expect(retries).toHaveLength(2);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("overlapping recovered selections fail closed without launching another proof", async () => {
+    const f = fixture([marketId]); const a = f.add(marketId, "overlap-long", 1n), b = f.add(marketId, "overlap-short", -1n);
+    for (const label of ["older", "newer"]) f.store.batchExecutionRuns.set(key(label), {
+      runId: key(label), batchId: label, marketId, startedAt: label === "older" ? 1 : 2,
+      intentCommitments: [a.intentCommitment, b.intentCommitment], phase: "proving", status: "failed",
+    });
+    let proofs = 0;
+    const result = await new BatchExecutorService(f.executor as never, { createSettlementTranscript(input) { proofs++; return f.transcript(input); } }).runOnce();
+    expect(proofs).toBe(0); expect(result.results[0]!.record.reason).toContain("overlapping batch reservations");
+    expect([...f.store.batchExecutionRuns.values()].every((record) => record.intentCommitments?.length === 2)).toBe(true);
+  });
+
+  test("uncertain settlement recovery is not blocked by another market's missing proving inputs", async () => {
+    const f = fixture(["a", "b"]);
+    const a = f.add("a", "unknown-input-long", 1n), aMaker = f.add("a", "unknown-input-short", -1n);
+    const b = f.add("b", "uncertain-b-long", 1n), bMaker = f.add("b", "uncertain-b-short", -1n);
+    f.store.batchExecutionRuns.set(key("unknown-input"), { runId: key("unknown-input"), marketId: "a", batchId: "unknown-input",
+      startedAt: 1, phase: "proving", status: "failed", intentCommitments: [a.intentCommitment, aMaker.intentCommitment] });
+    f.store.privateMatchIntents.delete(a.intentCommitment);
+    const transcript = f.transcript({ batchId: "uncertain-b", marketId: "b", intentCommitments: [b.intentCommitment, bMaker.intentCommitment] });
+    f.store.batchExecutionRuns.set(key("uncertain-b"), { runId: key("uncertain-b"), marketId: "b", batchId: "uncertain-b", startedAt: 2,
+      phase: "batch-settlement", status: "failed", intentCommitments: [b.intentCommitment, bMaker.intentCommitment],
+      submissionAttempted: true, settlementDigest: transcript.settlement.settlementDigest, settlementTranscript: transcript });
+    let proofs = 0, sends = 0;
+    const result = await new BatchExecutorService(f.executor as never, { createSettlementTranscript(input) { proofs++; return f.transcript(input); } },
+      { intervalMs: 1000, settlementsOnchainRequired: true }, { isBatchSettled: () => true,
+        batchPositionAppendIndexAsync: async () => 0, settleBatch() { sends++; } } as never).runOnce();
+    expect(result.results.find((item) => item.marketId === "b")?.record.status).toBe("settled");
+    expect(proofs).toBe(0); expect(sends).toBe(0); expect(f.commits()).toBe(1);
+    expect(f.store.orderLifecycle.get(aMaker.intentCommitment)?.status).toBe("open");
+  });
+
+  test("failed durable reservation writes prevent either prover from starting", async () => {
+    const f = fixture([marketId]); twoPairs(f);
+    Object.assign(f.store, { async flush() {
+      if ([...f.store.batchExecutionRuns.values()].some((record) => record.phase === "proving")) throw new Error("reservation storage unavailable");
+    } });
+    let proofs = 0;
+    const result = await new BatchExecutorService(f.executor as never, { createSettlementTranscript(input) {
+      proofs++; return f.transcript(input);
+    } }).runOnce();
+    expect(proofs).toBe(0); expect(result.results[0]!.record.status).toBe("failed");
+    expect([...f.store.batchExecutionRuns.values()].every((record) => record.intentCommitments?.length === 2)).toBe(true);
+  });
+
+  test("a checkpoint rejection retains market ownership until its sibling proof is drained and preserves both transcripts", async () => {
+    const f = fixture([marketId]); twoPairs(f);
+    const gate = deferred(), calls: CreateExternalSettlementInput[] = [];
+    let failures = 0;
+    Object.assign(f.store, { async flush() {
+      const first = [...f.store.batchExecutionRuns.values()].find((record) => record.batchId === calls[0]?.batchId);
+      if (first?.settlementTranscript && failures < 2) { failures++; throw new Error("checkpoint storage unavailable"); }
+    } });
+    const matcher = { async createSettlementTranscript(input: CreateExternalSettlementInput) {
+      const index = calls.push(input) - 1; if (index === 1) await gate.promise; return f.transcript(input);
+    } };
+    const worker = new BatchExecutorService(f.executor as never, matcher);
+    const first = worker.runOnce();
+    await wait(10); expect(calls).toHaveLength(2); expect(failures).toBe(2);
+    f.add(marketId, "checkpoint-extra-long", 1n); f.add(marketId, "checkpoint-extra-short", -1n);
+    const concurrent = new BatchExecutorService(f.executor as never, matcher).runOnce();
+    await wait(5); expect(calls).toHaveLength(2);
+    gate.resolve(); await Promise.all([first, concurrent]);
+    const held = [...f.store.batchExecutionRuns.values()].filter((record) => record.intentCommitments?.length);
+    expect(held).toHaveLength(2); expect(held.every((record) => Boolean(record.settlementTranscript))).toBe(true);
+    let reproves = 0;
+    await new BatchExecutorService(f.executor as never, { createSettlementTranscript(input) { reproves++; return f.transcript(input); } }).runOnce();
+    expect(reproves).toBe(0); expect(f.commits()).toBe(2);
+  });
+
+  test("checkpoint compaction retains unresolved proof reservations and releases completed history", () => {
+    const pending = ["running", "failed"].map((status, index) => ({
+      runId: key(`retained-${status}`), batchId: `retained-${status}`, marketId, startedAt: index,
+      intentCommitments: [key("retained-input-a"), key("retained-input-b")], phase: "proving" as const,
+      status: status as "running" | "failed",
+    }));
+    const settled = { ...pending[0]!, runId: key("completed-old"), status: "settled" as const };
+    const ready = { ...pending[1]!, runId: key("ready-old"), phase: "batch-settlement" as const, settlementDigest: key("ready-digest") };
+    const recent = Array.from({ length: BATCH_EXECUTION_RUN_RETENTION }, (_, index) => ({
+      runId: key(`recent-${index}`), batchId: `recent-${index}`, marketId, startedAt: index + 10, status: "skipped" as const,
+    }));
+    const retained = new Set(retainedBatchExecutionRuns([...pending, settled, ready, ...recent].map((record) => [record.runId, record])).map(([id]) => id));
+    for (const record of [...pending, ready]) expect(retained.has(record.runId)).toBe(true);
+    expect(retained.has(settled.runId)).toBe(false);
+  });
+});
 
 describe("bounded remote matcher", () => {
   test("aborts a stalled creation request without submitting it twice", async () => {

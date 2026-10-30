@@ -17,6 +17,7 @@ import { privateMarginNotes, reconcilePrivateMarginNotes } from "@/lib/private-m
 import { PnlModal, type PnlModalProps } from "@/components/pnl-modal";
 import { depositPrivateMargin } from "@/lib/trade-submit";
 import { positionLegs } from "@/lib/position-groups";
+import { summarizePositionCloses } from "@/lib/position-close-summary";
 import type { ClosePositionResult } from "@/lib/position-close";
 import { useTradingData } from "@/lib/use-trading-data";
 import { useWalletSession } from "@/lib/use-wallet-session";
@@ -71,48 +72,34 @@ export function PortfolioRoute() {
 
     setClosingPositionId(position.id);
     setPositionActionMessage(undefined);
+    const legs = positionLegs(position);
+    const records: ClosePositionResult[] = [];
     try {
-      const records: ClosePositionResult[] = [];
-      for (const leg of positionLegs(position)) {
+      for (const leg of legs) {
         records.push(await closePosition({ market, position: leg, session: wallet.session }));
       }
       const record = records.at(-1);
       if (!record) throw new Error("Position close produced no settlement");
-      const settlement = records.reduce((total, current) => ({
-        fee: total.fee + current.settlement.fee,
-        fundingPayment: total.fundingPayment + current.settlement.fundingPayment,
-        grossPricePnl: total.grossPricePnl + current.settlement.grossPricePnl,
-        returnedMargin: total.returnedMargin + current.settlement.returnedMargin,
-      }), { fee: 0, fundingPayment: 0, grossPricePnl: 0, returnedMargin: 0 });
-      
-      const entryPrice = position.entryPrice ?? 0;
-      const closePrice = Number(record.markPrice) / 100_000_000;
-      const size = position.size ?? 0;
       const side = position.side ?? "long";
 
       setPnlModalData({
-        closePrice,
-        entryPrice,
-        ...settlement,
-        fee: settlement.fee + (position.entryFee ?? 0),
-        initialMargin: position.collateral === undefined
-          ? undefined : position.collateral + (position.entryFee ?? 0),
+        ...summarizePositionCloses(legs, records),
         marketId: position.marketId,
         side,
-        size,
         txHash: record.txHash,
       });
 
       setPositionActionMessage({ tone: "success", text: "Position closed" });
       setPendingClosePosition(null);
-      setRefreshKey((value) => value + 1);
     } catch (error) {
+      const reason = error instanceof Error ? error.message : "Position close failed";
       setPositionActionMessage({
         tone: "error",
-        text: error instanceof Error ? error.message : "Position close failed",
+        text: records.length ? `${records.length} of ${legs.length} fills closed. ${reason}` : reason,
       });
       setPendingClosePosition(null);
     } finally {
+      setRefreshKey((value) => value + 1);
       setClosingPositionId(undefined);
     }
   }, [marketById, wallet.session]);

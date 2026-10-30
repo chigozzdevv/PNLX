@@ -120,6 +120,7 @@ export interface OnchainRelay {
   isIntentRegisteredAsync?(intentCommitment: Hex): Promise<boolean>;
   intentMatchingPayloadCommitmentAsync?(intentCommitment:Hex):Promise<Hex>;
   isIntentActiveAsync?(intentCommitment:Hex):Promise<boolean>;
+  isIntentCancelledAsync?(intentCommitment: Hex): Promise<boolean>;
   isSecureNullifierSpentAsync?(noteNullifier:Hex):Promise<boolean>;
   intentSubmissionSequence?(intentCommitment: Hex): bigint;
   intentSubmissionSequenceAsync?(intentCommitment: Hex): Promise<bigint>;

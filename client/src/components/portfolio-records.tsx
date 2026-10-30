@@ -4,6 +4,7 @@ import { ChevronDown, Copy, ExternalLink } from "lucide-react";
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { formatUsd, shortAddress } from "@/lib/format";
 import { OrderCapacityDetails } from "@/components/order-capacity-details";
+import { PositionFillDetails } from "@/components/position-fill-details";
 import {
   groupOwnerOrders,
   hasUnrecoveredResidual,
@@ -50,8 +51,8 @@ export function PortfolioRecords({
   const [expandedRow, setExpandedRow] = useState<string>();
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
   const openPositions = useMemo(
-    () => groupPositionRows(positions.filter((position) => position.status === "open")),
-    [positions],
+    () => groupPositionRows(positions.filter((position) => position.status === "open"), orders),
+    [positions, orders],
   );
   const openOrderGroups = useMemo(
     () => groupOwnerOrders(orders).filter((group) =>
@@ -197,7 +198,6 @@ function PositionsLedger({
       {positions.map((position) => {
         const key = `position:${position.id}`;
         const expanded = expandedRow === key;
-        const sourceOrder = sourceOrderForPosition(position, orders);
         const closeUnavailableReason = closeDisabledReason(position, onClosePosition);
         return (
           <Fragment key={position.id}>
@@ -244,48 +244,17 @@ function PositionsLedger({
                 />
               </div>
             </div>
-            {expanded ? <PositionDetails order={sourceOrder} position={position} /> : null}
+            {expanded ? (
+              <PositionFillDetails
+                className="portfolio-detail-panel"
+                id={`position-details-${position.id}`}
+                orders={orders}
+                position={position}
+              />
+            ) : null}
           </Fragment>
         );
       })}
-    </div>
-  );
-}
-
-function PositionDetails({
-  order,
-  position,
-}: {
-  order?: ServerOwnerOrderSnapshot;
-  position: PositionRow;
-}) {
-  return (
-    <div className="portfolio-detail-panel" id={`position-details-${position.id}`}>
-      <div className="portfolio-detail-heading"><strong>Position details</strong></div>
-      {order?.submissionTxHash ? (
-        <DetailItem label="Order submission">
-          <TransactionLink hash={order.submissionTxHash} />
-        </DetailItem>
-      ) : null}
-      {position.proofVerificationTxHash ? (
-        <DetailItem label="Proof record transaction">
-          <TransactionLink hash={position.proofVerificationTxHash} />
-        </DetailItem>
-      ) : null}
-      {position.settlementTxHash ? (
-        <DetailItem label="Settlement transaction">
-          <TransactionLink hash={position.settlementTxHash} />
-        </DetailItem>
-      ) : null}
-      {position.boundlessRequestId ? (
-        <DetailItem label="Boundless request">
-          <BoundlessLink requestId={position.boundlessRequestId} />
-        </DetailItem>
-      ) : null}
-      <DetailItem label="Batch ID"><strong>{position.batchId}</strong></DetailItem>
-      {position.proofSystem ? (
-        <DetailItem label="Proof system"><strong>{proofSystemLabel(position.proofSystem)}</strong></DetailItem>
-      ) : null}
     </div>
   );
 }
@@ -640,22 +609,6 @@ function closeDisabledReason(
     return "Private position key is unavailable in this browser";
   }
   return undefined;
-}
-
-function sourceOrderForPosition(
-  position: PositionRow,
-  orders: ServerOwnerOrderSnapshot[],
-): ServerOwnerOrderSnapshot | undefined {
-  const byIntent = new Map(orders.map((order) => [order.intentCommitment, order]));
-  let current = byIntent.get(position.sourceIntentCommitment);
-  const visited = new Set<Hex>();
-  while (current?.sourceIntentCommitment && !visited.has(current.intentCommitment)) {
-    visited.add(current.intentCommitment);
-    const parent = byIntent.get(current.sourceIntentCommitment);
-    if (!parent) break;
-    current = parent;
-  }
-  return current;
 }
 
 function activityMatchesFilter(item: ServerOwnerActivitySnapshot, filter: ActivityFilter): boolean {

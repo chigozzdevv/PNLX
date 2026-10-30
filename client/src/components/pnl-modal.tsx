@@ -36,6 +36,7 @@ export function PnlModal({
   isOpen,
   marketId,
   onClose,
+  returnedMargin,
   side,
   txHash,
 }: PnlModalProps) {
@@ -102,7 +103,9 @@ export function PnlModal({
   const pairName = `${marketId.split("-")[0]?.toUpperCase() || "PERP"}/USD`;
   const fundingImpact = -fundingPayment;
   const feeImpact = -fee;
-  const netRealizedPnl = grossPricePnl + fundingImpact + feeImpact;
+  const netRealizedPnl = initialMargin !== undefined && Number.isFinite(initialMargin) && Number.isFinite(returnedMargin)
+    ? returnedMargin - initialMargin
+    : grossPricePnl + fundingImpact + feeImpact;
   const netPnlSign = settlementAmountSign(netRealizedPnl);
   const pnlPercent = initialMargin && initialMargin > 0 ? (netRealizedPnl / initialMargin) * 100 : undefined;
   const txUrl = txHash ? `https://stellar.expert/explorer/testnet/tx/${txHash.replace(/^0x/, "")}` : undefined;

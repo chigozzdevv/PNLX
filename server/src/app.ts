@@ -192,6 +192,7 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
     {
       batchIdPrefix: env.batchExecutorPrefix,
       intervalMs: env.batchExecutorIntervalMs,
+      proofPipelineConcurrency: env.batchExecutorProofConcurrency,
       refreshMarketOracle: (marketId, signal) =>
         markets.refreshFromOracle(
           { marketId },

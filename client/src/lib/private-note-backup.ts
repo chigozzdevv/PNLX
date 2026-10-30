@@ -233,6 +233,8 @@ export async function syncPrivateMarginNoteBackup(session: WalletSession): Promi
   const health = await pnlxGet<PrivateMarginNoteRuntimeHealth>("/health", session.token);
   const scope = privateMarginNoteRuntimeScopeFromHealth(health);
   setPrivateMarginNoteRuntimeScope(scope);
+  await import("@/lib/trade-submit").then(({ recoverAbandonedPrivateMarginPreparations }) =>
+    recoverAbandonedPrivateMarginPreparations(session));
   await migrateLocalPrivateMarginNotes(session, scope);
   const recovered = await recoverPendingPrivateMarginDeposits(session);
   return recovered + await restorePrivateMarginNotes(session);

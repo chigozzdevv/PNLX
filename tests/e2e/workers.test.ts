@@ -1622,7 +1622,7 @@ describe("support workers", () => {
     expect(result.results[0].record).toMatchObject({
       batchId,
       phase: "batch-settlement",
-      status: "skipped",
+      status: "failed",
     });
     expect(result.results[0].record.reason).toContain("batch intent no longer active");
     expect(relayCalls).toBe(0);
@@ -1718,7 +1718,7 @@ describe("support workers", () => {
     expect(result.results[0].record).toMatchObject({
       batchId,
       phase: "batch-settlement",
-      status: "skipped",
+      status: "failed",
     });
     expect(result.results[0].record.reason).toContain("batch intent no longer active");
     expect(relayCalls).toBe(0);

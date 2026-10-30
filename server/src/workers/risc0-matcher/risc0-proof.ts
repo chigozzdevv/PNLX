@@ -361,66 +361,99 @@ function batchMatchImageId(): Hex {
   return value.imageId.toLowerCase() as Hex;
 }
 
+// Operators run one active matcher process per signer; this gate is local to that process.
+let boundlessSubmissionTurn = Promise.resolve();
+
+async function acquireBoundlessSubmission(): Promise<() => void> {
+  const previous = boundlessSubmissionTurn;
+  let release!: () => void;
+  boundlessSubmissionTurn = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    release();
+  };
+}
+
 export function runBoundlessProver(
   root: string, inputPath: string, proofDir: string,
   runtime: { command?: { command: string; args: string[] }; timeoutMs?: number } = {},
 ): Promise<ProverRun> {
   const timeoutMs = runtime.timeoutMs ?? Number(process.env.PNLX_RISC0_PROVER_TIMEOUT_MS ?? 65 * 60_000);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error("invalid RISC0 prover deadline");
-  return new Promise((resolve) => {
-    const metadataPath = join(proofDir, "proof.json");
-    const request = resumableBoundlessRequest(join(proofDir, "request.json"));
-    const target = runtime.command ?? boundlessProverCommand(root, inputPath, proofDir);
-    const child = spawn(target.command, target.args, {
-      cwd: root,
-      detached: process.platform !== "win32",
-      env: {
-        ...process.env,
-        ...(request ? {
-          BOUNDLESS_REQUEST_EXPIRES_AT: String(request.expiresAt),
-          BOUNDLESS_REQUEST_ID: request.requestId,
-        } : {}),
-        BOUNDLESS_IGNORE_PREFLIGHT: process.env.BOUNDLESS_IGNORE_PREFLIGHT ?? "1",
-        PATH: risc0ToolPath(process.env.HOME || "", process.env.PATH),
-        PNLX_EXPECTED_BATCH_MATCH_IMAGE_ID: RISC0_BATCH_MATCH_IMAGE_ID,
-        RISC0_DEV_MODE: "0",
-      },
-    });
-    let stdout = "";
-    let stderr = "";
-    let resolved = false;
-    const deadline = setTimeout(() => finish({
-      error: "prover deadline exceeded", metadataPath, stderr, stdout, status: null,
-    }), timeoutMs);
-    const completionTimer = setInterval(() => {
-      if (risc0ProofMetadataReady(metadataPath)) finish({ metadataPath, stderr, stdout, status: 0 });
-    }, 250);
-    completionTimer.unref?.();
+  return runQueuedBoundlessProver(root, inputPath, proofDir, runtime, timeoutMs);
+}
 
-    function finish(result: ProverRun): void {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(deadline);
-      clearInterval(completionTimer);
-      // Cargo can spawn the host binary; terminate the whole local process group.
-      if (child.exitCode === null && child.signalCode === null) {
-        try {
-          if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
-          else child.kill("SIGKILL");
-        } catch { child.kill("SIGKILL"); }
+async function runQueuedBoundlessProver(
+  root: string, inputPath: string, proofDir: string,
+  runtime: { command?: { command: string; args: string[] } }, timeoutMs: number,
+): Promise<ProverRun> {
+  const requestPath = join(proofDir, "request.json");
+  let request = resumableBoundlessRequest(requestPath);
+  const releaseSubmission = request ? () => {} : await acquireBoundlessSubmission();
+  try {
+    // A request may have become resumable while waiting for the submission turn.
+    request ??= resumableBoundlessRequest(requestPath);
+    if (request) releaseSubmission();
+    return await new Promise((resolve) => {
+      const metadataPath = join(proofDir, "proof.json");
+      const target = runtime.command ?? boundlessProverCommand(root, inputPath, proofDir);
+      const child = spawn(target.command, target.args, {
+        cwd: root,
+        detached: process.platform !== "win32",
+        env: {
+          ...process.env,
+          ...(request ? {
+            BOUNDLESS_REQUEST_EXPIRES_AT: String(request.expiresAt),
+            BOUNDLESS_REQUEST_ID: request.requestId,
+          } : {}),
+          BOUNDLESS_IGNORE_PREFLIGHT: process.env.BOUNDLESS_IGNORE_PREFLIGHT ?? "1",
+          PATH: risc0ToolPath(process.env.HOME || "", process.env.PATH),
+          PNLX_EXPECTED_BATCH_MATCH_IMAGE_ID: RISC0_BATCH_MATCH_IMAGE_ID,
+          RISC0_DEV_MODE: "0",
+        },
+      });
+      let stdout = "";
+      let stderr = "";
+      let resolved = false;
+      const deadline = setTimeout(() => finish({
+        error: "prover deadline exceeded", metadataPath, stderr, stdout, status: null,
+      }), timeoutMs);
+      const completionTimer = setInterval(() => {
+        if (resumableBoundlessRequest(requestPath)) releaseSubmission();
+        if (risc0ProofMetadataReady(metadataPath)) finish({ metadataPath, stderr, stdout, status: 0 });
+      }, 250);
+      completionTimer.unref?.();
+
+      function finish(result: ProverRun): void {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(deadline);
+        clearInterval(completionTimer);
+        // Cargo can spawn the host binary; terminate the whole local process group.
+        if (child.exitCode === null && child.signalCode === null) {
+          try {
+            if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
+            else child.kill("SIGKILL");
+          } catch { child.kill("SIGKILL"); }
+        }
+        resolve(result);
       }
-      resolve(result);
-    }
 
-    child.stdout?.setEncoding("utf8");
-    child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk: string) => { stdout = (stdout + chunk).slice(-16_384); });
-    child.stderr?.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-16_384); });
-    child.on("error", () => finish({
-      error: "prover process failed to start", metadataPath, stderr, stdout, status: null,
-    }));
-    child.on("close", (status) => finish({ metadataPath, stderr, stdout, status }));
-  });
+      child.stdout?.setEncoding("utf8");
+      child.stderr?.setEncoding("utf8");
+      child.stdout?.on("data", (chunk: string) => { stdout = (stdout + chunk).slice(-16_384); });
+      child.stderr?.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-16_384); });
+      child.on("error", () => finish({
+        error: "prover process failed to start", metadataPath, stderr, stdout, status: null,
+      }));
+      child.on("close", (status) => finish({ metadataPath, stderr, stdout, status }));
+    });
+  } finally {
+    releaseSubmission();
+  }
 }
 
 function boundlessProverCommand(
@@ -485,9 +518,9 @@ export function resumableBoundlessRequest(
       request_id?: unknown;
     };
     if (
-      typeof request.expires_at !== "number" ||
+      typeof request.expires_at !== "number" || !Number.isSafeInteger(request.expires_at) ||
       request.expires_at <= Math.floor(Date.now() / 1_000) ||
-      typeof request.request_id !== "string"
+      typeof request.request_id !== "string" || !/^0x[0-9a-f]{1,64}$/i.test(request.request_id)
     ) return undefined;
     assertHex(request.request_id, "Boundless request id");
     return { expiresAt: request.expires_at, requestId: request.request_id };

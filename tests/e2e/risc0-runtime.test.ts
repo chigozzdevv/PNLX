@@ -105,3 +105,121 @@ describe("RISC0 private witness lifecycle", () => {
     });
   });
 });
+
+describe("Boundless submission start gate", () => {
+  test("waits for complete request acknowledgement while allowing fulfillment processes to overlap", async () => {
+    await withControlledHosts(async (createHost) => {
+      const first = createHost("first"), second = createHost("second");
+      first.start(); second.start();
+      await waitForFile(first.started);
+      // A partial write must neither release the submission turn nor crash its watcher.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(existsSync(second.started)).toBe(false);
+      first.acknowledge();
+      await waitForFile(second.started);
+      for (const host of [first, second]) {
+        const { pid } = JSON.parse(readFileSync(host.started, "utf8"));
+        expect(() => process.kill(pid, 0)).not.toThrow();
+      }
+      first.stop(); second.stop();
+      expect((await first.result()).status).toBe(0);
+      expect((await second.result()).status).toBe(0);
+    });
+  });
+
+  test("an existing request resumes past a held gate without unlocking other new submissions", async () => {
+    await withControlledHosts(async (createHost) => {
+      const submitting = createHost("submitting"), resumed = createHost("resumed", { resume: true });
+      const waiting = createHost("waiting");
+      submitting.start(); await waitForFile(submitting.started);
+      resumed.start(); waiting.start();
+      await waitForFile(resumed.started);
+      expect(JSON.parse(readFileSync(resumed.started, "utf8")).requestId).toBe("0x1234");
+      expect(existsSync(waiting.started)).toBe(false);
+      resumed.stop(); await resumed.result();
+      expect(existsSync(waiting.started)).toBe(false);
+      submitting.acknowledge();
+      await waitForFile(waiting.started);
+      submitting.stop(); waiting.stop();
+    });
+  });
+
+  for (const outcome of ["failure", "timeout", "throw"] as const) {
+    test(`a ${outcome} releases the next new submission`, async () => {
+      await withControlledHosts(async (createHost) => {
+        const first = createHost("first", { outcome });
+        const second = createHost("second");
+        first.start(); second.start();
+        const failed = await first.result().then((result) => result, () => undefined);
+        if (outcome === "failure") expect(failed?.status).toBe(7);
+        if (outcome === "timeout") expect(failed?.error).toBe("prover deadline exceeded");
+        if (outcome === "throw") expect(failed).toBeUndefined();
+        await waitForFile(second.started);
+        second.stop(); expect((await second.result()).status).toBe(0);
+      });
+    });
+  }
+
+  test("invalid deadlines still throw before a prover is queued", () => {
+    expect(() => runBoundlessProver(".", "unused", "unused", { timeoutMs: 0 })).toThrow("invalid RISC0 prover deadline");
+  });
+});
+
+type ControlledHostOptions = { resume?: boolean; outcome?: "failure" | "timeout" | "throw" };
+
+async function withControlledHosts(work: (createHost: (name: string, options?: ControlledHostOptions) => {
+  started: string; acknowledge(): void; stop(): void; start(): void; result(): ReturnType<typeof runBoundlessProver>;
+}) => Promise<void>) {
+  const root = mkdtempSync(join(tmpdir(), "pnlx-boundless-submit-"));
+  const runs: ReturnType<typeof runBoundlessProver>[] = [];
+  const stops: Array<() => void> = [];
+  const createHost = (name: string, options: ControlledHostOptions = {}) => {
+    const directory = join(root, name);
+    mkdirSync(directory);
+    const request = join(directory, "request.json"), started = join(directory, "started.json");
+    const publish = join(directory, "publish.json"), exit = join(directory, "exit");
+    const metadata = JSON.stringify({ request_id: "0x1234", expires_at: Math.floor(Date.now() / 1_000) + 60 });
+    if (options.resume) writeFileSync(request, metadata);
+    const script = `const fs=require("node:fs");
+      fs.writeFileSync(${JSON.stringify(started)},JSON.stringify({pid:process.pid,requestId:process.env.BOUNDLESS_REQUEST_ID}));
+      ${options.resume ? "" : `fs.writeFileSync(${JSON.stringify(request)},"{");`}
+      ${options.outcome === "failure" ? "process.exit(7);" : ""}
+      let published=false;
+      setInterval(()=>{
+        if(!published&&fs.existsSync(${JSON.stringify(publish)})){
+          fs.writeFileSync(${JSON.stringify(request)},fs.readFileSync(${JSON.stringify(publish)}));published=true;
+        }
+        if(fs.existsSync(${JSON.stringify(exit)}))process.exit(0);
+      },10);`;
+    let run: ReturnType<typeof runBoundlessProver>;
+    const stop = () => writeFileSync(exit, "stop");
+    stops.push(stop);
+    return {
+      started, stop, acknowledge: () => writeFileSync(publish, metadata),
+      start() {
+        // Separate roots still share the process-wide signer submission gate.
+        run = runBoundlessProver(directory, join(directory, "input.json"), directory, {
+          timeoutMs: options.outcome === "timeout" ? 100 : 3_000,
+          command: { command: options.outcome === "throw" ? "" : process.execPath, args: ["-e", script] },
+        });
+        runs.push(run);
+        void run.catch(() => {});
+      },
+      result: () => run,
+    };
+  };
+  try { await work(createHost); }
+  finally {
+    stops.forEach((stop) => stop());
+    await Promise.allSettled(runs);
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+async function waitForFile(path: string): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!existsSync(path)) {
+    if (Date.now() > deadline) throw new Error("Timed out waiting for fake prover");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}

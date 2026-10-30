@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { buildProofArtifact, buildProofArtifactAsync } from "./artifact";
@@ -86,5 +86,50 @@ describe("proof artifact builder", () => {
     const target = join(process.cwd(), "circuits", "margin-check", "target");
     expect(readdirSync(join(target, "provers")).filter((file) => file.startsWith(`${name}-`))).toEqual([]);
     expect(readdirSync(target).filter((file) => file.startsWith(`${name}-`) && file.endsWith(".gz"))).toEqual([]);
+  });
+
+  test("parallel proofs preserve the canonical compiler output and verifier", async () => {
+    const target = join(process.cwd(), "circuits", "margin-check", "target");
+    const canonicalPath = join(target, "margin_check.json");
+    const canonical = readFileSync(canonicalPath);
+    const modified = statSync(canonicalPath).mtimeMs;
+    const inputs = {
+      size: 1n, price: 5_000_000_000_000n, margin: 12_000n,
+      initial_rate: 200_000n, max_leverage: 5n,
+      price_scale: 100_000_000n, rate_scale: 1_000_000n,
+    };
+    const verifierHash = loadCircuit(process.cwd(), "margin-check").verifierHash;
+    const results = await Promise.all([
+      buildProofArtifactAsync(process.cwd(), "margin-check", { name: "isolated-compiler", inputs }),
+      buildProofArtifactAsync(process.cwd(), "margin-check", {
+        name: "isolated-compiler", inputs: { ...inputs, margin: 15_000n },
+      }),
+    ]);
+    expect(results[0].vkHash).toBe(verifierHash);
+    expect(results[1].vkHash).toBe(verifierHash);
+    expect(results[0].proofPath).not.toBe(results[1].proofPath);
+    expect(readFileSync(canonicalPath)).toEqual(canonical);
+    expect(statSync(canonicalPath).mtimeMs).toBe(modified);
+    expect(readdirSync(join(process.cwd(), ".pnlx", "proof-work"))
+      .filter((name) => name.startsWith("margin-check-"))).toEqual([]);
+  });
+
+  test("a failed concurrent witness does not remove another proof or leave private workspaces", async () => {
+    const inputs = {
+      size: 1n, price: 5_000_000_000_000n, margin: 12_000n,
+      initial_rate: 200_000n, max_leverage: 5n,
+      price_scale: 100_000_000n, rate_scale: 1_000_000n,
+    };
+    const [valid, invalid] = await Promise.allSettled([
+      buildProofArtifactAsync(process.cwd(), "margin-check", { name: "mixed-outcome", inputs }),
+      buildProofArtifactAsync(process.cwd(), "margin-check", {
+        name: "mixed-outcome", inputs: { ...inputs, margin: 1n },
+      }),
+    ]);
+    expect(valid.status).toBe("fulfilled");
+    expect(invalid.status).toBe("rejected");
+    if (valid.status === "fulfilled") expect(existsSync(valid.value.proofPath)).toBe(true);
+    expect(readdirSync(join(process.cwd(), ".pnlx", "proof-work"))
+      .filter((name) => name.startsWith("margin-check-"))).toEqual([]);
   });
 });

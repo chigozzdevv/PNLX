@@ -27,7 +27,7 @@ export function PositionCloseDialog({ closing = false, onClose, onConfirm, posit
   const asset = position.market.split("/")[0] || "PERP";
   const unrealizedPnl = position.unrealizedPnl;
   const estimatedReturn = typeof position.collateral === "number" && typeof unrealizedPnl === "number"
-    ? Math.max(0, position.collateral + unrealizedPnl)
+    ? Math.max(0, position.collateral + unrealizedPnl + (position.entryFee ?? 0))
     : undefined;
 
   return (

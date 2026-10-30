@@ -3,6 +3,8 @@ import type { BatchExecutionRunRecord } from "@pnlx/protocol-types";
 export interface BatchExecutorConfig {
   batchIdPrefix?: string;
   intervalMs: number;
+  /** Independent one-execution proof jobs per market; settlement remains serialized. */
+  proofPipelineConcurrency?: 1 | 2;
   oracleRefreshIntervalMs?: number;
   oracleRefreshTimeoutMs?: number;
   refreshMarketOracle?: (marketId: string, signal?: AbortSignal) => Promise<void> | void;

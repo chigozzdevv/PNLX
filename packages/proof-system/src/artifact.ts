@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { constants, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter } from "node:path";
 import { join } from "node:path";
 import type { Hex } from "@pnlx/protocol-types";
@@ -157,15 +157,40 @@ export async function buildProofArtifactAsync(
   id: CircuitId,
   options: ProofArtifactOptions = {},
 ): Promise<ProofArtifact> {
-  const plan = prepareProofArtifact(root, id, options);
+  const circuit = loadCircuit(root, id);
+  const source = join(root, circuit.dir);
+  const workRoot = join(root, ".pnlx", "proof-work");
+  mkdirSync(workRoot, { recursive: true, mode: 0o700 });
+  const workspace = mkdtempSync(join(workRoot, `${id}-`));
+  const output = join(source, "target", "bb", `async-${randomUUID()}`);
   try {
+    // Each process owns its compiler outputs and caches as well as its witness.
+    // Other API/maker processes can continue proving against the original circuit.
+    copyFileSync(join(source, "Nargo.toml"), join(workspace, "Nargo.toml"));
+    cpSync(join(source, "src"), join(workspace, "src"), { recursive: true });
+    if (existsSync(join(source, "Nargo.lock"))) {
+      copyFileSync(join(source, "Nargo.lock"), join(workspace, "Nargo.lock"));
+    }
+    if (!options.inputs) copyFileSync(join(source, "Prover.toml"), join(workspace, "Prover.toml"));
+    const plan = prepareProofArtifact(root, id, options, workspace);
     preparePrivateWitness(plan);
     for (const command of plan.commands) {
       await runAsync(command.command, command.args, plan.dir, plan.env);
     }
-    return completeProofArtifact(plan);
+    const artifact = completeProofArtifact(plan);
+    mkdirSync(output, { recursive: true, mode: 0o700 });
+    const proofPath = join(output, "proof");
+    const publicInputsPath = join(output, "public_inputs");
+    const vkPath = join(output, "vk");
+    copyFileSync(artifact.proofPath, proofPath);
+    copyFileSync(artifact.publicInputsPath, publicInputsPath);
+    copyFileSync(artifact.vkPath, vkPath);
+    return { ...artifact, proofPath, publicInputsPath, vkPath };
+  } catch (error) {
+    rmSync(output, { recursive: true, force: true });
+    throw error;
   } finally {
-    clearPrivateWitness(plan);
+    rmSync(workspace, { recursive: true, force: true });
   }
 }
 
@@ -184,9 +209,10 @@ function prepareProofArtifact(
   root: string,
   id: CircuitId,
   options: ProofArtifactOptions,
+  workspace?: string,
 ): ProofArtifactPlan {
   const circuit = loadCircuit(root, id);
-  const dir = join(root, circuit.dir);
+  const dir = workspace ?? join(root, circuit.dir);
   const target = join(dir, "target");
   const isCustom = Boolean(options.inputs);
   const name = isCustom
@@ -200,8 +226,8 @@ function prepareProofArtifact(
   const vkPath = join(bbDir, "vk");
   const proverDir = join(target, "provers");
   const proverPath = join(proverDir, `${name}.toml`);
-  const cacheDir = join(root, ".pnlx", "proof-cache");
-  const proofHome = join(root, ".pnlx", "proof-home");
+  const cacheDir = join(workspace ?? root, ".pnlx", "proof-cache");
+  const proofHome = join(workspace ?? root, ".pnlx", "proof-home");
   const toolHome = process.env.HOME || "";
   const proofEnv = {
     ...process.env,
@@ -214,6 +240,12 @@ function prepareProofArtifact(
 
   mkdirSync(cacheDir, { recursive: true });
   mkdirSync(proofHome, { recursive: true });
+  const cachedCrs = join(root, ".pnlx", "proof-home", ".bb-crs");
+  if (workspace && existsSync(cachedCrs)) {
+    // CRS parameters are public. Copy-on-write where available keeps each job's
+    // parameter cache independent without redownloading already cached data.
+    cpSync(cachedCrs, join(proofHome, ".bb-crs"), { recursive: true, mode: constants.COPYFILE_FICLONE });
+  }
 
   if (!options.inputs && !existsSync(join(dir, "Prover.toml"))) {
     throw new Error(`missing prover inputs for ${id}`);

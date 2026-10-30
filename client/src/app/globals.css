@@ -7090,3 +7090,101 @@ button:disabled {
 :root[data-theme="light"] .pnl-modal-container {
   color: #ebe6dc;
 }
+
+.trade-records-details.position-fill-details,
+.portfolio-detail-panel.position-fill-details {
+  display: block;
+  border-color: var(--line);
+}
+
+.position-fill {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.position-fill + .position-fill {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.position-fill-heading {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.position-fill-metrics,
+.position-fill-evidence {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px 20px;
+  margin: 0;
+}
+
+.position-fill-metrics > div,
+.position-fill-evidence > div {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 5px;
+}
+
+.position-fill dt {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.position-fill dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.position-fill a {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.position-fill a svg {
+  flex-shrink: 0;
+}
+
+.position-fill a:hover {
+  text-decoration: underline;
+}
+
+.position-fill a:focus-visible {
+  outline: 2px solid var(--accent-orange);
+  outline-offset: 3px;
+}
+
+@media (max-width: 700px) {
+  .position-fill-metrics,
+  .position-fill-evidence {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 16px;
+  }
+}
+
+@media (max-width: 640px) {
+  .portfolio-page .portfolio-position-grid,
+  .positions-panel .trade-position-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .portfolio-page .portfolio-position-grid > .portfolio-market-cell,
+  .portfolio-page .portfolio-position-grid > .portfolio-row-actions,
+  .positions-panel .trade-position-grid > .trade-records-primary,
+  .positions-panel .trade-position-grid > .trade-records-actions {
+    grid-column: 1 / -1;
+  }
+}

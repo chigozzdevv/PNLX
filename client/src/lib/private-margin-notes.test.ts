@@ -5,6 +5,8 @@ import type { Hex } from "@/types/trading";
 import {
   planPrivateMarginNoteAllocations,
   lockPrivateMarginNote,
+  reservePrivateMarginNotes,
+  releasePrivateMarginPreparation,
   markPrivateMarginNoteSpent,
   findPrivateMarginRepairCandidate,
   privateMarginNotes,
@@ -26,6 +28,62 @@ import {
 
 const OWNER = `0x${"11".repeat(32)}` as Hex;
 const ASSET = `0x${"22".repeat(32)}` as Hex;
+
+describe("parallel proof reservations", () => {
+  test("reserves distinct real intents atomically and preserves the guard in durable storage", () => withNoteStorage(() => {
+    setPrivateMarginNoteRuntimeScope("test:parallel-reservation");
+    const first = savePrivateMarginNote(note("first", 100n)), second = savePrivateMarginNote(note("second", 100n));
+    lockPrivateMarginNote(second.commitment, "0x77");
+    expect(() => reservePrivateMarginNotes([{ commitment: first.commitment, intentCommitment: "0x01" },
+      { commitment: second.commitment, intentCommitment: "0x02" }])).toThrow("reserved");
+    expect(privateMarginNotes(OWNER).find((value) => value.commitment === first.commitment)?.status).toBe("available");
+    reservePrivateMarginNotes([{ commitment: first.commitment, intentCommitment: "0x01" }]);
+    expect(privateMarginNotes(OWNER).find((value) => value.commitment === first.commitment)).toMatchObject({
+      status: "locked", lockedByIntentCommitment: "0x01", submissionPending: true,
+    });
+    expect(() => reservePrivateMarginNotes([{ commitment: first.commitment, intentCommitment: "0x03" }])).toThrow("reserved");
+  }));
+
+  test("old cancelled-nullifier evidence cannot release a preparing reservation; exact lifecycle can", () => withNoteStorage(() => {
+    setPrivateMarginNoteRuntimeScope("test:parallel-evidence");
+    const source = savePrivateMarginNote(note("source", 100n));
+    reservePrivateMarginNotes([{ commitment: source.commitment, intentCommitment: "0x01" }]);
+    reconcilePrivateMarginNotes({ orders: [{ intentCommitment: "0x99", noteNullifier: source.noteNullifier, status: "cancelled" }] });
+    expect(privateSpendableBalance(OWNER)).toBe(0n);
+    expect(privateMarginNotes(OWNER)[0].submissionPending).toBe(true);
+    reconcilePrivateMarginNotes({ orders: [{ intentCommitment: "0x01", status: "filled" }] });
+    expect(privateMarginNotes(OWNER)[0]).toMatchObject({ status: "spent", submissionPending: undefined });
+    releasePrivateMarginPreparation(source.commitment, "0x01");
+    expect(privateSpendableBalance(OWNER)).toBe(0n);
+  }));
+
+  test("pre-submit cleanup releases only its own reservation and retires its uncreated change", () => withNoteStorage(() => {
+    setPrivateMarginNoteRuntimeScope("test:parallel-cleanup");
+    const source = savePrivateMarginNote(note("source", 100n));
+    reservePrivateMarginNotes([{ commitment: source.commitment, intentCommitment: "0x01" }]);
+    const change = savePrivateMarginNote({ ...note("change", 40n), status: "pending", lockedByIntentCommitment: "0x01" });
+    expect(findPrivateMarginRepairCandidate({ hasActiveOrders: false, hasCancelledOrder: true,
+      hasOpenPositions: false, ownerCommitment: OWNER })).toBeUndefined();
+    releasePrivateMarginPreparation(source.commitment, "0x02");
+    expect(privateSpendableBalance(OWNER)).toBe(0n);
+    releasePrivateMarginPreparation(source.commitment, "0x01");
+    expect(privateSpendableBalance(OWNER)).toBe(100n);
+    expect(privatePendingBalance(OWNER)).toBe(0n);
+    expect(privateMarginNotes(OWNER).find((value) => value.commitment === change.commitment)?.status).toBe("spent");
+  }));
+
+  test("cleanup follows its captured scope after a runtime switch without touching the active runtime", () => withNoteStorage(() => {
+    setPrivateMarginNoteRuntimeScope("test:preparation-old");
+    const source = savePrivateMarginNote(note("source", 100n));
+    reservePrivateMarginNotes([{ commitment: source.commitment, intentCommitment: "0x01" }]);
+    setPrivateMarginNoteRuntimeScope("test:preparation-current");
+    savePrivateMarginNote({ ...source, runtimeScope: "test:preparation-current", amount: "200", status: "available" });
+    releasePrivateMarginPreparation(source.commitment, "0x01", { runtimeScope: "test:preparation-old" });
+    expect(privateSpendableBalance(OWNER)).toBe(200n);
+    setPrivateMarginNoteRuntimeScope("test:preparation-old");
+    expect(privateSpendableBalance(OWNER)).toBe(100n);
+  }));
+});
 
 describe("private margin note allocation", () => {
   test("uses one consolidated note when it can cover the requested margin", () => {

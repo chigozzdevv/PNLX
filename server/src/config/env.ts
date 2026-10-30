@@ -7,6 +7,7 @@ export interface ServerEnv {
   authSessionSecret: string;
   batchExecutorEnabled: boolean;
   batchExecutorIntervalMs: number;
+  batchExecutorProofConcurrency: 1 | 2;
   batchExecutorPrefix: string;
   boundlessPrivateKeyConfigured: boolean;
   pinataJwtConfigured: boolean;
@@ -116,6 +117,7 @@ export function loadEnv(options: { validateRuntime?: boolean } = {}): ServerEnv 
     authSessionSecret,
     batchExecutorEnabled: booleanValue("BATCH_EXECUTOR_ENABLED", persistentByDefault),
     batchExecutorIntervalMs: Number(value("BATCH_EXECUTOR_INTERVAL_MS", "5000")),
+    batchExecutorProofConcurrency: batchProofConcurrency(value("BATCH_EXECUTOR_PROOF_CONCURRENCY", "2")),
     batchExecutorPrefix: value("BATCH_EXECUTOR_PREFIX", "auto"),
     boundlessPrivateKeyConfigured: Boolean(value("BOUNDLESS_PRIVATE_KEY", "")),
     pinataJwtConfigured: Boolean(value("PINATA_JWT", "")),
@@ -260,6 +262,11 @@ function positiveNumberValue(key: string, fallback: string): number {
     throw new Error(`${key} must be a positive number`);
   }
   return parsed;
+}
+
+function batchProofConcurrency(raw: string): 1 | 2 {
+  if (raw === "1" || raw === "2") return Number(raw) as 1 | 2;
+  throw new Error("BATCH_EXECUTOR_PROOF_CONCURRENCY must be 1 or 2");
 }
 
 function optionalBigInt(key: string): bigint | undefined {

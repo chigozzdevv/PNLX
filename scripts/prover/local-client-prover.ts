@@ -6,10 +6,26 @@ import type { ProofArtifact } from "@pnlx/proof-system";
 
 const DEFAULT_PORT = 4101;
 const BATCH_MATCH_PROGRAM_PATH = "/risc0/batch-match.bin";
+const PROOF_PATHS = new Set([
+  "/deposit-note", "/secure-deposit-note", "/intent-validity", "/position-close", "/withdraw", "/secure-withdraw",
+]);
+const MAX_ACTIVE_PROOFS = 2;
+const MAX_QUEUED_PROOFS = 8;
 
-export function createLocalClientProverHandler(root = process.cwd()) {
-  const prover = new ProverService(root);
-  return async function handleLocalClientProver(request: Request): Promise<Response> {
+type LocalClientProver = Pick<ProverService,
+  "artifactFor" | "proveDepositNote" | "proveSecureDepositNote" | "proveIntentValidityAsync" |
+  "provePositionClose" | "proveWithdrawal" | "proveSecureWithdrawal">;
+
+export function createLocalClientProverHandler(
+  root = process.cwd(),
+  options: { prover?: LocalClientProver } = {},
+) {
+  const prover = options.prover ?? new ProverService(root);
+  const proofJobs = new ProofJobQueue();
+  return async function handleLocalClientProver(
+    request: Request,
+    server?: { timeout(request: Request, seconds: number): void },
+  ): Promise<Response> {
     if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
     const url = new URL(request.url);
 
@@ -38,130 +54,140 @@ export function createLocalClientProverHandler(root = process.cwd()) {
           },
         }));
       }
-      if (request.method === "POST" && url.pathname === "/deposit-note") {
+      if (request.method === "POST" && PROOF_PATHS.has(url.pathname)) {
+        if (request.signal.aborted) throw new ProofRequestCancelled();
         const input = await request.json() as Record<string, unknown>;
-        const record = prover.proveDepositNote({
-          amount: BigInt(String(input.amount)),
-          blinding: requiredHex(input.blinding, "blinding"),
-          commitment: requiredHex(input.commitment, "commitment"),
-          ownerDigest: requiredHex(input.ownerDigest, "ownerDigest"),
-          rhoDigest: requiredHex(input.rhoDigest, "rhoDigest"),
-          tokenDigest: requiredHex(input.tokenDigest, "tokenDigest"),
-        });
-        return json(proofBundle(prover, record, record.proof));
-      }
-      if (request.method === "POST" && url.pathname === "/secure-deposit-note") {
-        const input = await request.json() as Record<string, unknown>;
-        const record = prover.proveSecureDepositNote({
-          amount: BigInt(String(input.amount)),
-          blinding: requiredHex(input.blinding, "blinding"),
-          commitment: requiredHex(input.commitment, "commitment"),
-          ownerDigest: requiredHex(input.ownerDigest, "ownerDigest"),
-          rhoDigest: requiredHex(input.rhoDigest, "rhoDigest"),
-          spendSecretDigest: requiredHex(input.spendSecretDigest, "spendSecretDigest"),
-          tokenDigest: requiredHex(input.tokenDigest, "tokenDigest"),
-        });
-        return json(proofBundle(prover, record, record.proof));
-      }
-      if (request.method === "POST" && url.pathname === "/intent-validity") {
-        const input = await request.json() as Record<string, unknown>;
-        const record = prover.proveIntentValidity({
-          assetDigest: requiredHex(input.assetDigest, "assetDigest"),
-          blinding: requiredHex(input.blinding, "blinding"),
-          changeBlinding: optionalHex(input.changeBlinding) ?? "0x0",
-          changeRhoDigest: optionalHex(input.changeRhoDigest) ?? "0x0",
-          currentBatch: BigInt(String(input.currentBatch)),
-          expiryBatch: BigInt(String(input.expiryBatch)),
-          intent: {
-            batchId: requiredString(input.batchId, "batchId"),
-            limitPrice: BigInt(String(input.limitPrice)),
-            margin: BigInt(String(input.margin)),
-            marketId: requiredString(input.marketId, "marketId"),
-            nonce: requiredString(input.nonce, "nonce"),
-            noteNullifier: requiredHex(input.noteNullifier, "noteNullifier"),
-            owner: requiredString(input.owner, "owner"),
-            salt: requiredString(input.salt, "salt"),
-            side: input.side === "short" ? "short" : "long",
-            size: BigInt(String(input.size)),
-          },
-          marginRoot: requiredHex(input.marginRoot, "marginRoot"),
-          noteAmount: BigInt(String(input.noteAmount)),
-          noteChangeCommitment: optionalHex(input.noteChangeCommitment) ?? "0x0",
-          noteCommitment: requiredHex(input.noteCommitment, "noteCommitment"),
-          ownerDigest: requiredHex(input.ownerDigest, "ownerDigest"),
-          pathIndices: requiredBooleanArray(input.pathIndices, "pathIndices"),
-          pathSiblings: requiredHexArray(input.pathSiblings, "pathSiblings"),
-          rhoDigest: requiredHex(input.rhoDigest, "rhoDigest"),
-          spendSecretDigest: requiredHex(input.spendSecretDigest, "spendSecretDigest"),
-        });
-        return json(proofBundle(prover, record, record.proof));
-      }
-      if (request.method === "POST" && url.pathname === "/position-close") {
-        const input = await request.json() as Record<string, unknown>;
-        const record = prover.provePositionClose({
-          blinding: requiredHex(input.blinding, "blinding"),
-          closeCommitment: requiredHex(input.closeCommitment, "closeCommitment"),
-          closeSize: BigInt(String(input.closeSize)),
-          currentFundingIndex: BigInt(String(input.currentFundingIndex)),
-          entryPrice: BigInt(String(input.entryPrice)),
-          fee: BigInt(String(input.fee)),
-          fundingIndex: BigInt(String(input.fundingIndex)),
-          fundingPayment: BigInt(String(input.fundingPayment)),
-          margin: BigInt(String(input.margin)),
-          marginOutputAmount: BigInt(String(input.marginOutputAmount)),
-          marginOutputAssetDigest: requiredHex(input.marginOutputAssetDigest, "marginOutputAssetDigest"),
-          marginOutputBlinding: requiredHex(input.marginOutputBlinding, "marginOutputBlinding"),
-          marginOutputCommitment: requiredHex(input.marginOutputCommitment, "marginOutputCommitment"),
-          marginOutputRhoDigest: requiredHex(input.marginOutputRhoDigest, "marginOutputRhoDigest"),
-          marginOutputSpendSecretDigest: requiredHex(input.marginOutputSpendSecretDigest, "marginOutputSpendSecretDigest"),
-          marketDigest: requiredHex(input.marketDigest, "marketDigest"),
-          marketId: requiredString(input.marketId, "marketId"),
-          markPrice: BigInt(String(input.markPrice)),
-          newMargin: BigInt(String(input.newMargin)),
-          newPositionBlinding: requiredHex(input.newPositionBlinding, "newPositionBlinding"),
-          newPositionCommitment: requiredHex(input.newPositionCommitment, "newPositionCommitment"),
-          newPositionRhoDigest: requiredHex(input.newPositionRhoDigest, "newPositionRhoDigest"),
-          ownerDigest: requiredHex(input.ownerDigest, "ownerDigest"),
-          pathIndices: requiredBooleanArray(input.pathIndices, "pathIndices"),
-          pathSiblings: requiredHexArray(input.pathSiblings, "pathSiblings"),
-          positionCommitment: requiredHex(input.positionCommitment, "positionCommitment"),
-          positionNullifier: requiredHex(input.positionNullifier, "positionNullifier"),
-          positionRoot: requiredHex(input.positionRoot, "positionRoot"),
-          remainingMargin: BigInt(String(input.remainingMargin)),
-          rhoDigest: requiredHex(input.rhoDigest, "rhoDigest"),
-          side: input.side === "short" ? "short" : "long",
-          size: BigInt(String(input.size)),
-          spendSecretDigest: requiredHex(input.spendSecretDigest, "spendSecretDigest"),
-        });
-        return json(proofBundle(prover, record, record.proof));
-      }
-      if (request.method === "POST" &&
-        (url.pathname === "/withdraw" || url.pathname === "/secure-withdraw")) {
-        const input = await request.json() as Record<string, unknown>;
-        const prove = url.pathname === "/secure-withdraw"
-          ? prover.proveSecureWithdrawal.bind(prover) : prover.proveWithdrawal.bind(prover);
-        const record = prove({
-          assetDigest: requiredHex(input.assetDigest, "assetDigest"),
-          blinding: requiredHex(input.blinding, "blinding"),
-          changeBlinding: optionalHex(input.changeBlinding),
-          changeRhoDigest: optionalHex(input.changeRhoDigest),
-          noteAmount: BigInt(String(input.noteAmount)),
-          noteCommitment: requiredHex(input.noteCommitment, "noteCommitment"),
-          nullifier: requiredHex(input.nullifier, "nullifier"),
-          ownerDigest: requiredHex(input.ownerDigest, "ownerDigest"),
-          pathIndices: requiredBooleanArray(input.pathIndices, "pathIndices"),
-          pathSiblings: requiredHexArray(input.pathSiblings, "pathSiblings"),
-          recipient: requiredHex(input.recipient, "recipient"),
-          rhoDigest: requiredHex(input.rhoDigest, "rhoDigest"),
-          root: requiredHex(input.root, "root"),
-          spendSecretDigest: requiredHex(input.spendSecretDigest, "spendSecretDigest"),
-          tokenDigest: requiredHex(input.tokenDigest, "tokenDigest"),
-          withdrawAmount: BigInt(String(input.withdrawAmount)),
-        });
-        return json(proofBundle(prover, record, record.proof));
+        // Proof/queue time can exceed Bun's default idle deadline. Child commands have their own deadlines.
+        server?.timeout(request, 0);
+        const response = await proofJobs.run(async () => {
+          if (url.pathname === "/deposit-note") {
+            const record = prover.proveDepositNote({
+              amount: BigInt(String(input.amount)),
+              blinding: requiredHex(input.blinding, "blinding"),
+              commitment: requiredHex(input.commitment, "commitment"),
+              ownerDigest: requiredHex(input.ownerDigest, "ownerDigest"),
+              rhoDigest: requiredHex(input.rhoDigest, "rhoDigest"),
+              tokenDigest: requiredHex(input.tokenDigest, "tokenDigest"),
+            });
+            return json(proofBundle(prover, record, record.proof));
+          }
+          if (url.pathname === "/secure-deposit-note") {
+            const record = prover.proveSecureDepositNote({
+              amount: BigInt(String(input.amount)),
+              blinding: requiredHex(input.blinding, "blinding"),
+              commitment: requiredHex(input.commitment, "commitment"),
+              ownerDigest: requiredHex(input.ownerDigest, "ownerDigest"),
+              rhoDigest: requiredHex(input.rhoDigest, "rhoDigest"),
+              spendSecretDigest: requiredHex(input.spendSecretDigest, "spendSecretDigest"),
+              tokenDigest: requiredHex(input.tokenDigest, "tokenDigest"),
+            });
+            return json(proofBundle(prover, record, record.proof));
+          }
+          if (url.pathname === "/intent-validity") {
+            const record = await prover.proveIntentValidityAsync({
+              assetDigest: requiredHex(input.assetDigest, "assetDigest"),
+              blinding: requiredHex(input.blinding, "blinding"),
+              changeBlinding: optionalHex(input.changeBlinding) ?? "0x0",
+              changeRhoDigest: optionalHex(input.changeRhoDigest) ?? "0x0",
+              currentBatch: BigInt(String(input.currentBatch)),
+              expiryBatch: BigInt(String(input.expiryBatch)),
+              intent: {
+                batchId: requiredString(input.batchId, "batchId"),
+                limitPrice: BigInt(String(input.limitPrice)),
+                margin: BigInt(String(input.margin)),
+                marketId: requiredString(input.marketId, "marketId"),
+                nonce: requiredString(input.nonce, "nonce"),
+                noteNullifier: requiredHex(input.noteNullifier, "noteNullifier"),
+                owner: requiredString(input.owner, "owner"),
+                salt: requiredString(input.salt, "salt"),
+                side: input.side === "short" ? "short" : "long",
+                size: BigInt(String(input.size)),
+              },
+              marginRoot: requiredHex(input.marginRoot, "marginRoot"),
+              noteAmount: BigInt(String(input.noteAmount)),
+              noteChangeCommitment: optionalHex(input.noteChangeCommitment) ?? "0x0",
+              noteCommitment: requiredHex(input.noteCommitment, "noteCommitment"),
+              ownerDigest: requiredHex(input.ownerDigest, "ownerDigest"),
+              pathIndices: requiredBooleanArray(input.pathIndices, "pathIndices"),
+              pathSiblings: requiredHexArray(input.pathSiblings, "pathSiblings"),
+              rhoDigest: requiredHex(input.rhoDigest, "rhoDigest"),
+              spendSecretDigest: requiredHex(input.spendSecretDigest, "spendSecretDigest"),
+            });
+            return json(proofBundle(prover, record, record.proof));
+          }
+          if (url.pathname === "/position-close") {
+            const record = prover.provePositionClose({
+              blinding: requiredHex(input.blinding, "blinding"),
+              closeCommitment: requiredHex(input.closeCommitment, "closeCommitment"),
+              closeSize: BigInt(String(input.closeSize)),
+              currentFundingIndex: BigInt(String(input.currentFundingIndex)),
+              entryPrice: BigInt(String(input.entryPrice)),
+              fee: BigInt(String(input.fee)),
+              fundingIndex: BigInt(String(input.fundingIndex)),
+              fundingPayment: BigInt(String(input.fundingPayment)),
+              margin: BigInt(String(input.margin)),
+              marginOutputAmount: BigInt(String(input.marginOutputAmount)),
+              marginOutputAssetDigest: requiredHex(input.marginOutputAssetDigest, "marginOutputAssetDigest"),
+              marginOutputBlinding: requiredHex(input.marginOutputBlinding, "marginOutputBlinding"),
+              marginOutputCommitment: requiredHex(input.marginOutputCommitment, "marginOutputCommitment"),
+              marginOutputRhoDigest: requiredHex(input.marginOutputRhoDigest, "marginOutputRhoDigest"),
+              marginOutputSpendSecretDigest: requiredHex(input.marginOutputSpendSecretDigest, "marginOutputSpendSecretDigest"),
+              marketDigest: requiredHex(input.marketDigest, "marketDigest"),
+              marketId: requiredString(input.marketId, "marketId"),
+              markPrice: BigInt(String(input.markPrice)),
+              newMargin: BigInt(String(input.newMargin)),
+              newPositionBlinding: requiredHex(input.newPositionBlinding, "newPositionBlinding"),
+              newPositionCommitment: requiredHex(input.newPositionCommitment, "newPositionCommitment"),
+              newPositionRhoDigest: requiredHex(input.newPositionRhoDigest, "newPositionRhoDigest"),
+              ownerDigest: requiredHex(input.ownerDigest, "ownerDigest"),
+              pathIndices: requiredBooleanArray(input.pathIndices, "pathIndices"),
+              pathSiblings: requiredHexArray(input.pathSiblings, "pathSiblings"),
+              positionCommitment: requiredHex(input.positionCommitment, "positionCommitment"),
+              positionNullifier: requiredHex(input.positionNullifier, "positionNullifier"),
+              positionRoot: requiredHex(input.positionRoot, "positionRoot"),
+              remainingMargin: BigInt(String(input.remainingMargin)),
+              rhoDigest: requiredHex(input.rhoDigest, "rhoDigest"),
+              side: input.side === "short" ? "short" : "long",
+              size: BigInt(String(input.size)),
+              spendSecretDigest: requiredHex(input.spendSecretDigest, "spendSecretDigest"),
+            });
+            return json(proofBundle(prover, record, record.proof));
+          }
+          if (url.pathname === "/withdraw" || url.pathname === "/secure-withdraw") {
+            const prove = url.pathname === "/secure-withdraw"
+              ? prover.proveSecureWithdrawal.bind(prover) : prover.proveWithdrawal.bind(prover);
+            const record = prove({
+              assetDigest: requiredHex(input.assetDigest, "assetDigest"),
+              blinding: requiredHex(input.blinding, "blinding"),
+              changeBlinding: optionalHex(input.changeBlinding),
+              changeRhoDigest: optionalHex(input.changeRhoDigest),
+              noteAmount: BigInt(String(input.noteAmount)),
+              noteCommitment: requiredHex(input.noteCommitment, "noteCommitment"),
+              nullifier: requiredHex(input.nullifier, "nullifier"),
+              ownerDigest: requiredHex(input.ownerDigest, "ownerDigest"),
+              pathIndices: requiredBooleanArray(input.pathIndices, "pathIndices"),
+              pathSiblings: requiredHexArray(input.pathSiblings, "pathSiblings"),
+              recipient: requiredHex(input.recipient, "recipient"),
+              rhoDigest: requiredHex(input.rhoDigest, "rhoDigest"),
+              root: requiredHex(input.root, "root"),
+              spendSecretDigest: requiredHex(input.spendSecretDigest, "spendSecretDigest"),
+              tokenDigest: requiredHex(input.tokenDigest, "tokenDigest"),
+              withdrawAmount: BigInt(String(input.withdrawAmount)),
+            });
+            return json(proofBundle(prover, record, record.proof));
+          }
+          throw new Error("Unknown proof route");
+        }, request.signal);
+        return request.signal.aborted ? cancelledResponse() : response;
       }
       return cors(Response.json({ error: "not found" }, { status: 404 }));
-    } catch {
+    } catch (error) {
+      if (error instanceof ProofRequestCancelled || request.signal.aborted) return cancelledResponse();
+      if (error instanceof ProofQueueFull) {
+        const response = json({ error: "Prover is busy. Try again shortly." }, 503);
+        response.headers.set("retry-after", "1");
+        return response;
+      }
       return cors(Response.json({ error: "Proof generation failed" }, { status: 500 }));
     }
   };
@@ -179,13 +205,63 @@ if (import.meta.main) {
   console.log(`PNLX local client prover listening on http://${hostname}:${server.port}`);
 }
 
-function proofBundle(prover: ProverService, record: unknown, proof: ProofMeta) {
+function proofBundle(prover: Pick<ProverService, "artifactFor">, record: unknown, proof: ProofMeta) {
   const artifact = prover.artifactFor(proof);
   if (!artifact) throw new Error("proof artifact not found");
   return {
     artifact: artifactRegistrationBody(proof, artifact),
     record,
   };
+}
+
+class ProofQueueFull extends Error {}
+class ProofRequestCancelled extends Error {}
+
+interface QueuedProofJob {
+  start(): void;
+}
+
+/** A disconnected active request keeps its slot until the prover's cleanup completes. */
+class ProofJobQueue {
+  private active = 0;
+  private readonly waiting: QueuedProofJob[] = [];
+
+  run<T>(job: () => Promise<T>, signal: AbortSignal): Promise<T> {
+    if (signal.aborted) return Promise.reject(new ProofRequestCancelled());
+    if (this.active >= MAX_ACTIVE_PROOFS && this.waiting.length >= MAX_QUEUED_PROOFS) {
+      return Promise.reject(new ProofQueueFull());
+    }
+
+    return new Promise<T>((resolve, reject) => {
+      const cancel = () => {
+        const index = this.waiting.indexOf(queued);
+        if (index < 0) return;
+        this.waiting.splice(index, 1);
+        signal.removeEventListener("abort", cancel);
+        reject(new ProofRequestCancelled());
+      };
+      const queued: QueuedProofJob = {
+        start: () => {
+          signal.removeEventListener("abort", cancel);
+          this.active += 1;
+          void Promise.resolve().then(job).then(resolve, reject).finally(() => {
+            this.active -= 1;
+            this.waiting.shift()?.start();
+          });
+        },
+      };
+
+      if (this.active < MAX_ACTIVE_PROOFS) queued.start();
+      else {
+        this.waiting.push(queued);
+        signal.addEventListener("abort", cancel, { once: true });
+      }
+    });
+  }
+}
+
+function cancelledResponse(): Response {
+  return json({ error: "Proof request cancelled" }, 499);
 }
 
 function artifactRegistrationBody(proof: ProofMeta, artifact: ProofArtifact) {

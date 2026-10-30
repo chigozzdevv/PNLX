@@ -7,16 +7,19 @@ import {
   registerProofBundle,
   type ClientProofProvider,
   type IntentValidityRecord,
+  type ProofBundle,
 } from "@/lib/client-proof-provider";
 import { storePendingConditionalStrategy as persistConditionalStrategy } from "@/lib/conditional-orders";
 import { pnlxGet, pnlxPost, PnlxApiError } from "@/lib/pnlx-api";
-import { createSecureMarginNote, randomLabel } from "@/lib/private-note";
+import { createSecureMarginNote, digestToFieldHex, fieldHashPair, fieldHex, randomLabel } from "@/lib/private-note";
 import { backUpExistingPrivateMarginNotes, backUpPrivateMarginNote, unlockPrivateNoteBackup } from "@/lib/private-note-backup";
 import { confirmRecoveredPrivateMarginDeposit } from "@/lib/deposit-recovery";
 import {
   currentPrivateMarginNoteRuntimeScope,
   confirmPrivateMarginDeposit,
-  lockPrivateMarginNote,
+  reservePrivateMarginNotes,
+  releasePrivateMarginPreparation,
+  markPrivateMarginSubmissionAttempted,
   markPrivateMarginNoteSpent,
   privateMarginNoteRuntimeScopeFromHealth,
   privateMarginNotes,
@@ -31,6 +34,8 @@ import { usdcToProtocolAmount } from "@/lib/asset-units";
 import { RATE_SCALE, TAKER_FEE_PPM } from "@pnlx/market-math";
 import type { Hex, MarketDisplay, ServerIntentRecord, ServerPortfolioSnapshot, Side } from "@/types/trading";
 import type { WalletSession } from "@/lib/wallet-auth";
+import { cancelOrder } from "@/lib/order-cancel";
+import type { TradeIntent } from "@pnlx/protocol-types";
 
 const PRICE_SCALE = 100_000_000n;
 const LEVERAGE_SCALE = 1_000_000n;
@@ -146,19 +151,6 @@ export async function submitTradeIntent(input: SubmitTradeIntentInput): Promise<
   await unlockPrivateNoteBackup(input.session);
   await backUpExistingPrivateMarginNotes(input.session);
 
-  const notes = privateMarginNotes(input.session.ownerCommitment);
-  const availableNotes = notes
-    .filter((note) => note.status === "available")
-    .filter((note) => !health.custody.collateralAsset.tokenDigest ||
-      note.assetDigest === health.custody.collateralAsset.tokenDigest);
-  const totalBalance = availableNotes.reduce((sum, note) => sum + BigInt(note.amount), 0n);
-  if (totalBalance < margin) {
-    const totalBalanceDisplay = Number(totalBalance) / 10_000_000;
-    throw new Error(
-      `Your spendable private balance is $${totalBalanceDisplay.toFixed(2)}. Deposit at least $${input.margin.toFixed(2)} before trading.`
-    );
-  }
-
   if (health.custody.required) {
     return submitCustodySharedTradeIntent({
       ...input,
@@ -171,6 +163,12 @@ export async function submitTradeIntent(input: SubmitTradeIntentInput): Promise<
       conditionalStrategy,
     });
   }
+
+  const totalBalance = privateMarginNotes(input.session.ownerCommitment)
+    .filter((note) => note.status === "available")
+    .filter((note) => !health.custody.collateralAsset.tokenDigest || note.assetDigest === health.custody.collateralAsset.tokenDigest)
+    .reduce((sum, note) => sum + BigInt(note.amount), 0n);
+  if (totalBalance < margin) throw new Error("Deposit sufficient private USDC before trading");
 
   return submitDevWitnessTradeIntent({
     ...input,
@@ -250,7 +248,7 @@ async function submitDevWitnessTradeIntent(
   };
 }
 
-async function submitCustodySharedTradeIntent(
+export async function submitCustodySharedTradeIntent(
   input: SubmitTradeIntentInput & {
     collateralToken: string;
     collateralTokenDigest?: Hex;
@@ -260,6 +258,12 @@ async function submitCustodySharedTradeIntent(
     protocolSize: bigint;
     conditionalStrategy: PendingConditionalStrategyInput | null;
   },
+): Promise<SubmitTradeIntentResult> {
+  return withWalletPreparation(input.session, () => submitCustodySharedTradeIntentUnlocked(input));
+}
+
+async function submitCustodySharedTradeIntentUnlocked(
+  input: Parameters<typeof submitCustodySharedTradeIntent>[0],
 ): Promise<SubmitTradeIntentResult> {
   const proofProvider = input.proofProvider ?? defaultClientProofProvider();
   if (!proofProvider) {
@@ -306,19 +310,19 @@ async function submitCustodySharedTradeIntent(
   const submittedSize = sizes.reduce((sum, size) => sum + size, 0n);
   const groupId = `ui-${Date.now()}-${input.market.marketId}`;
   const submitted: ServerIntentRecord[] = [];
+  const plans = await Promise.all(allocations.map((allocation, index) => prepareCustodyIntentFragment({
+    ...input, collateralTokenDigest: input.collateralTokenDigest!, allocation,
+    batchId: `${groupId}-${index + 1}`, membership: memberships[index], protocolSize: sizes[index],
+  })));
+  reservePrivateMarginNotes(plans.map((plan) => ({ commitment: plan.input.allocation.note.commitment,
+    intentCommitment: plan.intentCommitment })));
 
   try {
-    for (const [index, allocation] of allocations.entries()) {
-      submitted.push(await submitCustodyIntentFragment({
-        ...input,
-        allocation,
-        batchId: `${groupId}-${index + 1}`,
-        collateralTokenDigest: input.collateralTokenDigest,
-        membership: memberships[index],
-        protocolSize: sizes[index],
-      }));
-    }
+    for (const plan of plans) await persistPreparedChange(plan);
+    const proofs = await provePreparedFragments(plans);
+    for (const [index, plan] of plans.entries()) submitted.push(await submitPreparedCustodyFragment(plan, proofs[index]));
   } catch (error) {
+    for (const plan of plans) releaseUnsubmittedPreparation(plan);
     const uncancelled = await cancelSubmittedIntentFragments(submitted, input.session.token);
     if (uncancelled.length > 0) {
       throw new Error(
@@ -353,129 +357,233 @@ export async function submitCustodyIntentFragment(
     protocolSize: bigint;
   },
 ): Promise<ServerIntentRecord> {
-  const proofProvider = input.proofProvider ?? defaultClientProofProvider();
-  if (!proofProvider) throw new Error("Client proof provider is not configured");
+  return withWalletPreparation(input.session, async () => {
+    const plan = await prepareCustodyIntentFragment(input);
+    reservePrivateMarginNotes([{ commitment: plan.input.allocation.note.commitment, intentCommitment: plan.intentCommitment }]);
+    try {
+      await persistPreparedChange(plan);
+      const proof = await provePreparedFragment(plan);
+      return await submitPreparedCustodyFragment(plan, proof);
+    } catch (error) {
+      releaseUnsubmittedPreparation(plan);
+      throw error;
+    }
+  });
+}
+
+type CustodyFragmentInput = Parameters<typeof submitCustodyIntentFragment>[0];
+type PreparedCustodyFragment = {
+  input: CustodyFragmentInput;
+  intent: TradeIntent;
+  intentCommitment: Hex;
+  changeNote?: Awaited<ReturnType<typeof createSecureMarginNote>>;
+  attempted: boolean;
+  noteUnavailable: boolean;
+  authoritativeActiveIntent?: Hex;
+};
+
+export async function custodyIntentCommitment(intent: TradeIntent, owner: Hex): Promise<Hex> {
+  const [batch, market, nonce, salt] = await Promise.all([
+    digestToFieldHex("pnlx:batch-id:" + intent.batchId), digestToFieldHex("pnlx:market-id:" + intent.marketId),
+    digestToFieldHex("nonce:" + intent.nonce), digestToFieldHex("salt:" + intent.salt),
+  ]);
+  const scope = fieldHashPair(fieldHashPair(batch, market), fieldHashPair(fieldHex(BigInt(owner)), intent.side === "long" ? 1n : 2n));
+  const economics = fieldHashPair(fieldHashPair(intent.size, intent.limitPrice), fieldHashPair(intent.margin, intent.noteNullifier));
+  return fieldHashPair(fieldHashPair(scope, economics), fieldHashPair(nonce, salt));
+}
+
+async function prepareCustodyIntentFragment(original: CustodyFragmentInput): Promise<PreparedCustodyFragment> {
+  const input = { ...original, session: { ...original.session }, market: { ...original.market },
+    allocation: { ...original.allocation, note: { ...original.allocation.note } },
+    membership: { ...original.membership, membershipProof: { ...original.membership.membershipProof,
+      indices: [...original.membership.membershipProof.indices], siblings: [...original.membership.membershipProof.siblings] } } };
   const { amount: margin, note } = input.allocation;
-  let reservedIntentCommitment: Hex | undefined;
-  let pendingChangeCommitment: Hex | undefined;
-  if (!note.runtimeScope || note.runtimeScope !== currentPrivateMarginNoteRuntimeScope()) throw new Error("Private margin runtime changed before submission");
-  try {
-    const noteAmount = BigInt(note.amount);
-    const changeAmount = noteAmount - margin;
-    const changeNote = changeAmount > 0n
-      ? await createSecureMarginNote({
-          amount: changeAmount,
-          assetDigest: note.assetDigest,
-          blinding: randomLabel("change-blind"),
-          owner: input.session.address,
-          ownerDigest: note.ownerDigest,
-          rho: randomLabel("change-rho"),
-          spendSecret: randomLabel("change-spend"),
-          spendSecretDigest: note.spendSecretDigest,
-        })
-      : undefined;
-    markProgress(input, "proving");
-    const intent = {
-      batchId: input.batchId,
-      limitPrice: input.limitPriceProtocol,
-      margin,
-      marketId: input.market.marketId,
-      nonce: randomLabel("nonce"),
-      noteNullifier: note.noteNullifier,
-      owner: input.session.address,
-      salt: randomLabel("salt"),
-      side: input.side,
-      size: input.protocolSize,
-    };
-    const validity = await registerProofBundle(
-      await proofProvider.intentValidity({
-        assetDigest: note.assetDigest,
-        batchId: intent.batchId,
-        blinding: note.blinding,
-        changeBlinding: changeNote?.blinding ?? ZERO_HEX,
-        changeRhoDigest: changeNote?.rhoDigest ?? ZERO_HEX,
-        currentBatch: 1n,
-        expiryBatch: 2n,
-        limitPrice: intent.limitPrice,
-        margin: intent.margin,
-        marginRoot: input.membership.membershipProof.root,
-        marketId: intent.marketId,
-        nonce: intent.nonce,
-        noteAmount,
-        noteChangeCommitment: changeNote?.commitment ?? ZERO_HEX,
-        noteCommitment: note.commitment,
-        noteNullifier: note.noteNullifier,
-        owner: intent.owner,
-        ownerDigest: note.ownerDigest,
-        pathIndices: input.membership.membershipProof.indices,
-        pathSiblings: input.membership.membershipProof.siblings,
-        rhoDigest: note.rhoDigest,
-        salt: intent.salt,
-        side: intent.side,
-        size: intent.size,
-        spendSecretDigest: note.spendSecretDigest,
-      }),
-      input.session.token,
-    );
-    const validityRecord = normalizeIntentValidity(validity);
-    if (note.runtimeScope !== currentPrivateMarginNoteRuntimeScope()) throw new Error("Private margin runtime changed during proving");
-    const conditionalPolicy = prepareConditionalIntentPolicy(validityRecord.intentCommitment, input);
-    if (changeNote) {
-      const pending = savePendingPrivateMarginChange({
-        amount: changeNote.amount.toString(), assetDigest: changeNote.assetDigest,
-        blinding: changeNote.blinding, commitment: changeNote.commitment,
-        noteNullifier: changeNote.noteNullifier, ownerCommitment: input.session.ownerCommitment,
-        lockedByIntentCommitment: validityRecord.intentCommitment,
-        runtimeScope: note.runtimeScope,
-        noteFormat: "secure",
-        ownerDigest: changeNote.ownerDigest, rhoDigest: changeNote.rhoDigest,
-        spendSecretDigest: changeNote.spendSecretDigest, walletAddress: input.session.address,
-      });
-      pendingChangeCommitment = changeNote.commitment;
-      await backUpPrivateMarginNote(pending, input.session);
+  if (!note.runtimeScope || note.runtimeScope !== currentPrivateMarginNoteRuntimeScope() ||
+    note.ownerCommitment.toLowerCase() !== input.session.ownerCommitment.toLowerCase() ||
+    margin <= 0n || margin > BigInt(note.amount)) throw new Error("Private margin input changed before preparation");
+  const changeAmount = BigInt(note.amount) - margin;
+  const changeNote = changeAmount > 0n ? await createSecureMarginNote({ amount: changeAmount,
+    assetDigest: note.assetDigest, blinding: randomLabel("change-blind"), owner: input.session.address,
+    ownerDigest: note.ownerDigest, rho: randomLabel("change-rho"), spendSecret: randomLabel("change-spend"),
+    spendSecretDigest: note.spendSecretDigest }) : undefined;
+  const intent: TradeIntent = { batchId: input.batchId, limitPrice: input.limitPriceProtocol, margin,
+    marketId: input.market.marketId, nonce: randomLabel("nonce"), noteNullifier: note.noteNullifier,
+    owner: input.session.address, salt: randomLabel("salt"), side: input.side, size: input.protocolSize };
+  return { input, intent, changeNote, intentCommitment: await custodyIntentCommitment(intent, input.session.ownerCommitment),
+    attempted: false, noteUnavailable: false };
+}
+
+function assertPreparedReservation(plan: PreparedCustodyFragment): void {
+  const note = plan.input.allocation.note;
+  if (note.runtimeScope !== currentPrivateMarginNoteRuntimeScope()) throw new Error("Private margin runtime changed during preparation");
+  const current = privateMarginNotes(plan.input.session.ownerCommitment).find((value) => value.commitment.toLowerCase() === note.commitment.toLowerCase());
+  if (!current || current.status !== "locked" || !current.submissionPending || current.preparationOnly !== true ||
+    current.lockedByIntentCommitment?.toLowerCase() !== plan.intentCommitment.toLowerCase() ||
+    current.noteNullifier !== note.noteNullifier || current.amount !== note.amount) {
+    throw new Error("Private margin input reservation changed during preparation");
+  }
+}
+
+async function persistPreparedChange(plan: PreparedCustodyFragment): Promise<void> {
+  assertPreparedReservation(plan);
+  const { input, changeNote } = plan;
+  if (!changeNote) return;
+  const pending = savePendingPrivateMarginChange({ amount: changeNote.amount.toString(), assetDigest: changeNote.assetDigest,
+    blinding: changeNote.blinding, commitment: changeNote.commitment, noteNullifier: changeNote.noteNullifier,
+    ownerCommitment: input.session.ownerCommitment, lockedByIntentCommitment: plan.intentCommitment,
+    runtimeScope: input.allocation.note.runtimeScope, noteFormat: "secure", ownerDigest: changeNote.ownerDigest,
+    rhoDigest: changeNote.rhoDigest, spendSecretDigest: changeNote.spendSecretDigest, walletAddress: input.session.address });
+  await backUpPrivateMarginNote(pending, input.session);
+}
+
+async function provePreparedFragment(plan: PreparedCustodyFragment): Promise<ProofBundle<IntentValidityRecord>> {
+  assertPreparedReservation(plan);
+  const { input, intent, changeNote } = plan;
+  const note = input.allocation.note;
+  const provider = input.proofProvider ?? defaultClientProofProvider();
+  if (!provider) throw new Error("Client proof provider is not configured");
+  markProgress(input, "proving");
+  const proof = await provider.intentValidity({ assetDigest: note.assetDigest, batchId: intent.batchId,
+    blinding: note.blinding, changeBlinding: changeNote?.blinding ?? ZERO_HEX, changeRhoDigest: changeNote?.rhoDigest ?? ZERO_HEX,
+    currentBatch: 1n, expiryBatch: 2n, limitPrice: intent.limitPrice, margin: intent.margin,
+    marginRoot: input.membership.membershipProof.root, marketId: intent.marketId, nonce: intent.nonce,
+    noteAmount: BigInt(note.amount), noteChangeCommitment: changeNote?.commitment ?? ZERO_HEX,
+    noteCommitment: note.commitment, noteNullifier: note.noteNullifier, owner: intent.owner, ownerDigest: note.ownerDigest,
+    pathIndices: input.membership.membershipProof.indices, pathSiblings: input.membership.membershipProof.siblings,
+    rhoDigest: note.rhoDigest, salt: intent.salt, side: intent.side, size: intent.size, spendSecretDigest: note.spendSecretDigest });
+  assertPreparedReservation(plan);
+  const record = proof.record;
+  if (record.intentCommitment !== plan.intentCommitment || record.noteCommitment !== note.commitment ||
+    record.noteNullifier !== note.noteNullifier || record.assetDigest !== note.assetDigest || record.ownerDigest !== note.ownerDigest ||
+    record.marginRoot !== input.membership.membershipProof.root || record.noteChangeCommitment !== (changeNote?.commitment ?? ZERO_HEX) ||
+    BigInt(record.currentBatch) !== 1n || BigInt(record.expiryBatch) !== 2n) {
+    throw new Error("Intent validity proof does not match the reserved input");
+  }
+  return proof;
+}
+
+async function provePreparedFragments(plans: PreparedCustodyFragment[]): Promise<Array<ProofBundle<IntentValidityRecord>>> {
+  const proofs: Array<ProofBundle<IntentValidityRecord>> = new Array(plans.length);
+  let cursor = 0, failed = false;
+  let failure: unknown;
+  async function worker() {
+    while (!failed) {
+      const index = cursor++;
+      if (index >= plans.length) return;
+      try { proofs[index] = await provePreparedFragment(plans[index]); }
+      catch (error) { if (!failed) failure = error; failed = true; }
     }
-    lockPrivateMarginNote(note.commitment, validityRecord.intentCommitment);
-    reservedIntentCommitment = validityRecord.intentCommitment;
-    markProgress(input, "matching");
-    const response = await pnlxPost<IntentSubmitResponse>(
-      "/intents",
-      {
-        intent: {
-          ...intent,
-          limitPrice: intent.limitPrice.toString(),
-          margin: intent.margin.toString(),
-          size: intent.size.toString(),
-        },
-        validity: {
-          ...validityRecord,
-          currentBatch: validityRecord.currentBatch.toString(),
-          expiryBatch: validityRecord.expiryBatch.toString(),
-        },
-        conditionalPolicy,
-      },
-      input.session.token,
-    );
-    const submittedIntent = intentRecordFromResponse(response);
-    if (submittedIntent.intentCommitment.toLowerCase() !== validityRecord.intentCommitment.toLowerCase() ||
-        submittedIntent.ownerCommitment.toLowerCase() !== input.session.ownerCommitment.toLowerCase() ||
-        submittedIntent.marketId !== input.market.marketId) {
-      throw new Error("Intent submission confirmation does not match the authorized order");
-    }
-    return submittedIntent;
-  } catch (error) {
-    if (note.runtimeScope !== currentPrivateMarginNoteRuntimeScope()) throw error;
-    if (reservedIntentCommitment) {
-      if (error instanceof PnlxApiError && error.submissionRejected) {
-        reconcilePrivateMarginNotes({ orders: [{ intentCommitment: reservedIntentCommitment, status: "cancelled" }] });
-      } else {
-        await reconcileAmbiguousIntentSubmission(input.session, reservedIntentCommitment);
-      }
-    } else {
-      if (pendingChangeCommitment) markPrivateMarginNoteSpent(pendingChangeCommitment);
-      if (isRecoverablePrivateMarginNoteError(error)) markPrivateMarginNoteSpent(note.commitment);
-    }
+  }
+  await Promise.all(Array.from({ length: Math.min(2, plans.length) }, () => worker()));
+  if (failed) throw failure;
+  return proofs;
+}
+
+async function checkPreparedInput(plan: PreparedCustodyFragment): Promise<void> {
+  assertPreparedReservation(plan);
+  const { note } = plan.input.allocation;
+  let current: MarginMembershipResponse["note"];
+  try { current = await freshMarginMembership(note.commitment, plan.input.session.token); }
+  catch (error) {
+    if (note.runtimeScope === currentPrivateMarginNoteRuntimeScope()) plan.noteUnavailable = isRecoverablePrivateMarginNoteError(error);
     throw error;
   }
+  assertPreparedReservation(plan);
+  if (current.membershipProof.root !== plan.input.membership.membershipProof.root) {
+    throw new Error("Private collateral changed while proving; refresh and retry the order");
+  }
+  const status = await pnlxPost<{ notes: Array<{ commitment: Hex; known: boolean; spent: boolean; activeIntentCommitment?: Hex }> }>(
+    "/notes/recovery-status", { notes: [{ commitment: note.commitment, nullifier: note.noteNullifier }] }, plan.input.session.token);
+  assertPreparedReservation(plan);
+  const own = status.notes?.find((value) => value.commitment.toLowerCase() === note.commitment.toLowerCase());
+  if (!own || typeof own.known !== "boolean" || typeof own.spent !== "boolean") throw new Error("Private margin spend status is unavailable");
+  if (!own.known || own.spent) { plan.noteUnavailable = true; throw new Error("Private margin input is no longer spendable"); }
+  if (own.activeIntentCommitment && own.activeIntentCommitment.toLowerCase() !== plan.intentCommitment.toLowerCase()) {
+    if (!/^0x[0-9a-f]+$/i.test(own.activeIntentCommitment)) throw new Error("Private margin spend status is unavailable");
+    plan.authoritativeActiveIntent = own.activeIntentCommitment;
+    throw new Error("Private margin input is reserved by another order");
+  }
+  assertPreparedReservation(plan);
+}
+
+async function submitPreparedCustodyFragment(plan: PreparedCustodyFragment, proof: ProofBundle<IntentValidityRecord>): Promise<ServerIntentRecord> {
+  const { input, intent } = plan;
+  const validityRecord = normalizeIntentValidity(proof.record);
+  try {
+    await registerProofBundle(proof, input.session.token);
+    await checkPreparedInput(plan);
+    const conditionalPolicy = prepareConditionalIntentPolicy(plan.intentCommitment, input);
+    markPrivateMarginSubmissionAttempted(input.allocation.note.commitment, plan.intentCommitment);
+    plan.attempted = true;
+    markProgress(input, "matching");
+    const response = await pnlxPost<IntentSubmitResponse>("/intents", { intent: { ...intent,
+      limitPrice: intent.limitPrice.toString(), margin: intent.margin.toString(), size: intent.size.toString() },
+      validity: { ...validityRecord, currentBatch: validityRecord.currentBatch.toString(), expiryBatch: validityRecord.expiryBatch.toString() },
+      conditionalPolicy }, input.session.token);
+    const submitted = intentRecordFromResponse(response);
+    if (submitted.intentCommitment.toLowerCase() !== plan.intentCommitment.toLowerCase() ||
+      submitted.ownerCommitment.toLowerCase() !== input.session.ownerCommitment.toLowerCase() || submitted.marketId !== input.market.marketId) {
+      throw new Error("Intent submission confirmation does not match the authorized order");
+    }
+    return submitted;
+  } catch (error) {
+    if (input.allocation.note.runtimeScope !== currentPrivateMarginNoteRuntimeScope()) throw error;
+    if (!plan.attempted) {
+      releaseUnsubmittedPreparation(plan);
+    } else if (error instanceof PnlxApiError && error.submissionRejected) {
+      reconcilePrivateMarginNotes({ orders: [{ intentCommitment: plan.intentCommitment, status: "cancelled" }] });
+    } else await reconcileAmbiguousIntentSubmission(input.session, plan.intentCommitment);
+    throw error;
+  }
+}
+
+function releaseUnsubmittedPreparation(plan: PreparedCustodyFragment): void {
+  if (!plan.attempted) {
+    releasePrivateMarginPreparation(plan.input.allocation.note.commitment, plan.intentCommitment,
+      { runtimeScope: plan.input.allocation.note.runtimeScope, unavailable: plan.noteUnavailable,
+        authoritativeActiveIntent: plan.authoritativeActiveIntent, ownerCommitment: plan.input.session.ownerCommitment });
+  }
+}
+
+const preparingWallets = new Set<string>();
+class PreparationBusyError extends Error {}
+
+/** A reconnect may recover only work that provably never reached submission. */
+export async function recoverAbandonedPrivateMarginPreparations(session: WalletSession): Promise<void> {
+  try { await withWalletPreparation(session, async () => undefined); }
+  catch (error) { if (!(error instanceof PreparationBusyError)) throw error; }
+}
+
+async function recoverAbandonedPreparationsInScope(session: WalletSession): Promise<void> {
+  const scope = currentPrivateMarginNoteRuntimeScope();
+  const pending = privateMarginNotes(session.ownerCommitment).filter((note) =>
+    note.status === "locked" && note.submissionPending && note.preparationOnly === true && note.lockedByIntentCommitment);
+  for (let index = 0; index < pending.length; index += 16) {
+    const page = pending.slice(index, index + 16);
+    const status = await pnlxPost<{ notes: Array<{ commitment: Hex; known: boolean; spent: boolean; activeIntentCommitment?: Hex }> }>(
+      "/notes/recovery-status", { notes: page.map((note) => ({ commitment: note.commitment, nullifier: note.noteNullifier })) }, session.token);
+    if (currentPrivateMarginNoteRuntimeScope() !== scope) throw new Error("Private margin runtime changed during preparation recovery");
+    for (const note of page) {
+      const current = status.notes?.find((value) => typeof value.commitment === "string" && value.commitment.toLowerCase() === note.commitment.toLowerCase());
+      if (!current || current.known !== true || current.spent !== false || current.activeIntentCommitment !== undefined) continue;
+      releasePrivateMarginPreparation(note.commitment, note.lockedByIntentCommitment!, { runtimeScope: scope });
+    }
+  }
+}
+
+async function withWalletPreparation<T>(session: WalletSession, work: () => Promise<T>): Promise<T> {
+  const key = "pnlx.trade-preparation:" + currentPrivateMarginNoteRuntimeScope() + ":" + session.ownerCommitment.toLowerCase();
+  if (preparingWallets.has(key)) throw new PreparationBusyError("Another private order is already being prepared");
+  preparingWallets.add(key);
+  try {
+    const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+    if (locks) return await locks.request(key, { mode: "exclusive", ifAvailable: true }, async (lock) => {
+      if (!lock) throw new PreparationBusyError("Another private order is already being prepared");
+      await recoverAbandonedPreparationsInScope(session);
+      return work();
+    });
+    return await work();
+  } finally { preparingWallets.delete(key); }
 }
 
 async function reconcileAmbiguousIntentSubmission(session: WalletSession, intentCommitment: Hex): Promise<void> {
@@ -561,9 +669,13 @@ async function preflightMarginMemberships(
   allocations: PrivateMarginNoteAllocation[],
   token?: string,
 ): Promise<MarginMembershipResponse["note"][]> {
+  const scope = currentPrivateMarginNoteRuntimeScope();
   const results = await Promise.allSettled(
     allocations.map((allocation) => freshMarginMembership(allocation.note.commitment, token)),
   );
+  if (currentPrivateMarginNoteRuntimeScope() !== scope || allocations.some((allocation) => allocation.note.runtimeScope !== scope)) {
+    throw new Error("Private margin runtime changed during membership preflight");
+  }
   let firstError: unknown;
   const memberships: MarginMembershipResponse["note"][] = [];
   for (const [index, result] of results.entries()) {
@@ -573,7 +685,11 @@ async function preflightMarginMemberships(
     }
     firstError ??= result.reason;
     if (isRecoverablePrivateMarginNoteError(result.reason)) {
-      markPrivateMarginNoteSpent(allocations[index].note.commitment);
+      const expected = allocations[index].note;
+      const current = privateMarginNotes(expected.ownerCommitment).find((note) => note.commitment === expected.commitment);
+      if (current?.status === "available" && current.noteNullifier === expected.noteNullifier && current.amount === expected.amount) {
+        markPrivateMarginNoteSpent(expected.commitment);
+      }
     }
   }
   if (firstError) throw firstError;
@@ -587,11 +703,7 @@ async function cancelSubmittedIntentFragments(
   const uncancelled: ServerIntentRecord[] = [];
   for (const intent of [...submitted].reverse()) {
     try {
-      await pnlxPost(
-        "/orders/cancel",
-        { intentCommitment: intent.intentCommitment },
-        token,
-      );
+      await cancelOrder({ intentCommitment: intent.intentCommitment, token });
       reconcilePrivateMarginNotes({
         orders: [{ intentCommitment: intent.intentCommitment, status: "cancelled" }],
       });
@@ -678,19 +790,10 @@ function normalizeIntentValidity(input: IntentValidityRecord): Omit<IntentValidi
 }
 
 async function freshMarginMembership(commitment: Hex, token?: string): Promise<MarginMembershipResponse["note"]> {
-  try {
-    const response = await pnlxGet<MarginMembershipResponse>(
-      `/notes/membership?commitment=${encodeURIComponent(commitment)}`,
-      token,
-    );
-    return response.note;
-  } catch (error) {
-    if (error instanceof Error && error.message.toLowerCase().includes("margin note not found")) {
-      markPrivateMarginNoteSpent(commitment);
-      throw new Error("That local margin note is stale for this runtime. It has been removed; deposit private USDC again.");
-    }
-    throw error;
-  }
+  const response = await pnlxGet<MarginMembershipResponse>(
+    `/notes/membership?commitment=${encodeURIComponent(commitment)}`, token,
+  );
+  return response.note;
 }
 
 export function protocolOrderSize(margin: bigint, leverage: number, price: number): bigint {

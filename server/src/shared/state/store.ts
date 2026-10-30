@@ -782,7 +782,9 @@ export class ProtocolStore {
 export function retainedBatchExecutionRuns(
   entries: [Hex, BatchExecutionRunRecord][],
 ): [Hex, BatchExecutionRunRecord][] {
-  const required = new Set(entries.filter(([, run]) => run.submissionAttempted && run.status !== "settled")
+  const required = new Set(entries.filter(([, run]) => run.status !== "settled" && (run.submissionAttempted ||
+    ((run.status === "running" || run.status === "failed") && Boolean(run.intentCommitments?.length) &&
+      (run.phase === "proving" || Boolean(run.settlementDigest)))))
     .map(([key]) => key));
   const recent = entries.filter(([key]) => !required.has(key)).slice(-BATCH_EXECUTION_RUN_RETENTION);
   const retained = new Set([...required, ...recent.map(([key]) => key)]);

@@ -119,6 +119,7 @@ export class HealthController {
       batchExecutor: {
         enabled: this.env.batchExecutorEnabled,
         intervalMs: this.env.batchExecutorIntervalMs,
+        proofConcurrency: this.env.batchExecutorProofConcurrency,
         prefix: this.env.batchExecutorPrefix,
       },
       matching: {
