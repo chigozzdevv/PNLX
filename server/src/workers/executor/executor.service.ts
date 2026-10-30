@@ -1,5 +1,6 @@
 import { commitIntent, intentBindingFields, ownerCommitment } from "@pnlx/crypto";
 import { batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
+import { assertSettlementExposure } from "@/features/markets/market-open-interest";
 import {
   assertPositionOpeningAccountEvent,
   assertResidualOrderAccountEvent,
@@ -177,7 +178,7 @@ export class ExecutorService implements PnlxExecutor {
       market,
       match,
     });
-    const positionOpenings = createPositionOpenings(settlement, match.fills);
+    const positionOpenings = createPositionOpenings(settlement, match.fills, market.fundingIndex);
     const residualPrivateIntents = match.residuals;
     const residualOrders = createResidualOrderRecords(this.store, settlement, residualPrivateIntents);
     this.pendingPositionOpenings.set(
@@ -221,7 +222,7 @@ export class ExecutorService implements PnlxExecutor {
       market,
       match,
     });
-    const positionOpenings = createPositionOpenings(settlement, match.fills);
+    const positionOpenings = createPositionOpenings(settlement, match.fills, market.fundingIndex);
     const residualPrivateIntents = match.residuals;
     const residualOrders = createResidualOrderRecords(this.store, settlement, residualPrivateIntents);
     this.pendingPositionOpenings.set(settlement.settlementDigest, positionOpenings);
@@ -260,6 +261,7 @@ export class ExecutorService implements PnlxExecutor {
     const privateResiduals = residuals
       .map((residual) => this.store.privateMatchIntents.get(residual.intentCommitment))
       .filter((payload): payload is NonNullable<typeof payload> => Boolean(payload));
+    assertSettlementExposure(settlement, openings, this.store.privateMatchIntents);
     this.store.addSettlement(settlement, openings, residuals, [], privateResiduals);
     this.pendingPositionOpenings.delete(settlement.settlementDigest);
     this.pendingResidualOrders.delete(settlement.settlementDigest);
@@ -434,6 +436,9 @@ export class ExecutorService implements PnlxExecutor {
       }
     }
 
+    assertSettlementExposure(settlement, transcript.positionOpenings,
+      new Map([...this.store.privateMatchIntents, ...privateResiduals]));
+
     this.validateExternalAccountEvents(
       settlement.settlementDigest,
       transcript.positionOpenings,
@@ -571,11 +576,15 @@ function createPositionOpenings(
     ownerCommitment: Hex;
     positionCommitment: Hex;
     positionNullifier: Hex;
+    size: bigint;
+    side: "long" | "short";
   }>,
+  fundingIndex: bigint,
 ): PositionLifecycleRecord[] {
   const now = Date.now();
   return fills.map((fill) => ({
     batchId: settlement.batchId,
+    ...(fundingIndex !== 0n ? { fundingIndex } : {}),
     marketId: fill.marketId,
     openedAt: now,
     ownerCommitment: fill.ownerCommitment,
@@ -583,6 +592,8 @@ function createPositionOpenings(
     positionNullifier: fill.positionNullifier,
     settlementDigest: settlement.settlementDigest,
     sourceIntentCommitment: fill.intentCommitment,
+    size: fill.size,
+    side: fill.side,
     status: "open",
     updatedAt: now,
   }));

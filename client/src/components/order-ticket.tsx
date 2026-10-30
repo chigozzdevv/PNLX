@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft, CircleDollarSign, Plus } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ActionToast } from "@/components/action-toast";
 import { USDC_SCALE, usdcToProtocolAmount } from "@/lib/asset-units";
 import { formatNumber, formatUsd } from "@/lib/format";
@@ -15,8 +15,11 @@ import type { WalletSession } from "@/lib/wallet-auth";
 interface OrderTicketProps {
   availableCollateral?: number | null;
   connected?: boolean;
+  connecting?: boolean;
+  connectionError?: string;
   market: MarketDisplay;
   mode: TicketMode;
+  onConnect?: () => Promise<void>;
   onDeposit?: (input: OrderTicketDepositInput) => Promise<void>;
   onModeChange: (mode: TicketMode) => void;
   onSubmit?: (input: OrderTicketSubmitInput) => Promise<SubmitTradeIntentResult>;
@@ -51,8 +54,11 @@ const MARGIN_STORAGE_PREFIX = "pnlx.order-ticket.margin.v1";
 export function OrderTicket({
   availableCollateral,
   connected = false,
+  connecting = false,
+  connectionError,
   market,
   mode,
+  onConnect,
   onDeposit,
   onModeChange,
   onSubmit,
@@ -61,7 +67,8 @@ export function OrderTicket({
   const [side, setSide] = useState<Side>(order.side);
   const [orderType, setOrderType] = useState<"market" | "limit">("market");
   const [tpSlEnabled, setTpSlEnabled] = useState(false);
-  const [conditionMode, setConditionMode] = useState<ConditionMode>("percent");
+  const [conditionMode, setConditionMode] = useState<ConditionMode>("price");
+  const conditionSectionId = useId();
   const [submitError, setSubmitError] = useState<string | undefined>();
   const [submitStage, setSubmitStage] = useState<TradeSubmitStage | undefined>();
   const [submitSuccess, setSubmitSuccess] = useState<string | undefined>();
@@ -103,10 +110,15 @@ export function OrderTicket({
   const availableCollateralValue = availableCollateral ?? 0;
   const hasEnoughCollateral = availableCollateralValue >= margin;
   const priceReady = Number.isFinite(market.price) && market.price > 0;
-  const canSubmit = connected && priceReady && Boolean(onSubmit) && !submitting && !depositing && margin > 0 && hasEnoughCollateral;
+  const canSubmit = connected && priceReady && Number.isFinite(executionLimitPrice) && executionLimitPrice > 0 &&
+    protocolSize > 0n && Number.isFinite(margin) && margin > 0 && Boolean(onSubmit) &&
+    !submitting && !depositing && hasEnoughCollateral;
   const canDeposit = connected && Boolean(onDeposit) && !submitting && !depositing && fundAmount > 0;
-  const primaryDisabled = !canSubmit;
   const primaryBusy = submitting || depositing;
+  const ticketError = submitError ?? connectionError;
+  const primaryDisabled = primaryBusy || connecting || (!connected
+    ? !onConnect
+    : !hasEnoughCollateral ? !onDeposit : !canSubmit);
   const liquidationPrice = useMemo(() => {
     const riskMove = leverage > 0 ? 1 / leverage - market.maintenanceMarginRate : 0;
     return side === "long" ? sizingPrice * (1 - riskMove) : sizingPrice * (1 + riskMove);
@@ -178,7 +190,7 @@ export function OrderTicket({
   }
 
   async function submitOrder() {
-    if (!priceReady) return;
+    if (!canSubmit) return;
     if (!connected) {
       setSubmitError("Connect a wallet first");
       return;
@@ -217,7 +229,12 @@ export function OrderTicket({
 
   async function primaryAction() {
     if (!connected) {
-      setSubmitError("Connect a wallet first");
+      await onConnect?.();
+      return;
+    }
+    if (!hasEnoughCollateral) {
+      setFundAmount(Math.max(margin - availableCollateralValue, 0));
+      onModeChange("deposit");
       return;
     }
     await submitOrder();
@@ -272,10 +289,7 @@ export function OrderTicket({
           Short
         </button>
       </div>
-      <div className="ticket-heading">
-        <p>{mode === "deposit" ? "Deposit" : "Trade"}</p>
-        <span>{market.pair}</span>
-      </div>
+      {mode === "deposit" ? <div className="ticket-heading"><p>Deposit</p><span>USDC</span></div> : null}
 
       {mode === "deposit" ? (
         <>
@@ -313,18 +327,18 @@ export function OrderTicket({
           <button
             className="primary-trade-button"
             data-side="long"
-            disabled={!canDeposit}
+            disabled={connecting || (connected ? !canDeposit : !onConnect)}
             type="button"
-            onClick={() => depositMargin()}
+            onClick={() => connected ? depositMargin() : onConnect?.()}
           >
-            {!connected ? "Connect Wallet" : depositing ? "Depositing" : "Deposit"}
+            {connecting ? "Connecting…" : !connected ? "Connect Wallet" : depositing ? "Depositing" : "Deposit"}
           </button>
 
           <TradeProgress depositing={depositing} stage={submitStage} />
 
-          {submitError ? (
-            <p className="ticket-message ticket-message-error" role="alert" title={submitError}>
-              {submitError}
+          {ticketError ? (
+            <p className="ticket-message ticket-message-error" role="alert" title={ticketError}>
+              {ticketError}
             </p>
           ) : null}
         </>
@@ -333,44 +347,52 @@ export function OrderTicket({
       <div className="side-selector">
         <button
           className={`side-button side-button-long ${side === "long" ? "side-button-active" : ""}`}
+          aria-pressed={side === "long"}
           type="button"
           onClick={() => selectSide("long")}
         >
-          <span>Long</span>
+          <span>Buy / Long</span>
         </button>
         <button
           className={`side-button side-button-short ${side === "short" ? "side-button-active" : ""}`}
+          aria-pressed={side === "short"}
           type="button"
           onClick={() => selectSide("short")}
         >
-          <span>Short</span>
+          <span>Sell / Short</span>
         </button>
       </div>
 
       <div className="execution-selector">
         <div
           aria-label="Order type"
-          className="grid grid-cols-2 gap-1 rounded-[6px] border border-white/10 bg-white/[0.035] p-1"
+          className="order-type-tabs"
         >
           <button
-            className={`min-h-9 rounded-[4px] text-sm font-black ${
-              orderType === "market" ? "bg-[var(--surface-soft)] text-white" : "text-[var(--text-muted)]"
-            }`}
+            aria-pressed={orderType === "market"}
+            className={orderType === "market" ? "order-type-active" : ""}
             type="button"
             onClick={() => setOrderType("market")}
           >
             Market
           </button>
           <button
-            className={`min-h-9 rounded-[4px] text-sm font-black ${
-              orderType === "limit" ? "bg-[var(--surface-soft)] text-white" : "text-[var(--text-muted)]"
-            }`}
+            aria-pressed={orderType === "limit"}
+            className={orderType === "limit" ? "order-type-active" : ""}
             type="button"
             onClick={() => setOrderType("limit")}
           >
             Limit
           </button>
         </div>
+      </div>
+
+      <div className="ticket-balance-row">
+        <span>Available</span>
+        <strong>{connected ? formatUsd(availableCollateralValue, { maximumFractionDigits: 2 }) : "—"}</strong>
+        <button aria-label="Add funds" className="add-funds-action" disabled={primaryBusy || connecting || (!connected && !onConnect)} type="button" onClick={() => connected ? onModeChange("deposit") : onConnect?.()}>
+          <Plus aria-hidden="true" size={14} />
+        </button>
       </div>
 
       {orderType === "limit" && (
@@ -390,7 +412,7 @@ export function OrderTicket({
         </div>
       )}
 
-      <div className="ticket-field">
+      <div className="ticket-field ticket-margin-field">
         <div className="field-label">
           <span>Margin</span>
         </div>
@@ -403,41 +425,23 @@ export function OrderTicket({
           />
           <strong className="field-asset">{order.collateralAsset}</strong>
         </div>
-        <div className="field-meta-row">
-          <span className={hasEnoughCollateral ? "" : "field-balance-warning"}>
-            Available {formatUsd(availableCollateralValue, { maximumFractionDigits: 2 })}
-          </span>
+      </div>
+      <div className="margin-shortcuts" aria-label="Use available collateral">
+        {[25, 50, 75, 100].map((percent) => (
           <button
-            className="add-funds-action"
-            disabled={!connected || !onDeposit || depositing || submitting}
+            disabled={!connected || availableCollateralValue <= 0 || primaryBusy}
+            key={percent}
             type="button"
-            onClick={() => onModeChange("deposit")}
+            onClick={() => updateMargin(Math.floor(availableCollateralValue * USDC_SCALE * percent / 100) / USDC_SCALE)}
           >
-            <Plus aria-hidden="true" size={12} strokeWidth={2.25} />
-            <span>Add funds</span>
+            {percent === 100 ? "Max" : `${percent}%`}
           </button>
-        </div>
+        ))}
       </div>
 
-      <div className="ticket-field">
+      <div className="ticket-leverage-field">
         <div className="field-label">
           <span>Leverage</span>
-          <strong>{formatNumber(leverage, 2)}x</strong>
-        </div>
-        <div className="leverage-control">
-          <div className="leverage-buttons" aria-label="Leverage presets">
-            {[2, 3, 5, 10].map((preset) => (
-              <button
-                className={`leverage-button ${leverage === preset ? "leverage-button-active" : ""}`}
-                disabled={preset > market.maxLeverage}
-                key={preset}
-                type="button"
-                onClick={() => updateLeverage(preset)}
-              >
-                {preset}x
-              </button>
-            ))}
-          </div>
           <div className="leverage-input">
             <input
               aria-label="Custom leverage"
@@ -452,56 +456,72 @@ export function OrderTicket({
             <span>x</span>
           </div>
         </div>
+        <input aria-label="Leverage" className="leverage-slider" max={market.maxLeverage} min={1} step={0.1} type="range" value={leverage} onChange={(event) => updateLeverage(Number(event.target.value))} />
+        <div className="leverage-scale"><span>1x</span><span>{market.maxLeverage}x</span></div>
       </div>
 
-      <details
-        className="ticket-advanced"
-        onToggle={(event) => setTpSlEnabled(event.currentTarget.open)}
-      >
-        <summary>
-          <span>Take Profit / Stop Loss</span>
-        </summary>
-        <div className="ticket-advanced-body">
-          <div className="ticket-field conditional-field">
-            <div className="condition-mode-control" aria-label="TP SL input mode">
+      <div className="ticket-advanced">
+        <div className="ticket-advanced-header">
+          <label className="ticket-advanced-toggle">
+            <input
+              aria-controls={conditionSectionId}
+              checked={tpSlEnabled}
+              type="checkbox"
+              onChange={(event) => setTpSlEnabled(event.target.checked)}
+            />
+            <span>TP / SL</span>
+          </label>
+          {tpSlEnabled ? (
+            <div className="condition-mode-control" aria-label="TP SL input mode" role="group">
               <button
-                className={`condition-mode-button ${conditionMode === "percent" ? "condition-mode-button-active" : ""}`}
-                type="button"
-                onClick={() => setConditionMode("percent")}
-              >
-                %
-              </button>
-              <button
+                aria-pressed={conditionMode === "price"}
                 className={`condition-mode-button ${conditionMode === "price" ? "condition-mode-button-active" : ""}`}
                 type="button"
                 onClick={() => setConditionMode("price")}
               >
                 Price
               </button>
+              <button
+                aria-pressed={conditionMode === "percent"}
+                className={`condition-mode-button ${conditionMode === "percent" ? "condition-mode-button-active" : ""}`}
+                title="Estimated return on margin before fees and funding"
+                type="button"
+                onClick={() => setConditionMode("percent")}
+              >
+                ROE %
+              </button>
             </div>
+          ) : null}
+        </div>
+        {tpSlEnabled ? (
+          <div className="ticket-advanced-body" id={conditionSectionId}>
             <div className="condition-grid">
               <ConditionInput
+                key={`tp:${conditionMode}`}
                 label="TP"
                 mode={conditionMode}
                 pnl={takeProfitPnl}
                 percent={takeProfitPercent}
                 price={takeProfitPrice}
+                quoteAsset={market.quoteAsset}
                 onPercentChange={updateTakeProfitPercent}
                 onPriceChange={setTakeProfitPrice}
               />
               <ConditionInput
+                key={`sl:${conditionMode}`}
                 label="SL"
                 mode={conditionMode}
                 pnl={stopLossPnl}
                 percent={stopLossPercent}
                 price={stopLossPrice}
+                quoteAsset={market.quoteAsset}
                 onPercentChange={updateStopLossPercent}
                 onPriceChange={setStopLossPrice}
               />
             </div>
           </div>
-        </div>
-      </details>
+        ) : null}
+      </div>
 
       <div className="ticket-order-preview" aria-label="Estimated order values">
         <div>
@@ -520,6 +540,7 @@ export function OrderTicket({
           <span>Est. liquidation</span>
           <strong>{priceReady ? `$${formatNumber(liquidationPrice, market.price < 10 ? 5 : 2)}` : "—"}</strong>
         </div>
+        {orderType === "market" ? <div><span>Max. slippage</span><strong>{formatNumber(slippagePercent, 2)}%</strong></div> : null}
       </div>
 
       <div className="ticket-primary-area">
@@ -530,25 +551,25 @@ export function OrderTicket({
           type="button"
           onClick={primaryAction}
         >
-          {!connected
+          {connecting ? "Connecting…" : !connected
             ? "Connect Wallet"
               : primaryBusy
                 ? depositing
                   ? "Depositing"
                   : "Submitting"
               : !hasEnoughCollateral
-                ? "Top up first"
+                ? "Add funds"
                 : side === "long"
-                  ? `Submit Long ${market.baseAsset}`
-                  : `Submit Short ${market.baseAsset}`}
+                  ? `Buy / Long ${market.baseAsset}`
+                  : `Sell / Short ${market.baseAsset}`}
         </button>
       </div>
 
       <TradeProgress depositing={depositing} stage={submitStage} />
 
-      {submitError ? (
-        <p className="ticket-message ticket-message-error" role="alert" title={submitError}>
-          {submitError}
+      {ticketError ? (
+        <p className="ticket-message ticket-message-error" role="alert" title={ticketError}>
+          {ticketError}
         </p>
       ) : null}
         </>
@@ -609,6 +630,7 @@ function ConditionInput({
   pnl,
   percent,
   price,
+  quoteAsset,
   onPercentChange,
   onPriceChange,
 }: {
@@ -617,49 +639,52 @@ function ConditionInput({
   pnl: number;
   percent: number;
   price: number;
+  quoteAsset: string;
   onPercentChange: (value: number) => void;
   onPriceChange: (value: number) => void;
 }) {
+  const inputId = useId();
+  const [draft, setDraft] = useState<string | null>(null);
+  const hasValue = Number.isFinite(price) && price > 0;
+  const value = hasValue ? String(mode === "percent" ? formatInputNumber(percent) : price) : "";
   const positive = pnl >= 0;
-  const title = label === "TP" ? "Take Profit" : "Stop Loss";
+  const title = label === "TP" ? "Take profit" : "Stop loss";
   const previewValue =
-    mode === "percent" ? formatNumber(price, price < 10 ? 4 : 2) : `${formatInputNumber(percent)}%`;
+    mode === "percent"
+      ? `Trigger $${formatNumber(price, price < 1 ? 5 : price < 10 ? 4 : 2)}`
+      : `ROE ${positive ? "+" : "−"}${formatNumber(percent, 2)}%`;
 
   return (
     <div className={`condition-input condition-input-${label.toLowerCase()}`}>
-      <div className="condition-topline">
-        <span className="condition-label">{title}</span>
-        <strong className={`condition-pnl ${positive ? "metric-positive" : "metric-negative"}`}>
-          {positive ? "+" : ""}
-          {formatUsd(pnl, { maximumFractionDigits: 2 })}
-        </strong>
+      <label className="condition-label" htmlFor={inputId}>{title}</label>
+      <div className="condition-input-shell">
+        <input
+          aria-label={`${title} ${mode === "percent" ? "ROE percent" : "price"}`}
+          autoComplete="off"
+          id={inputId}
+          inputMode="decimal"
+          placeholder="0.00"
+          value={draft ?? value}
+          onBlur={() => setDraft(null)}
+          onChange={(event) => {
+            const text = event.target.value;
+            if (!/^\d*(?:\.\d*)?$/.test(text)) return;
+            const amount = Number(text);
+            if (text !== "." && !Number.isFinite(amount)) return;
+            setDraft(text);
+            if (text === "" || text === ".") onPriceChange(0);
+            else if (mode === "percent") onPercentChange(amount);
+            else onPriceChange(amount);
+          }}
+          onFocus={() => setDraft(value)}
+        />
+        <em>{mode === "percent" ? "%" : quoteAsset}</em>
       </div>
-      <div className="condition-control-row">
-        <label className="condition-value-input">
-          {mode === "percent" ? (
-            <div className="condition-input-shell">
-              <input
-                aria-label={`${label} percent`}
-                inputMode="decimal"
-                value={formatInputNumber(percent)}
-                onChange={(event) => onPercentChange(Number(event.target.value) || 0)}
-              />
-              <em>%</em>
-            </div>
-          ) : (
-            <div className="condition-input-shell">
-              <input
-                aria-label={`${label} price`}
-                inputMode="decimal"
-                value={price}
-                onChange={(event) => onPriceChange(Number(event.target.value) || 0)}
-              />
-            </div>
-          )}
-        </label>
-        <div className="condition-preview">
-          <strong>{previewValue}</strong>
-        </div>
+      <div className="condition-preview" title="Estimated return before fees and funding">
+        <span>{hasValue ? previewValue : mode === "percent" ? "Trigger price" : "Est. PnL"}</span>
+        <strong className={hasValue ? positive ? "metric-positive" : "metric-negative" : undefined}>
+          {hasValue ? `${positive ? "+" : ""}${formatUsd(pnl, { maximumFractionDigits: 2 })}` : "—"}
+        </strong>
       </div>
     </div>
   );

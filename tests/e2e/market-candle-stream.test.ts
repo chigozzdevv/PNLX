@@ -93,4 +93,24 @@ describe("market candle streaming", () => {
     expect(() => parseHyperliquidCandles([{ ...row, n: -1 }])).toThrow();
     expect(() => parseHyperliquidCandles([{ ...row, c: "0xff" }])).toThrow();
   });
+
+  test("subscribes to native four-hour candles and rejects hourly-aligned updates", async () => {
+    const socket = new TestSocket();
+    const stream = new MarketCandleStream(() => socket as unknown as WebSocket);
+    const reader = stream.stream({ ...input, interval: "4h" }).body!.getReader();
+    const alignedTime = Date.parse("2026-08-13T12:00:00.000Z");
+    try {
+      await read(reader);
+      socket.open();
+      expect(socket.sent).toContainEqual({
+        method: "subscribe", subscription: { coin: "XLM", interval: "4h", type: "candle" },
+      });
+      socket.emit("candle", { ...row, i: "4h", t: alignedTime + 3_600_000, c: "10" });
+      socket.emit("candle", { ...row, i: "4h", t: alignedTime, c: "11" });
+      const event = await read(reader);
+      expect(event).toContain('"interval":"4h"');
+      expect(event).toContain('"time":"2026-08-13T12:00:00.000Z"');
+      expect(event).toContain('"close":11');
+    } finally { await reader.cancel(); }
+  });
 });

@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActionToast } from "@/components/action-toast";
 import { AppShell } from "@/components/app-shell";
-import { BottomTicker } from "@/components/bottom-ticker";
 import { ChartToolbar } from "@/components/chart-toolbar";
 import { MarketHeader } from "@/components/market-header";
 import { OrderTicket, type OrderTicketSubmitInput } from "@/components/order-ticket";
@@ -21,8 +20,8 @@ import {
 import { positionLegs } from "@/lib/position-groups";
 import type { ClosePositionResult } from "@/lib/position-close";
 import { useMarketCandles, type CandleInterval } from "@/lib/use-market-candles";
-import { useMarketTicker } from "@/lib/use-market-ticker";
-import { useTradingData } from "@/lib/use-trading-data";
+import { useMarketDayStats } from "@/lib/use-market-day-stats";
+import { selectTradeMarkets, useTradingData } from "@/lib/use-trading-data";
 import { useWalletSession } from "@/lib/use-wallet-session";
 import type {
   MarketDisplay,
@@ -32,7 +31,6 @@ import type {
   ServerOwnerOrderSnapshot,
 } from "@/types/trading";
 
-const SELECTED_MARKET_STORAGE_KEY = "pnlx:selected-market-id:v2";
 const DEFAULT_MARKET_ID = "xlm-usd-perp";
 const OPTIMISTIC_ORDER_TTL_MS = 30_000;
 
@@ -53,14 +51,20 @@ export function TradingPage() {
   );
   const [pendingOrders, setPendingOrders] = useState<ServerOwnerOrderSnapshot[]>([]);
   const [optimisticOrderClock, setOptimisticOrderClock] = useState(0);
-  const [selectedMarketId, setSelectedMarketId] = useState(readStoredMarketId);
+  const selectedMarketId = DEFAULT_MARKET_ID;
   const trading = useTradingData(wallet.session, refreshKey, selectedMarketId);
-  const ticker = useMarketTicker(trading.data.ticker);
   const [chartInterval, setChartInterval] = useState<CandleInterval>("15m");
   const [ticketMode, setTicketMode] = useState<"trade" | "deposit">("trade");
   const [chartIndicators, setChartIndicators] = useState<ChartIndicatorId[]>([]);
+  const [chartFullscreen, setChartFullscreen] = useState(false);
+  useEffect(() => {
+    if (!chartFullscreen) return;
+    const previousOverflow = document.documentElement.style.overflow;
+    document.documentElement.style.overflow = "hidden";
+    return () => { document.documentElement.style.overflow = previousOverflow; };
+  }, [chartFullscreen]);
   const priceChartRef = useRef<PriceChartHandle>(null);
-  const markets = trading.data.markets;
+  const markets = selectTradeMarkets(trading.data.markets);
   const activeMarketId = markets.some((market) => market.marketId === selectedMarketId)
     ? selectedMarketId
     : markets[0]?.marketId;
@@ -69,6 +73,7 @@ export function TradingPage() {
     [activeMarketId, markets],
   );
   const candles = useMarketCandles(selectedMarket?.marketId, chartInterval);
+  const dayStats = useMarketDayStats(selectedMarket?.marketId);
   const displaySelectedMarket = useMemo(() => selectedMarket ? {
     ...selectedMarket, price: selectedMarket.markPrice ?? 0,
   } : undefined, [selectedMarket]);
@@ -113,10 +118,6 @@ export function TradingPage() {
     });
   }, [orders, trading.data.activity, trading.data.positions, wallet.session]);
   const hasPendingOrders = orders.some((order) => isActiveOrderStatus(order.status));
-  const handleSelectMarket = useCallback((marketId: string) => {
-    setSelectedMarketId(marketId);
-    writeStoredMarketId(marketId);
-  }, []);
   const marketById = useMemo(
     () => new Map(trading.data.markets.map((market) => [market.marketId, market])),
     [trading.data.markets],
@@ -326,16 +327,19 @@ export function TradingPage() {
       <main className="trade-grid">
         <section className="main-column">
           {displaySelectedMarket ? (
-            <MarketHeader
-              markets={markets}
-              selectedMarket={displaySelectedMarket}
-              onSelectMarket={handleSelectMarket}
-            />
+            <MarketHeader dayStats={dayStats} selectedMarket={displaySelectedMarket} />
+          ) : trading.loading ? (
+            <div aria-hidden="true" className="market-header trade-loading-market-header">
+              <span className="trade-loading-block trade-loading-market" />
+              <span className="trade-loading-block trade-loading-price" />
+              <span className="trade-loading-block trade-loading-metrics" />
+            </div>
           ) : null}
 
           <div className="chart-trades-grid">
             <section className="panel chart-panel">
               <ChartToolbar
+                fullscreen={chartFullscreen}
                 indicators={chartIndicators}
                 interval={chartInterval}
                 loadingMore={candles.loadingMore}
@@ -356,7 +360,7 @@ export function TradingPage() {
                     indicators={chartIndicators}
                     key={`${displaySelectedMarket.marketId}:${chartInterval}`}
                     market={displaySelectedMarket}
-                    markPrice={displaySelectedMarket.markPrice}
+                    onFullscreenChange={setChartFullscreen}
                     onLoadOlder={candles.loadOlder}
                     ref={priceChartRef}
                   />
@@ -383,6 +387,9 @@ export function TradingPage() {
             <OrderTicket
               availableCollateral={trading.data.account.availableShieldedUsdc}
               connected={Boolean(wallet.session)}
+              connecting={wallet.status === "connecting"}
+              connectionError={wallet.status === "error" ? wallet.error : undefined}
+              onConnect={wallet.connect}
               mode={ticketMode}
               onModeChange={setTicketMode}
               session={wallet.session}
@@ -453,7 +460,6 @@ export function TradingPage() {
         </div>
       </main>
 
-      <BottomTicker ticker={ticker.ticker} updatedAt={ticker.updatedAt} />
       <PnlModal
         isOpen={Boolean(pnlModalData)}
         onClose={() => setPnlModalData(null)}
@@ -496,16 +502,6 @@ function resolvedOrderIds(
 
 function isActiveOrderStatus(status?: string): boolean {
   return status === "open" || status === "partially-filled";
-}
-
-function readStoredMarketId(): string {
-  if (typeof window === "undefined") return DEFAULT_MARKET_ID;
-  return window.localStorage.getItem(SELECTED_MARKET_STORAGE_KEY) || DEFAULT_MARKET_ID;
-}
-
-function writeStoredMarketId(marketId: string): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(SELECTED_MARKET_STORAGE_KEY, marketId);
 }
 
 function orderDraftFromMarket(market: MarketDisplay): OrderDraft {

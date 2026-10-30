@@ -17,6 +17,7 @@ export function registerMarketsRoute(
   const controller = new MarketsController(markets);
   router.add("GET", "/markets", () => controller.list());
   router.add("GET", "/markets/ticker", () => controller.ticker());
+  router.add("GET", "/markets/stats", (request) => controller.stats(request));
   router.add("GET", "/markets/candles", (request) => controller.candles(request));
   router.add("GET", "/markets/candles/stream", (request) => controller.candleStream(request));
   router.add("GET", "/markets/prices/latest", (request) => controller.latestPrice(request));

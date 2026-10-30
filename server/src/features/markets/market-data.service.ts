@@ -697,6 +697,7 @@ function intervalSeconds(interval: MarketCandleInterval): number {
   return {
     "1d": 86_400,
     "1h": 3_600,
+    "4h": 14_400,
     "1m": 60,
     "5m": 300,
     "15m": 900,

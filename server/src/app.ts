@@ -185,7 +185,7 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
         }
       : undefined,
   );
-  const markets = new MarketsService(executor, oracle, env, onchain);
+  const markets = new MarketsService(executor, oracle, env, onchain, undefined, fundingEngine);
   const batchExecutor = createBatchExecutor(
     executor,
     matcher,
@@ -200,7 +200,7 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
         ).then(() => undefined),
       sampleFundingPremium: (marketId, sampledAt) => {
         if (env.fundingPremiumMode === "impact-twap") {
-          fundingEngine.sampleOnce({ marketId, sampledAt });
+          fundingEngine.sampleSafely({ marketId, sampledAt });
         }
       },
       settlementsOnchainRequired: env.settlementsOnchainRequired || Boolean(onchain?.enabled),
@@ -226,7 +226,7 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
     archivedPairedCloses:[...executor.store.pendingPairedCloses.values()].filter((run)=>run.retired).length,
     pendingIntentSubmissions:executor.store.pendingIntentSubmissions.size,
     schedulerOwnership:"single-active-process-required",
-  }));
+  }), fundingEngine);
   const legacyExitRecovery = new LegacyExitRecoveryService(env, relayer, deployment?.contracts["legacy-pair-exit"]);
   registerAccountKeysRoute(router, executor, legacyExitRecovery);
   registerAccountEventsRoute(router, executor);
@@ -278,6 +278,7 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
 }
 
 function startRuntimeWorkers(runtime: AppRuntime, env: ReturnType<typeof loadEnv>): void {
+  if (env.nodeEnv !== "test" && env.fundingPremiumMode === "impact-twap") runtime.fundingEngine.startSampling();
   if (env.fundingEngineEnabled) runtime.fundingEngine.start();
   if (env.batchExecutorEnabled) runtime.batchExecutor.start();
   if (env.liquidationAutomationEnabled) {

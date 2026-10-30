@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Gift, LogOut, Moon, Plus, Settings, Sun, Wallet } from "lucide-react";
+import { ChevronDown, Gift, LogOut, Menu, Moon, Plus, Settings, Sun, Wallet } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
@@ -47,17 +47,29 @@ export function AppShell({
     : `${address.slice(0, 4)}…${address.slice(-4)}`;
 
   useEffect(() => {
+    const openMenu = () => headerControlsRef.current?.querySelector<HTMLDetailsElement>('details[name="pnlx-header-menu"][open]');
     const closeOnOutsideClick = (event: PointerEvent) => {
-      const openMenu = headerControlsRef.current?.querySelector<HTMLDetailsElement>('details[name="pnlx-header-menu"][open]');
-      if (openMenu && !event.composedPath().includes(openMenu)) openMenu.open = false;
+      const menu = openMenu();
+      if (menu && !event.composedPath().includes(menu)) menu.open = false;
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      const menu = openMenu();
+      if (event.key !== "Escape" || !menu) return;
+      event.preventDefault();
+      menu.open = false;
+      menu.querySelector<HTMLElement>("summary")?.focus();
     };
 
     document.addEventListener("pointerdown", closeOnOutsideClick);
-    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
   }, []);
 
   return (
-    <div className="app-shell min-h-screen bg-[var(--surface-page)] text-[var(--text-primary)]">
+    <div className={`app-shell app-shell-${activeView} min-h-screen bg-[var(--surface-page)] text-[var(--text-primary)]`}>
       <header className="app-header sticky top-0 z-40 backdrop-blur-xl">
         <div className="app-header-inner flex min-h-[72px] min-w-0 items-center gap-3 px-3 md:gap-4 md:px-5">
           <Link className="app-brand" href="/" aria-label="PNLX home">
@@ -120,6 +132,7 @@ export function AppShell({
                     className="wallet-button account-trigger"
                     title={wallet.error ?? "Wallet menu"}
                   >
+                    <Wallet aria-hidden="true" className="account-wallet-icon" size={16} />
                     <span className="wallet-address wallet-address-wide">{shortAddress(address)}</span>
                     <span className="wallet-address wallet-address-compact">{compactAddress}</span>
                     <ChevronDown aria-hidden="true" className="account-chevron" size={14} />
@@ -149,20 +162,31 @@ export function AppShell({
                 </button>
               )}
             </div>
+            <details className="mobile-page-menu" name="pnlx-header-menu">
+              <summary aria-label="Navigation menu" title="Navigation menu">
+                <Menu aria-hidden="true" size={20} strokeWidth={1.75} />
+              </summary>
+              <nav aria-label="App pages" className="mobile-page-popover">
+                {[...navItems, { href: "/rewards", id: "rewards", label: "Rewards" }].map((item) => (
+                  <Link
+                    aria-current={item.id === activeView ? "page" : undefined}
+                    className={item.id === activeView ? "mobile-page-active" : undefined}
+                    href={item.href}
+                    key={item.id}
+                    onClick={(event) => event.currentTarget.closest("details")?.removeAttribute("open")}
+                  >
+                    {item.label}
+                  </Link>
+                ))}
+              </nav>
+            </details>
           </div>
         </div>
-        <nav aria-label="App pages" className="app-mobile-nav">
-          {navItems.map((item) => (
-            <Link aria-current={item.id === activeView ? "page" : undefined} className={item.id === activeView ? "app-mobile-nav-active" : ""} href={item.href} key={item.id}>
-              {item.label}
-            </Link>
-          ))}
-        </nav>
       </header>
 
       {connected && wallet.error ? <p className="private-backup-warning" role="alert">{wallet.error}</p> : null}
 
-      <div className="px-2 pb-12 pt-2 md:px-3">{children}</div>
+      <div className="app-content px-2 pb-12 pt-2 md:px-3">{children}</div>
     </div>
   );
 }

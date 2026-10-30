@@ -72,7 +72,7 @@ export function parseMarketPriceStream(request: Request): string {
 }
 
 function parseInterval(value: string): MarketCandleInterval {
-  if (value === "1m" || value === "5m" || value === "15m" || value === "1h" || value === "1d") {
+  if (value === "1m" || value === "5m" || value === "15m" || value === "1h" || value === "4h" || value === "1d") {
     return value;
   }
   throw new Error("unsupported candle interval");

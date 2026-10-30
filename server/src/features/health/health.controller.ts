@@ -3,6 +3,7 @@ import { oracleReadinessIssues } from "@/shared/protocol/oracle";
 import type { ServerEnv } from "@/config/env";
 import type { Hex } from "@pnlx/protocol-types";
 import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
+import type { FundingEngineService } from "@/workers/funding-engine/funding-engine.service";
 import type {
   ProtocolPersistenceStatus,
 } from "@/shared/mongo/store";
@@ -19,9 +20,11 @@ export class HealthController {
     private readonly onchain?: Pick<OnchainRelayService, "enabled" | "tokenDigest">,
     private readonly persistence?: PersistenceStatusProvider,
     private readonly operations?: () => unknown,
+    private readonly fundingEngine?: Pick<FundingEngineService, "status">,
   ) {}
 
   get(): Response {
+    const fundingStatus = this.fundingEngine?.status();
     const persistenceStatus = this.persistence?.persistenceStatus();
     const custodyIssues = custodyReadinessIssues(this.env);
     const governanceIssues = governanceReadinessIssues(this.env);
@@ -90,8 +93,15 @@ export class HealthController {
       funding: {
         enabled: this.env.fundingEngineEnabled,
         effective:
-          this.env.fundingEngineEnabled &&
+          Boolean(fundingStatus?.settlementRunning && !fundingStatus.settlementBlocked) &&
           (this.env.fundingPremiumMode === "impact-twap" || this.env.fundingPremiumRate !== 0n),
+        samplingRunning: fundingStatus?.samplingRunning ?? false,
+        settlementStatus: fundingStatus?.settlementBlocked ? "blocked" : fundingStatus?.settlementRunning ? "running" : "paused",
+        nextFundingAt: fundingStatus?.nextFundingAt ?? null,
+        lastSampledAt: fundingStatus?.lastSampledAt ?? null,
+        lastCompletedAt: fundingStatus?.lastCompletedAt ?? null,
+        lastError: fundingStatus?.lastError ?? null,
+        lastSampleError: fundingStatus?.lastSampleError ?? null,
         impactMargin: this.env.fundingImpactMargin.toString(),
         intervalMs: this.env.fundingIntervalMs,
         minimumSamples: this.env.fundingMinimumSamples,

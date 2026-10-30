@@ -1,5 +1,5 @@
 import { matchingPayloadCommitment, privateMatchIntentFromTradeIntent } from "@/workers/batch-matcher/private-intent";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   commitIntent,
   digestToFieldHex,
@@ -51,6 +51,7 @@ import { RemoteMatcherClient } from "@/workers/matcher/remote/matcher.service";
 import { MatcherService } from "@/workers/matcher/matcher.service";
 import { createMatcher } from "@/workers/matcher/matcher.worker";
 import { createFundingEngine } from "@/workers/funding-engine/funding-engine.worker";
+import { HealthController } from "@/features/health/health.controller";
 import { createIndexer } from "@/workers/indexer/indexer.worker";
 import { createOnchainRelay } from "@/workers/onchain/onchain.worker";
 import { OracleService } from "@/workers/oracle/oracle.service";
@@ -249,6 +250,31 @@ describe("support workers", () => {
     });
     expect(response.candles).toEqual([]);
     expect(response.hasMore).toBe(false);
+  });
+
+  test("accepts four-hour candles and requests native four-hour history", async () => {
+    const now = Date.parse("2026-08-13T13:30:00.000Z");
+    const input = parseMarketCandles(new Request(
+      "https://pnlx.test/markets/candles?marketId=xlm-usd-perp&interval=4h&limit=300",
+    ));
+    let requestBody: unknown;
+    const fetcher = async (_input: unknown, init?: RequestInit) => {
+      requestBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify([{
+        c: "0.16", h: "0.17", l: "0.15", o: "0.155",
+        t: Date.parse("2026-08-13T12:00:00.000Z"), v: "400.5",
+      }]), { status: 200 });
+    };
+    const service = new MarketDataService(loadEnv(), fetcher as never, () => now);
+
+    const response = await service.candles(input);
+
+    expect(requestBody).toEqual({
+      type: "candleSnapshot",
+      req: { coin: "XLM", interval: "4h", startTime: now - 14_400_000 * 300, endTime: now },
+    });
+    expect(response.interval).toBe("4h");
+    expect(response.candles[0]?.time).toBe("2026-08-13T12:00:00.000Z");
   });
 
   test("retries an aborted cold candle request", async () => {
@@ -1455,6 +1481,66 @@ describe("support workers", () => {
     expect(executor.store.orderLifecycle.get(long.intentCommitment)?.status).toBe("filled");
     expect(executor.store.orderLifecycle.get(short.intentCommitment)?.status).toBe("filled");
   });
+
+  for (const settlementFails of [false, true]) {
+    test(settlementFails
+      ? "keeps settlement failures fatal when funding premium sampling also fails"
+      : "settles crossed orders when funding premium sampling fails and exposes sanitized health", async () => {
+      const executor = createExecutor();
+      const market = { marketId: "btc-usd-perp", oraclePrice: 50_000n * PRICE_SCALE,
+        maxLeverage: 10n, initialMarginRate: 100_000n, maintenanceMarginRate: 50_000n, fundingIndex: 0n };
+      executor.addMarket(market);
+      const long = submitBackedIntent(executor, matchedTradeIntent("sample-isolation-long", "long", {
+        batchId: "sample-isolation-long", limitPrice: 50_500n * PRICE_SCALE, marketId: market.marketId,
+      }));
+      const short = submitBackedIntent(executor, matchedTradeIntent("sample-isolation-short", "short", {
+        batchId: "sample-isolation-short", limitPrice: 49_500n * PRICE_SCALE, marketId: market.marketId,
+      }));
+      // Historical incomplete rollover state must not turn a statistics failure
+      // into a failure of these two otherwise executable, fully backed orders.
+      const brokenId = hashFields("legacy-order", ["sample-isolation"]);
+      executor.store.orderLifecycle.set(brokenId, {
+        batchId: "legacy-sample-isolation", createdAt: 1, updatedAt: 1,
+        intentCommitment: brokenId, marketId: market.marketId, ownerCommitment: long.ownerCommitment,
+        status: "partially-filled",
+      });
+      const funding = createFundingEngine(executor, {
+        intervalMs: 3_600_000, minimumSamples: 1, premiumMode: "impact-twap", premiumRate: 0n,
+      });
+      const batch = createBatchExecutor(executor, createProoflessMatcher(executor, {
+        accountEventEncryptor: (payload) => `base64:test-encrypted:${payload.kind}`,
+      }), {
+        intervalMs: 1_000, settlementsOnchainRequired: settlementFails,
+        sampleFundingPremium: (marketId, sampledAt) => funding.sampleSafely({ marketId, sampledAt }),
+      }, settlementFails ? {
+        enabled: true,
+        positionRoot: () => executor.store.positionMembershipRoot(),
+        isBatchSettledAsync: async () => false,
+        settleBatchAsync: async () => { throw new Error("required batch settlement relay failed"); },
+      } as never : undefined);
+      const errorLog = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const result = await batch.runOnce({ marketId: market.marketId, now: 60_000 });
+        const health = await new HealthController({ ...loadEnv(), fundingEngineEnabled: false },
+          undefined, undefined, undefined, funding).get().json();
+        expect(health.funding).toMatchObject({ enabled: false, effective: false,
+          lastSampleError: "funding premium sampling failed" });
+        expect(JSON.stringify(health.funding)).not.toContain(brokenId);
+        expect(funding.fundingSummary(market.marketId, 60_000).rate).toBeNull();
+        if (settlementFails) {
+          expect(result.results[0].record.status).toBe("failed");
+          expect(result.results[0].record.reason).toContain("required batch settlement relay failed");
+          expect(executor.store.settlements.size).toBe(0);
+          expect(executor.store.orderLifecycle.get(long.intentCommitment)?.status).toBe("open");
+        } else {
+          expect(result.results[0].record.status).toBe("settled");
+          expect(executor.store.settlements.size).toBe(1);
+          expect(executor.store.orderLifecycle.get(long.intentCommitment)?.status).toBe("filled");
+          expect(executor.store.orderLifecycle.get(short.intentCommitment)?.status).toBe("filled");
+        }
+      } finally { batch.stop(); funding.stop(); errorLog.mockRestore(); }
+    });
+  }
 
   test("discards a proven batch when an included order is cancelled before relay", async () => {
     const executor = createExecutor();

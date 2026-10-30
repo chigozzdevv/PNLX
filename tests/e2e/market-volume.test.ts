@@ -6,11 +6,34 @@ import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
 import type { BatchSettlement, Hex, ProofMeta } from "@pnlx/protocol-types";
 import { loadEnv } from "@/config/env";
 import { MarketsService } from "@/features/markets/markets.service";
+import { applySettlementVolumes } from "@/features/markets/market-volume";
 import { FileProtocolStore } from "@/shared/state/persistent-store";
 import { ProtocolStore } from "@/shared/state/store";
 import { ExecutorService } from "@/workers/executor/executor.service";
 
 describe("PNLX market volume", () => {
+  test("buckets four-hour volume at UTC boundaries", () => {
+    const candles = [
+      candle("2026-08-13T08:00:00.000Z", 900),
+      candle("2026-08-13T12:00:00.000Z", 800),
+      candle("2026-08-13T16:00:00.000Z", 700),
+    ];
+    const records = [
+      { marketId: "xlm-usd-perp", matchedVolume: 10_000_000n,
+        settledAt: Date.parse("2026-08-13T11:59:59.999Z"), settlementDigest: "0xone" as Hex },
+      { marketId: "xlm-usd-perp", matchedVolume: 20_000_000n,
+        settledAt: Date.parse("2026-08-13T12:00:00.000Z"), settlementDigest: "0xtwo" as Hex },
+      { marketId: "xlm-usd-perp", matchedVolume: 30_000_000n,
+        settledAt: Date.parse("2026-08-13T15:59:59.999Z"), settlementDigest: "0xthree" as Hex },
+      { marketId: "xlm-usd-perp", matchedVolume: 40_000_000n,
+        settledAt: Date.parse("2026-08-13T16:00:00.000Z"), settlementDigest: "0xfour" as Hex },
+    ];
+
+    expect(applySettlementVolumes(candles, {
+      interval: "4h", limit: 3, marketId: "xlm-usd-perp",
+    }, records).map((item) => item.volume)).toEqual([1, 5, 4]);
+  });
+
   test("persists one-sided matched volume when a settlement commits", () => {
     const path = join(mkdtempSync(join(tmpdir(), "pnlx-volume-")), "protocol-store.json");
     const store = new FileProtocolStore(path);

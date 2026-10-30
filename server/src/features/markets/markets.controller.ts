@@ -21,6 +21,10 @@ export class MarketsController {
     return json(await this.markets.ticker());
   }
 
+  async stats(request: Request): Promise<Response> {
+    return json(await this.markets.stats(parseMarketPriceStream(request)));
+  }
+
   async candles(request: Request): Promise<Response> {
     return json(await this.markets.candles(parseMarketCandles(request)));
   }

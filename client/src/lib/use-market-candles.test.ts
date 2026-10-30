@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isCandleUpdate, isFreshFeedCheck, mergeCandles, mergeSnapshotCandles, startMarketCandleFeed,
+import { intervalMilliseconds, isCandleUpdate, isFreshFeedCheck, mergeCandles, mergeOlderCandles, mergeSnapshotCandles, startMarketCandleFeed,
   type CandleUpdate, type CandlesResponse } from "@/lib/use-market-candles";
 import type { ChartCandle } from "@/types/trading";
 
@@ -55,6 +55,27 @@ describe("native candle feed", () => {
     expect(mergeCandles([later], [first])).toEqual([first, later]);
     expect(mergeCandles([first], [{ ...first, close: 0 }, { ...first, time: "bad" }, { ...first, trades: -1 }])).toEqual([first]);
     expect(mergeSnapshotCandles([first], [{ ...first, close: 12, high: 12 }], 300, true)[0].close).toBe(12);
+  });
+  test("four-hour candles use four-hour boundaries and reject misaligned updates", () => {
+    const now = Date.parse("2026-08-13T12:30:00.000Z");
+    const aligned = { ...first, time: "2026-08-13T12:00:00.000Z" };
+    const event: CandleUpdate = { ...update(aligned, now), interval: "4h" };
+    expect(intervalMilliseconds("4h")).toBe(14_400_000);
+    expect(isCandleUpdate(event, input.marketId, "4h", now)).toBe(true);
+    expect(isCandleUpdate({ ...event, candle: { ...aligned, time: "2026-08-13T13:00:00.000Z" } },
+      input.marketId, "4h", now + 3_600_000)).toBe(false);
+  });
+  test("history loading stops when the retained window cannot advance", () => {
+    const candles = Array.from({ length: 5 }, (_, index) => ({
+      ...first, time: new Date(startedAt + index * 60_000).toISOString(),
+    }));
+    const older = { ...first, time: new Date(startedAt - 60_000).toISOString() };
+    expect(mergeOlderCandles(candles, [older], true, 5)).toEqual({ candles, hasMore: false });
+    expect(mergeOlderCandles(candles, [candles[0]], true, 10)).toEqual({ candles, hasMore: false });
+    const backfilled = mergeOlderCandles(candles, [older], true, 10);
+    expect(backfilled.candles).toEqual([older, ...candles]);
+    expect(backfilled.hasMore).toBe(true);
+    expect(mergeOlderCandles(candles, [older], false, 10).hasMore).toBe(false);
   });
   test("open SSE and stale snapshots do not establish feed freshness", async () => {
     const { state, stop } = harness(async () => snapshot(startedAt, true));

@@ -3,6 +3,7 @@ import type { ServerEnv } from "@/config/env";
 import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
 import { HealthController } from "@/features/health/health.controller";
 import type { ProtocolPersistenceStatus } from "@/shared/mongo/store";
+import type { FundingEngineService } from "@/workers/funding-engine/funding-engine.service";
 
 interface PersistenceStatusProvider {
   persistenceStatus(): ProtocolPersistenceStatus;
@@ -14,9 +15,10 @@ export function registerHealthRoute(
   onchain?: Pick<OnchainRelayService, "enabled" | "tokenDigest"> & Partial<Pick<OnchainRelayService,"marketPriceSnapshotAsync">>,
   store?: unknown,
   operations?: () => unknown,
+  fundingEngine?: Pick<FundingEngineService, "status">,
 ): void {
   const persistence = isPersistenceStatusProvider(store) ? store : undefined;
-  const controller = new HealthController(env, onchain, persistence, operations);
+  const controller = new HealthController(env, onchain, persistence, operations, fundingEngine);
   router.add("GET", "/health", () => controller.get());
   router.add("GET", "/health/live", async () => {
     const checks:Record<string,{ok:boolean;detail?:string}>={};

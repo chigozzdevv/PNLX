@@ -505,7 +505,13 @@ describe("server api", () => {
     const markets = result.markets as Array<Record<string, unknown>>;
     expect(markets.find((market) => market.marketId === "xlm-usd-perp")).toMatchObject({
       fundingRate: "0",
-      openInterest: null,
+      funding: {
+        rate: "0",
+        status: "ready",
+        settlementStatus: "paused",
+      },
+      openInterest: "0",
+      openInterestDetails: { status: "available", convention: "half-gross-base" },
       volume: "0",
     });
   });

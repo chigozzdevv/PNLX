@@ -5,7 +5,7 @@ import { pnlxGet } from "@/lib/pnlx-api";
 import { apiPath } from "@/lib/api-path";
 import type { ChartCandle } from "@/types/trading";
 
-export type CandleInterval = "1m" | "5m" | "15m" | "1h" | "1d";
+export type CandleInterval = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
 export type CandleTransport = "connecting" | "fallback" | "offline" | "stream";
 
 export interface CandlesResponse {
@@ -63,18 +63,24 @@ export function useMarketCandles(marketId: string | undefined, interval: CandleI
       createSource: typeof EventSource === "undefined" ? undefined : () => new EventSource(
         `${apiPath("markets/candles/stream")}?marketId=${encodeURIComponent(marketId)}&interval=${interval}`,
       ),
-      onSnapshot: (response) => setState((current) => ({
-        ...current,
-        candles: mergeSnapshotCandles(response.candles, current.candles, MAX_RETAINED_CANDLES, Boolean(response.stale)),
-        error: undefined, loading: false, source: response.source,
-        hasMore: response.hasMore ?? response.candles.length >= limit,
-        updatedAt: Math.max(current.updatedAt ?? 0, response.fetchedAt),
-      })),
-      onCandle: (update) => setState((current) => ({
-        ...current, candles: mergeCandles(current.candles, [update.candle]),
-        error: undefined, loading: false, source: update.source,
-        updatedAt: Math.max(current.updatedAt ?? 0, update.checkedAt),
-      })),
+      onSnapshot: (response) => setState((current) => {
+        const candles = mergeSnapshotCandles(response.candles, current.candles, MAX_RETAINED_CANDLES, Boolean(response.stale));
+        return {
+          ...current, candles,
+          error: undefined, loading: false, source: response.source,
+          hasMore: !current.historyExhausted && candles.length < MAX_RETAINED_CANDLES &&
+            (response.hasMore ?? response.candles.length >= limit),
+          updatedAt: Math.max(current.updatedAt ?? 0, response.fetchedAt),
+        };
+      }),
+      onCandle: (update) => setState((current) => {
+        const candles = mergeCandles(current.candles, [update.candle]);
+        return {
+          ...current, candles, hasMore: current.hasMore && candles.length < MAX_RETAINED_CANDLES,
+          error: undefined, loading: false, source: update.source,
+          updatedAt: Math.max(current.updatedAt ?? 0, update.checkedAt),
+        };
+      }),
       onHealth: (live, transport) => setState((current) => ({ ...current, live, transport })),
       onError: () => setState((current) => ({
         ...current, loading: false, error: current.candles.length > 0 ? undefined : "Unable to load candles",
@@ -83,7 +89,8 @@ export function useMarketCandles(marketId: string | undefined, interval: CandleI
   }, [marketId, interval, limit]);
 
   const loadOlder = useCallback(async () => {
-    if (!marketId || loadingMoreRef.current || !state.hasMore || state.candles.length === 0) return;
+    if (!marketId || loadingMoreRef.current || !state.hasMore || state.candles.length === 0 ||
+      state.candles.length >= MAX_RETAINED_CANDLES) return;
     const scope = `${marketId}:${interval}`;
     const earliest = Date.parse(state.candles[0].time);
     if (!Number.isFinite(earliest)) return;
@@ -96,12 +103,15 @@ export function useMarketCandles(marketId: string | undefined, interval: CandleI
         `/markets/candles?marketId=${encodeURIComponent(marketId)}&interval=${interval}&limit=${limit}&from=${from}&to=${to}`,
         undefined, AbortSignal.timeout(15_000),
       );
-      if (scopeRef.current !== scope || response.source !== "hyperliquid") return;
-      const older = response.candles.filter((candle) => Date.parse(candle.time) < earliest);
-      setState((current) => ({
-        ...current, candles: mergeCandles(older, current.candles), error: undefined, loadingMore: false,
-        hasMore: older.length > 0 && (response.hasMore ?? response.candles.length >= limit),
-      }));
+      if (scopeRef.current !== scope || response.source !== "hyperliquid" ||
+        response.marketId !== marketId || response.interval !== interval) return;
+      setState((current) => {
+        const history = mergeOlderCandles(current.candles, response.candles,
+          response.hasMore ?? response.candles.length >= limit);
+        return {
+          ...current, ...history, historyExhausted: !history.hasMore, error: undefined, loadingMore: false,
+        };
+      });
     } catch {
       if (scopeRef.current === scope) setState((current) => ({ ...current, loadingMore: false }));
     } finally {
@@ -114,8 +124,8 @@ export function useMarketCandles(marketId: string | undefined, interval: CandleI
   return { ...state, loadOlder };
 }
 
-function emptyCandleState(scope: string, loading: boolean): Omit<MarketCandlesState, "loadOlder"> & { scope: string } {
-  return { scope, candles: [], hasMore: true, live: false, loading, loadingMore: false,
+function emptyCandleState(scope: string, loading: boolean): Omit<MarketCandlesState, "loadOlder"> & { scope: string; historyExhausted: boolean } {
+  return { scope, candles: [], hasMore: true, historyExhausted: false, live: false, loading, loadingMore: false,
     transport: loading ? "connecting" : "offline" };
 }
 
@@ -274,7 +284,20 @@ export function isCandleUpdate(update: CandleUpdate, marketId: string, interval:
 }
 
 export function intervalMilliseconds(interval: CandleInterval): number {
-  return { "1d": 86_400_000, "1h": 3_600_000, "1m": 60_000, "5m": 300_000, "15m": 900_000 }[interval];
+  return { "1d": 86_400_000, "4h": 14_400_000, "1h": 3_600_000, "1m": 60_000, "5m": 300_000, "15m": 900_000 }[interval];
+}
+
+export function mergeOlderCandles(
+  current: ChartCandle[],
+  response: ChartCandle[],
+  providerHasMore: boolean,
+  limit = MAX_RETAINED_CANDLES,
+): { candles: ChartCandle[]; hasMore: boolean } {
+  const earliest = current[0] ? Date.parse(current[0].time) : Number.POSITIVE_INFINITY;
+  const older = response.filter((candle) => Date.parse(candle.time) < earliest);
+  const candles = mergeCandles(older, current, limit);
+  const progressed = candles.length > 0 && Date.parse(candles[0].time) < earliest;
+  return { candles, hasMore: progressed && candles.length < limit && providerHasMore };
 }
 
 export function mergeCandles(base: ChartCandle[], updates: ChartCandle[], limit = MAX_RETAINED_CANDLES): ChartCandle[] {

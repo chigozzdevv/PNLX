@@ -75,9 +75,59 @@ interface TradingDataState {
 const ZERO_ROOT = `0x${"0".repeat(64)}` as Hex;
 const PRICE_SCALE = 100_000_000;
 const ONCHAIN_MARK_MAX_SILENCE_MS = 10_000;
+const MARKET_SUMMARY_REFRESH_MS = 15_000;
 const PRIVATE_OPENING_RECOVERY_PREFIX = "pnlx.account-key-opening-recovery.v2";
 const SUPPORTED_MARKET_ORDER = ["btc-usd-perp", "eth-usd-perp", "xlm-usd-perp", "sol-usd-perp", "xrp-usd-perp"];
 const SUPPORTED_MARKET_IDS = new Set(SUPPORTED_MARKET_ORDER);
+
+export function selectTradeMarkets(markets: readonly MarketDisplay[]): MarketDisplay[] {
+  return markets.filter((market) => market.marketId === "xlm-usd-perp");
+}
+
+export function createMarketSummaryRefresh(
+  load: (signal: AbortSignal) => Promise<ServerMarketConfig[]>,
+  onMarkets: (markets: ServerMarketConfig[]) => void,
+) {
+  let active = true;
+  let pending: AbortController | undefined;
+  return {
+    async refresh(): Promise<void> {
+      if (!active || pending) return;
+      const request = new AbortController();
+      pending = request;
+      try {
+        const markets = await load(request.signal);
+        if (active && !request.signal.aborted) onMarkets(markets);
+      } catch {
+        // Keep the current account and market snapshot during a transient outage.
+      } finally {
+        if (pending === request) pending = undefined;
+      }
+    },
+    dispose() {
+      active = false;
+      pending?.abort();
+    },
+  };
+}
+
+export function applyMarketSummaries(
+  data: TradingLiveData,
+  summaries: ServerMarketConfig[],
+): TradingLiveData {
+  const previous = new Map(data.markets.map((market) => [market.marketId, market]));
+  const markets = canonicalMarkets(summaries).map((summary) => {
+    const current = previous.get(summary.marketId);
+    const market = marketDisplayFromServer(summary, undefined);
+    return {
+      ...market,
+      markPrice: current?.markPrice,
+      status: current?.status ?? market.status,
+      volume: summary.volume === undefined ? current?.volume ?? market.volume : market.volume,
+    };
+  });
+  return { ...data, markets };
+}
 
 export function useTradingData(session: WalletSession | null, refreshKey = 0, watchedMarketId?: string): TradingDataState {
   const emptyData = useMemo(() => emptyLiveData(session), [session]);
@@ -122,6 +172,22 @@ export function useTradingData(session: WalletSession | null, refreshKey = 0, wa
       active = false;
     };
   }, [emptyData, privateNotesVersion, refreshKey, session]);
+
+  useEffect(() => {
+    if (!watchedMarketId) return;
+    const refresh = createMarketSummaryRefresh(
+      async (signal) => (await pnlxGet<MarketsResponse>("/markets", session?.token, signal)).markets,
+      (summaries) => setState((current) => ({
+        ...current,
+        data: applyLatestOnchainMarks(applyMarketSummaries(current.data, summaries), latestOnchainMarks.current),
+      })),
+    );
+    const timer = window.setInterval(() => void refresh.refresh(), MARKET_SUMMARY_REFRESH_MS);
+    return () => {
+      window.clearInterval(timer);
+      refresh.dispose();
+    };
+  }, [session?.token, watchedMarketId]);
 
   const markMarketKey = useMemo(() => {
     const watchedMarket = watchedMarketId && (
@@ -577,6 +643,10 @@ function marketDisplayFromServer(
       ? baseAmount(publicMarket.aggregateVolume)
       : 0;
   const pending = publicMarket?.pendingIntentCount ?? 0;
+  const rawFundingRate = market.funding?.rate !== undefined ? market.funding.rate : market.fundingRate;
+  const fundingRate = rawFundingRate === undefined || rawFundingRate === null
+    ? null
+    : rateFromMicroBps(rawFundingRate) * 100;
 
   return {
     assetName: titleFromBaseAsset(baseAsset),
@@ -587,12 +657,12 @@ function marketDisplayFromServer(
     maintenanceMarginRate: rateFromMicroBps(market.maintenanceMarginRate),
     marketId: market.marketId,
     maxLeverage: Number(BigInt(market.maxLeverage)),
-    fundingRate: market.fundingRate === undefined || market.fundingRate === null
-      ? null
-      : rateFromMicroBps(market.fundingRate) * 100,
+    fundingRate,
+    funding: market.funding ? { ...market.funding, rate: fundingRate } : undefined,
     openInterest: market.openInterest === undefined || market.openInterest === null
       ? null
       : baseAmount(market.openInterest),
+    openInterestDetails: market.openInterestDetails,
     oraclePrice: market.oraclePrice,
     pair: pairFromMarketId(market.marketId),
     price,

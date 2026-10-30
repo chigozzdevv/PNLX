@@ -123,6 +123,9 @@ export type PositionStatus = "open" | "closed" | "liquidated";
 
 export interface PositionLifecycleRecord {
   batchId: string;
+  /** Private operator accounting fields; omit individual exposure from public snapshots. */
+  size?: bigint;
+  side?: Side;
   closeCommitment?: Hex;
   fundingIndex?: bigint;
   liquidationRewardCommitment?: Hex;

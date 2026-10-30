@@ -1,117 +1,137 @@
-import { ChevronDown } from "lucide-react";
 import Image from "next/image";
-import { useState } from "react";
-import { formatCompact, formatNumber, formatPct } from "@/lib/format";
-import type { MarketDisplay } from "@/types/trading";
+import { formatCompact, formatNumber, formatPct, formatUsd } from "@/lib/format";
+import type { MarketDayStats, MarketDisplay } from "@/types/trading";
 
 interface MarketHeaderProps {
-  markets: MarketDisplay[];
-  onSelectMarket: (marketId: string) => void;
+  dayStats?: MarketDayStats;
   selectedMarket: MarketDisplay;
 }
 
-const ASSET_LOGOS: Record<string, string> = {
-  BTC: "https://s2.coinmarketcap.com/static/img/coins/64x64/1.png",
-  ETH: "https://s2.coinmarketcap.com/static/img/coins/64x64/1027.png",
-  SOL: "https://s2.coinmarketcap.com/static/img/coins/64x64/5426.png",
-  XLM: "https://s2.coinmarketcap.com/static/img/coins/64x64/512.png",
-  XRP: "https://s2.coinmarketcap.com/static/img/coins/64x64/52.png",
-};
+interface HeaderMetric {
+  label: string;
+  value: string;
+  description: string;
+  badge?: string;
+  tone?: "positive" | "negative";
+}
 
-export function MarketHeader({ markets, selectedMarket, onSelectMarket }: MarketHeaderProps) {
-  const [open, setOpen] = useState(false);
-  const priceDigits = selectedMarket.price < 10 ? 5 : 2;
-  const stats = [
+function fundingMetric(market: MarketDisplay): HeaderMetric {
+  const funding = market.funding;
+  if (!funding) return {
+    label: "Est. funding",
+    value: market.fundingRate === null ? "Unavailable" : formatPct(market.fundingRate, 4),
+    description: "PNLX funding estimate. Settlement status is unavailable.",
+  };
+  const interval = funding.intervalMs;
+  const period = interval > 0 && Number.isFinite(interval)
+    ? interval % 3_600_000 === 0 ? `${interval / 3_600_000}h`
+      : interval % 60_000 === 0 ? `${interval / 60_000}m` : `${interval / 1_000}s`
+    : undefined;
+  const settling = funding.settlementStatus === "running";
+  const settlement = settling ? "Automatic funding settlement is running."
+    : funding.settlementStatus === "paused" ? "Automatic funding settlement is paused; this rate is an estimate."
+      : "Funding settlement is unavailable; this rate is an estimate.";
+  const sampledAt = funding.sampledAt !== null && funding.sampledAt > 0
+    ? ` Last sample: ${new Date(funding.sampledAt).toISOString()}.` : "";
+  const progress = `${funding.sampleCount}/${funding.minimumSamples} premium samples`;
+  return {
+    label: `${settling ? "Funding" : "Est. funding"}${period ? ` · ${period}` : ""}`,
+    value: funding.status === "warming" ? "Warming"
+      : funding.status === "stale" ? "Stale"
+        : funding.rate === null ? "Unavailable" : formatPct(funding.rate, 4),
+    badge: settling ? undefined : funding.settlementStatus === "paused" ? "Paused" : "Blocked",
+    description: `${funding.status === "warming" ? `Collecting ${progress}.`
+      : funding.status === "stale" ? `PNLX funding samples are out of date (${progress}).`
+        : funding.source === "fixed" ? "Configured PNLX funding estimate." : `PNLX funding estimate from ${progress}.`} ${settlement}${sampledAt}`,
+  };
+}
+
+function openInterestMetric(market: MarketDisplay): HeaderMetric {
+  const available = market.openInterestDetails?.status === "available" &&
+    market.openInterest !== null && Number.isFinite(market.openInterest) && market.openInterest >= 0;
+  if (!available) return {
+    label: "Open interest",
+    value: "Unavailable",
+    description: market.openInterestDetails?.reason ?? "PNLX has not published a complete open-interest aggregate.",
+  };
+  const size = market.openInterest!;
+  const notional = market.markPrice !== undefined && Number.isFinite(market.markPrice) && market.markPrice > 0
+    ? ` ${formatUsd(size * market.markPrice)} at the current verified mark.` : "";
+  return {
+    label: "Open interest",
+    value: `${formatCompact(size)} ${market.baseAsset}`,
+    description: `PNLX open interest counts one side of matched positions (half the total open size). ${formatNumber(size, 7)} ${market.baseAsset}.${notional}`,
+  };
+}
+
+export function MarketHeader({ dayStats, selectedMarket }: MarketHeaderProps) {
+  const markPrice = selectedMarket.markPrice;
+  const priceDigits = markPrice !== undefined && markPrice < 10 ? 5 : 2;
+  const reference = dayStats?.marketId === selectedMarket.marketId ? dayStats : undefined;
+  const referenceDescription = reference
+    ? `Hyperliquid ${selectedMarket.baseAsset} reference trades. Rolling 24h ending ${new Date(reference.asOf).toISOString()}, using complete 1m candles.${reference.stale ? " Last verified data; refresh is delayed." : ""}`
+    : `Hyperliquid ${selectedMarket.baseAsset} reference-price statistics are loading or temporarily unavailable.`;
+  const stats: HeaderMetric[] = [
     {
-      label: "Funding Rate",
-      value: selectedMarket.fundingRate === null ? "—" : formatPct(selectedMarket.fundingRate, 4),
+      label: "24h change",
+      value: reference ? formatPct(reference.change24h, 2) : "—",
+      description: referenceDescription,
+      badge: reference?.stale ? "Stale" : undefined,
+      tone: reference ? reference.change24h < 0 ? "negative" : reference.change24h > 0 ? "positive" : undefined : undefined,
     },
     {
-      label: "Open Interest",
-      value: selectedMarket.openInterest === null
-        ? "—"
-        : `${formatCompact(selectedMarket.openInterest)} ${selectedMarket.baseAsset}`,
+      label: "24h high",
+      value: reference ? `$${formatNumber(reference.high24h, reference.high24h < 10 ? 5 : 2)}` : "—",
+      description: referenceDescription,
+      badge: reference?.stale ? "Stale" : undefined,
     },
     {
-      label: "Volume",
+      label: "24h low",
+      value: reference ? `$${formatNumber(reference.low24h, reference.low24h < 10 ? 5 : 2)}` : "—",
+      description: referenceDescription,
+      badge: reference?.stale ? "Stale" : undefined,
+    },
+    fundingMetric(selectedMarket),
+    openInterestMetric(selectedMarket),
+    {
+      label: "All-time PNLX volume",
       value: `${formatCompact(selectedMarket.volume)} ${selectedMarket.baseAsset}`,
+      description: "Total settled PNLX volume across all recorded history, counted once per matched trade.",
     },
   ];
 
   return (
-    <section className="market-header">
-      <div
-        className="market-identity"
-        onBlur={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
-        }}
-      >
+    <section aria-label={`${selectedMarket.pair} market summary`} className="market-header" tabIndex={0}>
+      <div className="market-identity">
         <div className="market-card">
-          <AssetLogo asset={selectedMarket.baseAsset} />
-          <button
-            aria-expanded={open}
-            className="market-select-button"
-            type="button"
-            onClick={() => setOpen((value) => !value)}
-          >
-            <strong>{selectedMarket.pair}</strong>
-            <ChevronDown size={17} />
-          </button>
+          <span className="asset-logo">
+            <Image
+              alt="Stellar logo"
+              draggable={false}
+              height={30}
+              src="https://s2.coinmarketcap.com/static/img/coins/64x64/512.png"
+              width={30}
+            />
+          </span>
+          <strong className="market-symbol">{selectedMarket.pair}</strong>
         </div>
-
-        {open ? (
-          <div className="market-dropdown">
-            {markets.map((market) => (
-              <button
-                className={`market-dropdown-item ${market.marketId === selectedMarket.marketId ? "market-dropdown-item-active" : ""}`}
-                key={market.marketId}
-                type="button"
-                onClick={() => {
-                  onSelectMarket(market.marketId);
-                  setOpen(false);
-                }}
-              >
-                <AssetLogo asset={market.baseAsset} small />
-                <span>
-                  <strong>{market.pair}</strong>
-                  <small>{market.assetName}</small>
-                </span>
-                <em>{market.maxLeverage}x</em>
-              </button>
-            ))}
-          </div>
-        ) : null}
       </div>
 
       <div className="market-price-block">
         <span>Mark price</span>
-        <strong>{selectedMarket.markPrice === undefined ? "—" : `$${formatNumber(selectedMarket.markPrice, priceDigits)}`}</strong>
+        <strong>{markPrice === undefined ? "—" : `$${formatNumber(markPrice, priceDigits)}`}</strong>
       </div>
 
       <div className="market-summary">
         <div className="metric-strip">
           {stats.map((stat) => (
-            <div className="metric-item" key={stat.label}>
+            <div className="metric-item" key={stat.label} title={stat.description}>
               <span>{stat.label}</span>
-              <strong>{stat.value}</strong>
+              <strong className={stat.tone ? `metric-${stat.tone}` : undefined}>{stat.value}{stat.badge ? <small className="market-metric-badge">{stat.badge}</small> : null}</strong>
             </div>
           ))}
         </div>
       </div>
     </section>
-  );
-}
-
-function AssetLogo({ asset, small = false }: { asset: string; small?: boolean }) {
-  const src = ASSET_LOGOS[asset];
-  const size = small ? 22 : 30;
-  return (
-    <span className={`asset-logo ${small ? "asset-logo-small" : ""}`}>
-      {src ? (
-        <Image alt={`${asset} logo`} draggable={false} height={size} src={src} width={size} />
-      ) : (
-        <strong>{asset.slice(0, 1)}</strong>
-      )}
-    </span>
   );
 }

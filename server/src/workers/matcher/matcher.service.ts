@@ -298,6 +298,8 @@ function createPositionOpenings(
     ownerCommitment: `0x${string}`;
     positionCommitment: `0x${string}`;
     positionNullifier: `0x${string}`;
+    size: bigint;
+    side: "long" | "short";
   }>,
   fundingIndex: bigint,
 ): PositionLifecycleRecord[] {
@@ -312,6 +314,8 @@ function createPositionOpenings(
     positionNullifier: fill.positionNullifier,
     settlementDigest: settlement.settlementDigest,
     sourceIntentCommitment: fill.intentCommitment,
+    size: fill.size,
+    side: fill.side,
     status: "open",
     updatedAt: now,
   }));

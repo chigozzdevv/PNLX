@@ -86,6 +86,8 @@ function parsePositionOpenings(value: unknown): CommitExternalBatchSettlementReq
     }
     return {
       batchId: String(body.batchId),
+      ...parsePositionExposure(body),
+      ...(body.fundingIndex === undefined ? {} : { fundingIndex: parseFundingIndex(body.fundingIndex) }),
       closeCommitment: optionalHex(body.closeCommitment),
       liquidationRewardCommitment: optionalHex(body.liquidationRewardCommitment),
       marginOutputCommitment: optionalHex(body.marginOutputCommitment),
@@ -101,6 +103,25 @@ function parsePositionOpenings(value: unknown): CommitExternalBatchSettlementReq
       updatedAt: Number(body.updatedAt),
     };
   });
+}
+
+function parsePositionExposure(body: BatchBody): { size?: bigint; side?: "long" | "short" } {
+  if (body.size === undefined && body.side === undefined) return {};
+  if (body.size === undefined || body.side === undefined) {
+    throw new Error("position exposure size and side must be provided together");
+  }
+  if (body.side !== "long" && body.side !== "short") throw new Error("invalid position exposure side");
+  if ((typeof body.size !== "string" && typeof body.size !== "number" && typeof body.size !== "bigint") ||
+    (typeof body.size === "number" && !Number.isSafeInteger(body.size)) ||
+    !/^[1-9][0-9]*$/.test(String(body.size))) throw new Error("position exposure size must be a positive integer");
+  return { size: BigInt(String(body.size)), side: body.side };
+}
+
+function parseFundingIndex(value: unknown): bigint {
+  if ((typeof value !== "string" && typeof value !== "number" && typeof value !== "bigint") ||
+    (typeof value === "number" && !Number.isSafeInteger(value)) ||
+    !/^-?(0|[1-9][0-9]*)$/.test(String(value))) throw new Error("position funding index must be a signed integer");
+  return BigInt(String(value));
 }
 
 function parseResidualOrders(value: unknown): CommitExternalBatchSettlementRequest["residualOrders"] {

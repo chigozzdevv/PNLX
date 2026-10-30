@@ -1,10 +1,11 @@
 "use client";
 
-import { Activity, Check, Maximize2, RotateCcw } from "lucide-react";
+import { Activity, Check, Maximize2, Minimize2, RotateCcw } from "lucide-react";
 import type { ChartIndicatorId } from "@/lib/chart-indicators";
 import type { CandleInterval } from "@/lib/use-market-candles";
 
 interface ChartToolbarProps {
+  fullscreen?: boolean;
   indicators: ChartIndicatorId[];
   interval: CandleInterval;
   loadingMore: boolean;
@@ -14,7 +15,7 @@ interface ChartToolbarProps {
   onReset: () => void;
 }
 
-const intervals: CandleInterval[] = ["1m", "5m", "15m", "1h", "1d"];
+const intervals: CandleInterval[] = ["1m", "5m", "15m", "1h", "4h", "1d"];
 const availableIndicators: Array<{ id: ChartIndicatorId; label: string; pane: string }> = [
   { id: "sma", label: "SMA 20", pane: "Price" },
   { id: "ema", label: "EMA 20", pane: "Price" },
@@ -25,6 +26,7 @@ const availableIndicators: Array<{ id: ChartIndicatorId; label: string; pane: st
 ];
 
 export function ChartToolbar({
+  fullscreen = false,
   indicators,
   interval,
   loadingMore,
@@ -38,6 +40,7 @@ export function ChartToolbar({
       <div className="toolbar-group" aria-label="Chart interval">
         {intervals.map((item) => (
           <button
+            aria-pressed={item === interval}
             className={`time-chip ${item === interval ? "time-chip-active" : ""}`}
             key={item}
             type="button"
@@ -50,9 +53,9 @@ export function ChartToolbar({
 
       <div className="chart-toolbar-actions">
         <details className="indicator-menu">
-          <summary className={indicators.length > 0 ? "chart-tool-active" : ""}>
-            <Activity size={15} />
-            Indicators
+          <summary aria-label="Indicators" className={indicators.length > 0 ? "chart-tool-active" : ""}>
+            <Activity aria-hidden="true" size={15} />
+            <span className="chart-tool-label">Indicators</span>
             {indicators.length > 0 ? <em>{indicators.length}</em> : null}
           </summary>
           <div className="indicator-popover">
@@ -83,8 +86,8 @@ export function ChartToolbar({
         <button aria-label="Reset chart view" className="chart-icon-button" title="Reset chart view" type="button" onClick={onReset}>
           <RotateCcw size={15} />
         </button>
-        <button aria-label="Open chart fullscreen" className="chart-icon-button" title="Fullscreen" type="button" onClick={onFullscreen}>
-          <Maximize2 size={15} />
+        <button aria-label={fullscreen ? "Exit chart fullscreen" : "Open chart fullscreen"} className="chart-icon-button" title={fullscreen ? "Exit fullscreen" : "Fullscreen"} type="button" onClick={onFullscreen}>
+          {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
         </button>
       </div>
     </div>

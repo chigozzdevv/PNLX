@@ -6,7 +6,7 @@ export default function TradeLoading() {
     <div
       aria-label="Opening trading terminal"
       aria-live="polite"
-      className="app-shell min-h-screen bg-[var(--surface-page)] text-[var(--text-primary)]"
+      className="app-shell app-shell-trade min-h-screen bg-[var(--surface-page)] text-[var(--text-primary)]"
       role="status"
     >
       <header className="app-header sticky top-0 z-40 backdrop-blur-xl">
@@ -32,7 +32,7 @@ export default function TradeLoading() {
         </div>
       </header>
 
-      <div className="px-2 pb-12 pt-2 md:px-3">
+      <div className="app-content px-2 pb-12 pt-2 md:px-3">
         <main className="trade-grid trade-loading-grid">
           <section className="main-column">
             <div className="market-header trade-loading-market-header">

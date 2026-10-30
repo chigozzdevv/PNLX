@@ -14,6 +14,29 @@ export interface FundingEngineConfig {
   settlementsOnchainRequired?: boolean;
 }
 
+export interface FundingMarketSummary {
+  rate: bigint | null;
+  status: "ready" | "warming" | "stale";
+  settlementStatus: "running" | "paused" | "blocked";
+  intervalMs: number;
+  sampleCount: number;
+  minimumSamples: number;
+  sampledAt: number | null;
+  nextFundingAt: number | null;
+  source: FundingPremiumMode;
+}
+
+export interface FundingEngineStatus {
+  samplingRunning: boolean;
+  settlementRunning: boolean;
+  settlementBlocked: boolean;
+  nextFundingAt: number | null;
+  lastSampledAt: number | null;
+  lastCompletedAt: number | null;
+  lastError: string | null;
+  lastSampleError: string | null;
+}
+
 export interface RunFundingCycleInput {
   appliedAt?: number;
   elapsedMs?: number;

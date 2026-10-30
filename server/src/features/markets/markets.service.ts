@@ -14,7 +14,9 @@ import type { OracleService } from "@/workers/oracle/oracle.service";
 import { MarketDataService } from "@/features/markets/market-data.service";
 import { OnchainMarkStream } from "@/features/markets/onchain-mark-stream";
 import { applySettlementVolumes } from "@/features/markets/market-volume";
-import { currentFundingPremium } from "@/workers/funding-engine/funding-engine.service";
+import { FundingEngineService } from "@/workers/funding-engine/funding-engine.service";
+import { marketOpenInterest } from "@/features/markets/market-open-interest";
+import { MarketDayStatsService } from "@/features/markets/market-day-stats";
 import type {
   CreateOracleMarketInput,
   MarketCandlesInput,
@@ -50,6 +52,8 @@ export class MarketsService {
     private readonly env: ServerEnv,
     private readonly onchain?: OnchainRelayService,
     marketData?: MarketDataService,
+    private readonly fundingEngine?: Pick<FundingEngineService, "fundingSummary">,
+    private readonly dayStats = new MarketDayStatsService(),
   ) {
     this.marketData = marketData ?? new MarketDataService(env);
     if (onchain?.enabled) {
@@ -194,23 +198,31 @@ export class MarketsService {
   async list(): Promise<MarketSummary[]> {
     await this.ensureSupportedMarkets();
     const now = Date.now();
+    const fundingEngine = this.fundingEngine ?? new FundingEngineService(this.executor, {
+      intervalMs: this.env.fundingIntervalMs,
+      minimumSamples: this.env.fundingMinimumSamples,
+      premiumMode: this.env.fundingPremiumMode,
+      premiumRate: this.env.fundingPremiumRate,
+      premiumRateCap: this.env.fundingPremiumRateCap,
+      sampleIntervalMs: this.env.fundingSampleIntervalMs,
+    });
     return canonicalMarkets(this.executor.store.markets.values()).map((market) => {
-      const funding = currentFundingPremium(
-        this.executor.store.fundingPremiumSamples.values(),
-        {
-          intervalMs: this.env.fundingIntervalMs,
-          minimumSamples: this.env.fundingMinimumSamples,
-          premiumMode: this.env.fundingPremiumMode,
-          premiumRate: this.env.fundingPremiumRate,
-          premiumRateCap: this.env.fundingPremiumRateCap,
-        },
-        market.marketId,
-        now,
-      );
+      const funding = fundingEngine.fundingSummary(market.marketId, now);
+      const interest = marketOpenInterest(this.executor.store, market.marketId, market.oraclePrice, {
+        requireOnchainConfirmation: this.env.settlementsOnchainRequired || Boolean(this.onchain?.enabled),
+      });
       return {
         ...market,
-        fundingRate: funding.reason ? null : funding.rate,
-        openInterest: null,
+        fundingRate: funding.rate,
+        funding,
+        openInterest: interest.baseAmount,
+        openInterestDetails: {
+          status: interest.status,
+          reason: interest.reason,
+          updatedAt: now,
+          convention: interest.convention,
+          source: interest.source,
+        },
         volume: marketExecutedVolume(this.executor.store.settlements.values(), market.marketId),
       };
     });
@@ -222,6 +234,10 @@ export class MarketsService {
       source: "hyperliquid",
       ticker: await hyperliquidTicker(),
     };
+  }
+
+  stats(marketId: string) {
+    return this.dayStats.stats(marketId);
   }
 
   async candles(input: MarketCandlesInput) {

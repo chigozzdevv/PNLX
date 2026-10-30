@@ -7,11 +7,9 @@ import {
   HistogramSeries,
   LineSeries,
   createChart,
-  type AutoscaleInfoProvider,
   type CandlestickData,
   type HistogramData,
   type IChartApi,
-  type IPriceLine,
   type ISeriesApi,
   type LineData,
   type MouseEventParams,
@@ -31,7 +29,16 @@ import {
 } from "@/lib/chart-indicators";
 import { ChartTools } from "@/components/chart-tools";
 import { chartVolumeData } from "@/lib/chart-volume";
-import { latestLogicalRange } from "@/lib/chart-range";
+import {
+  DEFAULT_BAR_SPACING,
+  MAX_BAR_SPACING,
+  MIN_BAR_SPACING,
+  RIGHT_OFFSET_BARS,
+  isFollowingLatest,
+  latestLogicalRange,
+  preserveLogicalRange,
+  zoomLogicalRange,
+} from "@/lib/chart-range";
 import { formatNumber } from "@/lib/format";
 import type { ChartCandle, MarketDisplay } from "@/types/trading";
 
@@ -40,7 +47,7 @@ export interface PriceChartProps {
   drawingScope: string;
   indicators: ChartIndicatorId[];
   market: MarketDisplay;
-  markPrice?: number;
+  onFullscreenChange?: (fullscreen: boolean) => void;
   onLoadOlder: () => Promise<void>;
 }
 
@@ -54,7 +61,6 @@ interface ChartSeries {
   bollingerMiddle?: ISeriesApi<"Line">;
   bollingerUpper?: ISeriesApi<"Line">;
   candles: ISeriesApi<"Candlestick">;
-  mark?: IPriceLine;
   ema?: ISeriesApi<"Line">;
   macd?: ISeriesApi<"Line">;
   macdHistogram?: ISeriesApi<"Histogram">;
@@ -68,24 +74,29 @@ interface ChartSeries {
 const CHART_HEIGHT = 560;
 const LOAD_MORE_THRESHOLD = 40;
 
-function chartTheme() {
+function chartTheme(container: HTMLElement) {
   const light = document.documentElement.dataset.theme === "light";
-  const line = light ? "rgba(35, 32, 28, 0.12)" : "rgba(235, 230, 220, 0.08)";
+  const style = getComputedStyle(container);
+  const token = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
+  const line = token("--line", light ? "rgba(28, 27, 24, 0.11)" : "rgba(255, 255, 255, 0.085)");
+  const muted = token("--text-muted", light ? "#626774" : "#a0a2ae");
+  const faint = token("--text-faint", light ? "#777d89" : "#777b89");
   return {
     crosshair: {
-      horzLine: { color: light ? "rgba(35, 32, 28, 0.35)" : "rgba(211, 205, 194, 0.34)", labelBackgroundColor: light ? "#5d5951" : "#3a3833" },
+      horzLine: { color: faint, labelBackgroundColor: muted },
       mode: CrosshairMode.Normal,
-      vertLine: { color: light ? "rgba(35, 32, 28, 0.28)" : "rgba(211, 205, 194, 0.28)", labelBackgroundColor: light ? "#5d5951" : "#3a3833" },
+      vertLine: { color: faint, labelBackgroundColor: muted },
     },
     grid: {
-      horzLines: { color: light ? "rgba(35, 32, 28, 0.07)" : "rgba(235, 230, 220, 0.05)" },
-      vertLines: { color: light ? "rgba(35, 32, 28, 0.055)" : "rgba(235, 230, 220, 0.04)" },
+      horzLines: { color: line },
+      vertLines: { color: line },
     },
     layout: {
       attributionLogo: true,
-      background: { color: light ? "#f6f5f2" : "#0c0c0b", type: ColorType.Solid },
-      fontFamily: "var(--font-sans), Inter, sans-serif",
-      textColor: light ? "#625e56" : "#918c83",
+      background: { color: token("--surface-page", light ? "#fafafa" : "#101114"), type: ColorType.Solid },
+      fontFamily: style.fontFamily,
+      fontSize: container.clientWidth < 600 ? 11 : 12,
+      textColor: muted,
     },
     rightPriceScale: { borderColor: line },
     timeScale: { borderColor: line },
@@ -93,7 +104,7 @@ function chartTheme() {
 }
 
 export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function PriceChart(
-  { candles, drawingScope, indicators, market, markPrice, onLoadOlder },
+  { candles, drawingScope, indicators, market, onFullscreenChange, onLoadOlder },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -102,9 +113,8 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
   const loadOlderRef = useRef(onLoadOlder);
   const candlesRef = useRef(candles);
   const indicatorsRef = useRef(indicators);
-  const markPriceRef = useRef(markPrice);
   const initialRangeSetRef = useRef(false);
-  const previousFirstTimeRef = useRef<number | undefined>(undefined);
+  const renderedCandlesRef = useRef<ChartCandle[]>([]);
   const historyRequestPendingRef = useRef(false);
   const [crosshairCandle, setCrosshairCandle] = useState<ChartCandle>();
   const [drawingSurface, setDrawingSurface] = useState<{
@@ -116,29 +126,31 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
   loadOlderRef.current = onLoadOlder;
   candlesRef.current = candles;
   indicatorsRef.current = indicators;
-  markPriceRef.current = markPrice;
 
   useImperativeHandle(ref, () => ({
     reset: () => {
       const chart = chartRef.current;
       if (!chart) return;
+      seriesRef.current?.candles.priceScale().setAutoScale(true);
       showLatestWindow(chart, candlesRef.current.filter(isValidCandle).length);
     },
     toggleFullscreen: () => {
       const panel = containerRef.current?.closest(".chart-panel") as HTMLElement | null;
       if (!panel) return;
-      panel.classList.toggle("chart-panel-expanded");
+      const expanded = panel.classList.toggle("chart-panel-expanded");
+      onFullscreenChange?.(expanded);
     },
-  }), []);
+  }), [onFullscreenChange]);
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.key !== "Escape") return;
       containerRef.current?.closest(".chart-panel")?.classList.remove("chart-panel-expanded");
+      onFullscreenChange?.(false);
     };
     document.addEventListener("keydown", handleEscape);
     return () => document.removeEventListener("keydown", handleEscape);
-  }, []);
+  }, [onFullscreenChange]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -146,9 +158,9 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
     let cleanupChart = () => undefined;
     const setupFrame = requestAnimationFrame(() => {
       initialRangeSetRef.current = false;
-      previousFirstTimeRef.current = undefined;
+      renderedCandlesRef.current = [];
       historyRequestPendingRef.current = false;
-      const theme = chartTheme();
+      const theme = chartTheme(container);
 
     const chart = createChart(container, {
       height: container.clientHeight || CHART_HEIGHT,
@@ -156,49 +168,74 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
       ...theme,
       handleScale: {
         axisDoubleClickReset: true,
-        axisPressedMouseMove: { price: true, time: false },
-        mouseWheel: true,
+        axisPressedMouseMove: { price: true, time: true },
+        mouseWheel: false,
         pinch: true,
       },
       handleScroll: {
         horzTouchDrag: true,
-        mouseWheel: true,
+        mouseWheel: false,
         pressedMouseMove: true,
-        vertTouchDrag: true,
+        vertTouchDrag: false,
       },
       localization: {
         priceFormatter: (price: number) => formatNumber(price, price < 10 ? 5 : 2),
       },
       rightPriceScale: {
         ...theme.rightPriceScale,
-        minimumWidth: 76,
+        minimumWidth: container.clientWidth < 600 ? 64 : 76,
         scaleMargins: { bottom: 0.08, top: 0.08 },
       },
       timeScale: {
         ...theme.timeScale,
-        barSpacing: 8,
-        minBarSpacing: 1.5,
-        rightOffset: 8,
+        barSpacing: DEFAULT_BAR_SPACING,
+        minBarSpacing: MIN_BAR_SPACING,
+        maxBarSpacing: MAX_BAR_SPACING,
+        rightOffset: RIGHT_OFFSET_BARS,
         secondsVisible: false,
-        shiftVisibleRangeOnNewBar: true,
+        shiftVisibleRangeOnNewBar: false,
         timeVisible: true,
       },
     });
-    const themeObserver = new MutationObserver(() => chart.applyOptions(chartTheme()));
+    const refreshTheme = () => chart.applyOptions(chartTheme(container));
+    const themeObserver = new MutationObserver(refreshTheme);
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    const themeScope = container.closest(".app-shell-trade");
+    if (themeScope) themeObserver.observe(themeScope, { attributes: true, attributeFilter: ["class", "style"] });
+    document.fonts.addEventListener("loadingdone", refreshTheme);
+
+    const interactionRoot = container.parentElement ?? container;
+    const handleWheel = (event: WheelEvent) => {
+      if (event.target instanceof Element && event.target.closest(".chart-drawing-toolbar, .chart-drawing-context")) return;
+      const scale = chart.timeScale();
+      const range = scale.getVisibleLogicalRange();
+      if (!range) return;
+      event.preventDefault();
+      const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? container.clientWidth : 1;
+      const horizontalPan = !event.ctrlKey && !event.metaKey && Math.abs(event.deltaX) > Math.abs(event.deltaY);
+      if (!horizontalPan) {
+        const width = scale.width();
+        if (width <= 0) return;
+        const x = event.clientX - container.getBoundingClientRect().left;
+        scale.setVisibleLogicalRange(zoomLogicalRange(range, Math.exp(event.deltaY * multiplier * 0.002), x / width, width));
+      } else {
+        // Keep horizontal trackpad gestures for history; vertical scrolling zooms at the pointer.
+        scale.scrollToPosition(scale.scrollPosition() + event.deltaX * multiplier / scale.options().barSpacing, false);
+      }
+    };
+    interactionRoot.addEventListener("wheel", handleWheel, { passive: false });
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      borderDownColor: "#f15367",
-      borderUpColor: "#28d58f",
-      downColor: "#f15367",
-      priceLineColor: "#f15367",
+      title: "Last",
+      borderDownColor: "#ef5350",
+      borderUpColor: "#26a69a",
+      downColor: "#ef5350",
       priceLineStyle: 2,
-      upColor: "#28d58f",
-      wickDownColor: "#f15367",
-      wickUpColor: "#28d58f",
+      upColor: "#26a69a",
+      wickDownColor: "#ef5350",
+      wickUpColor: "#26a69a",
     }, 0);
     const series: ChartSeries = { candles: candleSeries };
-    syncMarkLine(series, markPriceRef.current);
 
     const handleCrosshair = (param: MouseEventParams<Time>) => {
       const value = param.seriesData.get(candleSeries) as CandlestickData<Time> | undefined;
@@ -231,24 +268,33 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
       if (!entry || !container.isConnected) return;
       const width = Math.max(Math.floor(entry.contentRect.width), 1);
       const height = Math.max(Math.floor(entry.contentRect.height), 240);
-      chart.resize(width, height);
+      const followingLatest = renderedCandlesRef.current.length > 0 &&
+        isFollowingLatest(chart.timeScale().getVisibleLogicalRange(), renderedCandlesRef.current.length);
+      chart.applyOptions({
+        layout: { fontSize: width < 600 ? 11 : 12 },
+        rightPriceScale: { minimumWidth: width < 600 ? 64 : 76 },
+      });
+      chart.resize(width, height, true);
+      if (followingLatest) chart.timeScale().scrollToPosition(RIGHT_OFFSET_BARS, false);
     });
     resizeObserver.observe(container);
     chartRef.current = chart;
     seriesRef.current = series;
     const initialCandles = candlesRef.current.filter(isValidCandle);
     series.candles.setData(initialCandles.map(toCandlestickData));
+    renderedCandlesRef.current = initialCandles;
     syncVolumeSeries(chart, series, initialCandles);
     configureIndicators(chart, series, indicatorsRef.current, initialCandles);
     if (initialCandles.length > 0) {
       showLatestWindow(chart, initialCandles.length);
       initialRangeSetRef.current = true;
-      previousFirstTimeRef.current = Date.parse(initialCandles[0].time);
     }
     setDrawingSurface({ chart, series: candleSeries });
 
       cleanupChart = () => {
         themeObserver.disconnect();
+        document.fonts.removeEventListener("loadingdone", refreshTheme);
+        interactionRoot.removeEventListener("wheel", handleWheel);
         resizeObserver.disconnect();
         chart.unsubscribeCrosshairMove(handleCrosshair);
         chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleVisibleRange);
@@ -265,10 +311,6 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
   }, []);
 
   useEffect(() => {
-    if (seriesRef.current) syncMarkLine(seriesRef.current, markPrice);
-  }, [markPrice]);
-
-  useEffect(() => {
     const chart = chartRef.current;
     const series = seriesRef.current;
     if (!chart || !series) return;
@@ -280,28 +322,27 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
     const series = seriesRef.current;
     if (!chart || !series) return;
     const cleanCandles = candles.filter(isValidCandle);
-    const firstTime = cleanCandles[0] ? Date.parse(cleanCandles[0].time) : undefined;
-    const previousVisibleRange = chart.timeScale().getVisibleRange();
+    const previousCandles = renderedCandlesRef.current;
     const logicalRange = chart.timeScale().getVisibleLogicalRange();
-    const rangeInfo = logicalRange ? series.candles.barsInLogicalRange(logicalRange) : null;
-    const wasFollowingLatest = !rangeInfo || rangeInfo.barsAfter < 3;
-    const prependedHistory = firstTime !== undefined && previousFirstTimeRef.current !== undefined && firstTime < previousFirstTimeRef.current;
+    const nextRange = preserveLogicalRange(logicalRange, previousCandles, cleanCandles,
+      isFollowingLatest(logicalRange, previousCandles.length));
 
-    series.candles.setData(cleanCandles.map(toCandlestickData));
+    const latestOnly = previousCandles.length > 0 && cleanCandles.length >= previousCandles.length &&
+      cleanCandles.length <= previousCandles.length + 1 &&
+      previousCandles.slice(0, -1).every((candle, index) => sameCandle(candle, cleanCandles[index])) &&
+      previousCandles.at(-1)?.time === cleanCandles[previousCandles.length - 1]?.time;
+    if (latestOnly) {
+      series.candles.update(toCandlestickData(cleanCandles[previousCandles.length - 1]));
+      if (cleanCandles.length > previousCandles.length) series.candles.update(toCandlestickData(cleanCandles.at(-1)!));
+    } else series.candles.setData(cleanCandles.map(toCandlestickData));
     syncVolumeSeries(chart, series, cleanCandles);
     setIndicatorData(series, cleanCandles);
+    renderedCandlesRef.current = cleanCandles;
 
     if (!initialRangeSetRef.current && cleanCandles.length > 0) {
       showLatestWindow(chart, cleanCandles.length);
       initialRangeSetRef.current = true;
-    } else if (prependedHistory && wasFollowingLatest) {
-      showLatestWindow(chart, cleanCandles.length);
-    } else if (prependedHistory && previousVisibleRange) {
-      chart.timeScale().setVisibleRange(previousVisibleRange);
-    } else if (wasFollowingLatest) {
-      chart.timeScale().scrollToRealTime();
-    }
-    previousFirstTimeRef.current = firstTime;
+    } else if (nextRange) chart.timeScale().setVisibleLogicalRange(nextRange);
   }, [candles]);
 
   const legendCandle = crosshairCandle ?? candles.at(-1);
@@ -312,7 +353,7 @@ export const PriceChart = forwardRef<PriceChartHandle, PriceChartProps>(function
     <div className="chart-canvas professional-chart">
       <div className="professional-chart-surface" ref={containerRef} />
       {legendCandle ? (
-        <div className="professional-chart-legend" aria-live="polite">
+        <div className="professional-chart-legend" aria-live="polite" title="Reference candles: Hyperliquid.">
           <strong>{market.pair}</strong>
           <span>O <b>{chartPrice(legendCandle.open)}</b></span>
           <span>H <b>{chartPrice(legendCandle.high)}</b></span>
@@ -374,28 +415,6 @@ function syncVolumeSeries(
     time: toTime(point.time),
     value: point.value,
   })));
-}
-
-function syncMarkLine(series: ChartSeries, price?: number): void {
-  const validPrice = price !== undefined && Number.isFinite(price) && price > 0;
-  const autoscaleInfoProvider: AutoscaleInfoProvider | undefined = validPrice ? (base) => {
-    const range = base();
-    if (!range?.priceRange) return range;
-    return { ...range, priceRange: {
-      minValue: Math.min(range.priceRange.minValue, price),
-      maxValue: Math.max(range.priceRange.maxValue, price),
-    } };
-  } : undefined;
-  series.candles.applyOptions({ autoscaleInfoProvider });
-  if (price === undefined || !Number.isFinite(price) || price <= 0) {
-    if (series.mark) series.candles.removePriceLine(series.mark);
-    series.mark = undefined;
-    return;
-  }
-  if (series.mark) series.mark.applyOptions({ price });
-  else series.mark = series.candles.createPriceLine({
-    price, title: "Mark", color: "#ff7a32", lineWidth: 1, lineStyle: 2, axisLabelVisible: true,
-  });
 }
 
 function configureIndicators(
@@ -534,6 +553,11 @@ function chartPrice(value: number): string {
 }
 
 function showLatestWindow(chart: IChartApi, candleCount: number): void {
-  const range = latestLogicalRange(candleCount);
+  const range = latestLogicalRange(candleCount, chart.timeScale().width());
   if (range) chart.timeScale().setVisibleLogicalRange(range);
+}
+
+function sameCandle(a: ChartCandle, b: ChartCandle | undefined): boolean {
+  return Boolean(b && a.time === b.time && a.open === b.open && a.high === b.high &&
+    a.low === b.low && a.close === b.close && a.volume === b.volume && a.trades === b.trades);
 }

@@ -20,10 +20,35 @@ export interface ServerProofMeta {
   vkHash?: Hex;
 }
 
+export interface ServerMarketFunding {
+  rate?: string | null;
+  status: "ready" | "warming" | "stale";
+  settlementStatus: "running" | "paused" | "blocked";
+  source: "fixed" | "impact-twap";
+  intervalMs: number;
+  sampleCount: number;
+  minimumSamples: number;
+  sampledAt: number | null;
+  nextFundingAt: number | null;
+}
+
+export interface MarketOpenInterestDetails {
+  status: "available" | "incomplete";
+  reason?: string;
+  updatedAt: number;
+  convention: "half-gross-base";
+}
+
+export interface MarketFundingDisplay extends Omit<ServerMarketFunding, "rate"> {
+  rate: number | null;
+}
+
 export interface ServerMarketConfig {
+  funding?: ServerMarketFunding;
   fundingRate?: string | null;
   marketId: string;
   openInterest?: string | null;
+  openInterestDetails?: MarketOpenInterestDetails;
   oraclePrice: string;
   maxLeverage: string;
   initialMarginRate: string;
@@ -190,7 +215,9 @@ export interface MarketDisplay {
   markPrice?: number;
   change24h: number;
   fundingRate: number | null;
+  funding?: MarketFundingDisplay;
   openInterest: number | null;
+  openInterestDetails?: MarketOpenInterestDetails;
   volume: number;
   fundingIndex: string;
   maxLeverage: number;
@@ -198,6 +225,21 @@ export interface MarketDisplay {
   maintenanceMarginRate: number;
   status: "live" | "settling" | "paused";
   volume24h?: number;
+}
+
+export interface MarketDayStats {
+  marketId: string;
+  source: "hyperliquid";
+  interval: "1m";
+  from: number;
+  asOf: number;
+  fetchedAt: number;
+  change24h: number;
+  high24h: number;
+  low24h: number;
+  open24h: number;
+  lastPrice: number;
+  stale: boolean;
 }
 
 export interface ChartCandle {
