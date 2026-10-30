@@ -150,14 +150,17 @@ export function PositionsTable({
       >
         {!connected ? (
           <div className="trade-records-empty">
-            <button
-              className="page-action-secondary"
-              disabled={connecting}
-              onClick={() => void onConnect()}
-              type="button"
-            >
-              {connecting ? "Connecting…" : "Connect wallet"}
-            </button>
+            <span>
+              <button
+                className="trade-records-connect"
+                disabled={connecting}
+                onClick={() => void onConnect()}
+                type="button"
+              >
+                {connecting ? "Connecting wallet…" : "Connect wallet"}
+              </button>
+              {connecting ? null : ` to see ${view}`}
+            </span>
           </div>
         ) : unavailable ? (
           <div className="trade-records-empty" role="status">

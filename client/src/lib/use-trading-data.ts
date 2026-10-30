@@ -25,6 +25,7 @@ import {
 } from "@/lib/private-margin-notes";
 import { priceFromOracleString, rateFromMicroBps } from "@/lib/format";
 import { walletTradedVolumeUsd } from "@/lib/wallet-volume";
+import { groupOwnerOrders, isActiveOrderGroup } from "@/lib/order-groups";
 import type {
   AccountSnapshot,
   Hex,
@@ -79,6 +80,64 @@ const MARKET_SUMMARY_REFRESH_MS = 15_000;
 const PRIVATE_OPENING_RECOVERY_PREFIX = "pnlx.account-key-opening-recovery.v2";
 const SUPPORTED_MARKET_ORDER = ["btc-usd-perp", "eth-usd-perp", "xlm-usd-perp", "sol-usd-perp", "xrp-usd-perp"];
 const SUPPORTED_MARKET_IDS = new Set(SUPPORTED_MARKET_ORDER);
+const ACCOUNT_REFRESH_MS = 15_000;
+
+export function createTradingDataRefresh(
+  load: () => Promise<TradingLiveData>,
+  onData: (data: TradingLiveData) => void,
+  onError: (error: unknown) => void,
+  options: {
+    autoRefresh?: boolean;
+    isVisible?: () => boolean;
+    schedule?: (callback: () => void, delayMs: number) => () => void;
+  } = {},
+) {
+  let active = true;
+  let pending: Promise<void> | undefined;
+  let needsRefresh = true;
+  let cancelScheduled: (() => void) | undefined;
+  const visible = options.isVisible ?? (() => true);
+  const schedule = options.schedule ?? ((callback, delayMs) => {
+    const timer = globalThis.setTimeout(callback, delayMs);
+    return () => globalThis.clearTimeout(timer);
+  });
+  function clearScheduled() {
+    cancelScheduled?.();
+    cancelScheduled = undefined;
+  }
+  function refresh(): Promise<void> {
+    if (!active) return Promise.resolve();
+    if (pending) return pending;
+    clearScheduled();
+    pending = Promise.resolve().then(load).then((data) => {
+      if (!active) return;
+      needsRefresh = data.account.pendingShieldedUsdc > 0 || groupOwnerOrders(data.orders).some(isActiveOrderGroup);
+      onData(data);
+    }).catch((error: unknown) => {
+      if (active) onError(error);
+    }).finally(() => {
+      pending = undefined;
+      if (active && options.autoRefresh && needsRefresh && visible()) {
+        cancelScheduled = schedule(() => {
+          cancelScheduled = undefined;
+          if (visible()) void refresh();
+        }, ACCOUNT_REFRESH_MS);
+      }
+    });
+    return pending;
+  }
+  return {
+    refresh,
+    visibilityChanged() {
+      clearScheduled();
+      if (options.autoRefresh && needsRefresh && visible()) void refresh();
+    },
+    dispose() {
+      active = false;
+      clearScheduled();
+    },
+  };
+}
 
 export function selectTradeMarkets(markets: readonly MarketDisplay[]): MarketDisplay[] {
   return markets.filter((market) => market.marketId === "xlm-usd-perp");
@@ -129,7 +188,13 @@ export function applyMarketSummaries(
   return { ...data, markets };
 }
 
-export function useTradingData(session: WalletSession | null, refreshKey = 0, watchedMarketId?: string): TradingDataState {
+export function useTradingData(
+  session: WalletSession | null,
+  refreshKey = 0,
+  watchedMarketId?: string,
+  options: { autoRefresh?: boolean } = {},
+): TradingDataState {
+  const autoRefresh = Boolean(session && options.autoRefresh);
   const emptyData = useMemo(() => emptyLiveData(session), [session]);
   const [privateNotesVersion, setPrivateNotesVersion] = useState(0);
   const latestOnchainMarks = useRef(new Map<string, { price?: bigint; receivedAt: number }>());
@@ -152,26 +217,32 @@ export function useTradingData(session: WalletSession | null, refreshKey = 0, wa
   }, []);
 
   useEffect(() => {
-    let active = true;
-
-    loadTradingData(session)
-      .then((data) => {
-        if (!active) return;
+    const refresh = createTradingDataRefresh(
+      () => loadTradingData(session),
+      (data) => {
         setState({ data: applyLatestOnchainMarks(data, latestOnchainMarks.current), loading: false });
-      })
-      .catch((error) => {
-        if (!active) return;
+      },
+      (error) => {
         setState({
           data: emptyData,
           error: error instanceof Error ? error.message : "Unable to load PNLX trading data",
           loading: false,
         });
-      });
+      },
+      { autoRefresh, isVisible: () => document.visibilityState !== "hidden" },
+    );
+    if (!autoRefresh || document.visibilityState !== "hidden") void refresh.refresh();
+    if (autoRefresh) {
+      window.addEventListener("focus", refresh.visibilityChanged);
+      document.addEventListener("visibilitychange", refresh.visibilityChanged);
+    }
 
     return () => {
-      active = false;
+      refresh.dispose();
+      window.removeEventListener("focus", refresh.visibilityChanged);
+      document.removeEventListener("visibilitychange", refresh.visibilityChanged);
     };
-  }, [emptyData, privateNotesVersion, refreshKey, session]);
+  }, [autoRefresh, emptyData, privateNotesVersion, refreshKey, session]);
 
   useEffect(() => {
     if (!watchedMarketId) return;

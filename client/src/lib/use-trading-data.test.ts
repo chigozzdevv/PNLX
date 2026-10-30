@@ -6,9 +6,11 @@ import {
   applyLatestOnchainMarks,
   applyMarketSummaries,
   createMarketSummaryRefresh,
+  createTradingDataRefresh,
   selectTradeMarkets,
 } from "@/lib/use-trading-data";
 import type { MarketDisplay, ServerMarketConfig, TradingLiveData } from "@/types/trading";
+import { emptyLiquidityAccount } from "@/lib/liquidity-account";
 
 const now = 1_000_000;
 const market = { marketId: "xlm-usd-perp", price: 0.21, pair: "XLM/USD", baseAsset: "XLM", quoteAsset: "USD",
@@ -199,6 +201,155 @@ describe("public market summary refresh", () => {
     expect(delivered).toEqual([]);
     await refresh.refresh();
     expect(delivered).toEqual([[summary]]);
+    refresh.dispose();
+  });
+});
+
+function accountData(pending = 0): TradingLiveData {
+  return { ...data(), account: { ...emptyLiquidityAccount, pendingShieldedUsdc: pending }, orders: [] };
+}
+
+function refreshClock() {
+  const callbacks = new Map<number, () => void>();
+  const delays: number[] = [];
+  let id = 0;
+  return {
+    callbacks, delays,
+    schedule(callback: () => void, delay: number) {
+      const current = ++id;
+      callbacks.set(current, callback);
+      delays.push(delay);
+      return () => { callbacks.delete(current); };
+    },
+    fire() {
+      const [current, callback] = [...callbacks.entries()][0];
+      callbacks.delete(current);
+      callback();
+    },
+  };
+}
+
+describe("pending account refresh", () => {
+  test("coalesces focus events and schedules only after the full slow request completes", async () => {
+    const clock = refreshClock();
+    let calls = 0;
+    let resolve!: (value: TradingLiveData) => void;
+    const snapshot = accountData();
+    snapshot.orders.push({ batchId: "ui-pending-1", createdAt: 1, updatedAt: 1, intentCommitment: "0x01",
+      isResidual: false, marketId: market.marketId, matchingPayloadCommitment: "0x02", status: "open",
+      matching: { state: "proving", message: "Preparing settlement" } });
+    const refresh = createTradingDataRefresh(() => {
+      calls++;
+      return new Promise((done) => { resolve = done; });
+    }, () => undefined, () => undefined, { autoRefresh: true, schedule: clock.schedule });
+    const first = refresh.refresh();
+    expect(refresh.refresh()).toBe(first);
+    refresh.visibilityChanged();
+    refresh.visibilityChanged();
+    await Promise.resolve();
+    expect(calls).toBe(1);
+    expect(clock.callbacks.size).toBe(0);
+    resolve(snapshot);
+    await first;
+    expect(clock.delays).toEqual([15_000]);
+    clock.fire();
+    const second = refresh.refresh();
+    await Promise.resolve();
+    expect(calls).toBe(2);
+    expect(clock.callbacks.size).toBe(0);
+    resolve(accountData());
+    await second;
+    expect(clock.callbacks.size).toBe(0);
+    refresh.dispose();
+  });
+
+  test("pauses while hidden, resumes pending collateral on visibility or focus, and disposes its timer", async () => {
+    const clock = refreshClock();
+    let visible = true, calls = 0;
+    const refresh = createTradingDataRefresh(async () => { calls++; return accountData(36.43); },
+      () => undefined, () => undefined,
+      { autoRefresh: true, isVisible: () => visible, schedule: clock.schedule });
+    await refresh.refresh();
+    expect(clock.callbacks.size).toBe(1);
+    visible = false;
+    refresh.visibilityChanged();
+    refresh.visibilityChanged();
+    expect(clock.callbacks.size).toBe(0);
+    expect(calls).toBe(1);
+    visible = true;
+    refresh.visibilityChanged();
+    await refresh.refresh();
+    expect(calls).toBe(2);
+    expect(clock.callbacks.size).toBe(1);
+    refresh.dispose();
+    expect(clock.callbacks.size).toBe(0);
+    await refresh.refresh();
+    expect(calls).toBe(2);
+  });
+
+  test("never applies or schedules an old owner's late result after disposal", async () => {
+    const clock = refreshClock();
+    let resolve!: (value: TradingLiveData) => void;
+    const delivered: string[] = [];
+    const old = createTradingDataRefresh(() => new Promise((done) => { resolve = done; }),
+      (value) => delivered.push(value.account.address), () => undefined,
+      { autoRefresh: true, schedule: clock.schedule });
+    const pending = old.refresh();
+    await Promise.resolve();
+    old.dispose();
+    const currentData = accountData(); currentData.account.address = "new-owner";
+    const current = createTradingDataRefresh(async () => currentData,
+      (value) => delivered.push(value.account.address), () => undefined, { autoRefresh: true, schedule: clock.schedule });
+    await current.refresh();
+    const oldData = accountData(36.43); oldData.account.address = "old-owner";
+    resolve(oldData);
+    await pending;
+    expect(delivered).toEqual(["new-owner"]);
+    expect(clock.callbacks.size).toBe(0);
+    current.dispose();
+  });
+
+  test("retries a failed pending snapshot and stops after a successful settled snapshot", async () => {
+    const clock = refreshClock();
+    let calls = 0, errors = 0;
+    const refresh = createTradingDataRefresh(async () => {
+      if (++calls === 1) throw new Error("offline");
+      return accountData();
+    }, () => undefined, () => { errors++; }, { autoRefresh: true, schedule: clock.schedule });
+    await refresh.refresh();
+    expect(errors).toBe(1);
+    expect(clock.callbacks.size).toBe(1);
+    clock.fire();
+    await refresh.refresh();
+    expect(calls).toBe(2);
+    expect(clock.callbacks.size).toBe(0);
+    refresh.dispose();
+  });
+
+  test("completed residual leaves stop polling despite the historical partial source status", async () => {
+    const clock = refreshClock();
+    const snapshot = accountData();
+    const source = { batchId: "source", createdAt: 1, updatedAt: 2, intentCommitment: "0x01" as const,
+      isResidual: false, marketId: market.marketId, matchingPayloadCommitment: "0x02" as const, status: "partially-filled" as const,
+      matching: { state: "settled" as const, message: "Settled" } };
+    snapshot.orders.push(source, { ...source, batchId: "residual", intentCommitment: "0x03", isResidual: true,
+      sourceIntentCommitment: source.intentCommitment, status: "filled" });
+    const refresh = createTradingDataRefresh(async () => snapshot, () => undefined, () => undefined,
+      { autoRefresh: true, schedule: clock.schedule });
+    await refresh.refresh();
+    expect(clock.callbacks.size).toBe(0);
+    refresh.dispose();
+  });
+
+  test("other hook users keep their one-shot account loading behavior", async () => {
+    const clock = refreshClock();
+    let calls = 0;
+    const refresh = createTradingDataRefresh(async () => { calls++; return accountData(36.43); },
+      () => undefined, () => undefined, { schedule: clock.schedule });
+    await refresh.refresh();
+    refresh.visibilityChanged();
+    expect(calls).toBe(1);
+    expect(clock.callbacks.size).toBe(0);
     refresh.dispose();
   });
 });

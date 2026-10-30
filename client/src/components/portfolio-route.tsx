@@ -38,7 +38,7 @@ export function PortfolioRoute() {
   const [positionActionMessage, setPositionActionMessage] = useState<
     { tone: "error" | "success"; text: string } | undefined
   >();
-  const trading = useTradingData(wallet.session, refreshKey);
+  const trading = useTradingData(wallet.session, refreshKey, undefined, { autoRefresh: true });
   const accountLoading = trading.loading || Boolean(wallet.session && trading.data.account.address !== wallet.session.address);
   const withdrawableNotes: ManageFundsBalance[] = wallet.session
     ? privateMarginNotes(wallet.session.ownerCommitment)

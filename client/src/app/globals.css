@@ -1436,32 +1436,54 @@ button:disabled {
 .action-toast {
   position: fixed;
   right: 18px;
-  bottom: 52px;
+  bottom: max(18px, env(safe-area-inset-bottom));
   z-index: 10000;
-  display: inline-flex;
-  min-height: 42px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 32px;
+  max-width: min(360px, calc(100vw - 32px));
+  min-height: 46px;
   align-items: center;
-  gap: 9px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #121312;
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3);
-  padding: 0 14px 0 11px;
+  gap: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+  padding: 7px 7px 7px 12px;
   color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 500;
   animation: action-toast-enter 160ms ease-out both;
 }
 
 .action-toast-icon {
   display: grid;
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   place-items: center;
   border-radius: 50%;
-  background: rgba(121, 184, 159, 0.12);
-  color: #79b89f;
+  color: var(--accent-green);
 }
+
+.action-toast-message {
+  min-width: 0;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.action-toast-close {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.action-toast-close:hover { background: var(--surface-hover); color: var(--text-primary); }
+.action-toast-close:focus-visible { outline: 1px solid var(--text-muted); outline-offset: 1px; }
 
 @keyframes action-toast-enter {
   from {
@@ -1472,6 +1494,10 @@ button:disabled {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .action-toast { animation: none; }
 }
 
 .positions-panel {
@@ -3775,10 +3801,13 @@ button:disabled {
 @media (max-width: 640px) {
   .action-toast {
     right: 12px;
-    bottom: 48px;
+    bottom: max(12px, env(safe-area-inset-bottom));
     left: 12px;
-    justify-content: center;
+    grid-template-columns: 18px minmax(0, 1fr) 36px;
+    max-width: none;
   }
+
+  .action-toast-close { width: 36px; height: 36px; }
 
   .header-controls {
     position: static;
@@ -6606,6 +6635,15 @@ button:disabled {
 
 .trade-records-empty span {
   font-size: 11px;
+}
+
+.trade-records-connect {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
 }
 
 @media (max-width: 1280px) {

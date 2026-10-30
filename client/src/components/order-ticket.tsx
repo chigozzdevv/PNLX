@@ -70,7 +70,6 @@ export function OrderTicket({
   const [conditionMode, setConditionMode] = useState<ConditionMode>("price");
   const conditionSectionId = useId();
   const [submitError, setSubmitError] = useState<string | undefined>();
-  const [submitStage, setSubmitStage] = useState<TradeSubmitStage | undefined>();
   const [submitSuccess, setSubmitSuccess] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
   const [depositing, setDepositing] = useState(false);
@@ -202,7 +201,6 @@ export function OrderTicket({
 
     setSubmitError(undefined);
     setSubmitSuccess(undefined);
-    setSubmitStage("hashing");
     setSubmitting(true);
     try {
       await onSubmit({
@@ -210,17 +208,14 @@ export function OrderTicket({
         leverage,
         limitPrice: executionLimitPrice,
         margin,
-        onProgress: setSubmitStage,
         orderType,
         side,
         sizingPrice,
         stopLossPrice: tpSlEnabled ? stopLossPrice : null,
         takeProfitPrice: tpSlEnabled ? takeProfitPrice : null,
       });
-      setSubmitStage(undefined);
       setSubmitSuccess("Order submitted");
     } catch (error) {
-      setSubmitStage(undefined);
       setSubmitError(error instanceof Error ? error.message : "Trade submission failed");
     } finally {
       setSubmitting(false);
@@ -252,19 +247,15 @@ export function OrderTicket({
 
     setSubmitError(undefined);
     setSubmitSuccess(undefined);
-    setSubmitStage(undefined);
     setDepositing(true);
     try {
       await onDeposit({
         amount,
         collateralAsset: order.collateralAsset,
-        onProgress: setSubmitStage,
       });
-      setSubmitStage(undefined);
       onModeChange("trade");
       setSubmitSuccess(`${formatUsd(amount, { maximumFractionDigits: 2 })} deposited`);
     } catch (error) {
-      setSubmitStage(undefined);
       setSubmitError(error instanceof Error ? error.message : "Deposit failed");
     } finally {
       setDepositing(false);
@@ -326,6 +317,7 @@ export function OrderTicket({
 
           <button
             className="primary-trade-button"
+            aria-busy={depositing}
             data-side="long"
             disabled={connecting || (connected ? !canDeposit : !onConnect)}
             type="button"
@@ -333,8 +325,6 @@ export function OrderTicket({
           >
             {connecting ? "Connecting…" : !connected ? "Connect Wallet" : depositing ? "Depositing" : "Deposit"}
           </button>
-
-          <TradeProgress depositing={depositing} stage={submitStage} />
 
           {ticketError ? (
             <p className="ticket-message ticket-message-error" role="alert" title={ticketError}>
@@ -546,6 +536,7 @@ export function OrderTicket({
       <div className="ticket-primary-area">
         <button
           className="primary-trade-button"
+          aria-busy={primaryBusy}
           data-side={side}
           disabled={primaryDisabled}
           type="button"
@@ -565,8 +556,6 @@ export function OrderTicket({
         </button>
       </div>
 
-      <TradeProgress depositing={depositing} stage={submitStage} />
-
       {ticketError ? (
         <p className="ticket-message ticket-message-error" role="alert" title={ticketError}>
           {ticketError}
@@ -577,51 +566,6 @@ export function OrderTicket({
       <ActionToast message={submitSuccess} onDismiss={() => setSubmitSuccess(undefined)} />
     </section>
   );
-}
-
-function TradeProgress({ depositing, stage }: { depositing: boolean; stage?: TradeSubmitStage }) {
-  if (!stage) return null;
-  const label = progressLabel(stage, depositing);
-
-  return (
-    <p className="ticket-message ticket-message-status" aria-live="polite">
-      {label}
-    </p>
-  );
-}
-
-function progressLabel(stage: TradeSubmitStage, depositing: boolean): string {
-  if (stage === "done") return depositing ? "Deposit confirmed" : "Order queued for matching";
-  if (depositing) {
-    switch (stage) {
-      case "shielding":
-        return "Creating shielded note";
-      case "signing":
-        return "Waiting for wallet signature";
-      case "proving":
-        return "Preparing deposit proof";
-      case "matching":
-        return "Finalizing deposit";
-      case "hashing":
-      default:
-        return "Preparing deposit";
-    }
-  }
-
-  switch (stage) {
-    case "hashing":
-      return "Preparing private order";
-    case "shielding":
-      return "Selecting private margin";
-    case "signing":
-      return "Waiting for wallet signature";
-    case "proving":
-      return "Generating validity proof";
-    case "matching":
-      return "Submitting private order";
-    default:
-      return "Submitting private order";
-  }
 }
 
 function ConditionInput({
