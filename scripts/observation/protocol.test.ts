@@ -12,7 +12,7 @@ const ASSET: Hex = fieldHex(456n);
 const TX: Hex = `0x${"12".repeat(32)}`;
 const CLOSE_TX: Hex = `0x${"34".repeat(32)}`;
 const ROOT: Hex = fieldHex(789n);
-const SPEC: OpenSpec = { id: "cycle-001", marketId: "btc-usd-perp", side: "long", margin: "100000000", leverage: 3 };
+const SPEC: OpenSpec = { id: "cycle-001", marketId: "xlm-usd-perp", side: "long", margin: "100000000", leverage: 3 };
 const identity: ProtocolIdentity = { source: "observation-trader", address: ADDRESS,
   signMessage: async () => "signed-message", signTransaction: async () => "c2lnbmVk" };
 
@@ -47,7 +47,7 @@ function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCance
       if (body) registeredKey = body;
       return respond({ accountKey: registeredKey });
     }
-    if (path === "/markets") return respond({ markets: [{ marketId: SPEC.marketId, maxLeverage: "10", initialMarginRate: "100000", oraclePrice: "10000000000000", fundingIndex: "4" }] });
+    if (path === "/markets") return respond({ markets: [{ marketId: SPEC.marketId, maxLeverage: "10", initialMarginRate: "100000", oraclePrice: "20000000", fundingIndex: "4" }] });
     if (path === "/notes/membership") {
       const commitment = parsed.searchParams.get("commitment");
       return respond({ note: { commitment, membershipRoot: ROOT, membershipProof: { leaf: commitment, root: ROOT, indices: [], siblings: [] } } });
@@ -86,7 +86,7 @@ function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCance
       return respond({ amount: body.depositProof.amount, commitment: body.depositProof.commitment, claimTxHash: CLOSE_TX });
     }
     if (path === "/notes/recovery-status") return respond({ notes: body.notes.map((note: any) => ({ commitment: note.commitment, known: true, spent: false })) });
-    if (path === "/position-closes/context") return respond({ context: { payoutAmount: "99990000", market: { marketId: SPEC.marketId, markPrice: "10000000000000", fundingIndex: "4" },
+    if (path === "/position-closes/context") return respond({ context: { payoutAmount: "99990000", market: { marketId: SPEC.marketId, markPrice: "20000000", fundingIndex: "4" },
       positionRoot: ROOT, membershipProof: { leaf: parsed.searchParams.get("positionCommitment"), root: ROOT, indices: [], siblings: [] } } });
     if (path === "/position-closes/manual") {
       closePosts++; lastClose = body;
@@ -121,7 +121,7 @@ function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCance
   const adapter = make();
   const addOpening = () => {
     const cycle = saved!.cycles[SPEC.id]!;
-    const opening = { entryFee: "10000", entryPrice: "10000000000000", fundingIndex: "4", margin: "99990000",
+    const opening = { entryFee: "10000", entryPrice: "20000000", fundingIndex: "4", margin: "99990000",
       marketId: SPEC.marketId, positionCommitment: "0x0" as Hex, positionNullifier: "0x0" as Hex,
       ownerDigest: seed.notes[0]!.ownerDigest, positionSeed: fieldHex(444n), fillIndex: 0,
       side: SPEC.side, size: cycle.intent.size, sourceIntentCommitment: cycle.intentCommitment };
@@ -153,7 +153,7 @@ function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCance
   const addUnmatched = () => {
     const cycle = saved!.cycles[SPEC.id]!;
     portfolio.orders = [{ batchId: cycle.intent.batchId, createdAt: Date.now(), updatedAt: Date.now(),
-      intentCommitment: cycle.intentCommitment, marketId: SPEC.marketId, status: "open", isResidual: false,
+      intentCommitment: cycle.intentCommitment, marketId: cycle.spec.marketId, status: "open", isResidual: false,
       matching: { state: "waiting-liquidity", status: "skipped" } }];
   };
   const addResidual = () => {
@@ -179,12 +179,14 @@ describe("real observation protocol adapter safety", () => {
 
   test("enforces the approved market/margin/leverage scope and fee-aware size", async () => {
     const f = fixture();
-    await expect(f.adapter.prepareOpen({ ...SPEC, marketId: "sol-usd-perp" })).rejects.toThrow("BTC, ETH or XLM");
+    for (const marketId of ["btc-usd-perp", "eth-usd-perp", "sol-usd-perp"]) {
+      await expect(f.adapter.prepareOpen({ ...SPEC, marketId })).rejects.toThrow("only XLM/USD");
+    }
     await expect(f.adapter.prepareOpen({ ...SPEC, margin: "10000000000" })).rejects.toThrow("10, 25, 50 or 100");
     await expect(f.adapter.prepareOpen({ ...SPEC, leverage: 10 })).rejects.toThrow("approved sequence");
     const cycle = await f.adapter.prepareOpen(SPEC);
     expect(cycle.phase).toBe("ready");
-    expect(BigInt(cycle.intent.size)).toBe(observationOrderSize(100_000_000n, 3, 10_100_000_000_000n));
+    expect(BigInt(cycle.intent.size)).toBe(observationOrderSize(100_000_000n, 3, 20_200_000n));
     expect(BigInt(cycle.intent.size) * BigInt(cycle.intent.limitPrice) / 100_000_000n).toBeLessThan(300_000_000n);
     expect(f.calls.some((call) => ["/markets/update", "/markets/oracle", "/batches/settle"].includes(call.path))).toBe(false);
   });
@@ -228,7 +230,7 @@ describe("real observation protocol adapter safety", () => {
     const f = fixture({ loseClose: true });
     await f.adapter.prepareOpen(SPEC); await f.adapter.open(SPEC.id); f.addOpening(); await f.adapter.pollOpen(SPEC.id);
     const prepared = await f.adapter.prepareClose(SPEC.id);
-    expect(prepared.positions[0]!.closes[0]!.markPrice).toBe("10000000000000");
+    expect(prepared.positions[0]!.closes[0]!.markPrice).toBe("20000000");
     await f.adapter.close(SPEC.id);
     expect(f.saved.cycles[SPEC.id]!.positions[0]!.closes[0]!.phase).toBe("uncertain");
     const restarted = f.make(f.saved);
@@ -271,6 +273,30 @@ describe("real observation protocol adapter safety", () => {
     expect(f.saved.notes[0]!.status).toBe("available");
     expect(f.saved.notes.find((note) => note.commitment === cancelled.changeCommitment)!.status).toBe("spent");
     expect(f.cancelPosts).toBe(1);
+  });
+
+  test("XLM-only new-order guard leaves an existing BTC pilot state cancellable and recoverable", async () => {
+    const f = fixture();
+    await f.adapter.prepareOpen(SPEC); await f.adapter.open(SPEC.id);
+    // Restore the shape of the already accepted BTC pilot; new preparation is
+    // prohibited, while recovery must continue to use its saved commitment.
+    const legacy = f.saved;
+    const cycle = legacy.cycles[SPEC.id]!;
+    const oldCommitment = cycle.intentCommitment;
+    cycle.spec.marketId = "btc-usd-perp"; cycle.intent.marketId = "btc-usd-perp";
+    cycle.intentCommitment = commitIntent({ ...cycle.intent, limitPrice: BigInt(cycle.intent.limitPrice),
+      margin: BigInt(cycle.intent.margin), size: BigInt(cycle.intent.size) } as TradeIntent);
+    cycle.validity!.intentCommitment = cycle.intentCommitment;
+    for (const note of legacy.notes) if (note.lockedByIntentCommitment === oldCommitment) note.lockedByIntentCommitment = cycle.intentCommitment;
+    f.addUnmatched();
+    const restored = f.make(legacy);
+    const cancelled = await restored.cancelOpen(SPEC.id);
+    expect(cancelled.spec.marketId).toBe("btc-usd-perp");
+    expect(cancelled.phase).toBe("cancelled");
+    expect(cancelled.cashReconciled).toBe(true);
+    expect(f.saved.notes[0]!.status).toBe("available");
+    expect(f.cancelPosts).toBe(1);
+    expect(f.intentPosts).toBe(1); // Recovery never opens another order.
   });
 
   test("uncertain cancellation is observation-only across restart until the saved order confirms", async () => {

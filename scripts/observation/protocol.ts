@@ -259,7 +259,7 @@ export class ObservationProtocol {
     return this.exclusive(async () => {
       validateId(spec.id); positive(spec.margin, "margin");
       if (!["100000000", "250000000", "500000000", "1000000000"].includes(spec.margin)) throw new Error("Observation margin must be 10, 25, 50 or 100 USDC");
-      if (!["btc-usd-perp", "eth-usd-perp", "xlm-usd-perp"].includes(spec.marketId)) throw new Error("Observation market must be BTC, ETH or XLM");
+      if (spec.marketId !== "xlm-usd-perp") throw new Error("Observation supports only XLM/USD");
       if (!Number.isInteger(spec.leverage) || ![1, 2, 3, 5, 8].includes(spec.leverage)) throw new Error("Observation leverage is outside the approved sequence");
       if (!["long", "short"].includes(spec.side)) throw new Error("Invalid trade side");
       const slippage = spec.limitSlippageBps ?? 100;

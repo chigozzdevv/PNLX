@@ -56,7 +56,7 @@ describe("observation campaign plan", () => {
       expect(cycles.filter((cycle) => cycle.side === "long")).toHaveLength(10);
       expect(cycles.filter((cycle) => cycle.side === "short")).toHaveLength(10);
       for (const market of OBSERVATION_MARKETS) {
-        expect([6, 7]).toContain(cycles.filter((cycle) => cycle.market === market).length);
+        expect(cycles.filter((cycle) => cycle.market === market)).toHaveLength(20);
         for (const side of ["long", "short"]) {
           expect(cycles.some((cycle) => cycle.market === market && cycle.side === side)).toBe(true);
         }

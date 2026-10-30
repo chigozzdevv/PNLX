@@ -38,7 +38,7 @@ export const PNLX_EMAIL_FROM = "PNLX <pnlx.updates@muwa.io>";
 const RESEND_API = "https://api.resend.com";
 const REQUEST_TIMEOUT_MS = 15_000;
 const colors = {
-  header: "#0c0c0b", panel: "#171613", accent: "#ff6b22", ink: "#ebe6dc",
+  header: "#0c0c0b", accent: "#ff6b22", ink: "#ebe6dc",
   muted: "#a49f95", border: "#302e28", background: "#0c0c0b",
   positive: "#27d68b", negative: "#ef4560",
 };
@@ -123,7 +123,7 @@ export function renderExecutionEmail(data: ExecutionEmailData): { subject: strin
   const message = publicText(data.message, 320);
   const pnl = publicText(data.pnl);
   const subject = ["PNLX", title, market].filter(Boolean).join(" · ");
-  const details: Row[] = [];
+  const details: Row[] = [{ label: "Network", value: "Testnet" }];
   addRow(details, "Side", data.side);
   addRow(details, "Margin", data.margin);
   addRow(details, "Leverage", typeof data.leverage === "number" ? (Number.isFinite(data.leverage) ? `${data.leverage}×` : undefined) : data.leverage);
@@ -171,13 +171,13 @@ export function renderExecutionEmail(data: ExecutionEmailData): { subject: strin
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>${escapeHtml(subject)}</title><style>@media only screen and (max-width:480px){.pad{padding-left:20px!important;padding-right:20px!important}}</style></head>
 <body style="margin:0;padding:0;background:${colors.background};color:${colors.ink};font-family:Arial,Helvetica,sans-serif;">
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="${colors.background}"><tr><td align="center" style="padding:24px 12px;"><table role="presentation" width="560" cellspacing="0" cellpadding="0" border="0" bgcolor="${colors.panel}" style="width:100%;max-width:560px;background:${colors.panel};border:1px solid ${colors.border};">
-<tr><td class="pad" style="padding:26px 28px 22px;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr><td><img src="cid:pnlx-logo" alt="PNLX" width="108" height="20" style="display:block;width:108px;height:20px;border:0;"></td><td align="right" style="color:${colors.muted};font-size:11px;">Testnet</td></tr></table></td></tr>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="${colors.background}"><tr><td align="center" style="padding:32px 16px;"><table role="presentation" width="400" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:400px;">
+<tr><td class="pad" style="padding:26px 28px 22px;"><img src="cid:pnlx-logo" alt="PNLX" width="108" height="20" style="display:block;width:108px;height:20px;border:0;"></td></tr>
 <tr><td class="pad" style="padding:0 28px;"><h1 style="margin:0;color:${colors.ink};font-size:24px;line-height:32px;font-weight:600;">${escapeHtml(title)}</h1>${market ? `<p style="margin:7px 0 0;color:${colors.accent};font-size:14px;line-height:21px;">${escapeHtml(market)}</p>` : ""}${result}${intro ? `<p style="margin:12px 0 0;color:${colors.muted};font-size:14px;line-height:22px;">${escapeHtml(intro)}</p>` : ""}</td></tr>
 ${section("", details)}${section("Execution", timeline)}${section("Timing", durations)}${section("", balances)}${section("", transactions)}
 <tr><td class="pad" style="padding:22px 28px 24px;color:${colors.muted};font-size:11px;line-height:18px;">${escapeHtml(timestamp)}</td></tr>
 </table></td></tr></table></body></html>`;
-  const text = ["PNLX · Testnet", title, market, data.kind === "closed" ? `Net P&L: ${pnl ?? "Unavailable"}` : undefined,
+  const text = ["PNLX", title, market, data.kind === "closed" ? `Net P&L: ${pnl ?? "Unavailable"}` : undefined,
     intro, ...[details, timeline, durations, balances, transactions].filter((rows) => rows.length).map((rows) => rows.map((row) => `${row.label}: ${row.href ?? row.value}`).join("\n")), timestamp].filter(Boolean).join("\n\n");
   return { subject, html, text };
 }

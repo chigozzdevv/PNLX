@@ -16,15 +16,15 @@ function emptyProtocol(wallet: WalletRecord): ProtocolState {
 }
 function savedCycle(id: string, phase: CycleState["phase"] = "open"): CycleState {
   return {
-    id, spec: { id, marketId: "btc-usd-perp", margin: "100000000", leverage: 2, side: "long" },
+    id, spec: { id, marketId: "xlm-usd-perp", margin: "100000000", leverage: 2, side: "long" },
     phase, noteCommitment: "0x3", intentCommitment: "0x4", intent: {},
-    oraclePriceAtPreparation: "6000000000000", fundingIndexAtPreparation: "0",
+    oraclePriceAtPreparation: "22000000", fundingIndexAtPreparation: "0",
     orders: [], activeOrders: [], matching: [], timings: { submissionStartedAt: START - 20 * MINUTE_MS, openedObservedAt: START - 10 * MINUTE_MS },
     positions: phase === "open" || phase === "closing" || phase === "closed" ? [{
-      snapshot: { batchId: "batch-1", marketId: "btc-usd-perp", openedAt: START - 30 * MINUTE_MS,
+      snapshot: { batchId: "batch-1", marketId: "xlm-usd-perp", openedAt: START - 30 * MINUTE_MS,
         positionCommitment: POSITION, settlementDigest: "0x5", settlementTxHash: HASH as `0x${string}`,
         sourceIntentCommitment: "0x4", status: phase === "closed" ? "closed" : "open", updatedAt: START },
-      opening: { entryPrice: "6000000000000", fundingIndex: "0", margin: "100000000", marketId: "btc-usd-perp",
+      opening: { entryPrice: "22000000", fundingIndex: "0", margin: "100000000", marketId: "xlm-usd-perp",
         positionCommitment: POSITION, positionNullifier: "0x6", ownerDigest: "0x7", positionSeed: "0x8", fillIndex: 0,
         side: "long", size: "10000", sourceIntentCommitment: "0x4" },
       closes: [],
@@ -42,7 +42,7 @@ function harness(state = createCampaign({ runId: "test-campaign", seed: "test-se
   };
   let chainTime: number | undefined = START - 10 * MINUTE_MS;
   const health = (): HealthSample => ({ at: now, apiOk: true, proverOk: true,
-    markets: [{ marketId: "btc-usd-perp", maxLeverage: 3 }, { marketId: "eth-usd-perp", maxLeverage: 3 }, { marketId: "xlm-usd-perp", maxLeverage: 2 }],
+    markets: [{ marketId: "xlm-usd-perp", maxLeverage: 2 }],
     budget: { at: now, chainId: 8453, creditWei: "10000000000000000", gasWei: "1000000000000000" } });
   const services: RunnerServices = {
     now: () => now, from: "PNLX <test@example.com>", to: "owner@example.com",
@@ -70,7 +70,7 @@ function harness(state = createCampaign({ runId: "test-campaign", seed: "test-se
         async open(id) { actions.push("submit-open"); data.cycles[id]!.phase = "accepted"; await save(); return read(id); },
         async prepareClose(id) { actions.push("prepare-close"); data.cycles[id]!.phase = "closing";
           data.cycles[id]!.positions[0]!.closes.push({ phase: "ready", closeCommitment: "0xa", witness: {}, output: {} as any,
-            createdAt: now, markPrice: "6100000000000", fundingIndex: "0", fundingPayment: "0", realizedPnl: "100", returnedMargin: "100000100" });
+            createdAt: now, markPrice: "23000000", fundingIndex: "0", fundingPayment: "0", realizedPnl: "100", returnedMargin: "100000100" });
           await save(); return read(id); },
         async close(id) { actions.push("submit-close"); data.cycles[id]!.positions[0]!.closes[0]!.phase = "submitting"; await save(); return read(id); },
         async cancelOpen(id) { actions.push("cancel-open"); data.cycles[id]!.activeOrders = []; await save(); return read(id); },
@@ -112,7 +112,7 @@ describe("one-time observation runner", () => {
     const state = createCampaign({ runId: "pilot-distributions", seed: "deterministic", startAt: START }, true);
     const first = state.cycles[0]!.plan;
     expect([first.market, first.side, first.marginUsdc, first.leverage, first.holdClass, first.holdDurationMs, first.plannedOpenAt])
-      .toEqual(["BTC", "long", 10, 1, "short", 5 * MINUTE_MS, START]);
+      .toEqual(["XLM", "long", 10, 1, "short", 5 * MINUTE_MS, START]);
     const day = state.cycles.filter((cycle) => cycle.plan.day === 1);
     expect(day.filter((cycle) => cycle.plan.holdClass === "short")).toHaveLength(12);
     expect(day.filter((cycle) => cycle.plan.holdClass === "medium")).toHaveLength(6);
@@ -126,12 +126,14 @@ describe("one-time observation runner", () => {
     h.services.health = async () => ({ ...h.health(), budget: { at: START, chainId: 8453, creditWei: "0", gasWei: "0" } });
     await h.runner().tick();
     expect(h.actions).toContain("prepare-close");
+    expect(h.actions).toContain("submit-close");
+    expect(h.actions.indexOf("submit-close")).toBe(h.actions.indexOf("prepare-close") + 1);
     expect(h.actions).not.toContain("fund");
     expect(h.actions).not.toContain("create-wallet");
     expect(active.cycle.openings[POSITION]!.at).toBe(START - 10 * MINUTE_MS);
     expect(active.cycle.openings[POSITION]!.source).toBe("chain");
     const opened = h.state.outbox.find((entry) => entry.data.kind === "opened")!;
-    expect(opened.data.entryPrice).toBe("$60000.0");
+    expect(opened.data.entryPrice).toBe("$0.22");
     expect(opened.data.holdingDurationMs).toBeUndefined();
   });
 
@@ -183,6 +185,22 @@ describe("one-time observation runner", () => {
     expect(h.state.cycles.filter((cycle) => cycle.status === "active")).toHaveLength(1);
   });
 
+  test("a fresh campaign reuses a reconciled carried-forward wallet and private note without funding again", async () => {
+    const h = harness();
+    const wallet: WalletRecord = { source: "pnlx-observation-archived-wallet", address: "GCARRIED", funding: [] };
+    const data = emptyProtocol(wallet);
+    data.cycles["archived-cancelled"] = { ...savedCycle("archived-cancelled", "cancelled"), cashReconciled: true };
+    data.notes.push({ amount: "1000000000", assetDigest: ASSET, ownerCommitment: OWNER,
+      walletAddress: wallet.address, status: "available", blinding: "0x1", commitment: "0x9", noteNullifier: "0x1",
+      ownerDigest: "0x1", rhoDigest: "0x1", spendSecretDigest: "0x1" });
+    wallet.protocol = data; h.state.wallets.push(wallet);
+    await h.runner().tick();
+    expect(h.actions).toEqual(["prepare-open:1"]);
+    expect(h.state.wallets).toHaveLength(1);
+    expect(h.state.cycles[0]!.walletSource).toBe(wallet.source);
+    expect((wallet.protocol as ProtocolState).cycles["archived-cancelled"]!.cashReconciled).toBe(true);
+  });
+
   test("expired slots are missed without a catch-up burst; the open gap and concurrency cap survive restart", async () => {
     const h = harness(); h.now(START + 5 * HOUR_MS);
     h.state.lastNewOpenAt = START + 5 * HOUR_MS - MINUTE_MS;
@@ -225,11 +243,11 @@ describe("one-time observation runner", () => {
     value.cashReconciled = true;
     value.positions[0]!.snapshot.lifecycleTxHash = closeHash as `0x${string}`;
     value.positions[0]!.confirmedClose = { closeCommitment: "0xa", settlementTxHash: closeHash,
-      markPrice: "6100000000000", netPnl: "4999999", fundingPayment: "100", entryFee: "1000", closeFee: "0",
+      markPrice: "23000000", netPnl: "4999999", fundingPayment: "100", entryFee: "1000", closeFee: "0",
       grossPricePnl: "5001099", returnedMargin: "104999999", pairedPayoutAdjustment: "0", payoutCapped: false, accountingComplete: true };
     value.positions[0]!.closes.push({ phase: "confirmed", closeCommitment: "0xa", witness: {}, output: {} as any,
       createdAt: START - 3 * MINUTE_MS, submittedAt: START - 2 * MINUTE_MS, confirmedAt: START,
-      markPrice: "6100000000000", fundingIndex: "0", fundingPayment: "100", realizedPnl: "5000000", returnedMargin: "104999999" });
+      markPrice: "23000000", fundingIndex: "0", fundingPayment: "100", realizedPnl: "5000000", returnedMargin: "104999999" });
     h.services.chainTime = async (hash) => hash === closeHash ? START : START - 10 * MINUTE_MS;
     await h.runner().tick();
     const closed = h.state.outbox.find((entry) => entry.data.kind === "closed")!.data;
@@ -237,7 +255,7 @@ describe("one-time observation runner", () => {
     expect(closed.timings).toEqual({ closeSubmissionToSettlementMs: 2 * MINUTE_MS });
     expect(closed.proofStartedAt).toBeUndefined();
     expect(closed.pnl).toBe("0.4999999 USDC");
-    expect(closed.exitPrice).toBe("$61000.0");
+    expect(closed.exitPrice).toBe("$0.23");
     expect(closed.holdingDurationMs).toBe(10 * MINUTE_MS);
   });
 });

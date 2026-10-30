@@ -66,7 +66,7 @@ export interface CampaignState {
   version: 1;
   plan: ObservationPlan;
   pilot: boolean;
-  pilotOverride?: { cycleId: string; market: "BTC"; side: "long"; marginUsdc: 10; leverage: 1; holdDurationMs: number; reason: string };
+  pilotOverride?: { cycleId: string; market: "XLM"; side: "long"; marginUsdc: 10; leverage: 1; holdDurationMs: number; reason: string };
   cycles: CampaignCycle[];
   wallets: WalletRecord[];
   outbox: OutboxEntry[];
@@ -104,7 +104,7 @@ export function createCampaign(input: ObservationPlanInput, pilot = false): Camp
     const first = cycles[0]!;
     // The explicit pilot remains cycle one of this campaign. Swap configurations
     // within day one so the daily side/market/margin/leverage/hold counts survive.
-    const exposure = cycles.find((cycle) => cycle.day === 1 && cycle.market === "BTC" && cycle.side === "long")!;
+    const exposure = cycles.find((cycle) => cycle.day === 1 && cycle.market === "XLM" && cycle.side === "long")!;
     [first.market, exposure.market] = [exposure.market, first.market];
     [first.side, exposure.side] = [exposure.side, first.side];
     const margin = cycles.find((cycle) => cycle.day === 1 && cycle.marginUsdc === 10)!;
@@ -119,9 +119,9 @@ export function createCampaign(input: ObservationPlanInput, pilot = false): Camp
   const plan: ObservationPlan = { ...generated, cycles };
   return {
     version: 1, plan, pilot,
-    ...(pilot ? { pilotOverride: { cycleId: plan.cycles[0]!.cycleId, market: "BTC" as const, side: "long" as const,
+    ...(pilot ? { pilotOverride: { cycleId: plan.cycles[0]!.cycleId, market: "XLM" as const, side: "long" as const,
       marginUsdc: 10 as const, leverage: 1 as const, holdDurationMs: 5 * MINUTE_MS,
-      reason: "Explicit five-minute 10 USDC 1x BTC pilot; within-day configuration swaps preserve the daily distribution." } } : {}),
+      reason: "Explicit five-minute 10 USDC 1x XLM pilot; within-day configuration swaps preserve the daily distribution." } } : {}),
     cycles: plan.cycles.map((cycle) => {
       const adapterId = `obs-${createHash("sha256").update(cycle.cycleId).digest("hex").slice(0, 40)}`;
       return { plan: cycle, adapterId, depositId: `${adapterId}-deposit`, status: "planned", openings: {} };
@@ -419,8 +419,14 @@ export class ObservationRunner {
           // Retire any residual exposure before spending the confirmed position.
           if (value.activeOrders?.length) { await client.cancelOpen(cycle.adapterId); return; }
           const previous = due.closes.at(-1);
-          if (!previous || previous.phase === "context-rejected") await client.prepareClose(cycle.adapterId, due.snapshot.positionCommitment);
-          else if (previous.phase === "ready") await client.close(cycle.adapterId, due.snapshot.positionCommitment);
+          if (!previous || previous.phase === "context-rejected") {
+            // Close witnesses bind the current oracle/funding/root. Persist the
+            // fresh preparation, then submit it immediately before that context
+            // ages across scheduler ticks. Ambiguous attempts remain poll-only.
+            const prepared = await client.prepareClose(cycle.adapterId, due.snapshot.positionCommitment);
+            const fresh = prepared.positions.find((position) => position.snapshot.positionCommitment === due.snapshot.positionCommitment)?.closes.at(-1);
+            if (fresh?.phase === "ready") await client.close(cycle.adapterId, due.snapshot.positionCommitment);
+          } else if (previous.phase === "ready") await client.close(cycle.adapterId, due.snapshot.positionCommitment);
           else continue; // Only observe ambiguous submissions; never rebuild them.
           return;
         }

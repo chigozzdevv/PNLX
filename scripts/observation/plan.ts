@@ -11,7 +11,7 @@ export const MINUTE_MS = 60_000;
 export const HOUR_MS = 60 * MINUTE_MS;
 export const DAY_MS = 24 * HOUR_MS;
 
-export const OBSERVATION_MARKETS = ["BTC", "ETH", "XLM"] as const;
+export const OBSERVATION_MARKETS = ["XLM"] as const;
 export const OBSERVATION_MARGINS_USDC = [10, 25, 50, 100] as const;
 export const OBSERVATION_LEVERAGES = [1, 2, 3, 5, 8] as const;
 
@@ -132,10 +132,10 @@ export function createObservationPlan(input: ObservationPlanInput): ObservationP
   for (let day = 1; day <= OBSERVATION_DAYS; day += 1) {
     const random = randomFromSeed(JSON.stringify([OBSERVATION_PLAN_VERSION, input.runId, input.seed, startAt, day]));
     const holds = dayHolds(day, random);
-    // Every day has both sides, every market, five of each margin, and four of
-    // each requested leverage. Rotate the extra market samples across days.
+    // Every day uses the supported XLM market, both sides, five of each margin,
+    // and four of each requested leverage.
     const exposures = shuffled(Array.from({ length: OBSERVATION_CYCLES_PER_DAY }, (_, index) => ({
-      market: OBSERVATION_MARKETS[(index + (day - 1) * 2) % OBSERVATION_MARKETS.length]!,
+      market: OBSERVATION_MARKETS[0],
       side: (index % 2 === 0 ? "long" : "short") as ObservationSide,
     })), random);
     const margins = shuffled(Array.from({ length: OBSERVATION_CYCLES_PER_DAY }, (_, index) =>
