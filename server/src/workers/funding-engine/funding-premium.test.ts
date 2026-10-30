@@ -73,6 +73,37 @@ describe("funding impact observations", () => {
     }).premiumRate).toBe(0n);
   });
 
+  test("configured oracle age preserves genuine timestamps and leaves depth freshness strict", () => {
+    const at = 1_000_000;
+    const book = [
+      intent("bid", 100n * 10_000_000n, market.oraclePrice + PRICE_SCALE / 10n),
+      intent("ask", -100n * 10_000_000n, market.oraclePrice + PRICE_SCALE),
+    ];
+    const options = { ...sampleConfig, maxOracleAgeMs: 600_000, depthObservedAt: at };
+    for (const age of [300_000, 600_000]) {
+      expect(fundingPremiumSample(market, book, at, { ...options, oracleObservedAt: at - age })).toMatchObject({
+        status: "available", premiumRate: 1_000n, observedAt: at, oracleObservedAt: at - age,
+      });
+    }
+    expect(fundingPremiumSample(market, book, at, { ...options, oracleObservedAt: at - 600_001 })).toMatchObject({
+      status: "unavailable", premiumRate: null, reason: "funding oracle observation unavailable or stale",
+      observedAt: at, oracleObservedAt: at - 600_001,
+    });
+    expect(fundingPremiumSample(market, book, at, {
+      ...options, oracleObservedAt: at - 300_000, depthObservedAt: at - 60_001,
+    })).toMatchObject({ status: "unavailable", premiumRate: null, reason: "funding depth observation unavailable or stale" });
+    const end = 1_200_000;
+    const rows = Array.from({ length: 5 }, (_, index) => {
+      const observedAt = end - config.intervalMs + index * 60_000 + 5_000;
+      return fundingPremiumSample(market, book, observedAt, {
+        ...options, oracleObservedAt: observedAt - 300_000, depthObservedAt: observedAt,
+      });
+    });
+    expect(currentFundingPremium(rows, { ...config, maxOracleAgeMs: 600_000 }, market.marketId, end)).toMatchObject({
+      status: "ready", rate: 1_000n, coverageMs: config.intervalMs, sampleCount: 5,
+    });
+  });
+
   test("wrong market, duplicate commitments, or malformed quotes cannot inflate depth", () => {
     const bid = intent("same", 100n * 10_000_000n, 99n * PRICE_SCALE);
     const ask = intent("ask", -100n * 10_000_000n, 101n * PRICE_SCALE);

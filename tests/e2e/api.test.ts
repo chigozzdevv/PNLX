@@ -516,6 +516,40 @@ describe("server api", () => {
     });
   });
 
+  test("funding oracle freshness follows the configured market policy", () => {
+    const previousMaxAge = process.env.ORACLE_PRICE_MAX_AGE_SECONDS;
+    process.env.ORACLE_PRICE_MAX_AGE_SECONDS = "600";
+    try {
+      const runtime = createAppRuntime();
+      const marketId = "xlm-usd-perp";
+      runtime.executor.addMarket({
+        fundingIndex: 0n,
+        initialMarginRate: 100_000n,
+        maintenanceMarginRate: 50_000n,
+        marketId,
+        maxLeverage: 10n,
+        oraclePrice: 100n * PRICE_SCALE,
+      });
+      const observedAt = 1_000_000;
+      const sample = (age: number) => runtime.fundingEngine.sampleOnce({
+        marketId, sampledAt: observedAt, oracleObservedAt: observedAt - age, depthObservedAt: observedAt,
+      })[0].record;
+      // With no quotes the book remains unavailable, but a genuine 300-second
+      // oracle observation must pass the configured 600-second freshness gate.
+      expect(sample(300_000)).toMatchObject({
+        status: "unavailable", premiumRate: null, observedAt, oracleObservedAt: 700_000,
+        reason: "insufficient two-sided impact depth",
+      });
+      expect(sample(600_001)).toMatchObject({
+        status: "unavailable", premiumRate: null, observedAt, oracleObservedAt: 399_999,
+        reason: "funding oracle observation unavailable or stale",
+      });
+      expect(runtime.fundingEngine.status().settlementRunning).toBe(false);
+    } finally {
+      restoreEnv("ORACLE_PRICE_MAX_AGE_SECONDS", previousMaxAge);
+    }
+  });
+
   test("reports custody readiness and rejects unconfigured asset custody", async () => {
     const previousCustody = process.env.ASSET_CUSTODY_REQUIRED;
     const previousAsset = process.env.COLLATERAL_ASSET;

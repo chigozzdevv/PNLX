@@ -132,6 +132,7 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
       impactMargin: env.fundingImpactMargin,
       intervalMs: env.fundingIntervalMs,
       maxFundingDelta: env.fundingMaxDelta,
+      maxOracleAgeMs: env.oraclePriceMaxAgeSeconds * 1_000,
       minimumSamples: env.fundingMinimumSamples,
       premiumMode: env.fundingPremiumMode,
       premiumRate: env.fundingPremiumRate,
