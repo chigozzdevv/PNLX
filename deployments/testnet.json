@@ -27,7 +27,7 @@
     "router": "CCM3HDMOON2B3LYEVWOF4I6LUQ2OATCENYRGAIQSNYTHU3XYBNXUIJ5E",
     "selector": "73c457ba"
   },
-  "risc0BatchMatchImageId": "0xc55d4795131e29e89f8fdfb9cca03793458418c31c734712ec970c212ad27284",
+  "risc0BatchMatchImageId": "0x26d68ce0dddeb52cf9092198f492d019eb58c9b34857ad20971c187072f279c2",
   "source": "pnlx-admin",
   "sourceAddress": "GDNHJPGBEPMMAINDMU3TN6V6PCDQKXWVY4FWHLMBJXPCBSCKLUYIESOC",
   "feeDestinations": {
@@ -61,8 +61,8 @@
     "intent-registry": "0x7c8e987bf1579e4cb6e20fe1c9b9b27475c729d549f267fa0533503a7f9fd855",
     "conditional-order": "0x2015c66402e55bfb26f353873799e22e21396c2912757def64fe12077a70c12f",
     "market": "0xb44143eef90eb122af99b60314b39af1de00a380e2145b5dadf8875a0f88daa4",
-    "funding-settlement": "0xdddf25788fd96747f48dd8e1c2d5e16869b210fd8cb3fdc14b6c7a0fa42e699a",
-    "batch-settlement": "0x49696c34eb05baa9b852f7201c08ae8d370a7a1963ecd23e2b0cdf93fb5ff5aa",
+    "funding-settlement": "0x18150c596c7ea9a6cf87e3fa297bb2e9f2f131d354aa1af4f75bbb8a986d684e",
+    "batch-settlement": "0x6e4a2fdb382d6f0d5ce209c0735b4b3cab77d4cd0f616814f41e8bbbc02b826e",
     "liquidation": "0xdd0376bf4c06a65d01087ca2e3c60018536aa30181d10b104175a7445d1e8d4a",
     "position-close": "0xf274de567a41273429e2e7156a2e81458917dd1be0a382c9f8249f8f31e78a98",
     "disclosure-verifier": "0x2c98496fe148895113b7e8f65fa5397f878aa424a05296530116df118cfe653c",
@@ -74,7 +74,7 @@
     "conditional-close-proof-verifier": "0x671fc838a286644c6eee5aeb0dac7d6e86ee7e099f48bd7452fb6f1da6895152",
     "deposit-note-proof-verifier": "0x671fc838a286644c6eee5aeb0dac7d6e86ee7e099f48bd7452fb6f1da6895152",
     "disclosure-proof-verifier": "0x671fc838a286644c6eee5aeb0dac7d6e86ee7e099f48bd7452fb6f1da6895152",
-    "funding-update-proof-verifier": "0xbe24718b96844aaf4af5df11d562b80b9bd2eac5dab624f9c7096ab43cfe0d08",
+    "funding-update-proof-verifier": "0x671fc838a286644c6eee5aeb0dac7d6e86ee7e099f48bd7452fb6f1da6895152",
     "intent-validity-proof-verifier": "0x671fc838a286644c6eee5aeb0dac7d6e86ee7e099f48bd7452fb6f1da6895152",
     "liquidation-check-proof-verifier": "0x671fc838a286644c6eee5aeb0dac7d6e86ee7e099f48bd7452fb6f1da6895152",
     "margin-check-proof-verifier": "0xbe24718b96844aaf4af5df11d562b80b9bd2eac5dab624f9c7096ab43cfe0d08",
@@ -138,5 +138,5 @@
     "createdAt": "2026-10-23T16:57:47.205Z",
     "retiredVerifierHash": "0xe9b16e730458dc8d62d8bb893fc79c313b768340e1f874dc691a121ff19dd7a3"
   },
-  "risc0BatchMatchVerifierHash": "0x68b9c0d6d7b51dab49ab184f7ecc403b4a4d7976757796e5c62d45f159c41b4a"
+  "risc0BatchMatchVerifierHash": "0xe5b60fbcf93ab4433c40ea841bd7790106b3a5588f88852359aded7bbe06b86f"
 }
