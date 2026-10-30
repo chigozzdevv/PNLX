@@ -1,0 +1,22 @@
+[Unit]
+Description=PNLX one-time seven-day execution observation
+After=network-online.target pnlx-api.service pnlx-matcher.service
+Requires=pnlx-api.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PNLX
+EnvironmentFile=/home/ubuntu/PNLX/.env
+Environment=HOME=/home/ubuntu
+Environment=PATH=/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/home/ubuntu/.nargo/bin:/home/ubuntu/.bb:/home/ubuntu/.bb/bin:/home/ubuntu/.risc0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=NODE_ENV=production
+Environment=PNLX_OBSERVATION_LOCKED=1
+UMask=0077
+ExecStart=/usr/bin/flock -n /home/ubuntu/PNLX/.pnlx/observation/runner.lock /home/ubuntu/.bun/bin/bun scripts/observation/run.ts
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=45
+
+[Install]
+WantedBy=multi-user.target
