@@ -1,9 +1,4 @@
 /* Single-market trading workspace. */
-.app-shell-trade .app-header { background: var(--surface-page); }
-.app-shell-trade .app-header-inner { min-height: 56px; padding-inline: 16px; }
-.app-shell-trade .app-brand { width: 94px; }
-.app-shell-trade .nav-item { min-height: 32px; padding-inline: 12px; border-radius: 4px; }
-.app-shell-trade .wallet-button { min-height: 32px; }
 .app-shell-trade .app-content { padding: 0; }
 
 .trade-grid {

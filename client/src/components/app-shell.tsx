@@ -71,7 +71,7 @@ export function AppShell({
   return (
     <div className={`app-shell app-shell-${activeView} min-h-screen bg-[var(--surface-page)] text-[var(--text-primary)]`}>
       <header className="app-header sticky top-0 z-40 backdrop-blur-xl">
-        <div className="app-header-inner flex min-h-[72px] min-w-0 items-center gap-3 px-3 md:gap-4 md:px-5">
+        <div className="app-header-inner flex min-w-0 items-center gap-3 md:gap-4">
           <Link className="app-brand" href="/" aria-label="PNLX home">
             <Image alt="PNLX" className="app-brand-logo" height={25} priority src="/pnlx-logo.png" width={138} />
           </Link>

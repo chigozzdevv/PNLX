@@ -10,7 +10,7 @@ export default function TradeLoading() {
       role="status"
     >
       <header className="app-header sticky top-0 z-40 backdrop-blur-xl">
-        <div className="app-header-inner flex min-h-[72px] min-w-0 items-center gap-3 px-3 md:gap-4 md:px-5">
+        <div className="app-header-inner flex min-w-0 items-center gap-3 md:gap-4">
           <Link aria-label="PNLX home" className="app-brand" href="/">
             <Image
               alt="PNLX"
@@ -25,6 +25,7 @@ export default function TradeLoading() {
             <span className="nav-item nav-item-active">Trade</span>
             <span className="nav-item">Portfolio</span>
             <span className="nav-item">Liquidity</span>
+            <span className="nav-item">Points</span>
           </nav>
           <div className="header-controls ml-auto">
             <span className="trade-loading-pill" />
