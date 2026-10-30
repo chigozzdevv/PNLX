@@ -23,12 +23,15 @@ import type {
 interface PositionsTableProps {
   activity?: ServerOwnerActivitySnapshot[];
   activeView?: PositionsTableView;
+  connected: boolean;
+  connecting?: boolean;
   loading?: boolean;
   unavailable?: boolean;
   closingPositionId?: string;
   cancellingOrderId?: string;
   actionMessage?: { tone: "error" | "success"; text: string };
   onClosePosition?: (position: PositionRow) => Promise<void> | void;
+  onConnect: () => Promise<void>;
   onCancelOrder?: (order: OwnerOrderGroup) => Promise<void> | void;
   onViewChange?: (view: PositionsTableView) => void;
   orders?: ServerOwnerOrderSnapshot[];
@@ -45,10 +48,13 @@ export function PositionsTable({
   activity = [],
   activeView,
   closingPositionId,
+  connected,
+  connecting = false,
   loading = false,
   unavailable = false,
   onCancelOrder,
   onClosePosition,
+  onConnect,
   onViewChange,
   orders = [],
   positions,
@@ -102,7 +108,7 @@ export function PositionsTable({
         <div className="positions-tabs" role="tablist" aria-label="Trade records">
           <TradeRecordTab
             active={view === "positions"}
-            count={unavailable ? undefined : openPositions.length}
+            count={!connected || loading || unavailable ? undefined : openPositions.length}
             label="Positions"
             onClick={() => selectView("positions")}
             onKeyDown={(event) => handleTabKeyDown(event, "positions")}
@@ -110,7 +116,7 @@ export function PositionsTable({
           />
           <TradeRecordTab
             active={view === "orders"}
-            count={unavailable ? undefined : openOrderGroups.length}
+            count={!connected || loading || unavailable ? undefined : openOrderGroups.length}
             label="Orders"
             onClick={() => selectView("orders")}
             onKeyDown={(event) => handleTabKeyDown(event, "orders")}
@@ -118,14 +124,14 @@ export function PositionsTable({
           />
           <TradeRecordTab
             active={view === "activity"}
-            count={unavailable ? undefined : visibleActivity.length}
+            count={!connected || loading || unavailable ? undefined : visibleActivity.length}
             label="Activity"
             onClick={() => selectView("activity")}
             onKeyDown={(event) => handleTabKeyDown(event, "activity")}
             view="activity"
           />
         </div>
-        {actionMessage ? (
+        {connected && actionMessage ? (
           <p
             className={`positions-action-message positions-action-message-${actionMessage.tone}`}
             role="status"
@@ -142,7 +148,18 @@ export function PositionsTable({
         id={panelId(view)}
         role="tabpanel"
       >
-        {unavailable ? (
+        {!connected ? (
+          <div className="trade-records-empty">
+            <button
+              className="page-action-secondary"
+              disabled={connecting}
+              onClick={() => void onConnect()}
+              type="button"
+            >
+              {connecting ? "Connecting…" : "Connect wallet"}
+            </button>
+          </div>
+        ) : unavailable ? (
           <div className="trade-records-empty" role="status">
             <strong>Unable to load records</strong>
             <span>Please try again shortly.</span>

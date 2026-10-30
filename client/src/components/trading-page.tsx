@@ -53,6 +53,7 @@ export function TradingPage() {
   const [optimisticOrderClock, setOptimisticOrderClock] = useState(0);
   const selectedMarketId = DEFAULT_MARKET_ID;
   const trading = useTradingData(wallet.session, refreshKey, selectedMarketId);
+  const recordsMatchWallet = Boolean(wallet.session && trading.data.account.address === wallet.session.address);
   const [chartInterval, setChartInterval] = useState<CandleInterval>("15m");
   const [ticketMode, setTicketMode] = useState<"trade" | "deposit">("trade");
   const [chartIndicators, setChartIndicators] = useState<ChartIndicatorId[]>([]);
@@ -445,17 +446,20 @@ export function TradingPage() {
         <div className="positions-workspace">
           <PositionsTable
             actionMessage={positionActionMessage?.tone === "error" ? positionActionMessage : undefined}
-            activity={trading.data.activity}
+            activity={recordsMatchWallet ? trading.data.activity : []}
             activeView={tableView}
             cancellingOrderId={cancellingOrderId}
             closingPositionId={closingPositionId}
-            loading={trading.loading}
-            unavailable={Boolean(trading.error)}
+            connected={Boolean(wallet.session)}
+            connecting={wallet.status === "connecting"}
+            loading={trading.loading || Boolean(wallet.session && !recordsMatchWallet)}
+            unavailable={recordsMatchWallet && Boolean(trading.error)}
             onCancelOrder={handleCancelOrder}
             onClosePosition={handleClosePosition}
+            onConnect={wallet.connect}
             onViewChange={setTableView}
-            orders={orders}
-            positions={trading.data.positions}
+            orders={recordsMatchWallet ? orders : []}
+            positions={recordsMatchWallet ? trading.data.positions : []}
           />
         </div>
       </main>
