@@ -199,7 +199,7 @@ export class ObservationRunner {
     this.state.lastBootAt = this.services.now();
     await this.save();
     if (this.state.bootCount > 1) await this.enqueueEmail(`boot-${this.state.bootCount}`, {
-      kind: "resumed", message: `Worker resumed. Boot ${this.state.bootCount}; saved trades and email events are being reconciled.`,
+      kind: "resumed", message: "Run resumed. Pending executions are being reconciled.",
     });
   }
   async enqueueEmail(key: string, data: Omit<ExecutionEmailData, "runId" | "timestamp"> & Partial<Pick<ExecutionEmailData, "runId" | "timestamp">>): Promise<void> {

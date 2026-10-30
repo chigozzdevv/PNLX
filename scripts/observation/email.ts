@@ -44,7 +44,7 @@ const colors = {
 };
 const events: Record<ExecutionEmailData["kind"], string> = {
   setup: "Updates connected", opened: "Position opened", closed: "Position closed",
-  failed: "Execution failed", paused: "Run paused", resumed: "Run resumed", completed: "Run completed",
+  failed: "Execution alert", paused: "Run paused", resumed: "Run resumed", completed: "Run completed",
 };
 
 function escapeHtml(value: string): string {
@@ -132,7 +132,8 @@ export function renderExecutionEmail(data: ExecutionEmailData): { subject: strin
   addRow(details, "Exit", data.exitPrice);
   addRow(details, "Fees", data.fees);
   addRow(details, "Funding", data.funding);
-  addRow(details, "Wallet", data.walletAlias);
+  const walletNumber = data.walletAlias?.match(/^pnlx-observation-[a-f0-9]{12}-(\d+)$/)?.[1];
+  addRow(details, "Wallet", walletNumber ? `Wallet ${walletNumber}` : data.walletAlias);
   addRow(details, "Close due", displayTime(data.holdUntil));
 
   const timeline: Row[] = [];
