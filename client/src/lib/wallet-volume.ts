@@ -1,4 +1,5 @@
-import type { Hex } from "@/types/trading";
+import { protocolUsdcToDisplay } from "@/lib/asset-units";
+import type { Hex, ServerPortfolioSnapshot } from "@/types/trading";
 
 const BASE_SCALE = 10_000_000n;
 const PRICE_SCALE = 100_000_000n;
@@ -8,6 +9,25 @@ export interface WalletVolumeOpening {
   entryPrice: string;
   positionCommitment: Hex;
   size: string;
+}
+
+export function walletTradedVolumeUsd(
+  portfolio: Pick<ServerPortfolioSnapshot, "positions" | "tradedVolume">,
+  openings: WalletVolumeOpening[],
+): number | null {
+  // A present aggregate is authoritative, including an explicit incomplete result.
+  // Only older API responses without the field use locally decrypted history.
+  if (Object.hasOwn(portfolio, "tradedVolume")) {
+    const aggregate: unknown = portfolio.tradedVolume;
+    if (!aggregate || typeof aggregate !== "object" || Array.isArray(aggregate)) return null;
+    const { amount, source, status } = aggregate as Record<string, unknown>;
+    if (status !== "available" || source !== "pnlx-confirmed-fills" ||
+        typeof amount !== "string" || !/^(0|[1-9][0-9]*)$/.test(amount)) return null;
+    const volume = protocolUsdcToDisplay(amount);
+    return Number.isFinite(volume) && volume >= 0 ? volume : null;
+  }
+
+  return walletMatchedVolumeUsd(openings, portfolio.positions.map((position) => position.positionCommitment));
 }
 
 export function walletMatchedVolumeUsd(

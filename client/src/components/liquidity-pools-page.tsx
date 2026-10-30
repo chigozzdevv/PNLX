@@ -3,6 +3,7 @@
 import { ArrowUpRight } from "lucide-react";
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
+import { shortAddress } from "@/lib/format";
 import { formatVaultUnits } from "@/lib/liquidity-vault";
 import { useLiquidityVault } from "@/lib/use-liquidity-vault";
 import { useWalletSession } from "@/lib/use-wallet-session";
@@ -29,6 +30,7 @@ export function LiquidityPoolsPage() {
           <div aria-hidden="true" className="liquidity-pool-head">
             <div className="liquidity-pool-head-main">
               <span>Pool</span>
+              <span>Operator</span>
               <span>APY</span>
               <span>Assets at cost</span>
               <span>Your positions</span>
@@ -37,8 +39,19 @@ export function LiquidityPoolsPage() {
           </div>
           {status ? (
             <div className="liquidity-pool-row">
-              <Link aria-label="View XLM/USD pool details" className="liquidity-pool-main" href={detailsHref}>
-                <span className="liquidity-pool-name"><strong>XLM/USD</strong><small>USDC liquidity <ArrowUpRight aria-hidden="true" size={12} /></small></span>
+              <div className="liquidity-pool-main">
+                <Link aria-label="View XLM/USD pool details" className="liquidity-pool-name" href={detailsHref}><strong>XLM/USD</strong><small>USDC liquidity <ArrowUpRight aria-hidden="true" size={12} /></small></Link>
+                <span className="liquidity-pool-cell liquidity-pool-operator">
+                  <small>Operator</small>
+                  <strong>PNLX <span>(<a
+                    aria-label={`View maker ${status.maker} on Stellar Expert`}
+                    className="liquidity-operator-address"
+                    href={`https://stellar.expert/explorer/testnet/account/${encodeURIComponent(status.maker)}`}
+                    rel="noopener noreferrer"
+                    target="_blank"
+                    title={status.maker}
+                  >{shortAddress(status.maker)}</a>)</span></strong>
+                </span>
                 <span className="liquidity-pool-cell"><small>APY</small><strong aria-label="APY unavailable" className="liquidity-apy-placeholder" title="APY is not available yet">—</strong></span>
                 <span className="liquidity-pool-cell"><small>Assets at cost</small><strong>${formatVaultUnits(status.totalAssetsAtCost)}</strong></span>
                 <span className="liquidity-pool-cell">
@@ -48,7 +61,7 @@ export function LiquidityPoolsPage() {
                     {connected && !vault.loading && vault.account ? vault.account.positions.length : "—"}
                   </strong>
                 </span>
-              </Link>
+              </div>
               <div className="liquidity-pool-actions">
                 <Link className="liquidity-pool-supply" href={`${detailsHref}?action=supply`}>Supply</Link>
                 <Link className="liquidity-pool-withdraw" href={`${detailsHref}?action=withdraw`}>Withdraw</Link>

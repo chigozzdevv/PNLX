@@ -179,6 +179,11 @@ export interface ServerPortfolioSnapshot {
   ownerCommitment: Hex;
   positions: ServerOwnerPositionSnapshot[];
   publicState: ServerPublicSnapshot;
+  tradedVolume?: {
+    amount: string | null;
+    status: "available" | "incomplete";
+    source: "pnlx-confirmed-fills";
+  };
 }
 
 export interface ServerIntentRecord {

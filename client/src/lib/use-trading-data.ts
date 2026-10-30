@@ -24,7 +24,7 @@ import {
   setPrivateMarginNoteRuntimeScope,
 } from "@/lib/private-margin-notes";
 import { priceFromOracleString, rateFromMicroBps } from "@/lib/format";
-import { walletMatchedVolumeUsd } from "@/lib/wallet-volume";
+import { walletTradedVolumeUsd } from "@/lib/wallet-volume";
 import type {
   AccountSnapshot,
   Hex,
@@ -346,10 +346,7 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
     ),
   );
   const tradedVolume = session && activePortfolio
-    ? walletMatchedVolumeUsd(
-        privateOpeningPayloads.map((payload) => payload.opening),
-        activePortfolio.positions.map((position) => position.positionCommitment),
-      )
+    ? walletTradedVolumeUsd(activePortfolio, privateOpeningPayloads.map((payload) => payload.opening))
     : null;
   const positionLockedMargin = activePortfolio?.positions.reduce((total, position) => {
     if (position.status !== "open") return total;

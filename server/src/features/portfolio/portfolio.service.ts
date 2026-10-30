@@ -2,6 +2,7 @@ import { assertAuthenticatedOwnerCommitment } from "@/shared/http/auth-context";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import { createIndexer } from "@/workers/indexer/indexer.worker";
 import type { PortfolioBalancesSnapshot, PortfolioInput, PortfolioSnapshot } from "@/features/portfolio/portfolio.model";
+import { walletTradedVolume } from "@/features/portfolio/wallet-volume";
 
 export class PortfolioService {
   constructor(private readonly executor: ExecutorService) {}
@@ -16,6 +17,7 @@ export class PortfolioService {
       ownerCommitment: input.ownerCommitment,
       positions: indexer.positionsFor(input.ownerCommitment),
       publicState: indexer.snapshot(),
+      tradedVolume: walletTradedVolume(this.executor.store, input.ownerCommitment),
     };
   }
 

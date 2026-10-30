@@ -111,7 +111,7 @@
 
 .liquidity-list-page .liquidity-pool-head-main,
 .liquidity-list-page .liquidity-pool-main {
-  grid-template-columns: minmax(145px, 1.4fr) minmax(60px, 0.65fr) minmax(130px, 1fr) minmax(100px, 0.8fr);
+  grid-template-columns: minmax(130px, 1.2fr) minmax(180px, 1.5fr) minmax(45px, 0.45fr) minmax(120px, 1fr) minmax(95px, 0.85fr);
   gap: 20px;
 }
 
@@ -128,6 +128,19 @@
 .liquidity-list-page .liquidity-pool-name strong {
   color: var(--text-primary);
 }
+
+.liquidity-list-page .liquidity-pool-name { text-decoration: none; }
+.liquidity-list-page .liquidity-pool-operator > strong {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.liquidity-list-page .liquidity-operator-address {
+  color: var(--accent-orange);
+  font-weight: 400;
+  text-decoration: none;
+}
+.liquidity-list-page .liquidity-operator-address:hover { text-decoration: underline; }
 
 .liquidity-list-page .liquidity-pool-name small {
   font-size: 12px;
@@ -231,7 +244,8 @@
     gap: 20px 16px;
   }
 
-  .liquidity-list-page .liquidity-pool-name {
+  .liquidity-list-page .liquidity-pool-name,
+  .liquidity-list-page .liquidity-pool-operator {
     grid-column: 1 / -1;
   }
 

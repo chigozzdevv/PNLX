@@ -1,4 +1,5 @@
 import type { AccountEventRecord, Hex } from "@pnlx/protocol-types";
+import type { WalletTradedVolume } from "@/features/portfolio/wallet-volume";
 import type {
   OwnerActivitySnapshot,
   OwnerOrderSnapshot,
@@ -17,6 +18,7 @@ export interface PortfolioSnapshot {
   ownerCommitment: Hex;
   positions: OwnerPositionSnapshot[];
   publicState: PublicSnapshot;
+  tradedVolume: WalletTradedVolume;
 }
 
 export interface PortfolioBalancesSnapshot {

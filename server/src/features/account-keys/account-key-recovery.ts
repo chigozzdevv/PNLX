@@ -143,7 +143,7 @@ export function recoverConfirmedCloseOutputEventsForOwner(
   return { events, skipped };
 }
 
-function reconstructSettlementOpenings(
+export function reconstructSettlementOpenings(
   settlement: BatchSettlement,
   positions: Map<Hex, PositionLifecycleRecord>,
   privateMatchIntents: Map<Hex, PrivateMatchIntent>,
