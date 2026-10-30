@@ -9,7 +9,7 @@ interface MarketHeaderProps {
 
 interface HeaderMetric {
   label: string;
-  value: string;
+  value: string | null;
   description: string;
   badge?: string;
   tone?: "positive" | "negative";
@@ -19,7 +19,7 @@ function fundingMetric(market: MarketDisplay): HeaderMetric {
   const funding = market.funding;
   if (!funding) return {
     label: "Est. funding",
-    value: market.fundingRate === null ? "Unavailable" : formatPct(market.fundingRate, 4),
+    value: market.fundingRate !== null && Number.isFinite(market.fundingRate) ? formatPct(market.fundingRate, 4) : null,
     description: "PNLX funding estimate. Settlement status is unavailable.",
   };
   const interval = funding.intervalMs;
@@ -36,10 +36,8 @@ function fundingMetric(market: MarketDisplay): HeaderMetric {
   const progress = `${funding.sampleCount}/${funding.minimumSamples} premium samples`;
   return {
     label: `${settling ? "Funding" : "Est. funding"}${period ? ` · ${period}` : ""}`,
-    value: funding.status === "warming" ? "Warming"
-      : funding.status === "stale" ? "Stale"
-        : funding.rate === null ? "Unavailable" : formatPct(funding.rate, 4),
-    badge: settling ? undefined : funding.settlementStatus === "paused" ? "Paused" : "Blocked",
+    value: funding.status === "ready" && funding.rate !== null && Number.isFinite(funding.rate)
+      ? formatPct(funding.rate, 4) : null,
     description: `${funding.status === "warming" ? `Collecting ${progress}.`
       : funding.status === "stale" ? `PNLX funding samples are out of date (${progress}).`
         : funding.source === "fixed" ? "Configured PNLX funding estimate." : `PNLX funding estimate from ${progress}.`} ${settlement}${sampledAt}`,
@@ -51,7 +49,7 @@ function openInterestMetric(market: MarketDisplay): HeaderMetric {
     market.openInterest !== null && Number.isFinite(market.openInterest) && market.openInterest >= 0;
   if (!available) return {
     label: "Open interest",
-    value: "Unavailable",
+    value: null,
     description: market.openInterestDetails?.reason ?? "PNLX has not published a complete open-interest aggregate.",
   };
   const size = market.openInterest!;
@@ -127,11 +125,24 @@ export function MarketHeader({ dayStats, selectedMarket }: MarketHeaderProps) {
           {stats.map((stat) => (
             <div className="metric-item" key={stat.label} title={stat.description}>
               <span>{stat.label}</span>
-              <strong className={stat.tone ? `metric-${stat.tone}` : undefined}>{stat.value}{stat.badge ? <small className="market-metric-badge">{stat.badge}</small> : null}</strong>
+              <strong className={stat.tone ? `metric-${stat.tone}` : undefined}>
+                {stat.value ?? <MetricDots label={stat.label} />}
+                {stat.badge ? <small className="market-metric-badge">{stat.badge}</small> : null}
+              </strong>
             </div>
           ))}
         </div>
       </div>
     </section>
+  );
+}
+
+function MetricDots({ label }: { label: string }) {
+  return (
+    <span aria-label={`${label} data pending`} className="market-metric-dots" role="status">
+      <span aria-hidden="true" />
+      <span aria-hidden="true" />
+      <span aria-hidden="true" />
+    </span>
   );
 }

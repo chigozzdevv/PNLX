@@ -216,3 +216,29 @@
   line-height: 1.2;
   vertical-align: 1px;
 }
+
+.trade-grid .market-metric-dots {
+  display: inline-flex;
+  min-width: 20px;
+  height: 14px;
+  align-items: center;
+  gap: 3px;
+  vertical-align: middle;
+}
+.trade-grid .market-metric-dots > span {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.45;
+  animation: market-metric-pulse 1.2s ease-in-out infinite;
+}
+.trade-grid .market-metric-dots > span:nth-child(2) { animation-delay: 0.15s; }
+.trade-grid .market-metric-dots > span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes market-metric-pulse {
+  0%, 70%, 100% { opacity: 0.45; }
+  35% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .trade-grid .market-metric-dots > span { animation: none; }
+}

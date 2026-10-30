@@ -99,7 +99,7 @@ describe("funding and open-interest summaries", () => {
     const markup = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket: refreshed.markets[0] }));
     expect(markup).toContain("Est. funding · 1h");
     expect(markup).toContain("+0.0100%");
-    expect(markup).toContain("Paused");
+    expect(markup).not.toContain(">Paused<");
     expect(markup).toContain("10 XLM");
     expect(markup).toContain("$3.00 at the current verified mark");
     expect(markup).toContain("half the total open size");
@@ -119,23 +119,33 @@ describe("funding and open-interest summaries", () => {
       { ...available, openInterestDetails: { ...available.openInterestDetails!, status: "incomplete" as const, reason: "Incomplete aggregate" } },
     ]) {
       const incomplete = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket }));
-      expect(incomplete).toContain("<span>Open interest</span><strong>Unavailable</strong>");
+      expect(incomplete).toContain('aria-label="Open interest data pending"');
+      expect(incomplete).toContain('class="market-metric-dots"');
+      expect(incomplete).not.toContain(">Unavailable<");
     }
   });
 
-  test("explains warming, stale, and blocked funding instead of an unexplained dash", () => {
+  test("uses three loading dots for pending funding and keeps status details in tooltips", () => {
     for (const status of ["warming", "stale"] as const) {
       const selectedMarket = applyMarketSummaries(data(), [{ ...summary, funding: { ...summary.funding!, status, rate: null, sampleCount: 3 } }]).markets[0];
       const markup = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket }));
-      expect(markup).toContain(status === "warming" ? "Warming" : "Stale");
+      expect(markup).toContain('aria-label="Est. funding · 1h data pending"');
+      expect(markup).toContain('class="market-metric-dots"');
+      expect(markup.match(/<span aria-hidden="true"><\/span>/g)).toHaveLength(3);
+      expect(markup).not.toContain(status === "warming" ? ">Warming<" : ">Stale<");
+      expect(markup).not.toContain(">Paused<");
       expect(markup).toContain("3/10 premium samples");
       expect(markup).not.toContain("+0.0100%");
     }
     const blocked = applyMarketSummaries(data(), [{ ...summary, funding: { ...summary.funding!, settlementStatus: "blocked" } }]).markets[0];
     const markup = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket: blocked }));
-    expect(markup).toContain("Blocked");
+    expect(markup).not.toContain(">Blocked<");
+    expect(markup).toContain("+0.0100%");
     expect(markup).toContain("Funding settlement is unavailable");
-    expect(renderToStaticMarkup(createElement(MarketHeader, { selectedMarket: market }))).toContain(">Unavailable</strong>");
+    const missing = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket: market }));
+    expect(missing).toContain('aria-label="Est. funding data pending"');
+    expect(missing).toContain('aria-label="Open interest data pending"');
+    expect(missing).not.toContain(">Unavailable<");
   });
 });
 
