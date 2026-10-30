@@ -3,7 +3,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { ActionToast } from "@/components/action-toast";
 import { AppShell } from "@/components/app-shell";
-import { BottomTicker } from "@/components/bottom-ticker";
 import { ManageFundsModal, type ManageFundsBalance } from "@/components/manage-funds-modal";
 import { PortfolioPage } from "@/components/portfolio-page";
 import { PositionCloseDialog } from "@/components/position-close-dialog";
@@ -19,7 +18,6 @@ import { PnlModal, type PnlModalProps } from "@/components/pnl-modal";
 import { depositPrivateMargin } from "@/lib/trade-submit";
 import { positionLegs } from "@/lib/position-groups";
 import type { ClosePositionResult } from "@/lib/position-close";
-import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useTradingData } from "@/lib/use-trading-data";
 import { useWalletSession } from "@/lib/use-wallet-session";
 import type { PositionRow } from "@/types/trading";
@@ -41,6 +39,7 @@ export function PortfolioRoute() {
     { tone: "error" | "success"; text: string } | undefined
   >();
   const trading = useTradingData(wallet.session, refreshKey);
+  const accountLoading = trading.loading || Boolean(wallet.session && trading.data.account.address !== wallet.session.address);
   const withdrawableNotes: ManageFundsBalance[] = wallet.session
     ? privateMarginNotes(wallet.session.ownerCommitment)
       .filter((note) => note.status === "available")
@@ -55,7 +54,6 @@ export function PortfolioRoute() {
         createdAt: note.createdAt,
       }))
     : [];
-  const ticker = useMarketTicker(trading.data.ticker);
   const marketById = useMemo(
     () => new Map(trading.data.markets.map((market) => [market.marketId, market])),
     [trading.data.markets],
@@ -230,19 +228,20 @@ export function PortfolioRoute() {
   }, [wallet.session]);
 
   return (
-    <AppShell account={trading.data.account} activeView="portfolio" wallet={wallet}>
+    <AppShell account={accountLoading || trading.error ? null : trading.data.account} activeView="portfolio" wallet={wallet}>
       <PortfolioPage
         actionMessage={positionActionMessage?.tone === "error" ? positionActionMessage : undefined}
         cancellingOrderId={cancellingOrderId}
         closingPositionId={closingPositionId}
         connected={Boolean(wallet.session)}
-        loading={trading.loading}
+        dataError={trading.error}
+        loading={accountLoading}
         onCancelOrder={handleCancelOrder}
         onClosePosition={setPendingClosePosition}
         onOpenManageFunds={handleOpenManageFunds}
+        onRetry={() => setRefreshKey((value) => value + 1)}
         trading={trading.data}
       />
-      <BottomTicker ticker={ticker.ticker} updatedAt={ticker.updatedAt} />
       <PnlModal
         isOpen={Boolean(pnlModalData)}
         onClose={() => setPnlModalData(null)}

@@ -20,7 +20,7 @@ const navItems: Array<{ href: string; id: AppView; label: string }> = [
 ];
 
 interface AppShellProps {
-  account?: AccountSnapshot;
+  account?: AccountSnapshot | null;
   activeView: AppView;
   children: ReactNode;
   onOpenDeposit?: () => void;
@@ -85,9 +85,9 @@ export function AppShell({
           </nav>
 
           <div className="header-controls ml-auto" ref={headerControlsRef}>
-            {wallet.session ? account ? (
+            {wallet.session ? account !== undefined ? (
               <CollateralBalanceMenu
-                account={account}
+                account={account ?? undefined}
                 onOpenDeposit={onOpenDeposit}
                 onRepairCollateral={onRepairCollateral}
                 showRepairCollateral={showRepairCollateral}

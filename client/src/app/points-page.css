@@ -1,0 +1,133 @@
+.points-page .account-stat > strong {
+  overflow-wrap: anywhere;
+}
+
+.points-page .points-stat-tier > strong {
+  font-size: 24px;
+  letter-spacing: -0.025em;
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+
+.points-value-partial {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--text-faint);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 6px;
+  cursor: help;
+}
+
+.points-tier-progress {
+  width: min(360px, 100%);
+  margin-top: 18px;
+}
+
+.points-progress-labels {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.points-progress-track {
+  height: 3px;
+  overflow: hidden;
+  margin-top: 9px;
+  background: var(--surface-soft);
+}
+
+.points-progress-track > span {
+  display: block;
+  height: 100%;
+  background: var(--text-primary);
+}
+
+.points-tier-table-wrap {
+  max-width: 100%;
+  margin-top: 18px;
+}
+
+.points-tier-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  text-align: left;
+}
+
+.points-tier-table th,
+.points-tier-table td {
+  padding: 16px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.points-tier-table tr > :first-child { padding-left: 0; }
+.points-tier-table tr > :last-child { padding-right: 0; }
+.points-tier-table thead th { padding-top: 12px; color: var(--text-muted); font-size: 11px; }
+.points-tier-table tbody th { font-weight: 500; }
+.points-tier-table [data-current="true"] .points-tier-name { color: var(--accent-orange); }
+.points-tier-mobile-label { display: none; }
+
+.points-loading-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 14px;
+  color: var(--text-muted);
+}
+
+.points-loading-dots > span {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.45;
+  animation: points-loading-pulse 1.2s ease-in-out infinite;
+}
+
+.points-loading-dots > span:nth-child(2) { animation-delay: 0.15s; }
+.points-loading-dots > span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes points-loading-pulse {
+  0%, 70%, 100% { opacity: 0.45; }
+  35% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .points-loading-dots > span { animation: none; }
+}
+
+@media (max-width: 640px) {
+  .points-page .account-stat > strong { font-size: 22px; }
+  .points-page .points-stat-tier > strong { font-size: 18px; }
+  .points-tier-table thead { display: none; }
+  .points-tier-table tbody { display: block; }
+  .points-tier-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 20px;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .points-tier-table tbody th,
+  .points-tier-table tbody td {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 5px;
+    border: 0;
+    padding: 0;
+    font-size: 13px;
+  }
+  .points-tier-table tbody th { grid-column: 1 / -1; font-size: 14px; font-weight: 500; }
+  .points-tier-table .points-tier-mobile-label { display: block; color: var(--text-muted); font-size: 11px; }
+}
+
+@media (max-width: 360px) {
+  .points-page .points-stat-tier > strong { font-size: 16px; }
+}

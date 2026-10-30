@@ -3,37 +3,34 @@
 import { ArrowUpRight } from "lucide-react";
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
-import { BottomTicker } from "@/components/bottom-ticker";
 import { formatVaultUnits } from "@/lib/liquidity-vault";
 import { useLiquidityVault } from "@/lib/use-liquidity-vault";
-import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useWalletSession } from "@/lib/use-wallet-session";
 
 const detailsHref = "/liquidity/xlm-usd";
 
 export function LiquidityPoolsPage() {
   const wallet = useWalletSession();
-  const ticker = useMarketTicker();
   const vault = useLiquidityVault(wallet.session);
   const connected = Boolean(wallet.session);
   const status = vault.status;
 
   return (
     <AppShell activeView="liquidity" wallet={wallet}>
-      <main className="liquidity-page liquidity-list-page">
-        <div className="liquidity-heading">
-          <h1>Liquidity</h1>
-          <p>Provide USDC liquidity for PNLX trades.</p>
+      <main className="account-page liquidity-page liquidity-list-page">
+        <div className="account-page-heading liquidity-heading">
+          <div>
+            <h1>Liquidity</h1>
+            <p>Provide USDC liquidity for PNLX trades.</p>
+          </div>
         </div>
 
         <section aria-label="Liquidity pools" className="liquidity-pools">
           <div aria-hidden="true" className="liquidity-pool-head">
             <div className="liquidity-pool-head-main">
               <span>Pool</span>
-              <span>Kind</span>
-              <span>Operator</span>
               <span>APY</span>
-              <span>Total assets</span>
+              <span>Assets at cost</span>
               <span>Your positions</span>
             </div>
             <span>Actions</span>
@@ -42,14 +39,13 @@ export function LiquidityPoolsPage() {
             <div className="liquidity-pool-row">
               <Link aria-label="View XLM/USD pool details" className="liquidity-pool-main" href={detailsHref}>
                 <span className="liquidity-pool-name"><strong>XLM/USD</strong><small>USDC liquidity <ArrowUpRight aria-hidden="true" size={12} /></small></span>
-                <span className="liquidity-pool-cell"><small>Kind</small><strong>Vault</strong></span>
-                <span className="liquidity-pool-cell" title={status.operator}><small>Operator</small><strong>PNLX</strong></span>
-                <span className="liquidity-pool-cell"><small>APY</small><strong aria-label="0 percent placeholder; APY is not calculated yet" className="liquidity-apy-placeholder" title="APY is not calculated yet">0%<sup>*</sup></strong></span>
-                <span className="liquidity-pool-cell"><small>Total assets</small><strong>${formatVaultUnits(status.totalAssetsAtCost)}</strong></span>
+                <span className="liquidity-pool-cell"><small>APY</small><strong aria-label="APY unavailable" className="liquidity-apy-placeholder" title="APY is not available yet">—</strong></span>
+                <span className="liquidity-pool-cell"><small>Assets at cost</small><strong>${formatVaultUnits(status.totalAssetsAtCost)}</strong></span>
                 <span className="liquidity-pool-cell">
                   <small>Your positions</small>
-                  <strong className={vault.account ? "" : "liquidity-pool-muted"}>
-                    {!connected ? "Connect to view" : vault.loading ? "Loading…" : vault.account ? vault.account.positions.length : "Unavailable"}
+                  <strong className={vault.account ? "" : "liquidity-pool-muted"}
+                    title={!connected ? "Connect wallet to view your positions" : vault.loading ? "Loading your positions" : vault.accountError ?? undefined}>
+                    {connected && !vault.loading && vault.account ? vault.account.positions.length : "—"}
                   </strong>
                 </span>
               </Link>
@@ -66,7 +62,6 @@ export function LiquidityPoolsPage() {
           )}
         </section>
       </main>
-      <BottomTicker ticker={ticker.ticker} updatedAt={ticker.updatedAt} />
     </AppShell>
   );
 }

@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
-import { BottomTicker } from "@/components/bottom-ticker";
 import {
   formatVaultUnits,
   formatVaultSharePrice,
@@ -23,7 +22,6 @@ import {
   type VaultChartRange,
 } from "@/lib/liquidity-vault";
 import { useLiquidityVault } from "@/lib/use-liquidity-vault";
-import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useWalletSession } from "@/lib/use-wallet-session";
 import type { WalletSession } from "@/lib/wallet-auth";
 
@@ -70,7 +68,6 @@ function PoolAssetsChart({ points }: { points: VaultHistory["assets"] }) {
 export function LiquidityPoolDetails() {
   const wallet = useWalletSession();
   const vault = useLiquidityVault(wallet.session);
-  const ticker = useMarketTicker();
   const searchParams = useSearchParams();
   const requestedAction = searchParams.get("action");
   const queryDialog: DialogMode | null = requestedAction === "supply" ? "deposit" : requestedAction === "withdraw" ? "withdraw" : null;
@@ -108,21 +105,23 @@ export function LiquidityPoolDetails() {
 
   return (
     <AppShell activeView="liquidity" wallet={wallet}>
-      <main className="liquidity-page">
-        <div className="liquidity-heading">
-          <Link className="liquidity-back-link" href="/liquidity">← Liquidity</Link>
-          <h1>XLM/USD</h1>
-          <p>USDC vault · Operated by PNLX</p>
+      <main className="account-page liquidity-page liquidity-details-page">
+        <div className="account-page-heading liquidity-heading">
+          <div>
+            <Link className="liquidity-back-link" href="/liquidity">← Liquidity</Link>
+            <h1>XLM/USD</h1>
+            <p>USDC vault · Operated by PNLX</p>
+          </div>
         </div>
 
-        <section aria-label="Your liquidity" className="liquidity-overview">
+        <section aria-busy={Boolean(wallet.session) && vault.loading} aria-label="Your liquidity" className="liquidity-overview">
           <div className="liquidity-account-row">
             <div>
               <span className="portfolio-overview-label">Your liquidity</span>
               {!wallet.session ? (
-                <p className="liquidity-wallet-hint">Connect wallet to view your position</p>
+                <><strong className="liquidity-account-value">—</strong><p className="liquidity-wallet-hint">Connect wallet to view your position</p></>
               ) : vault.loading ? (
-                <p className="liquidity-wallet-hint">Loading your position…</p>
+                <><strong className="liquidity-account-value">—</strong><p className="liquidity-wallet-hint">Loading your position…</p></>
               ) : vault.accountError ? (
                 <p className="liquidity-wallet-hint" role="alert">{vault.accountError}</p>
               ) : account && recordedValue !== undefined ? (
@@ -140,15 +139,15 @@ export function LiquidityPoolDetails() {
             </div>
           </div>
 
-          <div className="liquidity-supporting-values">
-            <div className="portfolio-supporting-value"><span>Pool APY</span><strong aria-label="0 percent placeholder; APY is not calculated yet" className="liquidity-apy-placeholder" title="APY is not calculated yet">0%<sup>*</sup></strong></div>
-            <div className="portfolio-supporting-value"><span>Assets at cost</span><strong>{status ? `$${formatVaultUnits(status.totalAssetsAtCost)}` : "—"}</strong></div>
+          <div className="account-stats liquidity-supporting-values">
+            <div className="account-stat portfolio-supporting-value"><span>Pool APY</span><strong aria-label="APY unavailable" className="liquidity-apy-placeholder" title="APY is not available yet">—</strong></div>
+            <div className="account-stat portfolio-supporting-value"><span>Assets at cost</span><strong>{status ? `$${formatVaultUnits(status.totalAssetsAtCost)}` : "—"}</strong></div>
           </div>
           {vault.statusError ? <p className="liquidity-data-error" role="alert">{vault.statusError} <button onClick={vault.refresh} type="button">Retry</button></p> : null}
         </section>
 
         <section aria-label="Total liquidity" className="liquidity-performance">
-          <div className="liquidity-section-heading">
+          <div className="page-section-heading liquidity-section-heading">
             <h2>Total liquidity</h2>
             <div aria-label="Chart range" className="liquidity-chart-ranges" role="group">
               {(["1D", "7D", "30D"] as const).map((range) => (
@@ -160,7 +159,7 @@ export function LiquidityPoolDetails() {
           <PoolAssetsChart points={selectVaultAssetPoints(history?.assets ?? [], chartRange,
             chartNow, history?.stale ? null : history?.observedAt)} />
           <div className="liquidity-detail-grid">
-            <div><span>{account && BigInt(account.shares) > 0n ? "Your share price" : "Share price"}</span><strong>{sharePrice !== null ? <>${formatVaultSharePrice(sharePrice)}{account?.equity === null ? <sup>*</sup> : null}</> : "—"}</strong></div>
+            <div><span>{account && BigInt(account.shares) > 0n ? "Your share price at cost" : "Share price"}</span><strong>{sharePrice !== null ? <>${formatVaultSharePrice(sharePrice)}{account?.equity === null ? <sup>*</sup> : null}</> : "—"}</strong></div>
             <div><span>Liquid USDC</span><strong>{status ? `$${formatVaultUnits(status.liquidAssets)}` : "—"}</strong></div>
             <div><span>Deployed principal</span><strong>{status ? `$${formatVaultUnits(status.deployedPrincipal)}` : "—"}</strong></div>
           </div>
@@ -168,7 +167,7 @@ export function LiquidityPoolDetails() {
         </section>
 
         <section aria-label="Recent liquidity activity" className="liquidity-activity">
-          <div className="liquidity-section-heading liquidity-activity-heading"><h2>Recent activity</h2></div>
+          <div className="page-section-heading liquidity-section-heading liquidity-activity-heading"><h2>Recent activity</h2></div>
           {history?.activity.length ? (
             <div className="liquidity-activity-list">
               {history.activity.slice(0, 6).map((item) => (
@@ -181,7 +180,6 @@ export function LiquidityPoolDetails() {
           ) : <p className="liquidity-activity-empty">{historyError || history?.stale ? "Activity unavailable." : history ? "No recent pool activity." : "Loading activity…"}</p>}
         </section>
       </main>
-      <BottomTicker ticker={ticker.ticker} updatedAt={ticker.updatedAt} />
       {dialog ? (
         <LiquidityActionDialog
           account={account}

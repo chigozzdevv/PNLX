@@ -12,10 +12,12 @@ interface PortfolioPageProps {
   cancellingOrderId?: string;
   closingPositionId?: string;
   connected?: boolean;
+  dataError?: string;
   loading?: boolean;
   onCancelOrder?: (order: OwnerOrderGroup) => Promise<void> | void;
   onClosePosition?: (position: PositionRow) => Promise<void> | void;
   onOpenManageFunds?: () => void;
+  onRetry?: () => void;
   trading: TradingLiveData;
 }
 
@@ -24,28 +26,46 @@ export function PortfolioPage({
   cancellingOrderId,
   closingPositionId,
   connected = false,
+  dataError,
   loading = false,
   onCancelOrder,
   onClosePosition,
   onOpenManageFunds,
+  onRetry,
   trading,
 }: PortfolioPageProps) {
   const [balancesHidden, setBalancesHidden] = useState(false);
-  const livePnl = trading.positions
-    .filter((position) => position.status === "open")
-    .reduce((total, position) => total + (position.unrealizedPnl ?? 0), 0);
-  const collateral = trading.account.accountValue ?? 0;
-  const accountValue = collateral + livePnl;
+  const accountReady = connected && !loading && !dataError && trading.account.accountValue !== null;
+  const openPositions = trading.positions.filter((position) => position.status === "open");
+  const livePnl = accountReady && openPositions.every((position) =>
+    position.unrealizedPnl !== undefined && Number.isFinite(position.unrealizedPnl))
+    ? openPositions.reduce((total, position) => total + position.unrealizedPnl!, 0)
+    : null;
+  // Committed collateral already includes entry fees or rebates; net P&L includes them too.
+  const entryFees = openPositions.reduce((total, position) => total + (position.entryFee ?? 0), 0);
+  const accountValue = livePnl !== null && trading.account.accountValue !== null
+    ? trading.account.accountValue + livePnl + entryFees : null;
 
   return (
-    <main className="portfolio-page">
-      <section aria-label="Account overview" className="portfolio-overview">
+    <main className="account-page portfolio-page">
+      <div className="account-page-heading portfolio-heading">
+        <h1>Portfolio</h1>
+        <button
+          className="portfolio-primary-action portfolio-manage-funds"
+          disabled={!connected || !onOpenManageFunds}
+          type="button"
+          onClick={onOpenManageFunds}
+        >
+          Manage funds
+        </button>
+      </div>
+      <section aria-busy={connected && loading} aria-label="Account overview" className="portfolio-overview">
         <div className="portfolio-account-row">
           <div>
             <span className="portfolio-overview-label">Account value</span>
             <div className="portfolio-account-value-row">
               <strong className="portfolio-account-value">
-                {balancesHidden ? "••••••" : portfolioUsd(accountValue)}
+                {balancesHidden && accountValue !== null ? "••••••" : portfolioUsd(accountValue)}
               </strong>
               <button
                 aria-label={balancesHidden ? "Show balances" : "Hide balances"}
@@ -59,45 +79,49 @@ export function PortfolioPage({
                   : <Eye aria-hidden="true" size={18} strokeWidth={1.8} />}
               </button>
             </div>
-            <p className="portfolio-unrealized">
-              <span className={livePnl > 0 ? "portfolio-unrealized-positive" : livePnl < 0 ? "portfolio-unrealized-negative" : ""}>
-                {balancesHidden ? "••••••" : signedUsd(livePnl)}
+            <p
+              className="portfolio-unrealized"
+              title={accountReady && livePnl === null
+                ? "Unrealized P&L is unavailable for one or more open positions."
+                : undefined}
+            >
+              <span className={!balancesHidden && livePnl !== null && livePnl > 0 ? "portfolio-unrealized-positive"
+                : !balancesHidden && livePnl !== null && livePnl < 0 ? "portfolio-unrealized-negative" : ""}>
+                {balancesHidden && livePnl !== null ? "••••••" : livePnl === null ? "—" : signedUsd(livePnl)}
               </span>
               <span>unrealized</span>
             </p>
           </div>
-          <button
-            className="portfolio-primary-action portfolio-manage-funds"
-            disabled={!connected || !onOpenManageFunds}
-            type="button"
-            onClick={onOpenManageFunds}
-          >
-            Manage funds
-          </button>
         </div>
 
-        <div className="portfolio-supporting-values">
+        <div className="account-stats portfolio-supporting-values">
           <SupportingValue
             hidden={balancesHidden}
             label="Available"
-            value={portfolioUsd(trading.account.availableShieldedUsdc ?? 0)}
+            value={portfolioUsd(accountReady ? trading.account.availableShieldedUsdc : null)}
           />
           <SupportingValue
             hidden={balancesHidden}
             label="Margin in use"
-            value={portfolioUsd(trading.account.lockedMargin)}
+            value={portfolioUsd(accountReady ? trading.account.lockedMargin : null)}
           />
-          {trading.account.tradedVolume !== null ? (
-            <SupportingValue
-              hidden={balancesHidden}
-              label="Traded volume"
-              value={portfolioUsd(trading.account.tradedVolume)}
-            />
-          ) : null}
+          <SupportingValue
+            hidden={balancesHidden}
+            label="Traded volume"
+            value={portfolioUsd(accountReady ? trading.account.tradedVolume : null)}
+          />
         </div>
       </section>
 
-      <PortfolioRecords
+      {dataError ? (
+        <div aria-label="Portfolio unavailable" className="page-empty-state" role="alert" title={dataError}>
+          {onRetry ? (
+            <button aria-label="Retry loading portfolio" className="page-action-secondary" onClick={onRetry} type="button">
+              Retry
+            </button>
+          ) : "Unavailable"}
+        </div>
+      ) : <PortfolioRecords
         actionMessage={actionMessage}
         activity={trading.activity}
         cancellingOrderId={cancellingOrderId}
@@ -107,14 +131,14 @@ export function PortfolioPage({
         onClosePosition={onClosePosition}
         orders={trading.orders}
         positions={trading.positions}
-      />
+      />}
     </main>
   );
 }
 
 function SupportingValue({ hidden, label, value }: { hidden: boolean; label: string; value: string }) {
   return (
-    <div className="portfolio-supporting-value">
+    <div className="account-stat portfolio-supporting-value">
       <span>{label}</span>
       <strong>{hidden && value !== "—" ? "••••••" : value}</strong>
     </div>
@@ -126,6 +150,7 @@ function signedUsd(value: number): string {
   return `${value > 0 ? "+" : "−"}${portfolioUsd(Math.abs(value))}`;
 }
 
-function portfolioUsd(value: number): string {
+function portfolioUsd(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "—";
   return formatUsd(value, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 }

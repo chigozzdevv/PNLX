@@ -2,12 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
-import { BottomTicker } from "@/components/bottom-ticker";
 import { pnlxGet } from "@/lib/pnlx-api";
-import { useMarketTicker } from "@/lib/use-market-ticker";
 import { useWalletSession } from "@/lib/use-wallet-session";
 
-interface TierBenefit {
+export interface TierBenefit {
   tier: "Standard" | "Silver" | "Gold" | "Platinum";
   threshold: number;
   feeRebatePercent: number;
@@ -15,7 +13,7 @@ interface TierBenefit {
   creditDropWeight: number;
 }
 
-interface PointsSnapshot {
+export interface PointsSnapshot {
   activePoints: number;
   benefits: TierBenefit;
   complete: boolean;
@@ -31,12 +29,13 @@ const tiers: TierBenefit[] = [
   { tier: "Platinum", threshold: 3_000, feeRebatePercent: 15, referralSharePercent: 10, creditDropWeight: 3 },
 ];
 
+const PARTIAL_POINTS_DESCRIPTION = "Verified activity only; some historical settlement details are missing.";
+
 export function PointsPage() {
   const wallet = useWalletSession();
-  const ticker = useMarketTicker();
   const [loaded, setLoaded] = useState<{ address: string; points: PointsSnapshot } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -45,61 +44,109 @@ export function PointsPage() {
     const load = () => {
       void pnlxGet<{ points: PointsSnapshot }>("/points", session.token)
         .then((response) => { if (active) { setLoaded({ address: session.address, points: response.points }); setError(null); } })
-        .catch((cause) => { if (active) { setLoaded(null); setError(cause instanceof Error ? cause.message : "Points unavailable"); } })
-        .finally(() => { if (active) setLoading(false); });
+        .catch((cause) => { if (active) { setLoaded(null); setError(cause instanceof Error ? cause.message : "Unable to retrieve points"); } });
     };
-    const start = window.setTimeout(() => { if (active) { setLoading(true); load(); } }, 0);
+    load();
     const timer = window.setInterval(load, 60_000);
-    return () => { active = false; window.clearTimeout(start); window.clearInterval(timer); };
-  }, [wallet.session]);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [refreshKey, wallet.session]);
 
   const points = loaded && wallet.session?.address === loaded.address ? loaded.points : null;
-  const next = points?.nextTier;
   return (
     <AppShell activeView="points" wallet={wallet}>
-      <main className="mx-auto w-full max-w-6xl px-4 pb-20 pt-10 md:px-6">
-        <h1 className="text-3xl font-semibold tracking-tight">Points</h1>
-        <p className="mt-2 text-sm text-[var(--text-muted)]">Your activity, counted over the last 90 days.</p>
+      <main className="account-page points-page">
+        <div className="account-page-heading"><h1>Points</h1></div>
 
         {!wallet.session ? (
-          <div className="mt-10 border-t border-[var(--line)] py-8 text-[var(--text-muted)]">Connect your wallet to view your points.</div>
+          <div className="page-empty-state">Connect your wallet to view your points.</div>
         ) : error ? (
-          <div className="mt-10 border-t border-[var(--line)] py-8 text-[var(--text-muted)]" role="alert">{error}</div>
+          <div className="page-empty-state" role="alert">
+            <span>{error}</span>
+            <button className="page-action-secondary" type="button" onClick={() => { setError(null); setRefreshKey((key) => key + 1); }}>Retry</button>
+          </div>
         ) : !points ? (
-          <div className="mt-10 border-t border-[var(--line)] py-8 text-[var(--text-muted)]">{loading ? "Loading points…" : "Points unavailable"}</div>
+          <div aria-label="Loading points" className="page-empty-state" role="status">
+            <span aria-hidden="true" className="points-loading-dots"><span /><span /><span /></span>
+          </div>
         ) : (
-          <>
-            <div className="mt-10 grid gap-6 border-y border-[var(--line)] py-7 sm:grid-cols-3">
-              <div><span className="text-sm text-[var(--text-muted)]">Your tier</span><strong className="mt-2 block text-3xl font-semibold">{points.tier}</strong></div>
-              <div><span className="text-sm text-[var(--text-muted)]">90-day points</span><strong className="mt-2 block text-3xl font-semibold">{points.activePoints.toLocaleString()}</strong></div>
-              <div><span className="text-sm text-[var(--text-muted)]">Lifetime points</span><strong className="mt-2 block text-3xl font-semibold">{points.lifetimePoints.toLocaleString()}</strong></div>
-            </div>
-            {!points.complete ? <p className="mt-4 text-sm text-[var(--accent-orange)]">Some settled activity is still being reconciled.</p> :
-              next ? <p className="mt-4 text-sm text-[var(--text-muted)]">{(next.threshold - points.activePoints).toLocaleString()} points to {next.tier}</p> : null}
-          </>
+          <PointsOverview points={points} />
         )}
 
-        <section className="mt-14" aria-label="Points tiers">
-          <h2 className="text-xl font-semibold">Tier benefits</h2>
-          <div className="mt-5 overflow-x-auto border-t border-[var(--line)]">
-            <table className="w-full min-w-[620px] border-collapse text-left text-sm">
-              <thead className="text-[var(--text-faint)]"><tr className="border-b border-[var(--line)]">
-                <th className="py-4 pr-4 font-medium">Tier</th><th className="py-4 pr-4 font-medium">90-day points</th>
-                <th className="py-4 pr-4 font-medium">Fee rebate</th><th className="py-4 pr-4 font-medium">Referral share</th>
-                <th className="py-4 font-medium">Credit Drop weight</th>
-              </tr></thead>
-              <tbody>{tiers.map((tier) => <tr className="border-b border-[var(--line)]" key={tier.tier}>
-                <td className={`py-4 pr-4 font-medium ${points?.tier === tier.tier ? "text-[var(--accent-orange)]" : ""}`}>{tier.tier}</td>
-                <td className="py-4 pr-4">{tier.threshold.toLocaleString()}</td>
-                <td className="py-4 pr-4">{tier.feeRebatePercent}%</td>
-                <td className="py-4 pr-4">{tier.referralSharePercent}%</td>
-                <td className="py-4">{tier.creditDropWeight}×</td>
-              </tr>)}</tbody>
-            </table>
-          </div>
-        </section>
+        <PointsTierBenefits points={points} />
       </main>
-      <BottomTicker ticker={ticker.ticker} updatedAt={ticker.updatedAt} />
     </AppShell>
+  );
+}
+
+export function PointsOverview({ points }: { points: PointsSnapshot }) {
+  const next = points.nextTier;
+  const partial = !points.complete;
+  const progress = next
+    ? Math.max(0, Math.min(100, (points.activePoints - points.benefits.threshold) / (next.threshold - points.benefits.threshold) * 100))
+    : 0;
+  return (
+    <>
+      <div aria-label="Points overview" className="account-stats points-stats">
+        <div className="account-stat points-stat-active">
+          <span>90-day points</span>
+          <strong className={partial ? "points-value-partial" : undefined} title={partial ? PARTIAL_POINTS_DESCRIPTION : undefined}>
+            {points.activePoints.toLocaleString()}
+            {partial ? <span className="sr-only">. {PARTIAL_POINTS_DESCRIPTION}</span> : null}
+          </strong>
+        </div>
+        <div className="account-stat points-stat-tier">
+          <span>Tier</span>
+          <strong className={partial ? "points-value-partial" : undefined} title={partial ? PARTIAL_POINTS_DESCRIPTION : undefined}>
+            {points.tier}
+            {partial ? <span className="sr-only">. {PARTIAL_POINTS_DESCRIPTION}</span> : null}
+          </strong>
+        </div>
+        <div className="account-stat">
+          <span>Lifetime points</span>
+          <strong className={partial ? "points-value-partial" : undefined} title={partial ? PARTIAL_POINTS_DESCRIPTION : undefined}>
+            {points.lifetimePoints.toLocaleString()}
+            {partial ? <span className="sr-only">. {PARTIAL_POINTS_DESCRIPTION}</span> : null}
+          </strong>
+        </div>
+      </div>
+      {points.complete && next ? (
+        <div className="points-tier-progress">
+          <div className="points-progress-labels"><span>{next.tier}</span><span>{points.activePoints.toLocaleString()} / {next.threshold.toLocaleString()}</span></div>
+          <div
+            aria-label={`Progress to ${next.tier}`}
+            aria-valuemax={next.threshold}
+            aria-valuemin={points.benefits.threshold}
+            aria-valuenow={points.activePoints}
+            className="points-progress-track"
+            role="progressbar"
+          ><span style={{ width: `${progress}%` }} /></div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+export function PointsTierBenefits({ points }: { points: PointsSnapshot | null }) {
+  const partial = points !== null && !points.complete;
+  return (
+    <section className="page-section" aria-label="Points tiers">
+      <div className="page-section-heading"><h2>Tier benefits</h2></div>
+      <div className="points-tier-table-wrap">
+        <table className="points-tier-table">
+          <thead><tr>
+            <th scope="col">Tier</th><th scope="col" title="Minimum points over the last 90 days">90-day points</th>
+            <th scope="col">Fee rebate</th><th scope="col">Referral share</th>
+            <th scope="col">Credit Drop weight</th>
+          </tr></thead>
+          <tbody>{tiers.map((tier) => <tr data-current={points?.tier === tier.tier || undefined} key={tier.tier}>
+            <th className={`points-tier-name${partial && points?.tier === tier.tier ? " points-value-partial" : ""}`} scope="row" title={partial && points?.tier === tier.tier ? PARTIAL_POINTS_DESCRIPTION : undefined}>{tier.tier}</th>
+            <td><span className="points-tier-mobile-label">90-day points</span>{tier.threshold.toLocaleString()}</td>
+            <td><span className="points-tier-mobile-label">Fee rebate</span>{tier.feeRebatePercent}%</td>
+            <td><span className="points-tier-mobile-label">Referral share</span>{tier.referralSharePercent}%</td>
+            <td><span className="points-tier-mobile-label">Credit Drop weight</span>{tier.creditDropWeight}×</td>
+          </tr>)}</tbody>
+        </table>
+      </div>
+    </section>
   );
 }

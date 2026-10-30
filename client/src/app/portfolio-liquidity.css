@@ -1,0 +1,297 @@
+.portfolio-page .portfolio-heading,
+.liquidity-page .liquidity-heading {
+  margin-bottom: 28px;
+}
+
+.portfolio-page .portfolio-overview {
+  padding: 0 0 28px;
+}
+
+.portfolio-page .portfolio-account-row {
+  display: block;
+}
+
+.portfolio-page .portfolio-account-value,
+.liquidity-page .liquidity-account-value {
+  color: var(--text-primary);
+  font-size: clamp(30px, 3vw, 36px);
+  font-weight: 500;
+  letter-spacing: -0.04em;
+  line-height: 1.15;
+}
+
+.portfolio-page .portfolio-account-value-row {
+  margin-top: 8px;
+}
+
+.portfolio-page .portfolio-supporting-values {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  margin-top: 24px;
+}
+
+.portfolio-page .portfolio-supporting-value,
+.liquidity-page .portfolio-supporting-value {
+  min-width: 0;
+}
+
+.portfolio-page .portfolio-supporting-value > strong,
+.liquidity-page .portfolio-supporting-value > strong {
+  font-size: 20px;
+  letter-spacing: -0.025em;
+}
+
+.portfolio-page .portfolio-manage-funds {
+  flex-shrink: 0;
+  margin-top: 0;
+}
+
+.portfolio-page .portfolio-primary-action,
+.liquidity-page .portfolio-primary-action,
+.liquidity-page .liquidity-secondary-action {
+  min-height: 38px;
+  border-radius: 6px;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.portfolio-page .portfolio-visibility-button:focus-visible,
+.portfolio-page .portfolio-primary-action:focus-visible,
+.liquidity-page button:focus-visible,
+.liquidity-page a:focus-visible {
+  outline: 2px solid var(--accent-orange);
+  outline-offset: 3px;
+}
+
+.portfolio-page .portfolio-records-toolbar {
+  min-height: 46px;
+  border-color: var(--line);
+}
+
+.portfolio-page .portfolio-record-tab {
+  min-height: 45px;
+  font-size: 13px;
+}
+
+.portfolio-page .portfolio-record-tab[aria-selected="true"],
+.portfolio-page .portfolio-market-cell strong {
+  color: var(--text-primary);
+}
+
+.portfolio-page .portfolio-empty-state {
+  min-height: 190px;
+}
+
+.liquidity-page .liquidity-heading h1 {
+  color: var(--text-primary);
+}
+
+.liquidity-page .liquidity-heading p {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.liquidity-page .liquidity-back-link {
+  margin-bottom: 16px;
+}
+
+.liquidity-list-page .liquidity-pools {
+  margin-top: 0;
+  border-color: var(--line);
+}
+
+.liquidity-list-page .liquidity-pool-head,
+.liquidity-list-page .liquidity-pool-row {
+  grid-template-columns: minmax(0, 1fr) 172px;
+  gap: 24px;
+}
+
+.liquidity-list-page .liquidity-pool-head-main,
+.liquidity-list-page .liquidity-pool-main {
+  grid-template-columns: minmax(145px, 1.4fr) minmax(60px, 0.65fr) minmax(130px, 1fr) minmax(100px, 0.8fr);
+  gap: 20px;
+}
+
+.liquidity-list-page .liquidity-pool-head {
+  min-height: 42px;
+  font-size: 12px;
+}
+
+.liquidity-list-page .liquidity-pool-main,
+.liquidity-list-page .liquidity-pool-row {
+  min-height: 88px;
+}
+
+.liquidity-list-page .liquidity-pool-name strong {
+  color: var(--text-primary);
+}
+
+.liquidity-list-page .liquidity-pool-name small {
+  font-size: 12px;
+}
+
+.liquidity-list-page .liquidity-pool-actions {
+  justify-content: flex-end;
+}
+
+.liquidity-list-page .liquidity-pool-actions a {
+  min-height: 36px;
+  border-radius: 6px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.liquidity-page .liquidity-overview {
+  padding: 0 0 28px;
+}
+
+.liquidity-page .liquidity-account-row {
+  align-items: center;
+  gap: 24px;
+}
+
+.liquidity-page .liquidity-actions {
+  flex-shrink: 0;
+  margin-top: 0;
+}
+
+.liquidity-page .liquidity-supporting-values {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  margin-top: 24px;
+}
+
+.liquidity-page .liquidity-value-note,
+.liquidity-page .liquidity-wallet-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.liquidity-page .liquidity-performance,
+.liquidity-page .liquidity-activity {
+  border-color: var(--line);
+  padding-top: 24px;
+}
+
+.liquidity-page .liquidity-performance {
+  padding-bottom: 28px;
+}
+
+.liquidity-page .liquidity-section-heading h2 {
+  color: var(--text-primary);
+}
+
+.liquidity-page .liquidity-chart {
+  margin-top: 20px;
+}
+
+.liquidity-page .liquidity-detail-grid {
+  gap: 20px;
+  margin-top: 24px;
+}
+
+.liquidity-page .liquidity-detail-grid > div {
+  gap: 6px;
+}
+
+.liquidity-page .liquidity-detail-grid strong {
+  font-size: 18px;
+  line-height: 1.4;
+}
+
+.liquidity-page .liquidity-activity-item {
+  min-height: 72px;
+  border-color: var(--line);
+}
+
+.liquidity-page .liquidity-activity-empty {
+  margin-top: 0;
+  padding: 40px 0;
+}
+
+@media (max-width: 900px) {
+  .liquidity-list-page .liquidity-pool-head {
+    display: none;
+  }
+
+  .liquidity-list-page .liquidity-pool-row {
+    display: block;
+    min-height: 0;
+    padding: 20px 0;
+  }
+
+  .liquidity-list-page .liquidity-pool-main {
+    min-height: 0;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 20px 16px;
+  }
+
+  .liquidity-list-page .liquidity-pool-name {
+    grid-column: 1 / -1;
+  }
+
+  .liquidity-list-page .liquidity-pool-cell small {
+    display: block;
+    font-size: 12px;
+  }
+
+  .liquidity-list-page .liquidity-pool-actions {
+    justify-content: flex-start;
+    margin-top: 20px;
+  }
+}
+
+@media (max-width: 600px) {
+  .portfolio-page .portfolio-heading,
+  .liquidity-page .liquidity-heading {
+    margin-bottom: 24px;
+  }
+
+  .portfolio-page .portfolio-supporting-values {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .portfolio-page .portfolio-supporting-values > :nth-child(2) {
+    padding-right: 0;
+  }
+
+  .portfolio-page .portfolio-supporting-values > :last-child {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+    padding-inline: 0;
+  }
+
+  .portfolio-page .portfolio-records-toolbar {
+    gap: 16px;
+  }
+
+  .liquidity-page .liquidity-account-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 20px;
+  }
+
+  .liquidity-page .liquidity-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .liquidity-page .liquidity-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px 16px;
+  }
+
+  .liquidity-page .liquidity-detail-grid > :first-child {
+    grid-column: 1 / -1;
+  }
+
+  .liquidity-page .liquidity-activity-item {
+    gap: 16px;
+  }
+}

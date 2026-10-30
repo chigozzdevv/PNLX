@@ -3,6 +3,10 @@ import localFont from "next/font/local";
 import type { ReactNode } from "react";
 import "./globals.css";
 import "./trade-workspace.css";
+import "./account-pages.css";
+import "./points-page.css";
+import "./rewards-page.css";
+import "./portfolio-liquidity.css";
 import "./mobile-shell.css";
 
 const inter = localFont({

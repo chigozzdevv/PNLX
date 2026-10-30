@@ -1,0 +1,134 @@
+/* Shared account-page layout; the application header stays in the app shell. */
+.app-shell > .app-content { padding: 0; }
+
+.account-page {
+  display: block;
+  width: min(1180px, 100%);
+  min-height: calc(100dvh - 57px);
+  margin: 0 auto;
+  padding: 32px 24px 80px;
+  font-variant-numeric: tabular-nums;
+}
+
+.account-page-heading {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.account-page-heading h1 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.25;
+}
+
+.account-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 28px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.account-stat {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 22px 24px;
+}
+
+.account-stat:first-child { padding-left: 0; }
+.account-stat:last-child { padding-right: 0; }
+.account-stat + .account-stat { border-left: 1px solid var(--line); }
+
+.account-stat > span,
+.account-stat > dt {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.account-stat > strong,
+.account-stat > dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 30px;
+  font-weight: 500;
+  letter-spacing: -0.035em;
+  line-height: 1.2;
+}
+
+.page-section { margin-top: 36px; }
+
+.page-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.page-section-heading h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.page-action-secondary {
+  display: inline-flex;
+  min-height: 34px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: transparent;
+  padding: 0 12px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.page-action-secondary:hover:not(:disabled) { background: var(--surface-raised); }
+.page-action-secondary:disabled { cursor: default; opacity: 0.45; }
+
+.account-page :is(button, a, summary):focus-visible {
+  outline: 2px solid var(--text-muted);
+  outline-offset: 3px;
+}
+
+.page-empty-state {
+  display: flex;
+  min-height: 128px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .account-page { padding: 24px 16px 72px; }
+  .account-page-heading { min-height: 34px; gap: 12px; }
+  .account-page-heading h1 { font-size: 22px; }
+  .account-stats { margin-top: 22px; }
+  .account-stat { gap: 7px; padding: 18px 12px; }
+  .account-stat > strong,
+  .account-stat > dd { font-size: 24px; }
+  .account-stat > span,
+  .account-stat > dt { font-size: 11px; }
+  .page-section { margin-top: 28px; }
+  .page-action-secondary { min-height: 36px; padding-inline: 10px; }
+}
