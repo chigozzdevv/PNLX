@@ -3,10 +3,11 @@ import { publicRunTiming } from "./metrics";
 
 test("extracts only timings for this run and drops private recovery material", () => {
   const runId = `0x${"a".repeat(64)}`;
-  const result = publicRunTiming({ runId, startedAt: 10, completedAt: 40,
+  const settlementDigest = `0x${"c".repeat(64)}`;
+  const result = publicRunTiming({ runId, startedAt: 10, completedAt: 40, status: "settled", settlementDigest,
     phaseTimestamps: { matcher: 12, proving: 20, "batch-settlement": 30, unknown: 99 },
     settlementTranscript: { witness: "private" }, intentCommitments: ["private selection"] }, new Set([runId]));
-  expect(result).toEqual({ runId, startedAt: 10, completedAt: 40,
+  expect(result).toEqual({ runId, startedAt: 10, completedAt: 40, status: "settled", settlementDigest,
     phaseTimestamps: { matcher: 12, proving: 20, "batch-settlement": 30 } });
   expect(JSON.stringify(result)).not.toContain("private");
   expect(publicRunTiming({ runId, startedAt: 10 }, new Set())).toBeUndefined();

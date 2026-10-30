@@ -8,7 +8,7 @@ import { ObservationProtocol, OBSERVATION_API_URL, type CycleState, type Protoco
 import { createWalletIdentity, fundWallet, walletIdentity, accountBalances, type WalletRecord } from "./wallets";
 import { renderExecutionEmail, sendExecutionEmail, type ExecutionEmailData } from "./email";
 import { ObservationStore } from "./store";
-import { readExecutionRuns } from "./metrics";
+import { readExecutionRuns, type PublicRunTiming } from "./metrics";
 
 export const NEW_OPEN_GAP_MS = 20 * MINUTE_MS;
 export const MISSED_SLOT_MS = 2 * HOUR_MS;
@@ -92,7 +92,7 @@ export interface RunnerServices {
   emailAssetFingerprint?(): string;
   chainTime(hash: string): Promise<number | undefined>;
   balances?(address: string): Promise<{ USDC: string; XLM: string }>;
-  executionRuns?(runIds: string[]): Promise<Array<{ runId: string; startedAt: number; completedAt?: number; phaseTimestamps?: Partial<Record<string, number>> }>>;
+  executionRuns?(runIds: string[]): Promise<PublicRunTiming[]>;
   from: string;
   to: string | string[];
 }
@@ -286,10 +286,16 @@ export class ObservationRunner {
       if (this.state.outbox.some((entry) => entry.key === openingKey) &&
         (!position.confirmedClose || this.state.outbox.some((entry) => entry.key === closingKey))) continue;
       const balances = this.services.balances ? await this.services.balances(this.wallet(cycle).address).catch(() => undefined) : undefined;
-      const runIds = [...new Set(value.matching.filter((entry) => entry.matching.batchId === position.snapshot.batchId &&
-        entry.matching.status === "settled").map((entry) => entry.matching.runId).filter((id): id is `0x${string}` => Boolean(id)))];
+      // Filled orders collapse to a generic "settled" matching summary without
+      // a run ID. Recover candidate IDs from the entire recorded batch history.
+      const runIds = [...new Set(value.matching.filter((entry) => entry.matching.batchId === position.snapshot.batchId)
+        .map((entry) => entry.matching.runId).filter((id): id is `0x${string}` => Boolean(id)))];
       const runs = this.services.executionRuns && runIds.length ? await this.services.executionRuns(runIds).catch(() => []) : [];
-      const run = runs.find((entry) => entry.completedAt !== undefined) ?? runs.at(-1);
+      // Completion alone also describes failed retries. Only the settled run
+      // bound to this confirmed position's settlement may supply its timings.
+      const run = runs.find((entry) => entry.status === "settled" && entry.batchId === position.snapshot.batchId &&
+        typeof entry.settlementDigest === "string" && entry.settlementDigest.toLowerCase() === position.snapshot.settlementDigest.toLowerCase() &&
+        runIds.some((id) => id.toLowerCase() === entry.runId.toLowerCase()));
       const common = {
         cycleId: cycle.plan.cycleId, walletAlias: cycle.walletSource, market: cycle.plan.market, side: cycle.plan.side,
         margin: `${cycle.plan.marginUsdc} USDC`, leverage: value.spec.leverage,

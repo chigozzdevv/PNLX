@@ -4,6 +4,8 @@ const PHASES = ["oracle", "maker-liquidity", "matcher", "proving", "batch-settle
 export interface PublicRunTiming {
   runId: string;
   batchId?: string;
+  status?: "failed" | "running" | "settled" | "skipped";
+  settlementDigest?: string;
   startedAt: number;
   completedAt?: number;
   phaseTimestamps: Partial<Record<typeof PHASES[number], number>>;
@@ -18,6 +20,8 @@ export function publicRunTiming(input: unknown, allowed: Set<string>): PublicRun
   for (const phase of PHASES) if (validTime(record.phaseTimestamps?.[phase])) phaseTimestamps[phase] = record.phaseTimestamps[phase];
   return { runId: record.runId, startedAt: record.startedAt,
     ...(typeof record.batchId === "string" ? { batchId: record.batchId } : {}),
+    ...(["failed", "running", "settled", "skipped"].includes(record.status) ? { status: record.status } : {}),
+    ...(typeof record.settlementDigest === "string" && /^0x[0-9a-f]{64}$/i.test(record.settlementDigest) ? { settlementDigest: record.settlementDigest } : {}),
     ...(validTime(record.completedAt) ? { completedAt: record.completedAt } : {}), phaseTimestamps };
 }
 function validTime(value: unknown): value is number { return Number.isSafeInteger(value) && (value as number) > 0; }

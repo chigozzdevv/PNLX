@@ -147,6 +147,65 @@ describe("one-time observation runner", () => {
     expect(h.state.outbox.find((entry) => entry.data.kind === "opened")!.data.message).toContain("confirmed observation");
   });
 
+  test("opening timings recover historical run IDs and select the settled run bound to the confirmed settlement", async () => {
+    const h = harness(); const { value } = attachActive(h);
+    const winningId = `0x${"1".repeat(64)}` as const;
+    const failedId = `0x${"2".repeat(64)}` as const;
+    const wrongSettlementId = `0x${"3".repeat(64)}` as const;
+    const unrelatedId = `0x${"4".repeat(64)}` as const;
+    const digest = `0x${"a".repeat(64)}` as const;
+    value.positions[0]!.snapshot.settlementDigest = digest;
+    value.matching = [
+      { observedAt: START - 15 * MINUTE_MS, intentCommitment: "0x4", matching: {
+        batchId: "batch-1", runId: failedId, state: "proving", phase: "proving", status: "running", message: "Proving" } },
+      { observedAt: START - 14 * MINUTE_MS, intentCommitment: "0x4", matching: {
+        batchId: "batch-1", runId: wrongSettlementId, state: "proving", phase: "proving", status: "running", message: "Proving" } },
+      { observedAt: START - 13 * MINUTE_MS, intentCommitment: "0x4", matching: {
+        batchId: "another-batch", runId: unrelatedId, state: "proving", phase: "proving", status: "running", message: "Proving" } },
+      { observedAt: START - 12 * MINUTE_MS, intentCommitment: "0x4", matching: {
+        batchId: "batch-1", runId: winningId, state: "proving", phase: "proving", status: "running", message: "Proving" } },
+      { observedAt: START - 10 * MINUTE_MS, intentCommitment: "0x4", matching: {
+        state: "settled", message: "Order no longer active" } },
+    ];
+    let requested: string[] = [];
+    h.services.executionRuns = async (ids) => {
+      requested = ids;
+      return [
+        { runId: failedId, batchId: "batch-1", status: "failed", settlementDigest: digest,
+          startedAt: START - 16 * MINUTE_MS, completedAt: START - 15 * MINUTE_MS,
+          phaseTimestamps: { proving: START - 16 * MINUTE_MS, "batch-settlement": START - 15 * MINUTE_MS } },
+        { runId: wrongSettlementId, batchId: "batch-1", status: "settled", settlementDigest: "0xdead",
+          startedAt: START - 15 * MINUTE_MS, completedAt: START - 14 * MINUTE_MS,
+          phaseTimestamps: { proving: START - 15 * MINUTE_MS, "batch-settlement": START - 14 * MINUTE_MS } },
+        { runId: winningId, batchId: "batch-1", status: "settled", settlementDigest: digest.toUpperCase(),
+          startedAt: START - 13 * MINUTE_MS, completedAt: START - 10 * MINUTE_MS,
+          phaseTimestamps: { proving: START - 12 * MINUTE_MS, "batch-settlement": START - 11 * MINUTE_MS } },
+      ];
+    };
+    await h.runner().tick();
+    expect(new Set(requested)).toEqual(new Set([failedId, wrongSettlementId, winningId]));
+    expect(requested).not.toContain(unrelatedId);
+    const opened = h.state.outbox.find((entry) => entry.data.kind === "opened")!.data;
+    expect(opened.matchedAt).toBe(new Date(START - 12 * MINUTE_MS).toISOString());
+    expect(opened.proofStartedAt).toBe(new Date(START - 12 * MINUTE_MS).toISOString());
+    expect(opened.proofCompletedAt).toBe(new Date(START - 11 * MINUTE_MS).toISOString());
+  });
+
+  test("completed or unbound execution runs supply no invented opening proof timings", async () => {
+    const h = harness(); const { value } = attachActive(h);
+    const runId = `0x${"1".repeat(64)}` as const;
+    value.matching.push({ observedAt: START - 12 * MINUTE_MS, intentCommitment: "0x4", matching: {
+      batchId: "batch-1", runId, state: "proving", status: "running", message: "Proving" } });
+    h.services.executionRuns = async () => [{ runId, batchId: "batch-1", status: "failed", settlementDigest: value.positions[0]!.snapshot.settlementDigest,
+      startedAt: START - 13 * MINUTE_MS, completedAt: START - 10 * MINUTE_MS,
+      phaseTimestamps: { proving: START - 12 * MINUTE_MS, "batch-settlement": START - 11 * MINUTE_MS } }];
+    await h.runner().tick();
+    const opened = h.state.outbox.find((entry) => entry.data.kind === "opened")!.data;
+    expect(opened.matchedAt).toBeUndefined();
+    expect(opened.proofStartedAt).toBeUndefined();
+    expect(opened.proofCompletedAt).toBeUndefined();
+  });
+
   test("uncertain close submissions are observed and never resubmitted or rebuilt", async () => {
     const h = harness(); const { value } = attachActive(h, 0, "closing");
     value.positions[0]!.closes.push({ phase: "uncertain", closeCommitment: "0xa", witness: {}, output: {} as any,
