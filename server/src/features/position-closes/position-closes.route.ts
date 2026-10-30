@@ -15,6 +15,7 @@ export function registerPositionClosesRoute(
   options: { witnessRoutesEnabled?: boolean } = {},
 ): void {
   const controller = new PositionClosesController(new PositionClosesService(executor, prover, onchain, env));
+  router.add("GET", "/position-closes/status", (request) => controller.status(request), { auth: true });
   router.add("GET", "/position-closes/context", (request) => controller.context(request), { auth: true });
   router.add("POST", "/position-closes/proven", (request) => controller.createProven(request));
   router.add("POST", "/position-closes/manual-proven", (request) => controller.createManualProven(request));

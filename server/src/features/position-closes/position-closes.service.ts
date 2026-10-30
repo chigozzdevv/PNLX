@@ -34,6 +34,17 @@ import type {
 
 const pairLocks = new WeakMap<object, Set<string>>();
 
+export interface PositionCloseStatusInput extends PositionCloseContextInput {
+  closeCommitment: Hex;
+}
+
+export interface PositionCloseStatusResult extends PositionCloseStatusInput {
+  marginOutputCommitment?: Hex;
+  settlementTxHash?: Hex;
+  transactionStatus?: "FAILED" | "SUCCESS" | "NOT_FOUND";
+  canRetry: boolean;
+}
+
 export class PositionClosesService {
   private recoveryCursor=0;
   constructor(
@@ -46,6 +57,69 @@ export class PositionClosesService {
       settlementsOnchainRequired: false,
     },
   ) {}
+
+  async status(input: PositionCloseStatusInput, authenticated?: string): Promise<PositionCloseStatusResult> {
+    if (!authenticated) throw new Error("authenticated owner is required");
+    assertAuthenticatedOwnerCommitment(authenticated, input.ownerCommitment, "ownerCommitment");
+    const store = this.executor.store;
+    const position = store.positionsFor(input.ownerCommitment).find(
+      (candidate) => candidate.positionCommitment === input.positionCommitment,
+    );
+    if (!position) throw new Error("position not found");
+    const result: PositionCloseStatusResult = { ...input, canRetry: false };
+    const matches = [...store.pendingPairedCloses.values()].filter((run) => run.pair.positions.some(
+      (leg) => leg.positionCommitment === input.positionCommitment && leg.closeCommitment === input.closeCommitment,
+    ));
+    if (matches.length !== 1) return result;
+    const run = matches[0]!;
+    const index = run.pair.positions.findIndex((leg) => leg.positionCommitment === input.positionCommitment &&
+      leg.closeCommitment === input.closeCommitment);
+    const leg = run.pair.positions[index]!;
+    const output = run.outputNotes[index];
+    if (leg.positionNullifier !== position.positionNullifier || !output ||
+      output.ownerCommitment !== input.ownerCommitment || output.commitment !== leg.marginOutputCommitment ||
+      output.closeCommitment !== input.closeCommitment || output.closePositionCommitment !== input.positionCommitment) return result;
+    result.marginOutputCommitment = leg.marginOutputCommitment;
+    const txHash = run.settlementTxHash;
+    if (!txHash || !/^0x[0-9a-f]{64}$/i.test(txHash)) return result;
+    result.settlementTxHash = txHash;
+    if (!this.onchain?.enabled || typeof this.onchain.positionPairTransactionStatus !== "function" ||
+      typeof this.onchain.isPositionCloseSettledAsync !== "function" ||
+      typeof this.onchain.isPositionSpentAsync !== "function") return result;
+
+    // Observe the exact saved transaction and both contract flags. A missing or
+    // pending transaction never grants permission to replace a signed request.
+    let statuses: boolean[];
+    let spentFlags: boolean[];
+    try {
+      const [transactionStatus, flags, spent] = await Promise.all([
+        this.onchain.positionPairTransactionStatus(txHash),
+        this.positionCloseStatusesAsync(run.pair.positions),
+        Promise.all(run.pair.positions.map((record) => this.onchain!.isPositionSpentAsync(record.positionNullifier))),
+      ]);
+      if (!["FAILED", "SUCCESS", "NOT_FOUND"].includes(transactionStatus) ||
+        flags.length !== 2 || flags.some((flag) => typeof flag !== "boolean") ||
+        spent.length !== 2 || spent.some((flag) => typeof flag !== "boolean")) return result;
+      result.transactionStatus = transactionStatus;
+      statuses = flags;
+      spentFlags = spent;
+    } catch { return result; }
+
+    // Recheck local state after the asynchronous chain reads. A concurrent
+    // winning close or another active recovery journal keeps this attempt held.
+    const current = store.pendingPairedCloses.get(run.journalKey);
+    const currentLeg = current?.pair.positions[index];
+    const pairPositions = run.pair.positions.map((record) => record.positionCommitment);
+    const activeCompetitor = [...store.pendingPairedCloses.values()].some((other) => !other.retired &&
+      other.journalKey !== run.journalKey && other.pair.positions.some((record) => pairPositions.includes(record.positionCommitment)));
+    const pairOpen = pairPositions.every((commitment) => store.positionLifecycle.get(commitment)?.status === "open");
+    result.canRetry = result.transactionStatus === "FAILED" && statuses.every((flag) => flag === false) &&
+      spentFlags.every((flag) => flag === false) &&
+      current?.retired === true && current.retiredReconciled !== true && current.settlementTxHash === txHash &&
+      currentLeg?.positionCommitment === input.positionCommitment && currentLeg.closeCommitment === input.closeCommitment &&
+      currentLeg.marginOutputCommitment === result.marginOutputCommitment && pairOpen && !activeCompetitor;
+    return result;
+  }
 
   context(input: PositionCloseContextInput, authenticated?: string): PositionCloseContextResult {
     assertAuthenticatedOwnerCommitment(authenticated, input.ownerCommitment, "ownerCommitment");

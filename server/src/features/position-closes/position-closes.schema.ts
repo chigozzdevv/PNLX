@@ -4,6 +4,7 @@ import type {
   CreateProvenPositionCloseInput,
 } from "@/features/position-closes/position-closes.model";
 import { parseProofMeta } from "@/features/intents/intents.schema";
+import type { PositionCloseStatusInput } from "@/features/position-closes/position-closes.service";
 
 type PositionCloseBody = Record<string, unknown>;
 
@@ -13,6 +14,17 @@ export function parsePositionCloseContext(request: Request): PositionCloseContex
     ownerCommitment: String(params.get("ownerCommitment") ?? "") as `0x${string}`,
     positionCommitment: String(params.get("positionCommitment") ?? "") as `0x${string}`,
   };
+}
+
+export function parsePositionCloseStatus(request: Request): PositionCloseStatusInput {
+  const params = new URL(request.url).searchParams;
+  const hex = (field: string): `0x${string}` => {
+    const value = params.get(field) ?? "";
+    if (!/^0x[0-9a-f]{64}$/i.test(value)) throw new Error(`${field} must be a 32-byte commitment`);
+    return value.toLowerCase() as `0x${string}`;
+  };
+  return { ownerCommitment: hex("ownerCommitment"), positionCommitment: hex("positionCommitment"),
+    closeCommitment: hex("closeCommitment") };
 }
 
 export function parsePositionClose(input: PositionCloseBody): CreatePositionCloseInput {

@@ -27,6 +27,7 @@ function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCance
   const calls: Array<{ path: string; body: any }> = [];
   let loseIntent = options.loseIntent ?? false;
   let loseClose = options.loseClose ?? false;
+  let closeStatus: Record<string, unknown> = { canRetry: false, transactionStatus: "NOT_FOUND" };
   const fetcher: typeof fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const parsed = new URL(String(url));
     const path = parsed.pathname;
@@ -88,6 +89,13 @@ function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCance
     if (path === "/notes/recovery-status") return respond({ notes: body.notes.map((note: any) => ({ commitment: note.commitment, known: true, spent: false })) });
     if (path === "/position-closes/context") return respond({ context: { payoutAmount: "99990000", market: { marketId: SPEC.marketId, markPrice: "20000000", fundingIndex: "4" },
       positionRoot: ROOT, membershipProof: { leaf: parsed.searchParams.get("positionCommitment"), root: ROOT, indices: [], siblings: [] } } });
+    if (path === "/position-closes/status") {
+      const attempt = saved!.cycles[SPEC.id]!.positions[0]!.closes.find((entry) => entry.closeCommitment === parsed.searchParams.get("closeCommitment"))!;
+      expect(init?.headers).toHaveProperty("authorization", "Bearer test-token");
+      return respond({ status: { ownerCommitment: OWNER, positionCommitment: parsed.searchParams.get("positionCommitment"),
+        closeCommitment: attempt.closeCommitment, marginOutputCommitment: attempt.output.commitment,
+        settlementTxHash: CLOSE_TX, ...closeStatus } });
+    }
     if (path === "/position-closes/manual") {
       closePosts++; lastClose = body;
       const attempt = saved?.cycles[SPEC.id]?.positions[0]?.closes.at(-1);
@@ -165,6 +173,7 @@ function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCance
     order.status = "cancelled"; order.cancellationTxHash = CLOSE_TX;
   } };
   return { adapter, make, calls, addOpening, confirmClose, addUnmatched, addResidual, confirmCancellation, get saved() { return saved!; },
+    setCloseStatus(value: Record<string, unknown>) { closeStatus = value; },
     get intentPosts() { return intentPosts; }, get closePosts() { return closePosts; }, get relayPosts() { return relayPosts; },
     get cancelPosts() { return cancelPosts; }, get refundPosts() { return refundPosts; } };
 }
@@ -249,6 +258,77 @@ describe("real observation protocol adapter safety", () => {
     expect(closed.positions[0]!.confirmedClose?.fundingPayment).toBe("0");
     expect(closed.positions[0]!.confirmedClose?.realizedPnl).toBeUndefined();
     expect(f.saved.notes.some((note) => note.amount === "99990000" && note.status === "available")).toBe(true);
+  });
+
+  test("confirmed failed close is retained and a fresh close can settle after restart", async () => {
+    const f = fixture({ loseClose: true });
+    await f.adapter.prepareOpen(SPEC); await f.adapter.open(SPEC.id); f.addOpening(); await f.adapter.pollOpen(SPEC.id);
+    await f.adapter.prepareClose(SPEC.id); await f.adapter.close(SPEC.id);
+    const old = structuredClone(f.saved.cycles[SPEC.id]!.positions[0]!.closes[0]!);
+    const failedHash: Hex = `0x${"56".repeat(32)}`;
+    f.setCloseStatus({ canRetry: true, transactionStatus: "FAILED", settlementTxHash: failedHash });
+    const restarted = f.make(f.saved);
+    const reconciled = await restarted.pollClose(SPEC.id);
+    const failed = reconciled.positions[0]!.closes[0]!;
+    expect(failed.phase).toBe("context-rejected");
+    expect(failed.failedTransaction?.txHash).toBe(failedHash);
+    expect(failed.output).toEqual(old.output);
+    expect(failed.witness).toEqual(old.witness);
+    expect(failed.error).toBe(old.error);
+    expect(f.closePosts).toBe(1);
+    f.setCloseStatus({ canRetry: false, transactionStatus: "NOT_FOUND" });
+    const prepared = await restarted.prepareClose(SPEC.id);
+    expect(prepared.positions[0]!.closes).toHaveLength(2);
+    expect(prepared.positions[0]!.closes[1]!.closeCommitment).not.toBe(old.closeCommitment);
+    expect(prepared.positions[0]!.closes[1]!.output.commitment).not.toBe(old.output.commitment);
+    await restarted.close(SPEC.id);
+    expect(f.closePosts).toBe(2);
+    f.confirmClose();
+    const closed = await restarted.pollClose(SPEC.id);
+    expect(closed.phase).toBe("closed");
+    expect(closed.positions[0]!.confirmedClose?.settlementTxHash).toBe(CLOSE_TX);
+    expect(closed.positions[0]!.closes[0]!.failedTransaction?.txHash).toBe(failedHash);
+  });
+
+  test("unknown or unapproved outcomes remain observation-only", async () => {
+    for (const transactionStatus of ["NOT_FOUND", "SUCCESS", "FAILED"]) {
+      const f = fixture({ loseClose: true });
+      await f.adapter.prepareOpen(SPEC); await f.adapter.open(SPEC.id); f.addOpening(); await f.adapter.pollOpen(SPEC.id);
+      await f.adapter.prepareClose(SPEC.id); await f.adapter.close(SPEC.id);
+      f.setCloseStatus({ canRetry: false, transactionStatus });
+      const restarted = f.make(f.saved);
+      await restarted.pollClose(SPEC.id); await restarted.prepareClose(SPEC.id); await restarted.close(SPEC.id);
+      expect(f.closePosts).toBe(1);
+      expect(f.saved.cycles[SPEC.id]!.positions[0]!.closes).toHaveLength(1);
+      expect(f.saved.cycles[SPEC.id]!.positions[0]!.closes[0]!.phase).toBe("uncertain");
+    }
+  });
+
+  test("mismatched failure evidence cannot authorize a new close", async () => {
+    for (const invalid of [{ ownerCommitment: fieldHex(99n) }, { positionCommitment: fieldHex(99n) },
+      { closeCommitment: fieldHex(99n) }, { marginOutputCommitment: fieldHex(99n) },
+      { settlementTxHash: "not-a-hash" }, { transactionStatus: "NOT_FOUND" }]) {
+      const f = fixture({ loseClose: true });
+      await f.adapter.prepareOpen(SPEC); await f.adapter.open(SPEC.id); f.addOpening(); await f.adapter.pollOpen(SPEC.id);
+      await f.adapter.prepareClose(SPEC.id); await f.adapter.close(SPEC.id);
+      f.setCloseStatus({ canRetry: true, transactionStatus: "FAILED", ...invalid });
+      await expect(f.make(f.saved).pollClose(SPEC.id)).rejects.toThrow();
+      expect(f.closePosts).toBe(1);
+      expect(f.saved.cycles[SPEC.id]!.positions[0]!.closes[0]!.phase).toBe("uncertain");
+    }
+  });
+
+  test("an older uncertain attempt blocks fresh preparation after a later failure", async () => {
+    const f = fixture({ loseClose: true });
+    await f.adapter.prepareOpen(SPEC); await f.adapter.open(SPEC.id); f.addOpening(); await f.adapter.pollOpen(SPEC.id);
+    await f.adapter.prepareClose(SPEC.id); await f.adapter.close(SPEC.id);
+    const saved = structuredClone(f.saved);
+    const attempts = saved.cycles[SPEC.id]!.positions[0]!.closes;
+    attempts.push({ ...structuredClone(attempts[0]!), closeCommitment: fieldHex(99n), phase: "context-rejected" });
+    const result = await f.make(saved).prepareClose(SPEC.id);
+    expect(result.positions[0]!.closes).toHaveLength(2);
+    expect(f.closePosts).toBe(1);
+    expect(result.positions[0]!.closes[0]!.phase).toBe("uncertain");
   });
 
   test("lost custody relay response preserves the exact envelope/hash and never creates another deposit", async () => {

@@ -72,7 +72,7 @@ function harness(state = createCampaign({ runId: "test-campaign", seed: "test-se
           data.cycles[id]!.positions[0]!.closes.push({ phase: "ready", closeCommitment: "0xa", witness: {}, output: {} as any,
             createdAt: now, markPrice: "23000000", fundingIndex: "0", fundingPayment: "0", realizedPnl: "100", returnedMargin: "100000100" });
           await save(); return read(id); },
-        async close(id) { actions.push("submit-close"); data.cycles[id]!.positions[0]!.closes[0]!.phase = "submitting"; await save(); return read(id); },
+        async close(id) { actions.push("submit-close"); data.cycles[id]!.positions[0]!.closes.at(-1)!.phase = "submitting"; await save(); return read(id); },
         async cancelOpen(id) { actions.push("cancel-open"); data.cycles[id]!.activeOrders = []; await save(); return read(id); },
         async recoverCash(id) { actions.push("recover-cash"); data.cycles[id]!.cashReconciled = true; await save(); return read(id); },
       };
@@ -216,6 +216,38 @@ describe("one-time observation runner", () => {
     expect(h.actions).not.toContain("submit-close");
     expect(h.actions).not.toContain("fund");
     expect(h.state.pausedReason).toContain("uncertain");
+  });
+
+  test("a confirmed failed-close transition clears stale alerts and closes before new opens", async () => {
+    const h = harness(); const { cycle, wallet, value } = attachActive(h, 0, "closing");
+    value.positions[0]!.closes.push({ phase: "uncertain", closeCommitment: "0xa", witness: {}, output: {} as any,
+      createdAt: START - MINUTE_MS, markPrice: "0", fundingIndex: "0", fundingPayment: "0", realizedPnl: "0", returnedMargin: "0" });
+    await h.runner().tick();
+    cycle.failureAlertedAt = START - MINUTE_MS; cycle.stallAlertedAt = START - MINUTE_MS;
+    const saved = (wallet.protocol as ProtocolState).cycles[cycle.adapterId]!;
+    saved.positions[0]!.closes[0]!.phase = "context-rejected";
+    saved.positions[0]!.closes[0]!.failedTransaction = { txHash: `0x${"c".repeat(64)}`, observedAt: START };
+    await h.runner().tick();
+    expect(cycle.failureAlertedAt).toBeUndefined(); expect(cycle.stallAlertedAt).toBeUndefined();
+    expect(h.actions).toContain("prepare-close"); expect(h.actions).toContain("submit-close");
+    expect(h.actions).not.toContain("fund"); expect(h.actions).not.toContain("submit-open");
+    const attempts = (wallet.protocol as ProtocolState).cycles[cycle.adapterId]!.positions[0]!.closes;
+    expect(attempts[0]!.phase).toBe("context-rejected");
+    expect(attempts[0]!.failedTransaction?.txHash).toBe(`0x${"c".repeat(64)}`);
+    expect(attempts[1]!.phase).toBe("submitting");
+  });
+
+  test("another uncertain operation preserves failure alerts after one close recovers", async () => {
+    const h = harness(); const { cycle, value } = attachActive(h, 0, "closing");
+    h.state.pausedReason = "An existing execution is stalled or uncertain.";
+    cycle.failureAlertedAt = START - MINUTE_MS; cycle.stallAlertedAt = START - MINUTE_MS;
+    value.positions[0]!.closes.push({ phase: "context-rejected", closeCommitment: "0xa", witness: {}, output: {} as any,
+      failedTransaction: { txHash: `0x${"c".repeat(64)}`, observedAt: START },
+      createdAt: START - MINUTE_MS, markPrice: "0", fundingIndex: "0", fundingPayment: "0", realizedPnl: "0", returnedMargin: "0" });
+    value.cancellations = { "0x4": { phase: "uncertain", submittedAt: START - MINUTE_MS } };
+    await h.runner().tick();
+    expect(cycle.failureAlertedAt).toBeDefined(); expect(cycle.stallAlertedAt).toBeDefined();
+    expect(h.actions).not.toContain("submit-open"); expect(h.state.pausedReason).toContain("uncertain");
   });
 
   test("reconciles uncertain deposits before pause gating, then resumes saved preparation", async () => {

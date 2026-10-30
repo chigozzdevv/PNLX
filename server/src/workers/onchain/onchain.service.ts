@@ -1053,6 +1053,15 @@ export class OnchainRelayService implements OnchainRelay {
     return parseAuthoritativeBoolean(result.stdout, "position close settlement status");
   }
 
+  async isPositionSpentAsync(positionNullifier: Hex): Promise<boolean> {
+    if (!this.config.enabled) throw new Error("position spend status requires on-chain relay");
+    const result = await this.relayer.readAsync({ kind: "contract-invoke", payload: {
+      args: ["--position_nullifier", bytes32(positionNullifier)],
+      contractId: contractId(this.deployment(), "position-state"), functionName: "is_spent", send: "no",
+    } });
+    return parseAuthoritativeBoolean(result.stdout, "position spend status");
+  }
+
   positionCloseAppendIndex(closeCommitment:Hex):number {
     if(!this.config.enabled)throw new Error("position close index requires on-chain relay");
     const result=this.relayer.read({kind:"contract-invoke",payload:{

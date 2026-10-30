@@ -3,12 +3,19 @@ import { authenticatedAddress } from "@/shared/http/auth-context";
 import {
   parsePositionClose,
   parsePositionCloseContext,
+  parsePositionCloseStatus,
   parseProvenPositionClose,
 } from "@/features/position-closes/position-closes.schema";
 import type { PositionClosesService } from "@/features/position-closes/position-closes.service";
 
 export class PositionClosesController {
   constructor(private readonly positionCloses: PositionClosesService) {}
+
+  async status(request: Request): Promise<Response> {
+    return json({ status: await this.positionCloses.status(
+      parsePositionCloseStatus(request), authenticatedAddress(request),
+    ) });
+  }
 
   context(request: Request): Response {
     return json({

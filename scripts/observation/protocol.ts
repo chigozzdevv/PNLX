@@ -6,7 +6,8 @@
  * It contains spend authority, signed envelopes, and the account-event private key.
  * The runner must hold a process-wide lock while using an instance. Each submission
  * is durably marked before the request. Restarted/ambiguous submissions are observed
- * by their saved commitment/hash and are never automatically submitted again.
+ * by their saved commitment/hash. A fresh close requires authoritative evidence
+ * that the prior transaction failed and its positions remain unspent.
  */
 import { createDecipheriv, createECDH, createHash, randomBytes } from "node:crypto";
 import {
@@ -62,6 +63,7 @@ export interface CloseAttempt {
   closeCommitment: Hex; witness: JsonObject; output: PrivateNote;
   createdAt: number; submittedAt?: number; confirmedAt?: number;
   settlementTxHash?: string; response?: JsonObject; error?: string;
+  failedTransaction?: { txHash: Hex; observedAt: number };
   markPrice: string; fundingIndex: string; fundingPayment: string;
   realizedPnl: string; returnedMargin: string;
 }
@@ -385,6 +387,7 @@ export class ObservationProtocol {
     return this.exclusive(async () => {
       const cycle = this.cycle(id); await this.pollCycle(cycle);
       const position = this.selectPosition(cycle, commitment);
+      if (position.closes.some((entry) => ["submitting", "uncertain"].includes(entry.phase))) return clone(cycle);
       const previous = position.closes.at(-1);
       if (previous && previous.phase !== "context-rejected") return clone(cycle);
       await this.readiness();
@@ -502,6 +505,7 @@ export class ObservationProtocol {
       if (!snapshot.settlementTxHash) throw new Error("Observed position is missing settlement transaction evidence");
       if (snapshot.status !== "open") await this.reconcileClosedPosition(position, events);
     }
+    await this.reconcileFailedCloses(cycle);
     if (cycle.positions.length) {
       this.note(cycle.noteCommitment).status = "spent";
       cycle.timings.openedObservedAt ??= this.now();
@@ -535,6 +539,28 @@ export class ObservationProtocol {
     // Keep the sole terminal no-fill status gated on actual custody recovery.
     if (fullyCancelled && !cycle.cashReconciled) { cycle.phase = "accepted"; cycle.error = "Cancellation confirmed; private collateral reconciliation pending"; }
     await this.save(); return clone(cycle);
+  }
+
+  private async reconcileFailedCloses(cycle: CycleState): Promise<void> {
+    for (const position of cycle.positions.filter((entry) => entry.snapshot.status === "open")) {
+      for (const attempt of position.closes.filter((entry) => ["submitting", "uncertain"].includes(entry.phase))) {
+        const query = new URLSearchParams({ ownerCommitment: this.data.ownerCommitment,
+          positionCommitment: position.opening.positionCommitment, closeCommitment: attempt.closeCommitment });
+        const { status } = await this.request<{ status: JsonObject }>(`/position-closes/status?${query}`);
+        if (!status || !same(status.ownerCommitment, this.data.ownerCommitment) ||
+          !same(status.positionCommitment, position.opening.positionCommitment) ||
+          !same(status.closeCommitment, attempt.closeCommitment)) throw new Error("Close recovery status binding mismatch");
+        if (status.canRetry !== true) continue;
+        if (status.transactionStatus !== "FAILED" || !/^0x[0-9a-f]{64}$/i.test(status.settlementTxHash ?? "") ||
+          !same(status.marginOutputCommitment, attempt.output.commitment) ||
+          (attempt.settlementTxHash && !same(attempt.settlementTxHash, status.settlementTxHash))) {
+          throw new Error("Close retry lacks matching confirmed failure evidence");
+        }
+        attempt.failedTransaction = { txHash: status.settlementTxHash, observedAt: this.now() };
+        attempt.phase = "context-rejected";
+        await this.save();
+      }
+    }
   }
 
   private async recoverCancelledResiduals(cycle: CycleState, allowSubmission: boolean): Promise<void> {
