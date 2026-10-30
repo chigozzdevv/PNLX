@@ -137,7 +137,8 @@ export function normalizedSnapshotFromRecords(
   const snapshot: Partial<ProtocolStoreSnapshot> = {};
   for (const [field] of NORMALIZED_SNAPSHOT_FIELDS) {
     const values = [...(records[field] ?? [])].sort((left, right) => left.ordinal - right.ordinal);
-    const isAddedField = field === "delegatedPolicies" || field === "pendingPairedCloses" || field === "pendingIntentSubmissions";
+    const isAddedField = field === "delegatedPolicies" || field === "pendingPairedCloses" || field === "pendingIntentSubmissions" ||
+      field === "fundingCycles" || field === "fundingCursors";
     const expected = isAddedField && expectedCounts[field] === undefined ? 0 : expectedCounts[field];
     if (!Number.isSafeInteger(expected) || expected! < 0) {
       throw new Error(`normalized protocol snapshot is missing count for ${field}`);
