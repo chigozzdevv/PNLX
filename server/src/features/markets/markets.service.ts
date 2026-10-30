@@ -17,6 +17,8 @@ import { applySettlementVolumes } from "@/features/markets/market-volume";
 import { FundingEngineService } from "@/workers/funding-engine/funding-engine.service";
 import { marketOpenInterest } from "@/features/markets/market-open-interest";
 import { MarketDayStatsService } from "@/features/markets/market-day-stats";
+import { MarketConfirmationReconciler } from "@/features/markets/market-confirmation-reconciler";
+import { MarketRiskFunding } from "@/features/markets/market-risk-funding";
 import type {
   CreateOracleMarketInput,
   MarketCandlesInput,
@@ -45,6 +47,8 @@ export interface OracleMarketResult {
 export class MarketsService {
   private readonly marketData: MarketDataService;
   private readonly onchainMarkStream?: OnchainMarkStream;
+  private readonly confirmations: MarketConfirmationReconciler;
+  private readonly riskFunding: MarketRiskFunding;
 
   constructor(
     private readonly executor: ExecutorService,
@@ -56,6 +60,8 @@ export class MarketsService {
     private readonly dayStats = new MarketDayStatsService(),
   ) {
     this.marketData = marketData ?? new MarketDataService(env);
+    this.confirmations = new MarketConfirmationReconciler(executor.store, onchain?.enabled ? onchain : undefined);
+    this.riskFunding = new MarketRiskFunding(executor.store, onchain?.enabled ? onchain : undefined);
     if (onchain?.enabled) {
       this.onchainMarkStream = new OnchainMarkStream(
         (marketId) => onchain.marketPriceSnapshotAsync(marketId),
@@ -197,6 +203,13 @@ export class MarketsService {
 
   async list(): Promise<MarketSummary[]> {
     await this.ensureSupportedMarkets();
+    // Confirmation repair and risk reads are bounded background work; a public
+    // summary request never waits on a backlog of historical RPC calls.
+    void this.confirmations.refresh().catch(() => undefined);
+    const riskMarkets = [this.env.marketId, ...[...this.executor.store.positionLifecycle.values()]
+      .filter((position) => position.status === "open").map((position) => position.marketId)]
+      .filter((marketId): marketId is string => typeof marketId === "string" && this.executor.store.markets.has(marketId));
+    void this.riskFunding.refresh(riskMarkets).catch(() => undefined);
     const now = Date.now();
     const fundingEngine = this.fundingEngine ?? new FundingEngineService(this.executor, {
       intervalMs: this.env.fundingIntervalMs,
@@ -215,6 +228,8 @@ export class MarketsService {
         ...market,
         fundingRate: funding.rate,
         funding,
+        riskFunding: this.riskFunding.snapshot(market.marketId, market.fundingIndex,
+          this.env.settlementsOnchainRequired || Boolean(this.onchain?.enabled)),
         openInterest: interest.baseAmount,
         openInterestDetails: {
           status: interest.status,

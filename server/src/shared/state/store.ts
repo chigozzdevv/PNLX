@@ -388,6 +388,20 @@ export class ProtocolStore {
     return updated;
   }
 
+  confirmSettlementOnchain(
+    key: string,
+    expected: Pick<BatchSettlement, "batchId" | "marketId" | "settlementDigest">,
+  ): BatchSettlement {
+    const current = this.settlements.get(key);
+    if (!current || current.batchId !== expected.batchId || current.marketId !== expected.marketId ||
+        current.settlementDigest !== expected.settlementDigest) {
+      throw new Error("settlement confirmation identity changed");
+    }
+    const confirmed = { ...current, onchainConfirmed: true };
+    this.settlements.set(key, confirmed);
+    return confirmed;
+  }
+
   settlementByDigest(settlementDigest: Hex): BatchSettlement | undefined {
     return [...this.settlements.values()].find((settlement) =>
       settlement.settlementDigest === settlementDigest

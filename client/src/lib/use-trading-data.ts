@@ -202,6 +202,7 @@ export function useTradingData(
     data: emptyData,
     loading: true,
   });
+  const hasOpenPositions = state.data.positions.some((position) => position.status === "open");
 
   useEffect(() => {
     function refreshPrivateNotes() {
@@ -245,7 +246,7 @@ export function useTradingData(
   }, [autoRefresh, emptyData, privateNotesVersion, refreshKey, session]);
 
   useEffect(() => {
-    if (!watchedMarketId) return;
+    if (!watchedMarketId && !hasOpenPositions) return;
     const refresh = createMarketSummaryRefresh(
       async (signal) => (await pnlxGet<MarketsResponse>("/markets", session?.token, signal)).markets,
       (summaries) => setState((current) => ({
@@ -258,7 +259,7 @@ export function useTradingData(
       window.clearInterval(timer);
       refresh.dispose();
     };
-  }, [session?.token, watchedMarketId]);
+  }, [hasOpenPositions, session?.token, watchedMarketId]);
 
   const markMarketKey = useMemo(() => {
     const watchedMarket = watchedMarketId && (
@@ -718,6 +719,7 @@ function marketDisplayFromServer(
 
   return {
     assetName: titleFromBaseAsset(baseAsset),
+    riskFunding: market.riskFunding,
     baseAsset,
     change24h: 0,
     fundingIndex: market.fundingIndex,

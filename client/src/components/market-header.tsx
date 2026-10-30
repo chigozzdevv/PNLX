@@ -49,7 +49,7 @@ function openInterestMetric(market: MarketDisplay): HeaderMetric {
     market.openInterest !== null && Number.isFinite(market.openInterest) && market.openInterest >= 0;
   if (!available) return {
     label: "Open interest",
-    value: null,
+    value: market.openInterestDetails?.status === "incomplete" ? "—" : null,
     description: market.openInterestDetails?.reason ?? "PNLX has not published a complete open-interest aggregate.",
   };
   const size = market.openInterest!;

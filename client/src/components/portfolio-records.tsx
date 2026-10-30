@@ -14,8 +14,10 @@ import {
 } from "@/lib/order-groups";
 import { groupPositionRows, hasPrivatePositionState } from "@/lib/position-groups";
 import { privateMarginNotes } from "@/lib/private-margin-notes";
+import { positionLiquidationDisplay } from "@/lib/position-liquidation";
 import type {
   Hex,
+  MarketDisplay,
   PositionRow,
   ServerOwnerActivitySnapshot,
   ServerOwnerOrderSnapshot,
@@ -30,6 +32,7 @@ interface PortfolioRecordsProps {
   cancellingOrderId?: string;
   closingPositionId?: string;
   loading?: boolean;
+  markets?: MarketDisplay[];
   onCancelOrder?: (order: OwnerOrderGroup) => Promise<void> | void;
   onClosePosition?: (position: PositionRow) => Promise<void> | void;
   orders: ServerOwnerOrderSnapshot[];
@@ -42,6 +45,7 @@ export function PortfolioRecords({
   cancellingOrderId,
   closingPositionId,
   loading = false,
+  markets = [],
   onCancelOrder,
   onClosePosition,
   orders,
@@ -109,6 +113,7 @@ export function PortfolioRecords({
           closingPositionId={closingPositionId}
           expandedRow={expandedRow}
           loading={loading}
+          markets={markets}
           onClosePosition={onClosePosition}
           onToggleDetails={toggleDetails}
           orders={orders}
@@ -169,6 +174,7 @@ function PositionsLedger({
   closingPositionId,
   expandedRow,
   loading,
+  markets,
   onClosePosition,
   onToggleDetails,
   orders,
@@ -177,6 +183,7 @@ function PositionsLedger({
   closingPositionId?: string;
   expandedRow?: string;
   loading: boolean;
+  markets: MarketDisplay[];
   onClosePosition?: (position: PositionRow) => Promise<void> | void;
   onToggleDetails: (key: string) => void;
   orders: ServerOwnerOrderSnapshot[];
@@ -198,6 +205,8 @@ function PositionsLedger({
       {positions.map((position) => {
         const key = `position:${position.id}`;
         const expanded = expandedRow === key;
+        const market = markets.find((market) => market.marketId === position.marketId);
+        const liquidation = positionLiquidationDisplay(position, market);
         const closeUnavailableReason = closeDisabledReason(position, onClosePosition);
         return (
           <Fragment key={position.id}>
@@ -211,7 +220,7 @@ function PositionsLedger({
               </LedgerCell>
               <LedgerCell label="Entry → mark">
                 <span>{positionPriceRange(position)}</span>
-                <small>Liq. —</small>
+                <small title={liquidation.title}>Est. liq. {liquidation.value}</small>
               </LedgerCell>
               <LedgerCell label="Margin">
                 {privateNumber(position.collateral, portfolioUsd, position.privateDetails)}
@@ -248,6 +257,7 @@ function PositionsLedger({
               <PositionFillDetails
                 className="portfolio-detail-panel"
                 id={`position-details-${position.id}`}
+                market={market}
                 orders={orders}
                 position={position}
               />

@@ -1,5 +1,6 @@
 import type { MarketConfig } from "@pnlx/protocol-types";
 import type { FundingEngineService } from "@/workers/funding-engine/funding-engine.service";
+import type { MarketRiskFundingSnapshot } from "@/features/markets/market-risk-funding";
 
 export type CreateMarketInput = MarketConfig;
 export type UpdateMarketInput = MarketConfig;
@@ -7,6 +8,7 @@ export type UpdateMarketInput = MarketConfig;
 export interface MarketSummary extends MarketConfig {
   fundingRate: bigint | null;
   funding: ReturnType<FundingEngineService["fundingSummary"]>;
+  riskFunding: MarketRiskFundingSnapshot;
   openInterest: bigint | null;
   openInterestDetails: {
     status: "available" | "incomplete";

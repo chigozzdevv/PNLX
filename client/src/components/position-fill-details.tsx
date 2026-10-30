@@ -2,16 +2,19 @@ import { ExternalLink } from "lucide-react";
 import type { ReactNode } from "react";
 import { formatUsd, shortAddress } from "@/lib/format";
 import { positionLegs, positionSourceOrder } from "@/lib/position-groups";
-import type { Hex, PositionRow, ServerOwnerOrderSnapshot } from "@/types/trading";
+import { positionLiquidationDisplay } from "@/lib/position-liquidation";
+import type { Hex, MarketDisplay, PositionRow, ServerOwnerOrderSnapshot } from "@/types/trading";
 
 export function PositionFillDetails({
   className,
   id,
+  market,
   orders,
   position,
 }: {
   className: string;
   id: string;
+  market?: MarketDisplay;
   orders: readonly ServerOwnerOrderSnapshot[];
   position: PositionRow;
 }) {
@@ -23,6 +26,7 @@ export function PositionFillDetails({
         const order = positionSourceOrder(fill, orders);
         const fillNumber = index + 1;
         const filledAt = Number.isFinite(fill.openedAt) ? new Date(fill.openedAt) : null;
+        const liquidation = positionLiquidationDisplay(fill, market);
 
         return (
           <section aria-label={`Fill ${fillNumber}`} className="position-fill" key={fill.id}>
@@ -74,6 +78,7 @@ export function PositionFillDetails({
                 </FillField>
               ) : null}
               <FillField label="Batch">{fill.batchId}</FillField>
+              <FillField label="Est. liq."><span title={liquidation.title}>{liquidation.value}</span></FillField>
               {fill.proofSystem ? (
                 <FillField label="Proof system">
                   {fill.proofSystem === "risc0-groth16" ? "RISC Zero Groth16" : "Noir UltraHonk"}

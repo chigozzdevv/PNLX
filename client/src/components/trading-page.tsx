@@ -440,6 +440,7 @@ export function TradingPage() {
             connected={Boolean(wallet.session)}
             connecting={wallet.status === "connecting"}
             loading={trading.loading || Boolean(wallet.session && !recordsMatchWallet)}
+            markets={trading.data.markets}
             unavailable={recordsMatchWallet && Boolean(trading.error)}
             onCancelOrder={handleCancelOrder}
             onClosePosition={handleClosePosition}

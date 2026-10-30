@@ -168,6 +168,13 @@ export class FileProtocolStore extends ProtocolStore {
     return this.persist(() => super.updateSettlementTransactions(settlementDigest, transactions));
   }
 
+  override confirmSettlementOnchain(
+    key: string,
+    expected: Parameters<ProtocolStore["confirmSettlementOnchain"]>[1],
+  ): BatchSettlement {
+    return this.persist(() => super.confirmSettlementOnchain(key, expected));
+  }
+
   override cancelOrder(intentCommitment: Hex, cancellationTxHash?: Hex): OrderLifecycleRecord {
     return this.persist(() => super.cancelOrder(intentCommitment, cancellationTxHash));
   }

@@ -116,15 +116,20 @@ describe("funding and open-interest summaries", () => {
     const markup = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket: available }));
     expect(markup).toContain("<span>Open interest</span><strong>0 XLM</strong>");
     expect(markup).toContain("0.0000%");
-    for (const selectedMarket of [
-      { ...available, openInterestDetails: undefined },
-      { ...available, openInterestDetails: { ...available.openInterestDetails!, status: "incomplete" as const, reason: "Incomplete aggregate" } },
-    ]) {
-      const incomplete = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket }));
-      expect(incomplete).toContain('aria-label="Open interest data pending"');
-      expect(incomplete).toContain('class="market-metric-dots"');
-      expect(incomplete).not.toContain(">Unavailable<");
-    }
+    const pending = renderToStaticMarkup(createElement(MarketHeader, {
+      selectedMarket: { ...available, openInterestDetails: undefined },
+    }));
+    expect(pending).toContain('aria-label="Open interest data pending"');
+    expect(pending).toContain('class="market-metric-dots"');
+    const incomplete = renderToStaticMarkup(createElement(MarketHeader, {
+      selectedMarket: { ...available, openInterest: null,
+        openInterestDetails: { ...available.openInterestDetails!, status: "incomplete", reason: "Incomplete aggregate" } },
+    }));
+    expect(incomplete).toContain('title="Incomplete aggregate"');
+    expect(incomplete).toContain("<span>Open interest</span><strong>—</strong>");
+    expect(incomplete).not.toContain('aria-label="Open interest data pending"');
+    expect(incomplete).not.toContain('class="market-metric-dots"');
+    expect(incomplete).not.toContain(">Unavailable<");
   });
 
   test("uses three loading dots for pending funding and keeps status details in tooltips", () => {

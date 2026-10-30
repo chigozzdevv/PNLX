@@ -14,8 +14,10 @@ import {
 } from "@/lib/order-groups";
 import { groupPositionRows, hasPrivatePositionState } from "@/lib/position-groups";
 import { privateMarginNotes } from "@/lib/private-margin-notes";
+import { positionLiquidationDisplay } from "@/lib/position-liquidation";
 import type {
   Hex,
+  MarketDisplay,
   PositionRow,
   ServerOwnerActivitySnapshot,
   ServerOwnerOrderSnapshot,
@@ -27,6 +29,7 @@ interface PositionsTableProps {
   connected: boolean;
   connecting?: boolean;
   loading?: boolean;
+  markets?: MarketDisplay[];
   unavailable?: boolean;
   closingPositionId?: string;
   cancellingOrderId?: string;
@@ -52,6 +55,7 @@ export function PositionsTable({
   connected,
   connecting = false,
   loading = false,
+  markets = [],
   unavailable = false,
   onCancelOrder,
   onClosePosition,
@@ -173,6 +177,7 @@ export function PositionsTable({
             closingPositionId={closingPositionId}
             expandedRow={expandedRow}
             loading={loading}
+            markets={markets}
             onClosePosition={onClosePosition}
             onToggleDetails={toggleDetails}
             orders={orders}
@@ -237,6 +242,7 @@ function PositionsView({
   closingPositionId,
   expandedRow,
   loading,
+  markets,
   onClosePosition,
   onToggleDetails,
   orders,
@@ -245,6 +251,7 @@ function PositionsView({
   closingPositionId?: string;
   expandedRow?: string;
   loading: boolean;
+  markets: MarketDisplay[];
   onClosePosition?: (position: PositionRow) => Promise<void> | void;
   onToggleDetails: (key: string) => void;
   orders: ServerOwnerOrderSnapshot[];
@@ -265,6 +272,8 @@ function PositionsView({
       {positions.map((position) => {
         const key = `position:${position.id}`;
         const expanded = expandedRow === key;
+        const market = markets.find((market) => market.marketId === position.marketId);
+        const liquidation = positionLiquidationDisplay(position, market);
         const closeUnavailableReason = closeDisabledReason(position, onClosePosition);
         return (
           <Fragment key={position.id}>
@@ -282,6 +291,7 @@ function PositionsView({
               </RecordCell>
               <RecordCell label="Entry → mark">
                 <span>{positionPriceRange(position)}</span>
+                <small title={liquidation.title}>Est. liq. {liquidation.value}</small>
               </RecordCell>
               <RecordCell label="Margin">
                 {privateNumber(position.collateral, portfolioUsd, position.privateDetails)}
@@ -318,6 +328,7 @@ function PositionsView({
               <PositionFillDetails
                 className="trade-records-details"
                 id={`trade-position-details-${position.id}`}
+                market={market}
                 orders={orders}
                 position={position}
               />

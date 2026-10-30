@@ -43,7 +43,15 @@ export interface MarketFundingDisplay extends Omit<ServerMarketFunding, "rate"> 
   rate: number | null;
 }
 
+export interface MarketRiskFunding {
+  status: "available" | "unavailable";
+  source: "onchain-market" | "market-config";
+  fundingIndex: string | null;
+  updatedAt: number | null;
+}
+
 export interface ServerMarketConfig {
+  riskFunding?: MarketRiskFunding;
   funding?: ServerMarketFunding;
   fundingRate?: string | null;
   marketId: string;
@@ -210,6 +218,7 @@ export interface AccountSnapshot {
 }
 
 export interface MarketDisplay {
+  riskFunding?: MarketRiskFunding;
   marketId: string;
   pair: string;
   baseAsset: string;

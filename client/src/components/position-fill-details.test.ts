@@ -5,7 +5,7 @@ import { PortfolioRecords } from "@/components/portfolio-records";
 import { PositionsTable } from "@/components/positions-table";
 import { PositionFillDetails } from "@/components/position-fill-details";
 import { groupPositionRows } from "@/lib/position-groups";
-import type { Hex, PositionRow, ServerOwnerOrderSnapshot } from "@/types/trading";
+import type { Hex, MarketDisplay, PositionRow, ServerOwnerOrderSnapshot } from "@/types/trading";
 
 const hex = (value: number): Hex => `0x${value.toString(16).padStart(64, "0")}`;
 const firstOrder = order(1, "ui-1730000000000-request-1");
@@ -15,6 +15,24 @@ const orders = [firstOrder, secondOrder, residual];
 const positions = [fill(1, firstOrder.intentCommitment, 10, 1, 0.1), fill(2, residual.intentCommitment, 30, 3, 0.2)];
 
 describe("combined position presentation", () => {
+  test("shows the first fill liquidation estimate in both rows and each independent fill detail", () => {
+    const market = { marketId: "xlm-usd-perp", maintenanceMarginRate: 0.05, fundingIndex: "0" } as MarketDisplay;
+    for (const markup of [renderToStaticMarkup(createElement(PositionsTable, {
+      connected: true, onConnect: async () => undefined, markets: [market], orders, positions,
+    })), renderToStaticMarkup(createElement(PortfolioRecords, { activity: [], markets: [market], orders, positions }))]) {
+      expect(markup).toContain("Est. liq. $0.2000");
+      expect(markup).not.toContain("Liq. —");
+    }
+    const [position] = groupPositionRows(positions, orders);
+    const details = renderToStaticMarkup(createElement(PositionFillDetails, {
+      className: "portfolio-detail-panel", id: "risk", market, orders, position,
+    }));
+    const sections = details.match(/<section\b[^>]*>[\s\S]*?<\/section>/g)!;
+    expect(sections[0]).toContain("$0.09473685");
+    expect(sections[1]).toContain("$0.2000");
+    expect(details.match(/<dt>Est\. liq\.<\/dt>/g)).toHaveLength(2);
+  });
+
   test("shows one aggregate trade in both records views", () => {
     const trade = renderToStaticMarkup(createElement(PositionsTable, {
       connected: true, onConnect: async () => undefined, orders, positions,

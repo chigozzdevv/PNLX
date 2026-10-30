@@ -127,6 +127,7 @@ export function PortfolioPage({
         cancellingOrderId={cancellingOrderId}
         closingPositionId={closingPositionId}
         loading={loading}
+        markets={trading.markets}
         onCancelOrder={onCancelOrder}
         onClosePosition={onClosePosition}
         orders={trading.orders}
