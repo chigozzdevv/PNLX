@@ -52,6 +52,7 @@ pub struct RecoveredIntent {
 pub struct SettlementDraft {
     pub aggregate_volume: String,
     pub batch_id: String,
+    pub funding_index: String,
     pub fill_count: u32,
     pub fee_config_hash: String,
     pub gross_taker_fee: String,
@@ -249,6 +250,7 @@ pub fn prove_request(request: &ProofRequest) -> ProvedSettlement {
     let draft = SettlementDraft {
         aggregate_volume: matched.aggregate_volume.to_string(),
         batch_id: request.batch_id.clone(),
+        funding_index: parse_i128(&request.market.funding_index).to_string(),
         fill_count: matched.fills.len() as u32,
         fee_config_hash: fee_config_hash(),
         gross_taker_fee: matched.fees.gross_taker_fee.to_string(),
@@ -860,6 +862,9 @@ fn batch_public_input_bytes(draft: &SettlementDraft) -> Vec<u8> {
         &hash_fields("market-id", &[Norm::text(&draft.market_id)]),
     );
     append_field(&mut out, &draft.settlement_digest);
+    let funding_index = parse_i128(&draft.funding_index);
+    append_u128(&mut out, funding_index.unsigned_abs());
+    append_u128(&mut out, if funding_index < 0 { 1 } else { 0 });
     append_public_vec(
         &mut out,
         &draft
@@ -933,6 +938,7 @@ fn append_bytes32(out: &mut Vec<u8>, value: &BigUint) {
 fn assert_settlement(actual: &SettlementDraft, expected: &SettlementDraft) {
     assert_eq!(actual.aggregate_volume, expected.aggregate_volume);
     assert_eq!(actual.batch_id, expected.batch_id);
+    assert_eq!(actual.funding_index, expected.funding_index);
     assert_eq!(actual.fill_count, expected.fill_count);
     assert_eq!(actual.fee_config_hash, expected.fee_config_hash);
     assert_eq!(actual.gross_taker_fee, expected.gross_taker_fee);
@@ -1011,12 +1017,54 @@ mod fee_tests {
         let proved = prove_request(&request);
         assert_eq!(
             proved.journal_digest,
-            "0x76167ef738e7df7fb613abfb82bb4c2c5bc181bc9aeb45598e4c4d197834d8c0"
+            "0x4521772969a361e50b6d3f50c3432f7c70cda9283be1a126ed45162727b30f05"
         );
         assert_eq!(proved.draft.gross_taker_fee, "500000");
         assert_eq!(proved.draft.maker_rebate, "150000");
         assert_eq!(proved.draft.insurance_fee, "100000");
         assert_eq!(proved.draft.treasury_fee, "250000");
+    }
+
+    #[test]
+    fn proves_signed_entry_funding_index_cross_language_fixture() {
+        let request: ProofRequest = serde_json::from_str(include_str!("../tests/fixtures/entry-negative.json")).unwrap();
+        let proved = prove_request(&request);
+        assert_eq!(proved.draft.funding_index, "-7");
+        assert_eq!(proved.journal_digest,
+            "0x4ee3c8c9f23fb7b6b499cc83bd5dadd2c5ef094e76f543404c706223066fd762");
+    }
+
+    #[test]
+    #[should_panic]
+    fn rejects_expected_entry_epoch_substitution() {
+        let mut request: ProofRequest = serde_json::from_str(include_str!("../tests/fixtures/fee-match.json")).unwrap();
+        request.expected.funding_index = "-7".to_string();
+        prove_request(&request);
+    }
+
+    #[test]
+    #[should_panic]
+    fn rejects_witness_entry_epoch_substitution() {
+        let mut request: ProofRequest = serde_json::from_str(include_str!("../tests/fixtures/fee-match.json")).unwrap();
+        request.market.funding_index = "-7".to_string();
+        prove_request(&request);
+    }
+
+    #[test]
+    fn public_entry_epoch_uses_normalized_signed_absolute_parts() {
+        let request: ProofRequest = serde_json::from_str(include_str!("../tests/fixtures/fee-match.json")).unwrap();
+        let mut draft = prove_request(&request).draft;
+        for index in [0, 7, -7, i128::MIN, i128::MAX] {
+            draft.funding_index = index.to_string();
+            let journal = super::batch_public_input_bytes(&draft);
+            assert_eq!(&journal[96..128], &{
+                let mut word = [0u8; 32];
+                word[16..].copy_from_slice(&index.unsigned_abs().to_be_bytes());
+                word
+            });
+            assert_eq!(journal[159], if index < 0 { 1 } else { 0 });
+            assert!(journal[128..159].iter().all(|byte| *byte == 0));
+        }
     }
 }
 

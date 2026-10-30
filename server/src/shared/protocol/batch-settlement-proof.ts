@@ -1,5 +1,5 @@
 import { hashFields } from "@pnlx/crypto";
-import { contractPublicInputHash, publicField, publicU128, type ContractPublicInput } from "@pnlx/proof-system";
+import { contractPublicInputHash, publicField, publicI128, publicU128, type ContractPublicInput } from "@pnlx/proof-system";
 import type { BatchSettlement, BatchSettlementCapacity, Hex } from "@pnlx/protocol-types";
 
 export const MAX_PUBLIC_ITEMS = 8;
@@ -43,6 +43,18 @@ export function readBatchSettlementCapacity(reason?: string): BatchSettlementCap
 }
 
 export function batchSettlementPublicInputHash(settlement: BatchSettlement): Hex {
+  // Historical, already landed transcripts retain their original journal bytes.
+  // New proof construction and every new chain relay separately require the index.
+  return settlement.entryFundingIndex === undefined
+    ? legacyBatchSettlementPublicInputHash(settlement)
+    : settlementPublicInputHash(settlement, batchEntryFundingIndex(settlement));
+}
+
+export function legacyBatchSettlementPublicInputHash(settlement: BatchSettlement): Hex {
+  return settlementPublicInputHash(settlement);
+}
+
+function settlementPublicInputHash(settlement: BatchSettlement, entryFundingIndex?: bigint): Hex {
   assertBatchSettlementCapacity(settlement);
   if ([settlement.matchingPayloadCommitments, settlement.residualCommitments, settlement.residualMargins, settlement.residualPayloadCommitments]
     .some((items) => !items || items.length !== settlement.orderUpdates.length)) {
@@ -52,6 +64,7 @@ export function batchSettlementPublicInputHash(settlement: BatchSettlement): Hex
     publicField(hashFields("batch-id", [settlement.batchId])),
     publicField(hashFields("market-id", [settlement.marketId])),
     publicField(settlement.settlementDigest),
+    ...(entryFundingIndex === undefined ? [] : [publicI128(entryFundingIndex)]),
     ...publicVec(settlement.orderUpdates.map((update) => update.intentCommitment)),
     ...publicVec(settlement.newCommitments),
     ...publicVec(settlement.marginChangeCommitments),
@@ -70,6 +83,13 @@ export function batchSettlementPublicInputHash(settlement: BatchSettlement): Hex
     ...publicVec(settlement.makerIntents),
     ...publicVec(settlement.takerIntents),
   ]);
+}
+
+export function batchEntryFundingIndex(settlement: Pick<BatchSettlement, "entryFundingIndex">): bigint {
+  const index = settlement.entryFundingIndex;
+  if (typeof index !== "bigint") throw new Error("batch entry funding index is required");
+  if (index < -(1n << 127n) || index >= (1n << 127n)) throw new Error("batch entry funding index is out of range");
+  return index;
 }
 
 function publicAmounts(values: bigint[]): ContractPublicInput[] {

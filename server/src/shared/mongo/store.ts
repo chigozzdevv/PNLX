@@ -9,6 +9,8 @@ import type {
   ConditionalOrderRecord,
   DisclosureRecord,
   FundingUpdateRecord,
+  FundingCycleRecord,
+  FundingCycleCursor,
   FundingPremiumSampleRecord,
   Hex,
   IntentRecord,
@@ -161,6 +163,22 @@ export class MongoProtocolStore extends ProtocolStore {
 
   override updateMarket(market: MarketConfig): void {
     this.persist(() => super.updateMarket(market));
+  }
+
+  override upsertFundingCycle(record: FundingCycleRecord): void {
+    this.persist(() => super.upsertFundingCycle(record));
+  }
+
+  override skipFundingCycle(record: FundingCycleRecord): void {
+    this.persist(() => super.skipFundingCycle(record));
+  }
+
+  override finalizeFundingCycle(cycleId: Hex): FundingUpdateRecord {
+    return this.persist(() => super.finalizeFundingCycle(cycleId));
+  }
+
+  override confirmFundingCycleFailure(cycleId: Hex, expected: Parameters<ProtocolStore["confirmFundingCycleFailure"]>[1]): void {
+    this.persist(() => super.confirmFundingCycleFailure(cycleId, expected));
   }
 
   override addFundingUpdate(record: FundingUpdateRecord): void {

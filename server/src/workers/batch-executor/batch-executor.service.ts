@@ -30,6 +30,8 @@ const DEFAULT_ORACLE_REFRESH_TIMEOUT_MS = 30_000;
 const MARKET_RUNS = new WeakMap<object, Map<string, Promise<BatchExecutorMarketResult>>>();
 const ACTIVE_RESERVATIONS = new WeakMap<object, Map<Hex, "fresh" | "recovery">>();
 
+class StaleFundingEpochError extends Error {}
+
 class BatchPhaseError extends Error {
   constructor(
     readonly phase: BatchExecutionPhase,
@@ -128,7 +130,9 @@ export class BatchExecutorService {
       return settlement;
     } catch (error) {
       if (context) {
-        this.record({ ...context, status: "failed", completedAt: Date.now(), reason: errorMessage(error),
+        const attempted = this.executor.store.batchExecutionRuns.get(context.runId)?.submissionAttempted;
+        this.record({ ...context, status: error instanceof StaleFundingEpochError && !attempted ? "skipped" : "failed",
+          completedAt: Date.now(), reason: errorMessage(error),
           phase: error instanceof BatchPhaseError ? error.phase : undefined });
         await flushStore(this.executor.store);
       }
@@ -398,7 +402,10 @@ export class BatchExecutorService {
       const phase = error instanceof BatchPhaseError ? error.phase : undefined;
       const reason = error instanceof Error ? error.message : "batch execution failed";
       const saved = this.executor.store.batchExecutionRuns.get(currentRunId);
-      const result = saved && await this.canAbandonReservation(saved)
+      const result = error instanceof StaleFundingEpochError && saved && !saved.submissionAttempted
+        ? this.record({ ...context, phase: phase ?? saved.phase, status: "skipped", completedAt: Date.now(),
+            updatedAt: Date.now(), reason: `${reason}; unsubmitted proof retired for a fresh funding epoch` })
+        : saved && await this.canAbandonReservation(saved)
         ? this.record({ ...context, phase: phase ?? saved.phase, status: "skipped", completedAt: Date.now(),
             updatedAt: Date.now(), reason: `${reason}; provably inactive input retired the unsubmitted batch` })
         : this.recordFailure(context, phase, reason);
@@ -432,6 +439,7 @@ export class BatchExecutorService {
     const { batchId, marketId, runId: currentRunId, startedAt, intentCommitments } = context;
     const alreadySettledOnchain = await this.isSettledOnchain(transcript.settlement);
     if (!alreadySettledOnchain) {
+      await this.assertEntryFundingEpoch(transcript);
       this.assertPipelinePriority(context);
       assertBatchExecutionBudget(transcript.settlement.fillCount / 2);
       assertPositionMutationReady(this.executor.store, "batch", currentRunId);
@@ -477,6 +485,20 @@ export class BatchExecutorService {
     );
     await flushStore(this.executor.store);
     return committedSettlement;
+  }
+
+  private async assertEntryFundingEpoch(transcript: ExternalBatchSettlementTranscript): Promise<void> {
+    if (!this.onchain?.enabled && !this.config.settlementsOnchainRequired) return;
+    if (!this.onchain?.marketFundingIndexAsync) throw new Error("current on-chain funding index is unavailable");
+    const entryIndex = transcript.settlement.entryFundingIndex;
+    const currentIndex = await this.onchain.marketFundingIndexAsync(transcript.settlement.marketId);
+    if (typeof entryIndex !== "bigint" || entryIndex !== currentIndex) {
+      throw new StaleFundingEpochError("batch proof entry funding index is stale or unbound");
+    }
+    if (transcript.positionOpenings.some((position) =>
+      position.marketId !== transcript.settlement.marketId || (position.fundingIndex ?? 0n) !== entryIndex)) {
+      throw new Error("position opening funding index differs from its proven batch epoch");
+    }
   }
 
   private record(update: BatchExecutionRunUpdate): BatchExecutorMarketResult {

@@ -22,6 +22,8 @@ export const NORMALIZED_SNAPSHOT_FIELDS = [
   ["pendingIntentSubmissions", "pending_intent_submissions"],
   ["disclosures", "disclosures"],
   ["fundingUpdates", "funding_updates"],
+  ["fundingCycles", "funding_cycles"],
+  ["fundingCursors", "funding_cursors"],
   ["fundingPremiumSamples", "funding_premium_samples"],
   ["intents", "intents"],
   ["liquidationAutomationJobs", "liquidation_jobs"],
@@ -228,6 +230,8 @@ export async function readNormalizedSnapshot(
   const snapshot = normalizedSnapshotFromRecords(entries, {
     ...checkpoint.counts,
     fundingPremiumSamples: checkpoint.counts.fundingPremiumSamples ?? 0,
+    fundingCycles: checkpoint.counts.fundingCycles ?? 0,
+    fundingCursors: checkpoint.counts.fundingCursors ?? 0,
     marketSettlementVolumes: checkpoint.counts.marketSettlementVolumes ?? 0,
   });
   const actualRoot = normalizedSnapshotPositionRoot(snapshot);

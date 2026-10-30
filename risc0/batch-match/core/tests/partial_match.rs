@@ -9,6 +9,6 @@ fn proves_typescript_partial_fill_and_residual_margin_fixture() {
     assert_ne!(proved.draft.residual_commitments[0], "0x0");
     assert_eq!(
         proved.journal_digest,
-        "0x5f5861cea88d366910de609a2f37c27a46f6ffc92acfa79619124cd9b19578ef"
+        "0x79b75c384bf1b1aa737898465907b23c442cd5850b8e3a8de4a78b52d519f898"
     );
 }

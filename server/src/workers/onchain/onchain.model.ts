@@ -98,6 +98,7 @@ export interface AssetDepositRelayInput {
 export interface OnchainRelay {
   readonly enabled: boolean;
   marketPriceAsync?(marketId: string): Promise<bigint>;
+  marketPriceSnapshotAsync?(marketId: string): Promise<{price:bigint;timestamp:number}>;
   marketFundingIndexAsync?(marketId: string): Promise<bigint>;
   isConditionalTriggeredAsync?(marketId: string, positionNullifier: Hex, closeCommitment: Hex): Promise<boolean>;
   isPositionCloseSettledAsync?(closeCommitment: Hex): Promise<boolean>;
@@ -153,4 +154,10 @@ export interface OnchainRelay {
   liquidate(record: LiquidationRecord): OnchainRelayResult;
   disclose(record: DisclosureRecord): OnchainRelayResult;
   settleFunding(record: FundingSettlementRecord): OnchainRelayResult;
+  settleFundingAsync?(record: FundingSettlementRecord,
+    beforeSubmit: (prepared: {txHash:Hex;xdr:string}) => Promise<void>,
+    prepared?: {txHash:Hex;xdr:string}): Promise<OnchainRelayResult>;
+  isFundingSettledAsync?(marketId: string, oldIndex: bigint, newIndex: bigint, cycleId?: Hex): Promise<boolean>;
+  fundingTransactionStatusAsync?(txHash: Hex): Promise<"SUCCESS"|"FAILED"|"NOT_FOUND">;
+  fundingActivationReadyAsync?(): Promise<boolean>;
 }

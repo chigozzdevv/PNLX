@@ -128,6 +128,7 @@ function createPositionGroup(input: PositionRow[], id: string, stable: boolean):
   const size = fullyPrivate ? sumKnown(legs.map((leg) => leg.size)) : undefined;
   const collateral = fullyPrivate ? sumKnown(legs.map((leg) => leg.collateral)) : undefined;
   const entryFee = fullyPrivate ? sumKnown(legs.map((leg) => leg.entryFee ?? 0)) : undefined;
+  const fundingPayment = fullyPrivate ? sumKnown(legs.map((leg) => leg.fundingPayment)) : undefined;
   const unrealizedPnl = fullyPrivate ? sumKnown(legs.map((leg) => leg.unrealizedPnl)) : undefined;
   const netValue = fullyPrivate ? sumKnown(legs.map((leg) => leg.netValue)) : undefined;
   const entryPrice = fullyPrivate ? weightedAverage(legs.map((leg) => ({
@@ -143,6 +144,7 @@ function createPositionGroup(input: PositionRow[], id: string, stable: boolean):
     closePrice: null,
     collateral,
     entryFee,
+    fundingPayment,
     commitment: undefined,
     entryPrice,
     id,

@@ -6,7 +6,7 @@ import { PortfolioPage } from "@/components/portfolio-page";
 import { emptyLiquidityAccount } from "@/lib/liquidity-account";
 import { applyLatestOnchainMarks } from "@/lib/use-trading-data";
 import type { WalletSessionController } from "@/lib/use-wallet-session";
-import type { PositionRow, TradingLiveData } from "@/types/trading";
+import type { MarketDisplay, PositionRow, TradingLiveData } from "@/types/trading";
 
 function portfolio(): TradingLiveData {
   return {
@@ -20,7 +20,7 @@ function portfolio(): TradingLiveData {
   };
 }
 
-function markedPortfolio(entryFee: bigint | undefined, markPrice = 20_000_000n): TradingLiveData {
+function markedPortfolio(entryFee: bigint | undefined, markPrice = 20_000_000n, fundingIndex = "0"): TradingLiveData {
   const trading = portfolio();
   const collateral = 100 - Number(entryFee ?? 0n) / 10_000_000;
   const position: PositionRow = {
@@ -52,6 +52,7 @@ function markedPortfolio(entryFee: bigint | undefined, markPrice = 20_000_000n):
   trading.account.accountValue = collateral;
   trading.account.lockedMargin = collateral;
   trading.positions = [position];
+  trading.markets = [{ marketId: position.marketId, fundingIndex } as MarketDisplay];
   return applyLatestOnchainMarks(trading,
     new Map([[position.marketId, { price: markPrice, receivedAt: 1_000 }]]), 1_000);
 }
@@ -130,6 +131,25 @@ describe("portfolio balance availability", () => {
 });
 
 describe("portfolio equity after entry fees", () => {
+  test("includes accrued funding once alongside the already-paid entry fee", () => {
+    for (const [index, equity, pnl] of [["2000000", "$97.00", "−$3.00"], ["-2000000", "$101.00", "+$1.00"]]) {
+      const trading = markedPortfolio(10_000_000n, 20_000_000n, index);
+      const markup = renderToStaticMarkup(createElement(PortfolioPage, { connected: true, trading }));
+      expect(markup).toContain(`class="portfolio-account-value">${equity}</strong>`);
+      expect(markup).toContain(`${pnl}</span>`);
+      expect(trading.positions[0].privateState?.fundingIndex).toBe("0");
+    }
+  });
+
+  test("does not publish equity when the current funding index is unknown", () => {
+    const trading = markedPortfolio(10_000_000n, 20_000_000n, "");
+    const markup = renderToStaticMarkup(createElement(PortfolioPage, { connected: true, trading }));
+    expect(trading.positions[0].unrealizedPnl).toBeUndefined();
+    expect(trading.positions[0].netValue).toBeUndefined();
+    expect(markup).toContain('class="portfolio-account-value">—</strong>');
+    expect(markup).toContain('<span>Margin in use</span><strong>$99.00</strong>');
+  });
+
   test("counts a taker entry fee once at an unchanged mark while keeping net P&L", () => {
     const trading = markedPortfolio(10_000_000n);
     expect(trading.positions[0].unrealizedPnl).toBe(-1);

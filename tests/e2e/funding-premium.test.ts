@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { digestToFieldHex, hashFields } from "@pnlx/crypto";
 import { PRICE_SCALE } from "@pnlx/market-math";
 import type { MarketConfig, PrivateMatchIntent, ProofMeta } from "@pnlx/protocol-types";
+import type { Prover, FundingSettlementProofInput } from "@/workers/prover/prover.model";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
 import { matchingPayloadCommitment } from "@/workers/batch-matcher/private-intent";
@@ -21,12 +22,14 @@ describe("impact TWAP funding", () => {
   test("uses only the remaining executable depth after an actual partial fill", () => {
     const { engine, executor, market, residual } = partiallyFilledFundingBook();
     expect(residual.signedSize).toBe(10n * 10_000_000n);
-    const sample = engine.sampleOnce({ sampledAt: 60_000 })[0].record;
+    const sample = sampleAt(engine, 60_000);
     expect(sample.impactNotional).toBe(5_000n * 10_000_000n);
     expect(sample.impactBidPrice).toBe(10_040_160_642n);
     expect(sample.premiumRate).toBe(4_016n);
     expect(executor.store.orderLifecycle.get(residual.sourceIntentCommitment!)?.status).toBe("partially-filled");
-    expect(engine.fundingSummary(market.marketId, 60_001).rate).toBe(4_016n);
+    expect(engine.fundingSummary(market.marketId, 120_000)).toMatchObject({
+      rate: null, status: "warming", sampleCount: 1, coverageMs: 60_000,
+    });
   });
 
   test("follows successive residuals without resampling filled ancestors", () => {
@@ -35,7 +38,7 @@ describe("impact TWAP funding", () => {
     seedFundingOrder(executor, short);
     const next = settleFundingMatch(executor, market, [residual, short], "funding-depth-second")[0];
     expect(next.signedSize).toBe(2n * 10_000_000n);
-    const sample = engine.sampleOnce({ sampledAt: 60_000 })[0].record;
+    const sample = sampleAt(engine, 60_000);
     expect(sample.impactBidPrice).toBe(10_008_006_405n);
     expect(sample.premiumRate).toBe(800n);
   });
@@ -50,7 +53,7 @@ describe("impact TWAP funding", () => {
         settleFundingMatch(executor, market, [residual, short], "funding-depth-final");
       }
       expect(executor.store.orderLifecycle.get(residual.intentCommitment)?.status).toBe(terminalStatus);
-      const sample = engine.sampleOnce({ sampledAt: 60_000 })[0].record;
+      const sample = sampleAt(engine, 60_000);
       expect(sample.impactBidPrice).toBe(100n * PRICE_SCALE);
       expect(sample.premiumRate).toBe(0n);
     });
@@ -70,7 +73,7 @@ describe("impact TWAP funding", () => {
     expect(executor.store.fundingPremiumSamples.size).toBe(0);
   });
 
-  test("reports warming, observed neutral funding, and stale samples without inventing a rate", () => {
+  test("reports warming, observed neutral funding, and stale samples without inventing a rate", async () => {
     const executor = createExecutor();
     const market = marketConfig(19_775_000n, "xlm-usd-perp");
     executor.addMarket(market);
@@ -82,17 +85,18 @@ describe("impact TWAP funding", () => {
       rate: null, status: "warming", settlementStatus: "paused", sampleCount: 0,
       minimumSamples: 2, sampledAt: null, nextFundingAt: null,
     });
-    engine.sampleOnce({ marketId: market.marketId, sampledAt: 60_000 });
-    expect(engine.fundingSummary(market.marketId, 60_001)).toMatchObject({ rate: null, status: "warming", sampleCount: 1 });
-    engine.sampleOnce({ marketId: market.marketId, sampledAt: 120_000 });
-    expect(engine.fundingSummary(market.marketId, 120_001)).toMatchObject({
-      rate: 0n, status: "ready", settlementStatus: "paused", sampleCount: 2,
-      sampledAt: 120_000, nextFundingAt: null, source: "impact-twap",
+    seedNeutralFundingBook(executor, market);
+    sampleAt(engine, 60_000);
+    expect(engine.fundingSummary(market.marketId, 120_000)).toMatchObject({ rate: null, status: "warming", sampleCount: 1 });
+    executor.store.addFundingPremiumSamples(fullWindow(market, 3_600_000, () => 0n));
+    expect(engine.fundingSummary(market.marketId, 3_600_001)).toMatchObject({
+      rate: 0n, status: "ready", settlementStatus: "paused", sampleCount: 60,
+      sampledAt: 3_540_000, nextFundingAt: null, source: "impact-twap",
     });
-    expect(engine.fundingSummary(market.marketId, 300_001)).toMatchObject({
-      rate: null, status: "stale", sampledAt: 120_000, nextFundingAt: null,
+    expect(engine.fundingSummary(market.marketId, 3_780_001)).toMatchObject({
+      rate: null, status: "stale", sampledAt: 3_540_000, nextFundingAt: null,
     });
-    expect(engine.runOnce({ appliedAt: 300_001 }).results[0]).toMatchObject({
+    expect((await engine.runOnce({ appliedAt: 3_780_001 })).results[0]).toMatchObject({
       skipped: true, reason: "stale premium samples",
     });
   });
@@ -110,8 +114,8 @@ describe("impact TWAP funding", () => {
       engine.startSampling();
       expect(engine.status()).toMatchObject({ samplingRunning: true, settlementRunning: false, nextFundingAt: null });
       now = 120_000;
-      engine.sampleOnce();
-      expect(engine.fundingSummary(market.marketId)).toMatchObject({ rate: 0n, status: "ready", settlementStatus: "paused" });
+      sampleAt(engine, now);
+      expect(engine.fundingSummary(market.marketId)).toMatchObject({ rate: null, status: "unavailable", settlementStatus: "paused" });
       expect(executor.store.markets.get(market.marketId)?.fundingIndex).toBe(0n);
       expect(executor.store.fundingUpdates.size).toBe(0);
     } finally { engine.stop(); }
@@ -130,28 +134,29 @@ describe("impact TWAP funding", () => {
       engine.startSampling();
       for (let attempt = 0; attempt < 20 && executor.store.fundingPremiumSamples.size < 2; attempt += 1) await Bun.sleep(5);
       expect(executor.store.fundingPremiumSamples.size).toBeGreaterThanOrEqual(2);
-      expect(engine.fundingSummary(market.marketId)).toMatchObject({ rate: 0n, status: "ready", settlementStatus: "paused", nextFundingAt: null });
+      const latest = [...executor.store.fundingPremiumSamples.values()].sort((a, b) => a.sampledAt - b.sampledAt).at(-1)!;
+      expect(engine.fundingSummary(market.marketId, latest.sampledAt + 10)).toMatchObject({
+        rate: null, status: "unavailable", settlementStatus: "paused", nextFundingAt: null,
+      });
       expect(executor.store.fundingUpdates.size).toBe(0);
     } finally { engine.stop(); }
   });
 
-  test("restores observed rates from persisted samples without claiming a running schedule", () => {
+  test("restores observed rates from persisted samples without claiming a running schedule", async () => {
     const executor = createExecutor();
     const market = marketConfig(19_775_000n, "xlm-usd-perp");
     executor.addMarket(market);
-    executor.store.addFundingPremiumSamples([
-      premiumSample(market, 60_000, -1_000n), premiumSample(market, 120_000, -3_000n),
-    ]);
+    executor.store.addFundingPremiumSamples(fullWindow(market, 3_600_000, (index) => index < 30 ? -1_000n : -3_000n));
     const config = {
       intervalMs: 3_600_000, minimumSamples: 2, premiumMode: "impact-twap" as const, premiumRate: 0n,
       sampleIntervalMs: 60_000,
     };
-    const engine = new FundingEngineService(executor, config, undefined, undefined, () => 120_001);
+    const engine = new FundingEngineService(executor, config, undefined, undefined, () => 3_600_001);
     expect(engine.fundingSummary(market.marketId)).toMatchObject({
-      rate: -2_000n, status: "ready", settlementStatus: "paused", sampledAt: 120_000, nextFundingAt: null,
+      rate: -2_000n, status: "ready", settlementStatus: "paused", sampledAt: 3_540_000, nextFundingAt: null,
     });
-    expect(engine.runOnce({ elapsedMs: config.intervalMs }).results[0].update?.fundingDelta).toBe(-39_550n);
-    const restarted = new FundingEngineService(executor, config, undefined, undefined, () => 120_002);
+    expect((await engine.runOnce()).results[0].update?.fundingDelta).toBe(-39_550n);
+    const restarted = new FundingEngineService(executor, config, undefined, undefined, () => 3_600_002);
     expect(restarted.fundingSummary(market.marketId)).toMatchObject({ rate: -2_000n, status: "ready", settlementStatus: "paused", nextFundingAt: null });
     expect(executor.store.markets.get(market.marketId)?.fundingIndex).toBe(-39_550n);
   });
@@ -173,12 +178,14 @@ describe("impact TWAP funding", () => {
     expect(engine.fundingSummary(market.marketId, 60_000).rate).toBe(null);
   });
 
-  test("continues XLM observations when another market has incomplete order data", () => {
+  test("continues XLM observations when another market has incomplete order data", async () => {
     const executor = createExecutor();
     const market = marketConfig(19_775_000n, "xlm-usd-perp");
     const broken = marketConfig(100n * PRICE_SCALE, "btc-usd-perp");
     executor.addMarket(market);
     executor.addMarket(broken);
+    seedNeutralFundingBook(executor, market);
+    executor.store.addFundingPremiumSamples(fullWindow(market, 3_600_000, () => 0n));
     const commitment = hashFields("intent", ["funding-broken-other-market"]);
     executor.store.orderLifecycle.set(commitment, {
       marketId: broken.marketId, intentCommitment: commitment, batchId: "funding-broken-other-market",
@@ -187,24 +194,28 @@ describe("impact TWAP funding", () => {
     const errorLog = spyOn(console, "error").mockImplementation(() => {});
     const engine = new FundingEngineService(executor, {
       intervalMs: 3_600_000, minimumSamples: 1, premiumMode: "impact-twap", premiumRate: 0n,
-    }, undefined, undefined, () => 60_000);
+    }, undefined, undefined, () => 3_600_000);
     try {
       engine.startSampling();
-      expect(engine.fundingSummary(market.marketId)).toMatchObject({ status: "ready", rate: 0n, sampledAt: 60_000 });
-      expect(engine.fundingSummary(broken.marketId)).toMatchObject({ status: "warming", rate: null, sampledAt: null });
+      await settleTasks();
+      await engine.sampleSafely({ sampledAt: 3_600_000, oracleObservedAt: 3_600_000, depthObservedAt: 3_600_000 });
+      expect(engine.fundingSummary(market.marketId)).toMatchObject({ status: "ready", rate: 0n, sampledAt: 3_600_000 });
+      expect(executor.store.fundingPremiumSamples.get(`${market.marketId}:3600000`)?.status).toBe("available");
+      expect(engine.fundingSummary(broken.marketId)).toMatchObject({ status: "warming", rate: null, sampledAt: 3_600_000 });
       expect(engine.status().lastSampleError).toBe("funding premium sampling failed");
-      expect(executor.store.fundingPremiumSamples.size).toBe(1);
-      executor.store.addFundingPremiumSamples([premiumSample(broken, 60_000, 0n)]);
+      expect(executor.store.fundingPremiumSamples.size).toBe(62);
+      executor.store.addFundingPremiumSamples(fullWindow(broken, 3_600_000, () => 0n));
       expect(engine.fundingSummary(broken.marketId)).toMatchObject({ status: "stale", rate: null });
-      expect(engine.runOnce({ marketId: broken.marketId }).results[0]).toMatchObject({ skipped: true, reason: "funding premium sampling unavailable" });
+      expect((await engine.runOnce({ marketId: broken.marketId })).results[0]).toMatchObject({ skipped: true, reason: "funding observations unavailable" });
     } finally { engine.stop(); errorLog.mockRestore(); }
   });
 
-  test("publishes a countdown only for a ready, running settlement schedule", () => {
+  test("publishes a countdown only for a ready, running settlement schedule", async () => {
     const executor = createExecutor();
     const market = marketConfig(19_775_000n, "xlm-usd-perp");
     executor.addMarket(market);
-    let now = 60_000;
+    executor.store.addFundingPremiumSamples(fullWindow(market, 3_600_000, () => 0n));
+    let now = 3_600_000;
     const engine = new FundingEngineService(executor, {
       intervalMs: 3_600_000, minimumSamples: 1, premiumMode: "impact-twap", premiumRate: 0n,
       sampleIntervalMs: 60_000,
@@ -213,21 +224,23 @@ describe("impact TWAP funding", () => {
     try {
       engine.startSampling();
       engine.start();
+      await settleTasks();
       expect(engine.fundingSummary(market.marketId)).toMatchObject({
-        rate: 0n, status: "ready", settlementStatus: "running", nextFundingAt: 3_660_000,
+        rate: 0n, status: "ready", settlementStatus: "running", nextFundingAt: 7_200_000,
       });
       engine.start();
-      expect(engine.status().nextFundingAt).toBe(3_660_000);
-      now = 4_000_000;
+      expect(engine.status().nextFundingAt).toBe(7_200_000);
+      now = 7_200_001;
       expect(engine.fundingSummary(market.marketId).nextFundingAt).toBe(null);
       engine.stop();
       expect(engine.fundingSummary(market.marketId)).toMatchObject({ settlementStatus: "paused", nextFundingAt: null });
       engine.start();
-      expect(engine.status().nextFundingAt).toBe(7_600_000);
+      await settleTasks();
+      expect(engine.status().nextFundingAt).toBe(10_860_000);
     } finally { engine.stop(); }
   });
 
-  test("blocks settlement startup when required relay dependencies are missing", () => {
+  test("blocks settlement startup when required relay dependencies are missing", async () => {
     const executor = createExecutor();
     const market = marketConfig(19_775_000n, "xlm-usd-perp");
     executor.addMarket(market);
@@ -237,7 +250,8 @@ describe("impact TWAP funding", () => {
     });
     try {
       engine.start();
-      expect(engine.status()).toMatchObject({ samplingRunning: true, settlementRunning: false, settlementBlocked: true, nextFundingAt: null });
+      await settleTasks();
+      expect(engine.status()).toMatchObject({ samplingRunning: true, settlementBlocked: true, nextFundingAt: null });
       expect(engine.fundingSummary(market.marketId).settlementStatus).toBe("blocked");
       expect(executor.store.fundingUpdates.size).toBe(0);
     } finally { engine.stop(); }
@@ -249,23 +263,29 @@ describe("impact TWAP funding", () => {
     executor.addMarket(market);
     let now = 100;
     let cycles = 0;
+    let finish!: () => void;
+    const proving = new Promise<void>((resolve) => { finish = resolve; });
+    const timers = fundingTimers();
     const engine = new FundingEngineService(executor, {
-      intervalMs: 20, premiumMode: "fixed", premiumRate: 1_000n,
-    }, undefined, undefined, () => now);
-    engine.runOnce = () => {
-      cycles += 1;
-      now += 55;
-      return { appliedAt: now, results: [] };
-    };
+      intervalMs: 20, sampleIntervalMs: 10, premiumMode: "fixed", premiumRate: 1_000n,
+    }, fundingProver(async () => { cycles++; await proving; }), undefined, () => now);
     try {
       engine.start();
+      await settleTasks();
       expect(engine.fundingSummary(market.marketId).nextFundingAt).toBe(120);
       now = 120;
-      for (let attempt = 0; attempt < 100 && cycles < 1; attempt += 1) await Bun.sleep(1);
+      timers.fire();
+      await settleTasks();
       expect(cycles).toBe(1);
-      expect(engine.status()).toMatchObject({ lastCompletedAt: 175, nextFundingAt: 195 });
-      expect(engine.fundingSummary(market.marketId).nextFundingAt).toBe(195);
-    } finally { engine.stop(); }
+      expect(timers.size()).toBe(0);
+      expect(engine.status().nextFundingAt).toBeNull();
+      now = 175;
+      finish();
+      await settleTasks();
+      expect(engine.status()).toMatchObject({ lastCompletedAt: 175, nextFundingAt: 176 });
+      expect(engine.fundingSummary(market.marketId).nextFundingAt).toBe(176);
+      expect(timers.size()).toBe(1);
+    } finally { engine.stop(); timers.restore(); }
   });
 
   test("reports failed settlement cycles as blocked until a successful retry", async () => {
@@ -274,25 +294,30 @@ describe("impact TWAP funding", () => {
     executor.addMarket(market);
     let now = 100;
     let cycles = 0;
+    const timers = fundingTimers();
     const errorLog = spyOn(console, "error").mockImplementation(() => {});
     const engine = new FundingEngineService(executor, {
-      intervalMs: 20, premiumMode: "fixed", premiumRate: 1_000n,
-    }, undefined, undefined, () => now);
-    engine.runOnce = () => {
+      intervalMs: 20, sampleIntervalMs: 10, premiumMode: "fixed", premiumRate: 1_000n,
+    }, fundingProver(async () => {
       cycles += 1;
       if (cycles === 1) throw new Error("funding settlement relay unavailable");
-      return { appliedAt: now, results: [] };
-    };
+    }), undefined, () => now);
     try {
       engine.start();
-      for (let attempt = 0; attempt < 100 && cycles < 1; attempt += 1) await Bun.sleep(1);
+      await settleTasks();
+      now = 120;
+      timers.fire();
+      await settleTasks();
+      expect(cycles).toBe(1);
       expect(engine.fundingSummary(market.marketId)).toMatchObject({ settlementStatus: "blocked", nextFundingAt: null });
       expect(engine.status().lastError).toBe("funding settlement cycle failed");
       now = 150;
-      for (let attempt = 0; attempt < 100 && cycles < 2; attempt += 1) await Bun.sleep(1);
+      timers.fire();
+      await settleTasks();
+      expect(cycles).toBe(2);
       expect(engine.status()).toMatchObject({ settlementRunning: true, settlementBlocked: false, lastError: null, lastCompletedAt: 150 });
-      expect(engine.fundingSummary(market.marketId)).toMatchObject({ settlementStatus: "running", nextFundingAt: 170 });
-    } finally { engine.stop(); errorLog.mockRestore(); }
+      expect(engine.fundingSummary(market.marketId)).toMatchObject({ settlementStatus: "running", nextFundingAt: 151 });
+    } finally { engine.stop(); errorLog.mockRestore(); timers.restore(); }
   });
 
   test("health distinguishes configured settlement pause from live premium sampling", async () => {
@@ -321,7 +346,7 @@ describe("impact TWAP funding", () => {
   test("exposes the current market premium without requiring a nonzero funding update", () => {
     const market = marketConfig(19_775_000n, "xlm-usd-perp");
     const result = currentFundingPremium(
-      [premiumSample(market, 1_000, 0n), premiumSample(market, 2_000, 0n)],
+      fullWindow(market, 3_600_000, () => 0n),
       {
         intervalMs: 3_600_000,
         minimumSamples: 2,
@@ -330,12 +355,14 @@ describe("impact TWAP funding", () => {
         premiumRateCap: 5_000n,
       },
       market.marketId,
-      3_000,
+      3_600_000,
     );
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       rate: 0n,
-      sampleCount: 2,
+      status: "ready",
+      sampleCount: 60,
+      coverageMs: 3_600_000,
       source: "impact-twap",
     });
   });
@@ -352,6 +379,8 @@ describe("impact TWAP funding", () => {
       {
         impactMargin: 500n * 10_000_000n,
         premiumRateCap: 5_000n,
+        oracleObservedAt: 60_000,
+        depthObservedAt: 60_000,
       },
     );
 
@@ -361,14 +390,11 @@ describe("impact TWAP funding", () => {
     expect(sample.premiumRate).toBe(5_000n);
   });
 
-  test("uses an hourly average and preserves precision for a low-priced market", () => {
+  test("uses an hourly average and preserves precision for a low-priced market", async () => {
     const executor = createExecutor();
     const market = marketConfig(19_775_000n, "xlm-usd-perp");
     executor.addMarket(market);
-    executor.store.addFundingPremiumSamples([
-      premiumSample(market, 1_000, 1_000n),
-      premiumSample(market, 2_000, 3_000n),
-    ]);
+    executor.store.addFundingPremiumSamples(fullWindow(market, 3_600_000, (index) => index < 30 ? 1_000n : 3_000n));
     const engine = createFundingEngine(executor, {
       impactMargin: 500n * 10_000_000n,
       intervalMs: 3_600_000,
@@ -379,19 +405,20 @@ describe("impact TWAP funding", () => {
       sampleIntervalMs: 60_000,
     });
 
-    const result = engine.runOnce({
-      appliedAt: 3_000,
-      elapsedMs: 3_600_000,
+    const result = await engine.runOnce({
+      appliedAt: 3_600_000,
       marketId: market.marketId,
     });
 
     expect(result.results[0].skipped).toBe(false);
     expect(result.results[0].update?.premiumRate).toBe(2_000n);
-    expect(result.results[0].update?.premiumSampleCount).toBe(2);
+    expect(result.results[0].update?.premiumSampleCount).toBe(60);
+    expect(result.results[0].update?.premiumSource).toBe("impact-twap");
+    expect(engine.fundingSummary(market.marketId, 3_600_000)).toMatchObject({ sampleCount: 60, coverageMs: 3_600_000 });
     expect(result.results[0].update?.fundingDelta).toBe(39_550n);
   });
 
-  test("skips dynamic funding until enough samples exist", () => {
+  test("skips dynamic funding until enough samples exist", async () => {
     const executor = createExecutor();
     const market = marketConfig(100n * PRICE_SCALE);
     executor.addMarket(market);
@@ -403,10 +430,13 @@ describe("impact TWAP funding", () => {
       premiumRate: 0n,
     });
 
-    const result = engine.runOnce({ appliedAt: 2_000, marketId: market.marketId });
+    const result = await engine.runOnce({ appliedAt: 3_600_000, marketId: market.marketId });
 
     expect(result.results[0].skipped).toBe(true);
-    expect(result.results[0].reason).toBe("insufficient premium samples: 1/2");
+    expect(result.results[0].reason).toBe("stale premium samples");
+    executor.store.addFundingPremiumSamples([premiumSample(market, 7_140_000, 1_000n)]);
+    const recent = await engine.runOnce({ appliedAt: 7_200_000, marketId: market.marketId });
+    expect(recent.results[0]).toMatchObject({ skipped: true, reason: "insufficient premium coverage: 60000/3600000ms (1/2 samples)" });
   });
 
   test("keeps one observation per configured time bucket", () => {
@@ -466,13 +496,67 @@ function intent(label: string, signedSize: bigint, limitPrice: bigint): PrivateM
 }
 
 function premiumSample(market: MarketConfig, sampledAt: number, premiumRate: bigint) {
+  const bucket = Math.floor(sampledAt / 60_000) * 60_000;
+  const shift = market.oraclePrice * premiumRate / 1_000_000n;
   return {
+    status: "available" as const,
+    observedAt: bucket + 1_000,
+    oracleObservedAt: bucket,
+    depthObservedAt: bucket + 1_000,
+    sampleIntervalMs: 60_000,
+    impactBidPrice: premiumRate > 0n ? market.oraclePrice + shift : market.oraclePrice - 1n,
+    impactAskPrice: premiumRate < 0n ? market.oraclePrice + shift : market.oraclePrice + 1n,
     impactNotional: 5_000n * 10_000_000n,
     indexPrice: market.oraclePrice,
     marketId: market.marketId,
     premiumRate,
-    sampledAt,
+    sampledAt: bucket,
     source: "impact-orderbook" as const,
+  };
+}
+
+function fullWindow(market: MarketConfig, end: number, rate: (index: number) => bigint) {
+  return Array.from({ length: 60 }, (_, index) => premiumSample(market, end - 3_600_000 + index * 60_000, rate(index)));
+}
+
+function sampleAt(engine: FundingEngineService, sampledAt: number) {
+  return engine.sampleOnce({ sampledAt, oracleObservedAt: sampledAt, depthObservedAt: sampledAt })[0].record;
+}
+
+function seedNeutralFundingBook(executor: ExecutorService, market: MarketConfig): void {
+  seedFundingOrder(executor, { ...fundingBookIntent(`${market.marketId}-neutral-bid`, 100_000n * 10_000_000n, market.oraclePrice - 1n), marketId: market.marketId });
+  seedFundingOrder(executor, { ...fundingBookIntent(`${market.marketId}-neutral-ask`, -100_000n * 10_000_000n, market.oraclePrice + 1n), marketId: market.marketId });
+}
+
+async function settleTasks(): Promise<void> {
+  for (let turn = 0; turn < 40; turn++) await Promise.resolve();
+}
+
+function fundingProver(beforeProof: () => Promise<void>): Prover {
+  return { async proveFundingSettlementAsync(input: FundingSettlementProofInput) {
+    await beforeProof();
+    return { ...input, fundingDelta: input.newFundingIndex - input.oldFundingIndex, proof: fundingFixtureProof("funding") };
+  } } as Prover;
+}
+
+function fundingTimers() {
+  const tasks = new Map<ReturnType<typeof setTimeout>, () => void>();
+  const schedule = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void) => {
+    const handle = { unref() {} } as ReturnType<typeof setTimeout>;
+    tasks.set(handle, callback);
+    return handle;
+  }) as typeof setTimeout);
+  const cancel = spyOn(globalThis, "clearTimeout").mockImplementation(((handle: ReturnType<typeof setTimeout>) => {
+    tasks.delete(handle);
+  }) as typeof clearTimeout);
+  return {
+    fire() {
+      const next = tasks.entries().next().value;
+      if (!next) throw new Error("no scheduled funding timer");
+      tasks.delete(next[0]); next[1]();
+    },
+    size: () => tasks.size,
+    restore() { schedule.mockRestore(); cancel.mockRestore(); },
   };
 }
 
@@ -536,6 +620,7 @@ function partiallyFilledFundingBook() {
   seedFundingOrder(executor, ask);
   const residual = settleFundingMatch(executor, market, [bid, ask], "funding-depth-first")[0];
   seedFundingOrder(executor, fundingBookIntent("fallback-bid", 100n * 10_000_000n, 100n * PRICE_SCALE));
+  seedFundingOrder(executor, fundingBookIntent("standing-ask", -100n * 10_000_000n, 103n * PRICE_SCALE));
   const engine = createFundingEngine(executor, {
     intervalMs: 3_600_000, minimumSamples: 1, premiumMode: "impact-twap", premiumRate: 0n,
   });

@@ -67,6 +67,7 @@ fn assert_signed_add(
 
 fn main(
     market_id: pub Field,
+    cycle_id: pub Field,
     old_index_abs: pub u128,
     old_index_is_negative: pub bool,
     new_index_abs: pub u128,
@@ -80,6 +81,7 @@ fn main(
     max_delta_enabled: pub u128,
 ) {
     assert(market_id != 0);
+    assert(cycle_id != 0);
     let delta = funding_delta(
         mark_price,
         premium_rate_abs,
@@ -101,35 +103,40 @@ fn main(
 
 #[test]
 fn valid_funding_update() {
-    main(9, 1_000, false, 50_000_001_000, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 0);
+    main(9, 7, 1_000, false, 50_000_001_000, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 0);
 }
 
 #[test]
 fn valid_negative_funding_update() {
-    main(9, 50_000_001_000, false, 1_000, false, 50_000_00000000, 10_000, true, 3_600_000, 3_600_000, 0, 0);
+    main(9, 7, 50_000_001_000, false, 1_000, false, 50_000_00000000, 10_000, true, 3_600_000, 3_600_000, 0, 0);
 }
 
 #[test]
 fn crosses_zero_with_negative_funding_update() {
-    main(9, 100, false, 49_999_999_900, true, 50_000_00000000, 10_000, true, 3_600_000, 3_600_000, 0, 0);
+    main(9, 7, 100, false, 49_999_999_900, true, 50_000_00000000, 10_000, true, 3_600_000, 3_600_000, 0, 0);
 }
 
 #[test]
 fn caps_funding_delta() {
-    main(9, 1_000, false, 1_050, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 50, 1);
+    main(9, 7, 1_000, false, 1_050, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 50, 1);
 }
 
 #[test(should_fail)]
 fn rejects_bad_delta() {
-    main(9, 1_000, false, 50_000_000_999, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 0);
+    main(9, 7, 1_000, false, 50_000_000_999, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 0);
 }
 
 #[test(should_fail)]
 fn rejects_bad_cap_flag() {
-    main(9, 1_000, false, 50_000_001_000, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 2);
+    main(9, 7, 1_000, false, 50_000_001_000, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 2);
 }
 
 #[test(should_fail)]
 fn rejects_non_normalized_negative_zero() {
-    main(9, 0, true, 50_000_000_000, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 0);
+    main(9, 7, 0, true, 50_000_000_000, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 0);
+}
+
+#[test(should_fail)]
+fn rejects_zero_cycle_identity() {
+    main(9, 0, 1_000, false, 50_000_001_000, false, 50_000_00000000, 10_000, false, 3_600_000, 3_600_000, 0, 0);
 }

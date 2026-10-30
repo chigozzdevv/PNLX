@@ -162,6 +162,7 @@ impl BatchSettlement {
         batch_id: BytesN<32>,
         market_id: BytesN<32>,
         settlement_digest: BytesN<32>,
+        entry_funding_index: i128,
         proof: ProofMeta,
         filled_intents: Vec<BytesN<32>>,
         new_commitments: Vec<BytesN<32>>,
@@ -225,6 +226,7 @@ impl BatchSettlement {
             &batch_id,
             &market_id,
             &settlement_digest,
+            entry_funding_index,
             &filled_intents,
             &new_commitments,
             &margin_change_commitments,
@@ -244,6 +246,7 @@ impl BatchSettlement {
             &taker_intents,
             &proof,
         );
+        validate_entry_funding_index(&env, &market_id, entry_funding_index);
         let batch_key = DataKey::Batch(batch_id, market_id.clone());
         if env.storage().persistent().has(&batch_key) {
             panic!("batch settled");
@@ -282,6 +285,8 @@ impl BatchSettlement {
         };
         env.storage().persistent().set(&batch_key, &meta);
     }
+
+    pub fn funding_epoch_bound() -> bool { true }
 
     pub fn residual_margin(env: Env, intent_commitment: BytesN<32>) -> i128 {
         env.storage()
@@ -778,11 +783,20 @@ fn checked_market_price(env: &Env, market_id: &BytesN<32>) -> MarketPrice {
     price
 }
 
+fn validate_entry_funding_index(env: &Env, market_id: &BytesN<32>, entry_funding_index: i128) {
+    let market: Address = env.storage().persistent().get(&DataKey::MarketContract)
+        .unwrap_or_else(|| panic!("not initialized"));
+    if MarketClient::new(env, &market).funding_index(market_id) != entry_funding_index {
+        panic!("stale entry funding index");
+    }
+}
+
 fn validate_public_inputs(
     env: &Env,
     batch_id: &BytesN<32>,
     market_id: &BytesN<32>,
     settlement_digest: &BytesN<32>,
+    entry_funding_index: i128,
     filled_intents: &Vec<BytesN<32>>,
     new_commitments: &Vec<BytesN<32>>,
     margin_change_commitments: &Vec<BytesN<32>>,
@@ -807,6 +821,7 @@ fn validate_public_inputs(
         batch_id,
         market_id,
         settlement_digest,
+        entry_funding_index,
         filled_intents,
         new_commitments,
         margin_change_commitments,
@@ -835,6 +850,7 @@ fn batch_public_input_hash(
     batch_id: &BytesN<32>,
     market_id: &BytesN<32>,
     settlement_digest: &BytesN<32>,
+    entry_funding_index: i128,
     filled_intents: &Vec<BytesN<32>>,
     new_commitments: &Vec<BytesN<32>>,
     margin_change_commitments: &Vec<BytesN<32>>,
@@ -857,6 +873,8 @@ fn batch_public_input_hash(
     append_field(env, &mut public_inputs, batch_id);
     append_field(env, &mut public_inputs, market_id);
     append_field(env, &mut public_inputs, settlement_digest);
+    append_u128_field(env, &mut public_inputs, entry_funding_index.unsigned_abs());
+    append_u128_field(env, &mut public_inputs, if entry_funding_index < 0 { 1 } else { 0 });
     append_public_vec(env, &mut public_inputs, filled_intents);
     append_public_vec(env, &mut public_inputs, new_commitments);
     append_public_vec(env, &mut public_inputs, margin_change_commitments);
@@ -951,6 +969,67 @@ mod tests {
     use test_oracle::{TestOracle, TestOracleClient};
 
     #[test]
+    fn funding_epoch_marker_is_explicit() {
+        let env = Env::default();
+        let id = env.register(BatchSettlement, ());
+        assert!(BatchSettlementClient::new(&env, &id).funding_epoch_bound());
+    }
+
+    #[test]
+    fn accepts_exact_signed_entry_funding_epoch() {
+        for index in [0, 7, -7] { assert_entry_epoch_settlement(index, index, index, true); }
+    }
+
+    #[test]
+    fn rejects_stale_epoch_and_index_substitution_without_spending_inputs() {
+        // The proof may be valid for its captured epoch, but that epoch is stale.
+        assert_entry_epoch_settlement(0, 0, 7, false);
+        assert_entry_epoch_settlement(-7, -7, 7, false);
+        // Replacing only the call argument cannot reuse a proof from another epoch.
+        assert_entry_epoch_settlement(0, 7, 7, false);
+        assert_entry_epoch_settlement(-7, 7, 7, false);
+    }
+
+    fn assert_entry_epoch_settlement(proven: i128, supplied: i128, current: i128, accepted: bool) {
+        let env = Env::default();
+        let id = env.register(BatchSettlement, ());
+        let client = BatchSettlementClient::new(&env, &id);
+        let batch = BytesN::from_array(&env, &[1; 32]);
+        let market = BytesN::from_array(&env, &[2; 32]);
+        let filled = filled_intents(&env);
+        let mut proof = proof(&env);
+        proof.public_input_hash = super::batch_public_input_hash(
+            &env, &batch, &market, &settlement_digest(&env), proven,
+            &filled, &new_commitments(&env), &margin_change_commitments(&env),
+            &spent_nullifiers(&env), &payloads(&env, &filled), &zero_residuals(&env, &filled),
+            &zero_residual_margins(&env, &filled), &zero_residuals(&env, &filled), 0, 2,
+            &super::expected_fee_config_hash(&env), 0, 0, 0, 0, &fee_makers(&env), &fee_takers(&env),
+        );
+        let pool_id = setup_shielded_pool(&env, &id);
+        let registry_id = setup_intent_registry(&env, &id, &pool_id, false);
+        let market_id = setup_market(&env, &market, 50_000_00000000, 950, true);
+        let market_client = MarketClient::new(&env, &market_id);
+        let mut config = market_client.get(&market);
+        config.funding_index = current;
+        market_client.upsert(&market, &config);
+        client.init(&setup_governance(&env), &setup_proof_ledger(&env, Some(&proof)), &market_id,
+            &setup_position_state(&env, &id), &pool_id, &registry_id, &circuit(&env));
+        client.configure_fee_token(&fixture_collateral_token(&env, &registry_id));
+        let result = client.try_settle(
+            &batch, &market, &settlement_digest(&env), &supplied, &proof,
+            &filled, &new_commitments(&env), &margin_change_commitments(&env),
+            &spent_nullifiers(&env), &payloads(&env, &filled), &zero_residuals(&env, &filled),
+            &zero_residual_margins(&env, &filled), &zero_residuals(&env, &filled), &2, &0,
+            &super::expected_fee_config_hash(&env), &0, &0, &0, &0, &fee_makers(&env), &fee_takers(&env),
+        );
+        assert_eq!(result.is_ok(), accepted);
+        assert_eq!(client.is_settled(&batch, &market), accepted);
+        for nullifier in spent_nullifiers(&env).iter() {
+            assert_eq!(ShieldedPoolClient::new(&env, &pool_id).is_spent(&nullifier), accepted);
+        }
+    }
+
+    #[test]
     fn settles_batch() {
         let env = Env::default();
         let id = env.register(BatchSettlement, ());
@@ -976,6 +1055,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            &0,
             &proof,
             &filled,
             &new_commitments(&env),
@@ -1051,6 +1131,7 @@ mod tests {
             let changes=Vec::new(&env);
             let mut proved=proof(&env);
             proved.public_input_hash=super::batch_public_input_hash(&env,&batch,&market,&settlement_digest(&env),
+                0,
                 &filled,&commitments,&changes,&nullifiers,&payloads,&zeros,&margins,&zeros,0,2,
                 &super::expected_fee_config_hash(&env),0,0,0,0,&makers,&takers);
             client.init(&setup_governance(&env),&setup_proof_ledger(&env,Some(&proved)),
@@ -1058,7 +1139,7 @@ mod tests {
                 &pool_id,&registry_id,&circuit(&env));
             client.configure_fee_token(&fixture_collateral_token(&env,&registry_id));
             env.cost_estimate().budget().reset_default();
-            let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||client.try_settle(&batch,&market,&settlement_digest(&env),&proved,&filled,&commitments,
+            let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||client.try_settle(&batch,&market,&settlement_digest(&env), &0,&proved,&filled,&commitments,
                 &changes,&nullifiers,&payloads,&zeros,&margins,&zeros,&2,&0,&super::expected_fee_config_hash(&env),
                 &0,&0,&0,&0,&makers,&takers)));
             let accepted=result.map(|value|value.is_ok()).unwrap_or(false);
@@ -1095,6 +1176,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            0,
             &filled,
             &new_commitments(&env),
             &changes,
@@ -1131,6 +1213,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            &0,
             &proved,
             &filled,
             &new_commitments(&env),
@@ -1257,6 +1340,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            0,
             &filled,
             &new_commitments(&env),
             &margin_change_commitments(&env),
@@ -1290,6 +1374,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            &0,
             &proved,
             &filled,
             &new_commitments(&env),
@@ -1329,6 +1414,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            0,
             &filled,
             &commitments,
             &changes,
@@ -1370,6 +1456,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            &0,
             &proof,
             &filled,
             &commitments,
@@ -1465,6 +1552,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest,
+            &0,
             &proof,
             &filled,
             &commitments,
@@ -1513,6 +1601,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            &0,
             &proof,
             &filled_intents(&env),
             &new_commitments(&env),
@@ -1560,6 +1649,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            &0,
             &proof,
             &filled_intents(&env),
             &new_commitments(&env),
@@ -1583,6 +1673,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            &0,
             &proof,
             &filled_intents(&env),
             &new_commitments(&env),
@@ -1629,6 +1720,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            &0,
             &proof,
             &filled_intents(&env),
             &new_commitments(&env),
@@ -1675,6 +1767,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            &0,
             &proof,
             &filled_intents(&env),
             &new_commitments(&env),
@@ -1721,6 +1814,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            &0,
             &proof,
             &filled_intents(&env),
             &new_commitments(&env),
@@ -1771,6 +1865,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            &0,
             &proof,
             &filled_intents(&env),
             &new_commitments(&env),
@@ -1817,6 +1912,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            &0,
             &proof,
             &filled_intents(&env),
             &new_commitments(&env),
@@ -1866,6 +1962,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            &0,
             &proof,
             &filled_intents(&env),
             &new_commitments(&env),
@@ -1913,6 +2010,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            &0,
             &proof,
             &filled_intents(&env),
             &new_commitments(&env),
@@ -1959,6 +2057,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            &0,
             &proof,
             &filled_intents(&env),
             &new_commitments(&env),
@@ -2006,6 +2105,7 @@ mod tests {
             &batch,
             &market,
             &settlement_digest(&env),
+            &0,
             &proof,
             &duplicate_intents,
             &new_commitments(&env),
@@ -2070,6 +2170,7 @@ mod tests {
                 batch,
                 market,
                 settlement_digest,
+                0,
                 filled_intents,
                 new_commitments,
                 margin_change_commitments,

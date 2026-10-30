@@ -6,6 +6,7 @@ import type {
   DisclosureInput,
   DisclosureRecord,
   FundingSettlementRecord,
+  Hex,
   IntentValidityRecord,
   IntentValidityWitness,
   LiquidationRecord,
@@ -26,6 +27,7 @@ export type IntentValidityProofInput = IntentValidityWitness;
 export type DepositNoteProofInput = DepositNoteWitness;
 
 export interface FundingSettlementProofInput {
+  cycleId?: Hex;
   appliedAt: number;
   elapsedMs: number;
   intervalMs: number;
@@ -40,6 +42,7 @@ export interface FundingSettlementProofInput {
 export interface Prover {
   proveDepositNote(input: DepositNoteProofInput): DepositNoteRecord;
   proveFundingSettlement(input: FundingSettlementProofInput): FundingSettlementRecord;
+  proveFundingSettlementAsync?(input: FundingSettlementProofInput): Promise<FundingSettlementRecord>;
   proveIntentValidity(input: IntentValidityProofInput): IntentValidityRecord;
   proveIntentValidityAsync?(input: IntentValidityProofInput): Promise<IntentValidityRecord>;
   proveConditionalClose(input: ConditionalCloseProofInput): ConditionalOrderRecord;

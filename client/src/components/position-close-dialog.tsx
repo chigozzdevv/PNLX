@@ -3,6 +3,7 @@
 import { X } from "lucide-react";
 import { useEffect } from "react";
 import { formatUsd } from "@/lib/format";
+import { positionLegs } from "@/lib/position-groups";
 import type { PositionRow } from "@/types/trading";
 
 interface PositionCloseDialogProps {
@@ -26,8 +27,9 @@ export function PositionCloseDialog({ closing = false, onClose, onConfirm, posit
 
   const asset = position.market.split("/")[0] || "PERP";
   const unrealizedPnl = position.unrealizedPnl;
-  const estimatedReturn = typeof position.collateral === "number" && typeof unrealizedPnl === "number"
-    ? Math.max(0, position.collateral + unrealizedPnl + (position.entryFee ?? 0))
+  const fills = positionLegs(position);
+  const estimatedReturn = fills.every((fill) => typeof fill.netValue === "number" && Number.isFinite(fill.netValue))
+    ? fills.reduce((total, fill) => total + Math.max(0, fill.netValue!), 0)
     : undefined;
 
   return (
@@ -60,6 +62,7 @@ export function PositionCloseDialog({ closing = false, onClose, onConfirm, posit
               ? unrealizedPnl > 0 ? "portfolio-value-positive" : unrealizedPnl < 0 ? "portfolio-value-negative" : undefined
               : undefined}
           />
+          <CloseRow label="Funding" value={signedUsd(position.fundingPayment === undefined ? undefined : -position.fundingPayment)} />
           <CloseRow label="Estimated return" value={estimatedReturn === undefined ? "—" : portfolioUsd(estimatedReturn)} />
         </div>
         <p className="portfolio-close-note">Final values use the verified mark price and funding state at settlement.</p>

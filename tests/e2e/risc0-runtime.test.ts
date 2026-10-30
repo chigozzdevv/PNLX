@@ -54,6 +54,27 @@ async function withFixture(work: (f: ReturnType<typeof fixture>) => Promise<void
 }
 
 describe("RISC0 private witness lifecycle", () => {
+  test("different entry funding epochs cannot coalesce into one in-flight proof", async () => {
+    await withFixture(async (f) => {
+      let entered!: () => void, release!: () => void;
+      const started = new Promise<void>((resolve) => { entered = resolve; });
+      const pending = new Promise<void>((resolve) => { release = resolve; });
+      const first = runRisc0Prover(f.root, f.input, f.draft, async () => {
+        entered();
+        await pending;
+        f.output();
+        return { metadataPath: f.metadataPath, status: 0, stdout: "", stderr: "" };
+      });
+      try {
+        await started;
+        const market = { ...f.input.market, fundingIndex: -7n };
+        const input = { ...f.input, market, match: new BatchMatcherService().match({ ...f.input, market }) };
+        await expect(runRisc0Prover(f.root, input, prepareRisc0SettlementDraft(input)))
+          .rejects.toThrow("conflicting prover witness");
+      } finally { release(); await first; }
+    });
+  });
+
   test("cached artifacts never recreate input and remove an interrupted scratch file", async () => {
     await withFixture(async (f) => {
       f.output();

@@ -1869,7 +1869,7 @@ describe("server api", () => {
         new Request("http://pnlx.local/funding/run", {
           method: "POST",
           body: body({
-            appliedAt: "1000",
+            appliedAt: "3600000",
             elapsedMs: String(60 * 60 * 1000),
             marketId: market.marketId,
           }),
@@ -2778,7 +2778,7 @@ describe("server api", () => {
     expect((fundingUpdate.fundingUpdate as Record<string, string>).oldFundingIndex).toBe("0");
     expect((fundingUpdate.fundingUpdate as Record<string, string>).newFundingIndex).toBe("150");
     const fundingCycle = await post("/funding/run", {
-      appliedAt: "100000",
+      appliedAt: "3600000",
       elapsedMs: String(60 * 60 * 1000),
       marketId: market.marketId,
       maxFundingDelta: "10",

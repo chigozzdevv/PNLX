@@ -22,7 +22,12 @@ export interface ServerProofMeta {
 
 export interface ServerMarketFunding {
   rate?: string | null;
-  status: "ready" | "warming" | "stale";
+  status: "ready" | "warming" | "stale" | "unavailable";
+  reason?: string;
+  coverageMs?: number;
+  requiredCoverageMs?: number;
+  windowStart?: number;
+  windowEnd?: number;
   settlementStatus: "running" | "paused" | "blocked";
   source: "fixed" | "impact-twap";
   intervalMs: number;
@@ -287,6 +292,8 @@ export interface PositionRow {
   size?: number;
   collateral?: number;
   entryFee?: number;
+  /** Accrued funding: positive debit, negative credit. Included once in unrealizedPnl. */
+  fundingPayment?: number;
   entryPrice?: number;
   marketPrice?: number;
   netValue?: number;

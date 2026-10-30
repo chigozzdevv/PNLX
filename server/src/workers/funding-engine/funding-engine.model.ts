@@ -11,12 +11,19 @@ export interface FundingEngineConfig {
   premiumRate: bigint;
   premiumRateCap?: bigint;
   sampleIntervalMs?: number;
+  maxOracleAgeMs?: number;
+  maxDepthAgeMs?: number;
   settlementsOnchainRequired?: boolean;
 }
 
 export interface FundingMarketSummary {
   rate: bigint | null;
-  status: "ready" | "warming" | "stale";
+  status: "ready" | "warming" | "stale" | "unavailable";
+  reason?: string;
+  coverageMs: number;
+  requiredCoverageMs: number;
+  windowStart: number;
+  windowEnd: number;
   settlementStatus: "running" | "paused" | "blocked";
   intervalMs: number;
   sampleCount: number;

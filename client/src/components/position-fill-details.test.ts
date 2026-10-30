@@ -76,11 +76,15 @@ describe("combined position presentation", () => {
 
   test("keeps a shielded fill distinct without inventing zero amounts or an unrelated order link", () => {
     const hidden: PositionRow = { ...positions[1], sourceIntentCommitment: hex(999),
-      size: undefined, collateral: undefined, entryPrice: undefined, privateState: undefined, privateDetails: true };
+      size: undefined, collateral: undefined, entryPrice: undefined, fundingPayment: undefined,
+      privateState: undefined, privateDetails: true };
     const markup = renderToStaticMarkup(createElement(PositionFillDetails, {
       className: "portfolio-detail-panel", id: "hidden", orders, position: hidden,
     }));
-    expect(markup.match(/>Shielded<\/dd>/g)).toHaveLength(3);
+    expect(markup.match(/>Shielded<\/dd>/g)).toHaveLength(4);
+    for (const field of ["Size", "Margin", "Entry", "Funding"]) {
+      expect(markup).toContain(`<dt>${field}</dt><dd>Shielded</dd>`);
+    }
     expect(markup).not.toContain("$0.00");
     expect(markup).not.toContain("Order submission for fill");
     expect(markup).toContain(hidden.settlementTxHash!);

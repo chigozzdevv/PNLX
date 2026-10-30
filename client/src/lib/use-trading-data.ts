@@ -26,6 +26,7 @@ import {
 import { priceFromOracleString, rateFromMicroBps } from "@/lib/format";
 import { walletTradedVolumeUsd } from "@/lib/wallet-volume";
 import { groupOwnerOrders, isActiveOrderGroup } from "@/lib/order-groups";
+import { positionValuation } from "@/lib/position-funding";
 import type {
   AccountSnapshot,
   Hex,
@@ -173,6 +174,7 @@ export function createMarketSummaryRefresh(
 export function applyMarketSummaries(
   data: TradingLiveData,
   summaries: ServerMarketConfig[],
+  now = Date.now(),
 ): TradingLiveData {
   const previous = new Map(data.markets.map((market) => [market.marketId, market]));
   const markets = canonicalMarkets(summaries).map((summary) => {
@@ -185,7 +187,17 @@ export function applyMarketSummaries(
       volume: summary.volume === undefined ? current?.volume ?? market.volume : market.volume,
     };
   });
-  return { ...data, markets };
+  const marketById = new Map(markets.map((market) => [market.marketId, market]));
+  const positions = data.positions.map((position) => {
+    if (position.status !== "open") return position;
+    const market = marketById.get(position.marketId);
+    const mark = market?.markPrice;
+    const rawMark = mark !== undefined && Number.isFinite(mark) && mark > 0
+      ? BigInt(Math.round(mark * PRICE_SCALE)) : undefined;
+    return { ...position, marketPrice: rawMark === undefined ? undefined : mark,
+      ...positionValuation(position.privateState, rawMark, market, now) };
+  });
+  return { ...data, markets, positions };
 }
 
 export function useTradingData(
@@ -351,34 +363,19 @@ export function applyLatestOnchainMarks(
     changed = true;
     return { ...market, markPrice };
   });
+  const marketById = new Map(markets.map((market) => [market.marketId, market]));
   const positions = data.positions.map((position) => {
     if (position.status !== "open") return position;
     const mark = marks.get(position.marketId);
-    if (!mark?.price || now - mark.receivedAt > ONCHAIN_MARK_MAX_SILENCE_MS) {
-      if (position.marketPrice === undefined && position.unrealizedPnl === undefined) return position;
-      changed = true;
-      return { ...position, marketPrice: undefined, unrealizedPnl: undefined };
-    }
-    const marketPrice = Number(mark.price) / PRICE_SCALE;
-    const unrealizedPnl = unrealizedPnlAtMark(position, mark.price);
-    if (position.marketPrice === marketPrice && position.unrealizedPnl === unrealizedPnl) return position;
+    const rawMark = mark?.price && now - mark.receivedAt <= ONCHAIN_MARK_MAX_SILENCE_MS ? mark.price : undefined;
+    const marketPrice = rawMark === undefined ? undefined : Number(rawMark) / PRICE_SCALE;
+    const valuation = positionValuation(position.privateState, rawMark, marketById.get(position.marketId), now);
+    if (position.marketPrice === marketPrice && position.unrealizedPnl === valuation.unrealizedPnl &&
+      position.netValue === valuation.netValue && position.fundingPayment === valuation.fundingPayment) return position;
     changed = true;
-    return { ...position, marketPrice, unrealizedPnl };
+    return { ...position, marketPrice, ...valuation };
   });
   return changed ? { ...data, markets, positions } : data;
-}
-
-function unrealizedPnlAtMark(
-  position: TradingLiveData["positions"][number],
-  markPrice: bigint,
-): number | undefined {
-  const opening = position.privateState;
-  if (!opening) return undefined;
-  const entryPrice = BigInt(opening.entryPrice);
-  const size = BigInt(opening.size);
-  const entryFee = BigInt(opening.entryFee ?? "0");
-  const delta = opening.side === "long" ? markPrice - entryPrice : entryPrice - markPrice;
-  return protocolUsdcToDisplay((size * delta) / BigInt(PRICE_SCALE) - entryFee);
 }
 
 async function loadTradingData(session: WalletSession | null): Promise<TradingLiveData> {
@@ -432,7 +429,7 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
   const markets = canonicalMarkets(marketsResponse.markets).map((market) =>
     marketDisplayFromServer(market, publicMarkets.get(market.marketId)),
   );
-  const marketPrices = new Map(markets.map((market) => [market.marketId, market.price]));
+  const marketById = new Map(markets.map((market) => [market.marketId, market]));
 
   return {
     account: accountFromServer(
@@ -453,10 +450,8 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
       const size = baseAmount(opening?.size);
       const collateral = usdcAmount(opening?.margin);
       const entryFee = usdcAmount(opening?.entryFee);
-      const marketPrice = marketPrices.get(position.marketId);
-      const unrealizedPnl = opening && typeof marketPrice === "number" && typeof entryPrice === "number"
-        ? (opening.side === "long" ? marketPrice - entryPrice : entryPrice - marketPrice) * size - entryFee
-        : undefined;
+      // A public snapshot price is not a verified live mark. Funding can still be known.
+      const valuation = positionValuation(opening, undefined, marketById.get(position.marketId));
 
       return {
         batchId: position.batchId,
@@ -469,8 +464,7 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
         id: position.positionCommitment,
         marketId: position.marketId,
         market: pairFromMarketId(position.marketId),
-        marketPrice,
-        netValue: collateral ? collateral + (unrealizedPnl ?? 0) + entryFee : undefined,
+        ...valuation,
         openedAt: position.openedAt,
         journalDigest: position.journalDigest,
         lifecycleKind: position.lifecycleKind,
@@ -504,7 +498,6 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
         sourceIntentCommitment: position.sourceIntentCommitment,
         status: position.status,
         time: formatTime(position.openedAt),
-        unrealizedPnl,
       };
     }) ?? [],
     ticker: markets.map((market) => ({

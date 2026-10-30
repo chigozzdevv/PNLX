@@ -7,6 +7,8 @@ import type {
   ConditionalOrderRecord,
   DisclosureRecord,
   FundingUpdateRecord,
+  FundingCycleRecord,
+  FundingCycleCursor,
   FundingPremiumSampleRecord,
   Hex,
   IntentRecord,
@@ -24,6 +26,7 @@ import type {
 } from "@pnlx/protocol-types";
 import {
   EMPTY_ROOT,
+  FIELD_PRIME,
   merkleRoot,
   positionMerkleProof,
   positionMerkleRoot,
@@ -69,6 +72,8 @@ export class ProtocolStore {
   readonly positionCloses = new Map<Hex, PositionCloseRecord>();
   readonly disclosures = new Map<Hex, DisclosureRecord>();
   readonly fundingUpdates = new Map<string, FundingUpdateRecord>();
+  readonly fundingCycles = new Map<Hex, FundingCycleRecord>();
+  readonly fundingCursors = new Map<string, FundingCycleCursor>();
   readonly fundingPremiumSamples = new Map<string, FundingPremiumSampleRecord>();
   readonly liquidationAutomationJobs = new Map<Hex, LiquidationAutomationJobRecord>();
   readonly batchExecutionRuns = new Map<Hex, BatchExecutionRunRecord>();
@@ -260,6 +265,85 @@ export class ProtocolStore {
     const key = `${record.marketId}:${record.appliedAt}:${record.newFundingIndex}`;
     if (this.fundingUpdates.has(key)) throw new Error("funding update already exists");
     this.fundingUpdates.set(key, record);
+  }
+
+  upsertFundingCycle(record: FundingCycleRecord): void {
+    assertFundingCycle(record);
+    const previous = this.fundingCycles.get(record.cycleId);
+    if (previous) {
+      const identity = (value: FundingCycleRecord) => JSON.stringify({ ...value, status: undefined,
+        reason: undefined, updatedAt: undefined, submissionAttempted: undefined, settlement: undefined,
+        preparedXdr: undefined, settlementTxHash: undefined }, (_key, value) => typeof value === "bigint" ? value.toString() : value);
+      if (identity(previous) !== identity(record)) throw new Error("funding cycle identity changed");
+      if (previous.submissionAttempted && (!record.submissionAttempted || record.status === "skipped" || record.status === "retired")) {
+        throw new Error("attempted funding cycle requires exact reconciliation");
+      }
+      if ((previous.status === "settled" || previous.status === "skipped" || previous.status === "retired") &&
+          previous.status !== record.status) throw new Error("funding cycle is already complete");
+      if ((previous.settlementTxHash && previous.settlementTxHash !== record.settlementTxHash) ||
+          (previous.preparedXdr && previous.preparedXdr !== record.preparedXdr)) throw new Error("funding transaction identity changed");
+      if (previous.settlement && record.settlement && previous.settlement.proof.publicInputHash !== record.settlement.proof.publicInputHash) {
+        throw new Error("funding proof identity changed");
+      }
+    }
+    this.fundingCycles.set(record.cycleId, structuredClone(record));
+  }
+
+  /** Skip/zero decisions and their cursor are one checkpoint, with no cash transition. */
+  skipFundingCycle(record: FundingCycleRecord): void {
+    if (record.status !== "skipped" || record.oldFundingIndex !== record.newFundingIndex || record.submissionAttempted) {
+      throw new Error("invalid skipped funding cycle");
+    }
+    const cursor = this.fundingCursors.get(record.marketId);
+    if (cursor && cursor.windowEnd > record.windowEnd) throw new Error("funding cursor cannot move backwards");
+    this.upsertFundingCycle(record);
+    this.fundingCursors.set(record.marketId, { marketId: record.marketId, windowEnd: record.windowEnd, updatedAt: record.updatedAt });
+  }
+
+  /** Called only after exact chain confirmation (or explicit local development settlement). */
+  finalizeFundingCycle(cycleId: Hex): FundingUpdateRecord {
+    const record = this.fundingCycles.get(cycleId);
+    if (!record || !record.settlement || record.premiumRate === null || record.oldFundingIndex === record.newFundingIndex) {
+      throw new Error("funding settlement journal is incomplete");
+    }
+    const market = this.markets.get(record.marketId);
+    const key = `${record.marketId}:${record.windowEnd}:${record.newFundingIndex}`;
+    const existing = this.fundingUpdates.get(key);
+    if (!market || (market.fundingIndex !== record.oldFundingIndex && market.fundingIndex !== record.newFundingIndex)) {
+      throw new Error("funding settlement index requires reconciliation");
+    }
+    if (existing && (existing.oldFundingIndex !== record.oldFundingIndex || existing.newFundingIndex !== record.newFundingIndex)) {
+      throw new Error("conflicting funding settlement history");
+    }
+    const cursor = this.fundingCursors.get(record.marketId);
+    if (cursor && cursor.windowEnd > record.windowEnd) throw new Error("funding cursor is ahead of this settlement");
+    const update: FundingUpdateRecord = { ...record.settlement, appliedAt: record.windowEnd,
+      fundingDelta: record.newFundingIndex - record.oldFundingIndex };
+    this.markets.set(record.marketId, { ...market, fundingIndex: record.newFundingIndex });
+    this.fundingUpdates.set(key, update);
+    this.fundingCycles.set(cycleId, { ...record, status: "settled", reason: undefined });
+    this.fundingCursors.set(record.marketId, { marketId: record.marketId, windowEnd: record.windowEnd, updatedAt: record.updatedAt });
+    return update;
+  }
+
+  confirmFundingCycleFailure(cycleId: Hex,
+    expected: { marketId: string; oldFundingIndex: bigint; newFundingIndex: bigint; settlementTxHash: Hex; observedAt: number }): void {
+    const record = this.fundingCycles.get(cycleId);
+    if (!record || !record.submissionAttempted || record.marketId !== expected.marketId ||
+        record.oldFundingIndex !== expected.oldFundingIndex || record.newFundingIndex !== expected.newFundingIndex ||
+        record.settlementTxHash !== expected.settlementTxHash || !Number.isSafeInteger(expected.observedAt)) {
+      throw new Error("failed funding transaction identity changed");
+    }
+    if (record.status === "retired" && record.failureConfirmed) return;
+    if (record.status !== "attempted") throw new Error("funding transaction is not awaiting reconciliation");
+    const market = this.markets.get(record.marketId);
+    const cursor = this.fundingCursors.get(record.marketId);
+    if (!market || market.fundingIndex !== record.oldFundingIndex || (cursor && cursor.windowEnd > record.windowEnd)) {
+      throw new Error("failed funding transaction index requires reconciliation");
+    }
+    this.fundingCycles.set(cycleId, { ...record, status: "retired", failureConfirmed: true,
+      reason: "exact funding transaction failed without changing the index", updatedAt: expected.observedAt });
+    this.fundingCursors.set(record.marketId, { marketId: record.marketId, windowEnd: record.windowEnd, updatedAt: expected.observedAt });
   }
 
   addFundingPremiumSamples(records: FundingPremiumSampleRecord[]): void {
@@ -879,4 +963,32 @@ function proofKey(proof: ProofMeta): string {
 
 function assertProof(store: ProtocolStore, proof: ProofMeta): void {
   if (!store.hasProof(proof)) throw new Error("unverified proof");
+}
+
+function assertFundingCycle(record: FundingCycleRecord): void {
+  const maxIndex = (1n << 127n) - 1n;
+  if (!/^0x[0-9a-f]{64}$/i.test(record.cycleId) || BigInt(record.cycleId) === 0n || BigInt(record.cycleId) >= FIELD_PRIME || !record.marketId ||
+      !Number.isSafeInteger(record.windowStart) || record.windowStart < 0 ||
+      !Number.isSafeInteger(record.windowEnd) || record.windowEnd <= record.windowStart ||
+      !Number.isSafeInteger(record.intervalMs) || record.intervalMs <= 0 ||
+      !Number.isSafeInteger(record.updatedAt) || record.updatedAt < 0 || record.markPrice <= 0n ||
+      record.oldFundingIndex < -maxIndex || record.oldFundingIndex > maxIndex ||
+      record.newFundingIndex < -maxIndex || record.newFundingIndex > maxIndex ||
+      !["prepared", "attempted", "settled", "skipped", "retired"].includes(record.status)) {
+    throw new Error("invalid funding cycle journal");
+  }
+  const settlement = record.settlement;
+  if (settlement && (settlement.cycleId !== record.cycleId || settlement.marketId !== record.marketId || settlement.appliedAt !== record.windowEnd ||
+      settlement.oldFundingIndex !== record.oldFundingIndex || settlement.newFundingIndex !== record.newFundingIndex ||
+      settlement.markPrice !== record.markPrice || settlement.premiumRate !== record.premiumRate ||
+      settlement.intervalMs !== record.intervalMs || settlement.elapsedMs !== record.windowEnd - record.windowStart ||
+      settlement.maxFundingDelta !== record.maxFundingDelta)) throw new Error("funding proof does not match its journal");
+  if (record.submissionAttempted && (!settlement || record.status === "prepared" ||
+      (record.status === "retired" && !record.failureConfirmed) || record.status === "skipped")) {
+    throw new Error("invalid attempted funding journal");
+  }
+  if ((record.settlementTxHash === undefined) !== (record.preparedXdr === undefined) ||
+      (record.settlementTxHash !== undefined && (!/^0x[0-9a-f]{64}$/i.test(record.settlementTxHash) || !record.preparedXdr))) {
+    throw new Error("invalid prepared funding transaction");
+  }
 }

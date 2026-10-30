@@ -245,23 +245,61 @@ export interface FundingUpdateRecord {
 }
 
 export interface FundingPremiumSampleRecord {
+  /** Legacy snapshots omit these fields and cannot establish current coverage. */
+  status?: "available" | "unavailable";
+  reason?: string;
+  observedAt?: number;
+  oracleObservedAt?: number;
+  depthObservedAt?: number;
+  sampleIntervalMs?: number;
   impactAskPrice?: bigint;
   impactBidPrice?: bigint;
   impactNotional: bigint;
   indexPrice: bigint;
   marketId: string;
-  premiumRate: bigint;
+  premiumRate: bigint | null;
   sampledAt: number;
   source: "impact-orderbook";
 }
 
 export interface FundingSettlementRecord extends FundingUpdateRecord {
+  cycleId?: Hex;
   elapsedMs: number;
   intervalMs: number;
   markPrice: bigint;
   maxFundingDelta?: bigint;
   premiumRate: bigint;
   proof: ProofMeta;
+}
+
+export interface FundingCycleCursor {
+  marketId: string;
+  windowEnd: number;
+  updatedAt: number;
+}
+
+/** A durable funding attempt. An attempted transition is never inferred from a relay receipt. */
+export interface FundingCycleRecord {
+  cycleId: Hex;
+  marketId: string;
+  windowStart: number;
+  windowEnd: number;
+  intervalMs: number;
+  status: "prepared" | "attempted" | "settled" | "skipped" | "retired";
+  oldFundingIndex: bigint;
+  newFundingIndex: bigint;
+  markPrice: bigint;
+  premiumRate: bigint | null;
+  premiumSampleCount?: number;
+  premiumSource?: "fixed" | "impact-twap";
+  maxFundingDelta?: bigint;
+  settlement?: FundingSettlementRecord;
+  submissionAttempted?: boolean;
+  settlementTxHash?: Hex;
+  preparedXdr?: string;
+  failureConfirmed?: true;
+  reason?: string;
+  updatedAt: number;
 }
 
 export type BatchExecutionRunStatus = "failed" | "running" | "settled" | "skipped";
@@ -344,6 +382,8 @@ export interface Fill {
 export interface BatchSettlement {
   batchId: string;
   marketId: string;
+  /** Publicly bound by new batch proofs; absent only on legacy stored settlements. */
+  entryFundingIndex?: bigint;
   matchTranscriptDigest: Hex;
   settlementDigest: Hex;
   newCommitments: Hex[];

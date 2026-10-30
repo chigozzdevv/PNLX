@@ -4,6 +4,7 @@ import type { MarketDayStats, MarketDisplay } from "@/types/trading";
 
 interface MarketHeaderProps {
   dayStats?: MarketDayStats;
+  loading?: boolean;
   selectedMarket: MarketDisplay;
 }
 
@@ -15,11 +16,11 @@ interface HeaderMetric {
   tone?: "positive" | "negative";
 }
 
-function fundingMetric(market: MarketDisplay): HeaderMetric {
+function fundingMetric(market: MarketDisplay, loading: boolean): HeaderMetric {
   const funding = market.funding;
   if (!funding) return {
     label: "Est. funding",
-    value: market.fundingRate !== null && Number.isFinite(market.fundingRate) ? formatPct(market.fundingRate, 4) : null,
+    value: market.fundingRate !== null && Number.isFinite(market.fundingRate) ? formatPct(market.fundingRate, 4) : loading ? null : "—",
     description: "PNLX funding estimate. Settlement status is unavailable.",
   };
   const interval = funding.intervalMs;
@@ -37,19 +38,20 @@ function fundingMetric(market: MarketDisplay): HeaderMetric {
   return {
     label: `${settling ? "Funding" : "Est. funding"}${period ? ` · ${period}` : ""}`,
     value: funding.status === "ready" && funding.rate !== null && Number.isFinite(funding.rate)
-      ? formatPct(funding.rate, 4) : null,
-    description: `${funding.status === "warming" ? `Collecting ${progress}.`
+      ? formatPct(funding.rate, 4) : "—",
+    description: `${funding.reason ?? (funding.status === "warming" ? `Collecting ${progress}.`
       : funding.status === "stale" ? `PNLX funding samples are out of date (${progress}).`
-        : funding.source === "fixed" ? "Configured PNLX funding estimate." : `PNLX funding estimate from ${progress}.`} ${settlement}${sampledAt}`,
+        : funding.status === "unavailable" ? "Two-sided funding depth is unavailable."
+          : funding.source === "fixed" ? "Configured PNLX funding estimate." : `PNLX funding estimate from ${progress}.`)} ${settlement}${sampledAt}`,
   };
 }
 
-function openInterestMetric(market: MarketDisplay): HeaderMetric {
+function openInterestMetric(market: MarketDisplay, loading: boolean): HeaderMetric {
   const available = market.openInterestDetails?.status === "available" &&
     market.openInterest !== null && Number.isFinite(market.openInterest) && market.openInterest >= 0;
   if (!available) return {
     label: "Open interest",
-    value: market.openInterestDetails?.status === "incomplete" ? "—" : null,
+    value: market.openInterestDetails?.status === "incomplete" || !loading ? "—" : null,
     description: market.openInterestDetails?.reason ?? "PNLX has not published a complete open-interest aggregate.",
   };
   const size = market.openInterest!;
@@ -62,7 +64,7 @@ function openInterestMetric(market: MarketDisplay): HeaderMetric {
   };
 }
 
-export function MarketHeader({ dayStats, selectedMarket }: MarketHeaderProps) {
+export function MarketHeader({ dayStats, loading = false, selectedMarket }: MarketHeaderProps) {
   const markPrice = selectedMarket.markPrice;
   const priceDigits = markPrice !== undefined && markPrice < 10 ? 5 : 2;
   const reference = dayStats?.marketId === selectedMarket.marketId ? dayStats : undefined;
@@ -89,8 +91,8 @@ export function MarketHeader({ dayStats, selectedMarket }: MarketHeaderProps) {
       description: referenceDescription,
       badge: reference?.stale ? "Stale" : undefined,
     },
-    fundingMetric(selectedMarket),
-    openInterestMetric(selectedMarket),
+    fundingMetric(selectedMarket, loading),
+    openInterestMetric(selectedMarket, loading),
     {
       label: "All-time PNLX volume",
       value: `${formatCompact(selectedMarket.volume)} ${selectedMarket.baseAsset}`,

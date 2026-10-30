@@ -10,6 +10,8 @@ import type {
   ConditionalOrderRecord,
   DisclosureRecord,
   FundingUpdateRecord,
+  FundingCycleRecord,
+  FundingCycleCursor,
   FundingPremiumSampleRecord,
   Hex,
   IntentRecord,
@@ -48,6 +50,9 @@ interface ProtocolStoreSnapshot {
   pendingIntentSubmissions?: [Hex, PendingIntentSubmission][];
   disclosures: [Hex, DisclosureRecord][];
   fundingUpdates: [string, FundingUpdateRecord][];
+  fundingPremiumSamples?: [string, FundingPremiumSampleRecord][];
+  fundingCycles?: [Hex, FundingCycleRecord][];
+  fundingCursors?: [string, FundingCycleCursor][];
   intents: [string, IntentRecord][];
   liquidationAutomationJobs: [Hex, LiquidationAutomationJobRecord][];
   liquidations: [Hex, LiquidationRecord][];
@@ -115,6 +120,22 @@ export class FileProtocolStore extends ProtocolStore {
 
   override updateMarket(market: MarketConfig): void {
     this.persist(() => super.updateMarket(market));
+  }
+
+  override upsertFundingCycle(record: FundingCycleRecord): void {
+    this.persist(() => super.upsertFundingCycle(record));
+  }
+
+  override skipFundingCycle(record: FundingCycleRecord): void {
+    this.persist(() => super.skipFundingCycle(record));
+  }
+
+  override finalizeFundingCycle(cycleId: Hex): FundingUpdateRecord {
+    return this.persist(() => super.finalizeFundingCycle(cycleId));
+  }
+
+  override confirmFundingCycleFailure(cycleId: Hex, expected: Parameters<ProtocolStore["confirmFundingCycleFailure"]>[1]): void {
+    this.persist(() => super.confirmFundingCycleFailure(cycleId, expected));
   }
 
   override addFundingUpdate(record: FundingUpdateRecord): void {
@@ -304,6 +325,9 @@ export class FileProtocolStore extends ProtocolStore {
     this.positionCloses.clear();
     this.disclosures.clear();
     this.fundingUpdates.clear();
+    this.fundingPremiumSamples.clear();
+    this.fundingCycles.clear();
+    this.fundingCursors.clear();
     this.liquidationAutomationJobs.clear();
     this.batchExecutionRuns.clear();
     this.withdrawals.clear();
@@ -369,6 +393,9 @@ export class FileProtocolStore extends ProtocolStore {
     for (const [key, value] of snapshot.positionCloses) this.positionCloses.set(key, value);
     for (const [key, value] of snapshot.disclosures) this.disclosures.set(key, value);
     for (const [key, value] of snapshot.fundingUpdates ?? []) this.fundingUpdates.set(key, value);
+    for (const [key, value] of snapshot.fundingPremiumSamples ?? []) this.fundingPremiumSamples.set(key, value);
+    for (const [key, value] of snapshot.fundingCycles ?? []) this.fundingCycles.set(key, value);
+    for (const [key, value] of snapshot.fundingCursors ?? []) this.fundingCursors.set(key, value);
     for (const [key, value] of snapshot.liquidationAutomationJobs ?? []) {
       this.liquidationAutomationJobs.set(key, value);
     }
@@ -391,6 +418,9 @@ export class FileProtocolStore extends ProtocolStore {
       pendingIntentSubmissions: [...this.pendingIntentSubmissions.entries()],
       disclosures: [...this.disclosures.entries()],
       fundingUpdates: [...this.fundingUpdates.entries()],
+      fundingPremiumSamples: [...this.fundingPremiumSamples.entries()],
+      fundingCycles: [...this.fundingCycles.entries()],
+      fundingCursors: [...this.fundingCursors.entries()],
       liquidationAutomationJobs: [...this.liquidationAutomationJobs.entries()],
       batchExecutionRuns: retainedBatchExecutionRuns([...this.batchExecutionRuns.entries()]),
       intents: [...this.intents.entries()],

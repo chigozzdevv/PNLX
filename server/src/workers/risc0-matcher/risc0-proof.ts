@@ -5,7 +5,7 @@ import { delimiter, dirname, join } from "node:path";
 import { hashFields } from "@pnlx/crypto";
 import type { ProofArtifact } from "@pnlx/proof-system";
 import type { BatchSettlement, Hex, ProofMeta } from "@pnlx/protocol-types";
-import { assertBatchSettlementCapacity, batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
+import { assertBatchSettlementCapacity, batchEntryFundingIndex, batchSettlementPublicInputHash } from "@/shared/protocol/batch-settlement-proof";
 import { assertBatchExecutionBudget } from "@/shared/protocol/batch-budget";
 import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
 import { matchTranscriptDigest } from "@/workers/batch-matcher/match-transcript";
@@ -112,6 +112,7 @@ export async function createRisc0BatchSettlement(
 
 export function prepareRisc0SettlementDraft(input: SettlementProofInput): Omit<BatchSettlement, "proof"> {
   assertMatchTranscript(input);
+  batchEntryFundingIndex({ entryFundingIndex: input.market.fundingIndex });
 
   const newCommitments = input.match.fills.map((fill) => fill.positionCommitment);
   const settlementDigest = risc0SettlementDigest(input, newCommitments);
@@ -138,6 +139,7 @@ export function prepareRisc0SettlementDraft(input: SettlementProofInput): Omit<B
   const draft = {
     aggregateVolume: input.match.aggregateVolume,
     batchId: input.batchId,
+    entryFundingIndex: input.market.fundingIndex,
     fillCount: input.match.fills.length,
     feeConfigHash: FEE_CONFIG_HASH,
     grossTakerFee: input.match.fees.grossTakerFee,
@@ -550,11 +552,15 @@ function risc0ToolPath(home: string, existingPath = ""): string {
 }
 
 export function toProverInput(input: SettlementProofInput, draft: Omit<BatchSettlement, "proof">) {
+  if (batchEntryFundingIndex(draft) !== input.market.fundingIndex) {
+    throw new Error("batch entry funding index does not match witness market");
+  }
   return {
     batch_id: input.batchId,
     expected: {
       aggregate_volume: draft.aggregateVolume,
       batch_id: draft.batchId,
+      funding_index: draft.entryFundingIndex,
       fill_count: draft.fillCount,
       fee_config_hash: draft.feeConfigHash,
       gross_taker_fee: draft.grossTakerFee,
@@ -654,6 +660,7 @@ function inputHash(input: SettlementProofInput): Hex {
   return hashFields("risc0-batch-witness", [
     input.batchId,
     input.market.marketId,
+    input.market.fundingIndex,
     input.intents,
   ]);
 }

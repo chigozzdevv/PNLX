@@ -54,7 +54,8 @@
     "spent_nullifiers": [
       "0x10f562e7c271d6243a44f7deb0443b8506b8e3737f41dbe69b865b228335d108",
       "0xcb72ec372b88d893cc8133edf3050ac0700391eb870b845d0c144f94bc134356"
-    ]
+    ],
+    "funding_index": "0"
   },
   "intents": [
     {

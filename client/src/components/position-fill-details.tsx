@@ -79,6 +79,11 @@ export function PositionFillDetails({
               ) : null}
               <FillField label="Batch">{fill.batchId}</FillField>
               <FillField label="Est. liq."><span title={liquidation.title}>{liquidation.value}</span></FillField>
+              <FillField label="Funding">
+                {privateNumber(fill.fundingPayment, (funding) => `${funding > 0 ? "−" : funding < 0 ? "+" : ""}${formatUsd(Math.abs(funding), {
+                  maximumFractionDigits: 7, minimumFractionDigits: 2,
+                })}`, fill.privateDetails)}
+              </FillField>
               {fill.proofSystem ? (
                 <FillField label="Proof system">
                   {fill.proofSystem === "risc0-groth16" ? "RISC Zero Groth16" : "Noir UltraHonk"}

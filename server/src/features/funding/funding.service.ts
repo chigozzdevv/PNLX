@@ -16,6 +16,9 @@ export class FundingService {
     assertProtocolAdmin(authenticated, this.env.protocolAdminAddresses, {
       required: this.env.protocolAdminRequired,
     });
+    if (this.env.settlementsOnchainRequired || this.env.assetCustodyRequired) {
+      throw new Error("direct local funding advances are disabled for on-chain markets");
+    }
     if (input.fundingDelta === 0n) throw new Error("funding delta cannot be zero");
 
     const market = this.executor.store.markets.get(input.marketId);
@@ -40,7 +43,7 @@ export class FundingService {
     return [...this.executor.store.fundingUpdates.values()];
   }
 
-  run(input: RunFundingInput, authenticated?: string): RunFundingResult {
+  run(input: RunFundingInput, authenticated?: string): Promise<RunFundingResult> {
     assertProtocolAdmin(authenticated, this.env.protocolAdminAddresses, {
       required: this.env.protocolAdminRequired,
     });

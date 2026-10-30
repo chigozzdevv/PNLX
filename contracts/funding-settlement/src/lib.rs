@@ -19,6 +19,7 @@ const BN254_SCALAR_MODULUS_BE: [u8; 32] = [
 pub enum DataKey {
     Circuit,
     Funding(BytesN<32>, i128, i128),
+    FundingCycle(BytesN<32>, BytesN<32>),
     Governance,
     MarketContract,
     ProofLedger,
@@ -88,6 +89,7 @@ impl FundingSettlement {
     pub fn settle(
         env: Env,
         market_id: BytesN<32>,
+        cycle_id: BytesN<32>,
         old_index: i128,
         new_index: i128,
         mark_price: i128,
@@ -98,7 +100,16 @@ impl FundingSettlement {
         max_delta_enabled: bool,
         proof: ProofMeta,
     ) {
+        // The proof establishes arithmetic, not the private market's quote
+        // provenance. Only the governed funding operator may choose a rate.
+        let governance_id: Address = env.storage().persistent().get(&DataKey::Governance)
+            .unwrap_or_else(|| panic!("not initialized"));
+        GovernanceClient::new(&env, &governance_id).admin().require_auth();
         validate_hash(&env, &market_id);
+        validate_hash(&env, &cycle_id);
+        if field_bytes(&env, &cycle_id) != Bytes::from_array(&env, &cycle_id.to_array()) {
+            panic!("non-canonical funding cycle");
+        }
         if new_index == old_index {
             panic!("invalid funding index");
         }
@@ -116,6 +127,7 @@ impl FundingSettlement {
         validate_public_inputs(
             &env,
             &market_id,
+            &cycle_id,
             old_index,
             new_index,
             mark_price,
@@ -127,7 +139,7 @@ impl FundingSettlement {
             &proof,
         );
 
-        let key = DataKey::Funding(market_id.clone(), old_index, new_index);
+        let key = DataKey::FundingCycle(market_id.clone(), cycle_id);
         if env.storage().persistent().has(&key) {
             panic!("funding already settled");
         }
@@ -174,6 +186,19 @@ impl FundingSettlement {
         env.storage()
             .persistent()
             .has(&DataKey::Funding(market_id, old_index, new_index))
+    }
+
+    pub fn requires_operator_auth(_env: Env) -> bool {
+        true
+    }
+
+    pub fn funding_cycle_bound(_env: Env) -> bool {
+        true
+    }
+
+    pub fn is_cycle_settled(env: Env, market_id: BytesN<32>, cycle_id: BytesN<32>, old_index: i128, new_index: i128) -> bool {
+        env.storage().persistent().get::<_, FundingSettlementMeta>(&DataKey::FundingCycle(market_id, cycle_id))
+            .is_some_and(|meta| meta.old_index == old_index && meta.new_index == new_index)
     }
 }
 
@@ -252,6 +277,7 @@ fn validate_proof(env: &Env, proof: &ProofMeta) {
 fn validate_public_inputs(
     env: &Env,
     market_id: &BytesN<32>,
+    cycle_id: &BytesN<32>,
     old_index: i128,
     new_index: i128,
     mark_price: i128,
@@ -265,6 +291,7 @@ fn validate_public_inputs(
     let expected = funding_public_input_hash(
         env,
         market_id,
+        cycle_id,
         old_index,
         new_index,
         mark_price as u128,
@@ -282,6 +309,7 @@ fn validate_public_inputs(
 fn funding_public_input_hash(
     env: &Env,
     market_id: &BytesN<32>,
+    cycle_id: &BytesN<32>,
     old_index: i128,
     new_index: i128,
     mark_price: u128,
@@ -293,6 +321,7 @@ fn funding_public_input_hash(
 ) -> BytesN<32> {
     let mut public_inputs = Bytes::new(env);
     append_field(env, &mut public_inputs, market_id);
+    append_field(env, &mut public_inputs, cycle_id);
     append_i128_fields(env, &mut public_inputs, old_index);
     append_i128_fields(env, &mut public_inputs, new_index);
     append_u128_field(env, &mut public_inputs, mark_price);
@@ -306,7 +335,7 @@ fn funding_public_input_hash(
 
 fn append_i128_fields(env: &Env, out: &mut Bytes, value: i128) {
     if value < 0 {
-        append_u128_field(env, out, (-value) as u128);
+        append_u128_field(env, out, value.unsigned_abs());
         append_u128_field(env, out, 1);
     } else {
         append_u128_field(env, out, value as u128);
@@ -353,6 +382,108 @@ mod tests {
     use test_oracle::{TestOracle, TestOracleClient};
 
     #[test]
+    fn funding_cycles_allow_repeating_index_transitions_without_replay() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+        let id = env.register(FundingSettlement, ());
+        let client = FundingSettlementClient::new(&env, &id);
+        let market_id = BytesN::from_array(&env, &[8; 32]);
+        let cycles = [BytesN::from_array(&env, &[10; 32]), BytesN::from_array(&env, &[11; 32]),
+            BytesN::from_array(&env, &[12; 32])];
+        let first = proof_for_cycle(&env, &market_id, 1_000, 1_500, 50_000_00000000, 10_000, &cycles[0]);
+        let governance = setup_governance(&env, &first);
+        let ledger = setup_proof_ledger(&env, &governance, &first);
+        let market = setup_market(&env, &governance, &market_id, 1_000);
+        MarketClient::new(&env, &market).set_funding_updater(&id, &true);
+        client.init(&governance, &ledger, &market, &circuit(&env));
+        let authority = GovernanceClient::new(&env, &governance).verifier_authority(&first.circuit_id);
+        for (index, (old, new, rate)) in [(1_000, 1_500, 10_000), (1_500, 1_000, -10_000),
+            (1_000, 1_500, 10_000)].iter().enumerate() {
+            let proof = proof_for_cycle(&env, &market_id, *old, *new, 50_000_00000000, *rate, &cycles[index]);
+            ProofLedgerClient::new(&env, &ledger).record(&authority, &proof.circuit_id, &proof.verifier_hash,
+                &proof.public_input_hash, &proof.proof_digest);
+            client.settle(&market_id, &cycles[index], old, new, &50_000_00000000, rate,
+                &3_600_000, &3_600_000, &0, &false, &proof);
+            assert!(client.is_cycle_settled(&market_id, &cycles[index], old, new));
+            assert_eq!(MarketClient::new(&env, &market).funding_index(&market_id), *new);
+        }
+        assert!(!client.is_cycle_settled(&market_id, &cycles[2], &1_500, &1_000));
+        assert!(client.try_settle(&market_id, &cycles[2], &1_000, &1_500, &50_000_00000000,
+            &10_000, &3_600_000, &3_600_000, &0, &false, &proof_for_cycle(&env, &market_id,
+                1_000, 1_500, 50_000_00000000, 10_000, &cycles[2])).is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "public input mismatch")]
+    fn rejects_a_different_cycle_with_an_old_verified_proof() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+        let id = env.register(FundingSettlement, ());
+        let client = FundingSettlementClient::new(&env, &id);
+        let market_id = BytesN::from_array(&env, &[8; 32]);
+        let proof = proof(&env, &market_id, 1_000, 1_500, 50_000_00000000);
+        let governance = setup_governance(&env, &proof);
+        let ledger = setup_proof_ledger(&env, &governance, &proof);
+        let market = setup_market(&env, &governance, &market_id, 1_000);
+        MarketClient::new(&env, &market).set_funding_updater(&id, &true);
+        client.init(&governance, &ledger, &market, &circuit(&env));
+        client.settle(&market_id, &BytesN::from_array(&env, &[10; 32]), &1_000, &1_500,
+            &50_000_00000000, &10_000, &3_600_000, &3_600_000, &0, &false, &proof);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-canonical funding cycle")]
+    fn rejects_field_aliases_as_distinct_cycle_identities() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+        let mut canonical = [0u8; 32];
+        canonical[31] = 9;
+        let mut alias = super::BN254_SCALAR_MODULUS_BE;
+        alias[31] += 9;
+        let canonical = BytesN::from_array(&env, &canonical);
+        let alias = BytesN::from_array(&env, &alias);
+        let id = env.register(FundingSettlement, ());
+        let client = FundingSettlementClient::new(&env, &id);
+        let market_id = BytesN::from_array(&env, &[8; 32]);
+        let proof = proof_for_cycle(&env, &market_id, 1_000, 1_500, 50_000_00000000, 10_000, &canonical);
+        assert_eq!(proof.public_input_hash, proof_for_cycle(&env, &market_id, 1_000, 1_500,
+            50_000_00000000, 10_000, &alias).public_input_hash);
+        let governance = setup_governance(&env, &proof);
+        let ledger = setup_proof_ledger(&env, &governance, &proof);
+        let market = setup_market(&env, &governance, &market_id, 1_000);
+        MarketClient::new(&env, &market).set_funding_updater(&id, &true);
+        client.init(&governance, &ledger, &market, &circuit(&env));
+        client.settle(&market_id, &alias, &1_000, &1_500, &50_000_00000000, &10_000,
+            &3_600_000, &3_600_000, &0, &false, &proof);
+    }
+
+    #[test]
+    fn rejects_funding_without_operator_authorization() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+        let id = env.register(FundingSettlement, ());
+        let client = FundingSettlementClient::new(&env, &id);
+        let market_id = BytesN::from_array(&env, &[8; 32]);
+        let proof = proof(&env, &market_id, 1_000, 1_500, 50_000_00000000);
+        let governance = setup_governance(&env, &proof);
+        let proof_ledger = setup_proof_ledger(&env, &governance, &proof);
+        let market = setup_market(&env, &governance, &market_id, 1_000);
+        MarketClient::new(&env, &market).set_funding_updater(&id, &true);
+        client.init(&governance, &proof_ledger, &market, &circuit(&env));
+        assert!(client.requires_operator_auth());
+        env.set_auths(&[]);
+
+        assert!(client.try_settle(&market_id, &cycle(&env), &1_000, &1_500, &50_000_00000000,
+            &10_000, &3_600_000, &3_600_000, &0, &false, &proof).is_err());
+        assert_eq!(MarketClient::new(&env, &market).funding_index(&market_id), 1_000);
+        assert!(!client.is_cycle_settled(&market_id, &cycle(&env), &1_000, &1_500));
+    }
+
+    #[test]
     fn settles_funding_update() {
         let env = Env::default();
         env.mock_all_auths();
@@ -369,6 +500,7 @@ mod tests {
 
         client.settle(
             &market_id,
+            &cycle(&env),
             &1_000,
             &1_500,
             &50_000_00000000,
@@ -380,7 +512,7 @@ mod tests {
             &proof,
         );
 
-        assert!(client.is_settled(&market_id, &1_000, &1_500));
+        assert!(client.is_cycle_settled(&market_id, &cycle(&env), &1_000, &1_500));
         assert_eq!(
             MarketClient::new(&env, &market).funding_index(&market_id),
             1_500
@@ -404,6 +536,7 @@ mod tests {
 
         client.settle(
             &market_id,
+            &cycle(&env),
             &1_000,
             &500,
             &50_000_00000000,
@@ -415,7 +548,7 @@ mod tests {
             &proof,
         );
 
-        assert!(client.is_settled(&market_id, &1_000, &500));
+        assert!(client.is_cycle_settled(&market_id, &cycle(&env), &1_000, &500));
         assert_eq!(
             MarketClient::new(&env, &market).funding_index(&market_id),
             500
@@ -440,6 +573,7 @@ mod tests {
 
         client.settle(
             &market_id,
+            &cycle(&env),
             &1_000,
             &1_501,
             &50_000_00000000,
@@ -470,6 +604,7 @@ mod tests {
 
         client.settle(
             &market_id,
+            &cycle(&env),
             &1_000,
             &1_500,
             &49_000_00000000,
@@ -481,6 +616,8 @@ mod tests {
             &proof,
         );
     }
+
+    fn cycle(env: &Env) -> BytesN<32> { BytesN::from_array(env, &[9; 32]) }
 
     fn proof(
         env: &Env,
@@ -500,6 +637,11 @@ mod tests {
         mark_price: i128,
         premium_rate: i128,
     ) -> ProofMeta {
+        proof_for_cycle(env, market_id, old_index, new_index, mark_price, premium_rate, &cycle(env))
+    }
+
+    fn proof_for_cycle(env: &Env, market_id: &BytesN<32>, old_index: i128, new_index: i128,
+        mark_price: i128, premium_rate: i128, cycle_id: &BytesN<32>) -> ProofMeta {
         ProofMeta {
             circuit_id: circuit(env),
             circuit_hash: BytesN::from_array(env, &[6; 32]),
@@ -507,6 +649,7 @@ mod tests {
             public_input_hash: super::funding_public_input_hash(
                 env,
                 market_id,
+                cycle_id,
                 old_index,
                 new_index,
                 mark_price as u128,

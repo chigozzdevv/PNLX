@@ -7,6 +7,8 @@ import type {
   ConditionalOrderRecord,
   DisclosureRecord,
   FundingUpdateRecord,
+  FundingCycleRecord,
+  FundingCycleCursor,
   FundingPremiumSampleRecord,
   Hex,
   IntentRecord,
@@ -46,6 +48,8 @@ export interface ProtocolStoreSnapshot {
   pendingIntentSubmissions?: [Hex, PendingIntentSubmission][];
   disclosures: [Hex, DisclosureRecord][];
   fundingUpdates: [string, FundingUpdateRecord][];
+  fundingCycles?: [Hex, FundingCycleRecord][];
+  fundingCursors?: [string, FundingCycleCursor][];
   fundingPremiumSamples: [string, FundingPremiumSampleRecord][];
   intents: [string, IntentRecord][];
   liquidationAutomationJobs: [Hex, LiquidationAutomationJobRecord][];
@@ -77,6 +81,8 @@ export function snapshotProtocolStore(store: ProtocolStore): ProtocolStoreSnapsh
     pendingIntentSubmissions: [...store.pendingIntentSubmissions.entries()],
     disclosures: [...store.disclosures.entries()],
     fundingUpdates: [...store.fundingUpdates.entries()],
+    fundingCycles: [...store.fundingCycles.entries()],
+    fundingCursors: [...store.fundingCursors.entries()],
     fundingPremiumSamples: retainedFundingPremiumSamples([...store.fundingPremiumSamples.entries()]),
     liquidationAutomationJobs: [...store.liquidationAutomationJobs.entries()],
     batchExecutionRuns: retainedBatchExecutionRuns([...store.batchExecutionRuns.entries()]),
@@ -119,6 +125,8 @@ export function applyProtocolStoreSnapshot(store: ProtocolStore, snapshot: Parti
   store.positionCloses.clear();
   store.disclosures.clear();
   store.fundingUpdates.clear();
+  store.fundingCycles.clear();
+  store.fundingCursors.clear();
   store.fundingPremiumSamples.clear();
   store.liquidationAutomationJobs.clear();
   store.batchExecutionRuns.clear();
@@ -189,6 +197,8 @@ export function applyProtocolStoreSnapshot(store: ProtocolStore, snapshot: Parti
   for (const [key, value] of snapshot.positionCloses ?? []) store.positionCloses.set(key, value);
   for (const [key, value] of snapshot.disclosures ?? []) store.disclosures.set(key, value);
   for (const [key, value] of snapshot.fundingUpdates ?? []) store.fundingUpdates.set(key, value);
+  for (const [key, value] of snapshot.fundingCycles ?? []) store.fundingCycles.set(key, value);
+  for (const [key, value] of snapshot.fundingCursors ?? []) store.fundingCursors.set(key, value);
   for (const [key, value] of retainedFundingPremiumSamples(snapshot.fundingPremiumSamples ?? [])) {
     store.fundingPremiumSamples.set(key, value);
   }

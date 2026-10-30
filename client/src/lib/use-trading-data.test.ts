@@ -14,7 +14,7 @@ import { emptyLiquidityAccount } from "@/lib/liquidity-account";
 
 const now = 1_000_000;
 const market = { marketId: "xlm-usd-perp", price: 0.21, pair: "XLM/USD", baseAsset: "XLM", quoteAsset: "USD",
-  fundingRate: null, openInterest: null, volume: 0, maxLeverage: 10 } as MarketDisplay;
+  fundingIndex: "0", fundingRate: null, openInterest: null, volume: 0, maxLeverage: 10 } as MarketDisplay;
 const summary: ServerMarketConfig = {
   marketId: market.marketId, oraclePrice: "21000000", maxLeverage: "10", initialMarginRate: "100000",
   maintenanceMarginRate: "50000", fundingIndex: "0", openInterest: "100000000", fundingRate: "100",
@@ -117,6 +117,7 @@ describe("funding and open-interest summaries", () => {
     expect(markup).toContain("<span>Open interest</span><strong>0 XLM</strong>");
     expect(markup).toContain("0.0000%");
     const pending = renderToStaticMarkup(createElement(MarketHeader, {
+      loading: true,
       selectedMarket: { ...available, openInterestDetails: undefined },
     }));
     expect(pending).toContain('aria-label="Open interest data pending"');
@@ -132,27 +133,37 @@ describe("funding and open-interest summaries", () => {
     expect(incomplete).not.toContain(">Unavailable<");
   });
 
-  test("uses three loading dots for pending funding and keeps status details in tooltips", () => {
-    for (const status of ["warming", "stale"] as const) {
+  test("keeps resolved missing funding stable and uses dots only before a summary arrives", () => {
+    for (const status of ["warming", "stale", "unavailable"] as const) {
       const selectedMarket = applyMarketSummaries(data(), [{ ...summary, funding: { ...summary.funding!, status, rate: null, sampleCount: 3 } }]).markets[0];
       const markup = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket }));
-      expect(markup).toContain('aria-label="Est. funding · 1h data pending"');
-      expect(markup).toContain('class="market-metric-dots"');
-      expect(markup.match(/<span aria-hidden="true"><\/span>/g)).toHaveLength(3);
-      expect(markup).not.toContain(status === "warming" ? ">Warming<" : ">Stale<");
+      expect(markup).toContain('<span>Est. funding · 1h</span><strong>—</strong>');
+      expect(markup).not.toContain('data pending');
+      expect(markup).not.toContain('class="market-metric-dots"');
+      expect(markup).not.toMatch(/>(Warming|Stale|Unavailable)</);
       expect(markup).not.toContain(">Paused<");
-      expect(markup).toContain("3/10 premium samples");
+      expect(markup).toContain(status === "unavailable" ? "Two-sided funding depth is unavailable" : "3/10 premium samples");
       expect(markup).not.toContain("+0.0100%");
     }
+    const missingDepth = applyMarketSummaries(data(), [{ ...summary, funding: { ...summary.funding!,
+      status: "unavailable", rate: null, reason: "insufficient two-sided impact depth", coverageMs: 0,
+      requiredCoverageMs: 3_600_000 } }]).markets[0];
+    const gap = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket: missingDepth }));
+    expect(gap).toContain('title="insufficient two-sided impact depth');
+    expect(gap).not.toContain("0.0000%");
     const blocked = applyMarketSummaries(data(), [{ ...summary, funding: { ...summary.funding!, settlementStatus: "blocked" } }]).markets[0];
     const markup = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket: blocked }));
     expect(markup).not.toContain(">Blocked<");
     expect(markup).toContain("+0.0100%");
     expect(markup).toContain("Funding settlement is unavailable");
-    const missing = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket: market }));
+    const missing = renderToStaticMarkup(createElement(MarketHeader, { loading: true, selectedMarket: market }));
     expect(missing).toContain('aria-label="Est. funding data pending"');
     expect(missing).toContain('aria-label="Open interest data pending"');
     expect(missing).not.toContain(">Unavailable<");
+    const loadedLegacy = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket: market }));
+    expect(loadedLegacy).not.toContain('class="market-metric-dots"');
+    expect(loadedLegacy).toContain('<span>Est. funding</span><strong>—</strong>');
+    expect(loadedLegacy).toContain('<span>Open interest</span><strong>—</strong>');
   });
 });
 

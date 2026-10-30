@@ -1095,6 +1095,7 @@ describe("support workers", () => {
         enabled: true,
         positionRoot: () => executor.store.positionMembershipRoot(),
         isBatchSettled: () => batchLanded,
+        marketFundingIndexAsync: async () => market.fundingIndex,
         batchPositionAppendIndexAsync: async () => 0,
         settleBatch(settlement: BatchSettlement) {
           batchLanded = true;
@@ -1393,6 +1394,10 @@ describe("support workers", () => {
         positionRoot() {
           return executor.store.positionMembershipRoot();
         },
+        async marketFundingIndexAsync(marketId: string) {
+          expect(marketId).toBe(market.marketId);
+          return market.fundingIndex;
+        },
         async isBatchSettledAsync(_batchId: string, _marketId: string, settlementDigest: string) {
           checkedDigests.push(settlementDigest);
           return confirmedOnchain;
@@ -1515,6 +1520,7 @@ describe("support workers", () => {
       }, settlementFails ? {
         enabled: true,
         positionRoot: () => executor.store.positionMembershipRoot(),
+        marketFundingIndexAsync: async () => market.fundingIndex,
         isBatchSettledAsync: async () => false,
         settleBatchAsync: async () => { throw new Error("required batch settlement relay failed"); },
       } as never : undefined);
@@ -2029,7 +2035,7 @@ describe("support workers", () => {
     ]);
   });
 
-  test("runs bounded funding engine cycles from market oracle price", () => {
+  test("runs bounded funding engine cycles from market oracle price", async () => {
     const executor = createExecutor();
     const market = {
       marketId: "btc-usd-perp",
@@ -2046,8 +2052,8 @@ describe("support workers", () => {
       premiumRate: 100n,
     });
 
-    const capped = engine.runOnce({
-      appliedAt: 1_000,
+    const capped = await engine.runOnce({
+      appliedAt: 3_600_000,
       marketId: market.marketId,
     });
 
@@ -2056,8 +2062,8 @@ describe("support workers", () => {
     expect(capped.results[0].update?.fundingDelta).toBe(3n);
     expect(executor.store.markets.get(market.marketId)?.fundingIndex).toBe(3n);
 
-    const uncapped = engine.runOnce({
-      appliedAt: 2_000,
+    const uncapped = await engine.runOnce({
+      appliedAt: 7_200_000,
       elapsedMs: 60 * 60 * 1000,
       marketId: market.marketId,
       maxFundingDelta: 10n,
@@ -2066,8 +2072,8 @@ describe("support workers", () => {
     expect(uncapped.results[0].update?.oldFundingIndex).toBe(3n);
     expect(uncapped.results[0].update?.newFundingIndex).toBe(13n);
 
-    const negative = engine.runOnce({
-      appliedAt: 3_000,
+    const negative = await engine.runOnce({
+      appliedAt: 10_800_000,
       elapsedMs: 60 * 60 * 1000,
       marketId: market.marketId,
       maxFundingDelta: 2n,
@@ -2079,123 +2085,51 @@ describe("support workers", () => {
     expect(negative.results[0].update?.newFundingIndex).toBe(11n);
   });
 
-  test("live funding cycles prove and relay funding settlement before local index update", () => {
+  test("live funding cycles prove and confirm the exact cycle before local index update", async () => {
     const executor = createExecutor();
-    const market = {
-      marketId: "btc-usd-perp",
-      oraclePrice: 50_000n * PRICE_SCALE,
-      maxLeverage: 10n,
-      initialMarginRate: 100_000n,
-      maintenanceMarginRate: 50_000n,
-      fundingIndex: 4n,
-    };
-    const fundingProof = proof("funding-update");
-    let proofInput: Record<string, unknown> | undefined;
-    let relayed: Record<string, unknown> | undefined;
+    const market = { marketId: "btc-usd-perp", oraclePrice: 50_000n * PRICE_SCALE, maxLeverage: 10n,
+      initialMarginRate: 100_000n, maintenanceMarginRate: 50_000n, fundingIndex: 4n };
     executor.addMarket(market);
-    const prover = {
-      proveFundingSettlement(input: Record<string, unknown>) {
-        proofInput = input;
-        return {
-          ...input,
-          fundingDelta: BigInt(input.newFundingIndex as bigint) - BigInt(input.oldFundingIndex as bigint),
-          proof: fundingProof,
-        };
+    let index = 4n, confirmed = false;
+    let proofInput: Record<string, unknown> | undefined, relayed: Record<string, unknown> | undefined;
+    const prover = { async proveFundingSettlementAsync(input: Record<string, unknown>) {
+      proofInput = input; return { ...input, fundingDelta: (input.newFundingIndex as bigint) - (input.oldFundingIndex as bigint), proof: proof("funding-update") };
+    } };
+    const onchain = { enabled: true, fundingActivationReadyAsync: async () => true,
+      marketFundingIndexAsync: async () => index,
+      marketPriceSnapshotAsync: async () => ({ price: market.oraclePrice, timestamp: Math.floor(Date.now()/1_000) }),
+      isFundingSettledAsync: async (_market: string, _old: bigint, _next: bigint, cycleId?: Hex) => Boolean(cycleId) && confirmed,
+      async settleFundingAsync(record: Record<string, unknown>, before: (value:{txHash:Hex;xdr:string})=>Promise<void>) {
+        expect(executor.store.markets.get(market.marketId)?.fundingIndex).toBe(4n);
+        await before({ txHash: hashFields("funding-test", ["tx"]), xdr: "signed-funding" });
+        relayed = record; index = record.newFundingIndex as bigint; confirmed = true; return {relays:[]};
       },
     };
-    const onchain = {
-      enabled: true,
-      settleFunding(record: Record<string, unknown>) {
-        relayed = record;
-        return { relays: [] };
-      },
-    };
-    const engine = createFundingEngine(
-      executor,
-      {
-        intervalMs: 60 * 60 * 1000,
-        premiumRate: 100n,
-      },
-      prover as never,
-      onchain as never,
-    );
-
-    const cycle = engine.runOnce({
-      appliedAt: 9_000,
-      elapsedMs: 60 * 60 * 1000,
-      marketId: market.marketId,
-      maxFundingDelta: 10n,
-    });
-
+    const engine = createFundingEngine(executor,{ intervalMs:3_600_000,premiumRate:100n,maxFundingDelta:10n,
+      settlementsOnchainRequired:true },prover as never,onchain as never);
+    const cycle = await engine.runOnce({ marketId: market.marketId });
     expect(cycle.results[0].skipped).toBe(false);
-    expect(proofInput?.oldFundingIndex).toBe(4n);
-    expect(proofInput?.newFundingIndex).toBe(14n);
-    expect(proofInput?.markPrice).toBe(50_000n * PRICE_SCALE);
-    expect(proofInput?.maxFundingDelta).toBe(10n);
-    expect(relayed?.proof).toBe(fundingProof);
+    expect(proofInput?.oldFundingIndex).toBe(4n);expect(proofInput?.newFundingIndex).toBe(14n);
+    expect(proofInput?.markPrice).toBe(market.oraclePrice);expect(proofInput?.maxFundingDelta).toBe(10n);
+    expect(relayed?.cycleId).toBe(proofInput?.cycleId);
     expect(executor.store.markets.get(market.marketId)?.fundingIndex).toBe(14n);
   });
 
-  test("funding cycles do not update local index without submitted on-chain settlement when required", () => {
-    const executor = createExecutor();
-    const market = {
-      marketId: "btc-usd-perp",
-      oraclePrice: 50_000n * PRICE_SCALE,
-      maxLeverage: 10n,
-      initialMarginRate: 100_000n,
-      maintenanceMarginRate: 50_000n,
-      fundingIndex: 4n,
-    };
-    const fundingProof = proof("funding-update");
-    executor.addMarket(market);
-    const prover = {
-      proveFundingSettlement(input: Record<string, unknown>) {
-        return {
-          ...input,
-          fundingDelta: BigInt(input.newFundingIndex as bigint) - BigInt(input.oldFundingIndex as bigint),
-          proof: fundingProof,
-        };
-      },
-    };
-    const onchain = {
-      enabled: true,
-      settleFunding() {
-        return {
-          relays: [
-            {
-              functionName: "settle",
-              kind: "funding-settlement",
-              mode: "local",
-              payloadDigest: hashFields("payload", ["funding-unsubmitted"]),
-              relayId: hashFields("relay", ["funding-unsubmitted"]),
-              submitted: false,
-              submittedAt: Date.now(),
-            },
-          ],
-        };
-      },
-    };
-    const engine = createFundingEngine(
-      executor,
-      {
-        intervalMs: 60 * 60 * 1000,
-        premiumRate: 100n,
-        settlementsOnchainRequired: true,
-      },
-      prover as never,
-      onchain as never,
-    );
-
-    expect(() =>
-      engine.runOnce({
-        appliedAt: 9_000,
-        elapsedMs: 60 * 60 * 1000,
-        marketId: market.marketId,
-        maxFundingDelta: 10n,
-      }),
-    ).toThrow("settle transaction was not submitted");
-    expect(executor.store.markets.get(market.marketId)?.fundingIndex).toBe(4n);
-    expect(executor.store.fundingUpdates.size).toBe(0);
+  test("funding cycles do not update the local index without exact on-chain confirmation", async () => {
+    const executor=createExecutor();
+    const market={marketId:"btc-usd-perp",oraclePrice:50_000n*PRICE_SCALE,maxLeverage:10n,
+      initialMarginRate:100_000n,maintenanceMarginRate:50_000n,fundingIndex:4n};executor.addMarket(market);
+    const prover={async proveFundingSettlementAsync(input:Record<string,unknown>){return{...input,
+      fundingDelta:(input.newFundingIndex as bigint)-(input.oldFundingIndex as bigint),proof:proof("funding-update")};}};
+    const onchain={enabled:true,fundingActivationReadyAsync:async()=>true,marketFundingIndexAsync:async()=>4n,
+      marketPriceSnapshotAsync:async()=>({price:market.oraclePrice,timestamp:Math.floor(Date.now()/1_000)}),
+      isFundingSettledAsync:async()=>false,
+      async settleFundingAsync(_record:unknown,before:(value:{txHash:Hex;xdr:string})=>Promise<void>){
+        await before({txHash:hashFields("funding-test",["unconfirmed"]),xdr:"signed-unconfirmed"});return{relays:[]};},};
+    const engine=createFundingEngine(executor,{intervalMs:3_600_000,premiumRate:100n,settlementsOnchainRequired:true},prover as never,onchain as never);
+    await expect(engine.runOnce({marketId:market.marketId})).rejects.toThrow("not confirmed on chain");
+    expect(executor.store.markets.get(market.marketId)?.fundingIndex).toBe(4n);expect(executor.store.fundingUpdates.size).toBe(0);
+    expect([...executor.store.fundingCycles.values()][0]?.submissionAttempted).toBe(true);
   });
 
   test("builds real stellar cli relay invocations", () => {
@@ -2929,6 +2863,7 @@ describe("support workers", () => {
     onchain.settleBatch({
       batchId,
       marketId,
+      entryFundingIndex: -7n,
       matchTranscriptDigest: hashFields("match-transcript", [batchId]),
       settlementDigest: hashFields("settlement-digest", [batchId]),
       newCommitments: [hashFields("position", [batchId])],
@@ -2971,6 +2906,8 @@ describe("support workers", () => {
     expect(calls[0]).toContain(batchProof.sealDigest!.slice(2));
     expect(calls[1]).toContain("batch-settlement-contract");
     expect(calls[1]).toContain("settle");
+    expect(calls[1]).toContain("--entry_funding_index");
+    expect(calls[1]).toContain("-7");
     expect(calls[1]).toContain(hashFields("batch-id", [batchId]).slice(2));
     expect(calls[1]).toContain(hashFields("market-id", [marketId]).slice(2));
     expect(calls[1]).toContain(hashFields("settlement-digest", [batchId]).slice(2));
@@ -3027,6 +2964,7 @@ describe("support workers", () => {
     const fundingProof = proof("funding-update");
 
     onchain.settleFunding({
+      cycleId: digestToFieldHex(hashFields("funding-test", ["relay-cycle"])),
       appliedAt: 1_000,
       elapsedMs: 3_600_000,
       fundingDelta: 5n,
@@ -4600,6 +4538,7 @@ function externalSettlement(input: {
   const draft = {
     aggregateVolume: BigInt(input.newCommitments.length),
     batchId: input.batchId,
+    entryFundingIndex: input.store.markets.get(input.marketId)?.fundingIndex,
     fillCount: input.newCommitments.length,
     feeConfigHash: FEE_CONFIG_HASH,
     grossTakerFee: 0n,
@@ -4661,6 +4600,7 @@ function prooflessProofs(): ConstructorParameters<typeof MatcherService>[1] {
       const draft = {
         aggregateVolume: input.match.aggregateVolume,
         batchId: input.batchId,
+        entryFundingIndex: input.market.fundingIndex,
         fillCount: input.match.fills.length,
         feeConfigHash: FEE_CONFIG_HASH,
         grossTakerFee: input.match.fees.grossTakerFee,

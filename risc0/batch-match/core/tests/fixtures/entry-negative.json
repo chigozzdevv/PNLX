@@ -1,0 +1,94 @@
+{
+  "batch_id": "fee-parity",
+  "expected": {
+    "aggregate_volume": "2000000000",
+    "batch_id": "fee-parity",
+    "funding_index": "-7",
+    "fill_count": 2,
+    "fee_config_hash": "0xbb5f68bb955bd581f42275c73aa5063589736f55c733db22e05cf372dfedd687",
+    "gross_taker_fee": "500000",
+    "maker_rebate": "150000",
+    "insurance_fee": "100000",
+    "treasury_fee": "250000",
+    "maker_intents": [
+      "0x642a5c2e356da362e7dd2ca9cedaa0869909803447802a16f233f32ac83827a3"
+    ],
+    "taker_intents": [
+      "0x136294d7007608c259dcadddfebdb58e23832be3b1055a5f87682fd2128f054c"
+    ],
+    "margin_change_commitments": [],
+    "matching_payload_commitments": [
+      "0x1b4dd65f0ce94da637abd8463f46e0e2e5f0fd22d99ba1c532cdcca10845d3ae",
+      "0x0979b336fc2e005bd4a84e171ae75b07a929dc6b45c0e000df796d1b5aa63527"
+    ],
+    "residual_commitments": [
+      "0x0",
+      "0x0"
+    ],
+    "residual_payload_commitments": [
+      "0x0",
+      "0x0"
+    ],
+    "residual_margins": [
+      "0",
+      "0"
+    ],
+    "market_id": "xlm-usd-perp",
+    "match_transcript_digest": "0x7f68b3aa4f176aa36a64443aa9f523d2efa372df66e0d8b97f7ced9529b7916b",
+    "new_commitments": [
+      "0x0988ecf85ce7a409c336bf54fbca1d9396f9c7e98ed3633f5c6f55f9c7f17593",
+      "0x1dd0d0966ee1f12178373e0fa7c38b28d780906028c9e4409a9fdbc72bcf117b"
+    ],
+    "open_interest_delta": "2000000000",
+    "order_updates": [
+      {
+        "intent_commitment": "0x642a5c2e356da362e7dd2ca9cedaa0869909803447802a16f233f32ac83827a3",
+        "status": "filled"
+      },
+      {
+        "intent_commitment": "0x136294d7007608c259dcadddfebdb58e23832be3b1055a5f87682fd2128f054c",
+        "status": "filled"
+      }
+    ],
+    "residual_size": "0",
+    "settlement_digest": "0x2c882a2622dcdde79efa032aee9503019d6695a1c8cf8519f9133e1c2ab20874",
+    "spent_nullifiers": [
+      "0x10f562e7c271d6243a44f7deb0443b8506b8e3737f41dbe69b865b228335d108",
+      "0xcb72ec372b88d893cc8133edf3050ac0700391eb870b845d0c144f94bc134356"
+    ]
+  },
+  "intents": [
+    {
+      "batch_id": "fee-parity",
+      "intent_commitment": "0x642a5c2e356da362e7dd2ca9cedaa0869909803447802a16f233f32ac83827a3",
+      "limit_price": "100000000",
+      "margin": "200000000",
+      "market_id": "xlm-usd-perp",
+      "note_change_commitment": "0x0",
+      "note_nullifier": "0x10f562e7c271d6243a44f7deb0443b8506b8e3737f41dbe69b865b228335d108",
+      "owner_commitment": "0xf67df1481dfd399504be07f8667d5406abf9c9c9b3d3200c809c7f9fba310d3f",
+      "owner_digest": "0x21ffb42eed8edc8fea6630d0730b78a5a2df1787522ba4aa9544f2f9c11134dc",
+      "position_seed": "0x11e7f5f45dd0febcf1447f82fa50a2592f71d9ea6042e473c12a0a9c5d45b121",
+      "signed_size": "1000000000"
+    },
+    {
+      "batch_id": "fee-parity",
+      "intent_commitment": "0x136294d7007608c259dcadddfebdb58e23832be3b1055a5f87682fd2128f054c",
+      "limit_price": "100000000",
+      "margin": "200000000",
+      "market_id": "xlm-usd-perp",
+      "note_change_commitment": "0x0",
+      "note_nullifier": "0xcb72ec372b88d893cc8133edf3050ac0700391eb870b845d0c144f94bc134356",
+      "owner_commitment": "0xf8d9dbf211fc1ac74bdfb35512eeeaa208fd7085e6bb5d17f2dea24b6b8b9dc1",
+      "owner_digest": "0x015a8aaa39c81529c7ee17c781db8cfcb846d71992f97dde0915bc9a8d0da334",
+      "position_seed": "0x127f58e66914b6494d564f46390e8f0e7a797919929b2630179728af8ad545f5",
+      "signed_size": "-1000000000"
+    }
+  ],
+  "market": {
+    "funding_index": "-7",
+    "initial_margin_rate": "100000",
+    "market_id": "xlm-usd-perp",
+    "max_leverage": "10"
+  }
+}

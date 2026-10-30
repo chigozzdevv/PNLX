@@ -1,11 +1,11 @@
 import { formatUsd } from "@/lib/format";
 import { positionLegs } from "@/lib/position-groups";
+import { currentPositionFundingIndex } from "@/lib/position-funding";
 import type { MarketDisplay, PositionRow } from "@/types/trading";
 
 const PRICE_SCALE = 100_000_000n;
 const RATE_SCALE = 1_000_000n;
 const MAX_PRICE = (1n << 128n) - 1n;
-const RISK_MAX_AGE_MS = 60_000;
 
 export type LiquidationEstimate = { status: "price"; price: number } | { status: "none" | "unavailable" };
 type RiskMarket = Pick<MarketDisplay, "marketId" | "maintenanceMarginRate" | "fundingIndex" | "riskFunding">;
@@ -43,18 +43,11 @@ function estimateFill(position: PositionRow, market: RiskMarket | undefined, now
   if (!opening || position.privateDetails || !market || market.marketId !== position.marketId) return { status: "unavailable" };
   const size = integer(opening.size), entry = integer(opening.entryPrice), margin = integer(opening.margin);
   const entryIndex = integer(opening.fundingIndex, true);
-  const snapshot = market.riskFunding;
-  const hasSnapshot = snapshot !== undefined;
-  if (hasSnapshot && (!snapshot || typeof snapshot !== "object" || snapshot.status !== "available" ||
-    (snapshot.source !== "onchain-market" && snapshot.source !== "market-config") || snapshot.updatedAt === null ||
-    !Number.isSafeInteger(snapshot.updatedAt) || now - snapshot.updatedAt > RISK_MAX_AGE_MS || snapshot.updatedAt > now + 5_000)) {
-    return { status: "unavailable" };
-  }
-  const currentIndex = integer(hasSnapshot ? snapshot?.fundingIndex : market.fundingIndex, true);
+  const currentIndex = currentPositionFundingIndex(market, now);
   const rawRate = Math.round(market.maintenanceMarginRate * Number(RATE_SCALE));
   const rate = Number.isSafeInteger(rawRate) ? BigInt(rawRate) : null;
   if (size === null || size <= 0n || entry === null || entry <= 0n || margin === null || margin < 0n ||
-    entryIndex === null || currentIndex === null || rate === null || rate <= 0n || rate >= RATE_SCALE ||
+    entryIndex === null || currentIndex === undefined || rate === null || rate <= 0n || rate >= RATE_SCALE ||
     (opening.side !== "long" && opening.side !== "short")) return { status: "unavailable" };
 
   const direction = opening.side === "long" ? 1n : -1n;

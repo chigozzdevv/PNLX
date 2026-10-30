@@ -1,4 +1,4 @@
-import { hashFields, secureMarginRoot } from "@pnlx/crypto";
+import { FIELD_PRIME, hashFields, secureMarginRoot } from "@pnlx/crypto";
 import type {
   BatchSettlement,
   ConditionalOrderCommitment,
@@ -17,6 +17,7 @@ import type {
 } from "@pnlx/protocol-types";
 import type { RelayerService } from "@/workers/relayer/relayer.service";
 import { parseOnchainMarketPrice } from "@/workers/oracle/oracle.service";
+import { batchEntryFundingIndex } from "@/shared/protocol/batch-settlement-proof";
 import type {
   DeploymentRegistry,
   OnchainRelay,
@@ -609,6 +610,7 @@ export class OnchainRelayService implements OnchainRelay {
 
   settleBatch(record: BatchSettlement): OnchainRelayResult {
     if (!this.config.enabled) return empty();
+    const entryFundingIndex = batchEntryFundingIndex(record);
     return {
       relays: [
         this.invokeProofVerifier(record.proof),
@@ -619,6 +621,8 @@ export class OnchainRelayService implements OnchainRelay {
           marketKey(record.marketId),
           "--settlement_digest",
           bytes32(record.settlementDigest),
+          "--entry_funding_index",
+          entryFundingIndex.toString(),
           "--proof",
           proofArg(record.proof),
           "--filled_intents",
@@ -662,6 +666,7 @@ export class OnchainRelayService implements OnchainRelay {
 
   async settleBatchAsync(record: BatchSettlement): Promise<OnchainRelayResult> {
     if (!this.config.enabled) return empty();
+    const entryFundingIndex = batchEntryFundingIndex(record);
     return {
       relays: [
         await this.invokeProofVerifierAsync(record.proof),
@@ -672,6 +677,8 @@ export class OnchainRelayService implements OnchainRelay {
           marketKey(record.marketId),
           "--settlement_digest",
           bytes32(record.settlementDigest),
+          "--entry_funding_index",
+          entryFundingIndex.toString(),
           "--proof",
           proofArg(record.proof),
           "--filled_intents",
@@ -813,6 +820,8 @@ export class OnchainRelayService implements OnchainRelay {
         this.invoke("funding-settlement", "funding-settlement", "settle", [
           "--market_id",
           marketKey(record.marketId),
+          "--cycle_id",
+          bytes32(record.cycleId ?? (() => { throw new Error("funding cycle binding is required"); })()),
           "--old_index",
           record.oldFundingIndex.toString(),
           "--new_index",
@@ -834,6 +843,49 @@ export class OnchainRelayService implements OnchainRelay {
         ]),
       ],
     };
+  }
+
+  async settleFundingAsync(record: FundingSettlementRecord,
+    beforeSubmit: (prepared: {txHash:Hex;xdr:string}) => Promise<void>,
+    prepared?: {txHash:Hex;xdr:string}): Promise<OnchainRelayResult> {
+    if (!this.config.enabled) throw new Error("funding settlement requires on-chain relay");
+    record = structuredClone(record);
+    const args = fundingSettlementArgs(record);
+    if (!(await this.fundingActivationReadyAsync())) throw new Error("funding contract protections require upgrade");
+    const verification = prepared ? undefined : await this.invokeProofVerifierAsync(record.proof);
+    const relay = await this.relayer.relayJournaled({ kind: "funding-settlement", payload: {
+      contractId: contractId(this.deployment(), "funding-settlement"), functionName: "settle", send: "yes",
+      args,
+    } }, beforeSubmit, prepared);
+    return { relays: [...(verification ? [verification] : []), relay] };
+  }
+
+  async isFundingSettledAsync(marketId: string, oldIndex: bigint, newIndex: bigint, cycleId?: Hex): Promise<boolean> {
+    if (!this.config.enabled) throw new Error("funding confirmation requires on-chain relay");
+    const result = await this.relayer.readAsync({ kind: "funding-settlement", payload: {
+      contractId: contractId(this.deployment(), "funding-settlement"), functionName: cycleId ? "is_cycle_settled" : "is_settled", send: "no",
+      args: ["--market_id", marketKey(marketId), ...(cycleId ? ["--cycle_id", bytes32(cycleId)] : []),
+        "--old_index", oldIndex.toString(), "--new_index", newIndex.toString()],
+    } });
+    return strictBatchSettlementStatus(result.stdout);
+  }
+
+  fundingTransactionStatusAsync(txHash: Hex): Promise<"SUCCESS"|"FAILED"|"NOT_FOUND"> {
+    return this.relayer.readTransactionStatus(txHash);
+  }
+
+  async fundingActivationReadyAsync(): Promise<boolean> {
+    if (!this.config.enabled) return false;
+    const markers = await Promise.allSettled([
+      ["funding-settlement", "requires_operator_auth"], ["funding-settlement", "funding_cycle_bound"],
+      ["batch-settlement", "funding_epoch_bound"],
+    ].map(async ([contract, functionName]) => {
+      const result = await this.relayer.readAsync({ kind: "funding-settlement", payload: {
+        contractId: contractId(this.deployment(), contract), functionName, send: "no",
+      } });
+      return strictBatchSettlementStatus(result.stdout);
+    }));
+    return markers.every((marker) => marker.status === "fulfilled" && marker.value === true);
   }
 
   registerConditionalOrder(record: ConditionalOrderCommitment): OnchainRelayResult {
@@ -1640,4 +1692,14 @@ function isStellarAssetTrustlineMissing(error: unknown): boolean {
   return message.includes("Contract, #13") ||
     message.includes("TrustlineMissingError") ||
     message.toLowerCase().includes("trustline is missing");
+}
+
+function fundingSettlementArgs(record: FundingSettlementRecord): string[] {
+  if (!record.cycleId || !/^0x[0-9a-f]{64}$/i.test(record.cycleId) ||
+      BigInt(record.cycleId) === 0n || BigInt(record.cycleId) >= FIELD_PRIME) throw new Error("canonical funding cycle binding is required");
+  return ["--market_id", marketKey(record.marketId), "--cycle_id", bytes32(record.cycleId), "--old_index", record.oldFundingIndex.toString(),
+    "--new_index", record.newFundingIndex.toString(), "--mark_price", record.markPrice.toString(),
+    "--premium_rate", record.premiumRate.toString(), "--elapsed_ms", String(record.elapsedMs),
+    "--interval_ms", String(record.intervalMs), "--max_delta", (record.maxFundingDelta ?? 0n).toString(),
+    "--max_delta_enabled", record.maxFundingDelta === undefined ? "false" : "true", "--proof", proofArg(record.proof)];
 }

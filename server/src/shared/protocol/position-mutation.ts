@@ -13,10 +13,17 @@ export async function withPositionMutation<T>(store: object, work: () => Promise
 }
 
 export function assertPositionMutationReady(
-  store: Pick<ProtocolStore, "batchExecutionRuns" | "settlements" | "pendingPairedCloses" | "positionCloses">,
-  kind: "batch" | "pair",
+  store: Pick<ProtocolStore, "batchExecutionRuns" | "settlements" | "pendingPairedCloses" | "positionCloses"> &
+    Partial<Pick<ProtocolStore, "fundingCycles">>,
+  kind: "batch" | "pair" | "funding",
   id: Hex,
 ): void {
+  for (const cycle of store.fundingCycles?.values() ?? []) {
+    if (!cycle.submissionAttempted || cycle.status === "settled" || cycle.status === "skipped" ||
+        (cycle.status === "retired" && cycle.failureConfirmed === true) ||
+        (kind === "funding" && cycle.cycleId.toLowerCase() === id.toLowerCase())) continue;
+    throw new Error(`position mutation blocked by pending funding ${cycle.cycleId}; reconciliation required`);
+  }
   for (const run of store.batchExecutionRuns.values()) {
     if (!run.submissionAttempted || (kind === "batch" && run.runId.toLowerCase() === id.toLowerCase())) continue;
     const committed = [...store.settlements.values()].some((settlement) =>

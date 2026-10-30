@@ -21,7 +21,7 @@ export class FundingController {
   async run(request: Request): Promise<Response> {
     const body = await readJson<Record<string, unknown>>(request);
     return json(
-      { fundingCycle: this.funding.run(parseRunFunding(body), authenticatedAddress(request)) },
+      { fundingCycle: await this.funding.run(parseRunFunding(body), authenticatedAddress(request)) },
       201,
     );
   }

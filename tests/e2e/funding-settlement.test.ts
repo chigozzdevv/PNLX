@@ -28,9 +28,10 @@ import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.servi
 import { prepareRisc0SettlementDraft } from "@/workers/risc0-matcher/risc0-proof";
 
 describe("funding settlement enforcement", () => {
-  test("builds a real funding settlement proof artifact", () => {
+  test("builds a real async cycle-bound funding settlement proof artifact", async () => {
     const prover = createProver();
-    const record = prover.proveFundingSettlement({
+    const record = await prover.proveFundingSettlementAsync({
+      cycleId: digestToFieldHex("funding-settlement-proof-cycle"),
       appliedAt: 1_000,
       elapsedMs: 3_600_000,
       intervalMs: 3_600_000,
@@ -42,6 +43,7 @@ describe("funding settlement enforcement", () => {
       premiumRate: 1_000n,
     });
 
+    expect(record.cycleId).toBe(digestToFieldHex("funding-settlement-proof-cycle"));
     expect(record.fundingDelta).toBe(50n * PRICE_SCALE);
     expect(record.proof.circuitId).toBe("funding-update");
     expect(record.proof.publicInputHash).toMatch(/^0x[0-9a-f]{64}$/);

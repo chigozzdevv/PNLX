@@ -315,7 +315,7 @@ export function TradingPage() {
       <main className="trade-grid">
         <section className="main-column">
           {displaySelectedMarket ? (
-            <MarketHeader dayStats={dayStats} selectedMarket={displaySelectedMarket} />
+            <MarketHeader dayStats={dayStats} loading={trading.loading} selectedMarket={displaySelectedMarket} />
           ) : trading.loading ? (
             <div aria-hidden="true" className="market-header trade-loading-market-header">
               <span className="trade-loading-block trade-loading-market" />

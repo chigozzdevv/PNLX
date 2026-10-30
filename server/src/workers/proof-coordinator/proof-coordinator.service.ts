@@ -55,6 +55,7 @@ export class ProofCoordinatorService {
     const draft = {
       aggregateVolume: input.match.aggregateVolume,
       batchId: input.batchId,
+      entryFundingIndex: input.market.fundingIndex,
       fillCount: input.match.fills.length,
       feeConfigHash: FEE_CONFIG_HASH,
       grossTakerFee: input.match.fees.grossTakerFee,

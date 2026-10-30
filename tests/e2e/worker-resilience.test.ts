@@ -69,6 +69,7 @@ function fixture(marketIds = ["test-market"], store = new ProtocolStore()) {
       accountEvents: [], positionOpenings: [],
       settlement: {
         batchId: input.batchId, marketId: input.marketId,
+        entryFundingIndex: store.markets.get(input.marketId)!.fundingIndex,
         settlementDigest: key(`settlement-${input.batchId}`),
         orderUpdates: match.orderUpdates, aggregateVolume: match.aggregateVolume,
         spentNullifiers: match.spentNullifiers,
@@ -84,6 +85,119 @@ function deferred() {
   const promise = new Promise<void>((done) => { resolve = done; });
   return { promise, resolve };
 }
+
+describe("batch entry funding epochs", () => {
+  const marketId = "xlm-usd-perp";
+  const config = { intervalMs: 1000, proofPipelineConcurrency: 1 as const, settlementsOnchainRequired: true };
+  function epochFixture() {
+    const f = fixture([marketId]);
+    const long = f.add(marketId, "epoch-long", 1n), short = f.add(marketId, "epoch-short", -1n);
+    let chainIndex = 7n, sends = 0, reads = 0;
+    const landed = new Set<Hex>();
+    const relay = {
+      enabled: true,
+      positionRoot: () => f.store.positionMembershipRoot(),
+      marketFundingIndexAsync: async () => { reads++; return chainIndex; },
+      batchPositionAppendIndexAsync: async () => 0,
+      isBatchSettledAsync: async (_batch: string, _market: string, digest?: Hex) => Boolean(digest && landed.has(digest)),
+      async settleBatchAsync(settlement: BatchSettlement) {
+        sends++; landed.add(settlement.settlementDigest);
+        return { relays: [{ functionName: "verify_and_record", submitted: true, txHash: key("epoch-proof") }] };
+      },
+    };
+    return { ...f, relay, landed, ids: [long.intentCommitment, short.intentCommitment],
+      sends: () => sends, reads: () => reads, setIndex: (index: bigint) => { chainIndex = index; } };
+  }
+
+  test("never sends or applies a stale or missing proven epoch", async () => {
+    for (const entryIndex of [0n, undefined]) {
+      const f = epochFixture();
+      const result = await new BatchExecutorService(f.executor as never, { createSettlementTranscript(input) {
+        const transcript = f.transcript(input); transcript.settlement.entryFundingIndex = entryIndex; return transcript;
+      } }, config, f.relay as never).runOnce();
+      expect(result.results[0]!.record.status).toBe("skipped");
+      expect(result.results[0]!.record.reason).toContain("stale or unbound");
+      expect(f.sends()).toBe(0); expect(f.commits()).toBe(0);
+      expect(f.store.orderLifecycle.get(f.ids[0]!)?.status).toBe("open");
+      expect([...f.store.batchExecutionRuns.values()][0]?.submissionAttempted).not.toBe(true);
+    }
+  });
+
+  test("a missing current-index reader or inconsistent private opening cannot send or apply", async () => {
+    for (const missingReader of [true, false]) {
+      const f = epochFixture();
+      const relay = { ...f.relay, marketFundingIndexAsync: missingReader ? undefined : f.relay.marketFundingIndexAsync };
+      const result = await new BatchExecutorService(f.executor as never, { createSettlementTranscript(input) {
+        const transcript = f.transcript(input); transcript.settlement.entryFundingIndex = 7n;
+        if (!missingReader) transcript.positionOpenings = [{ marketId, fundingIndex: 8n }] as never;
+        return transcript;
+      } }, config, relay as never).runOnce();
+      expect(result.results[0]!.record.status).toBe("failed");
+      expect(result.results[0]!.record.reason).toContain(missingReader
+        ? "current on-chain funding index is unavailable" : "position opening funding index differs");
+      expect(f.sends()).toBe(0); expect(f.commits()).toBe(0);
+    }
+  });
+
+  test("retires an unsubmitted stale proof and replans the same active inputs at the fresh epoch", async () => {
+    const f = epochFixture(); let proofs = 0;
+    const matcher = { createSettlementTranscript(input: CreateExternalSettlementInput) { proofs++; return f.transcript(input); } };
+    const first = await new BatchExecutorService(f.executor as never, matcher, config, f.relay as never).runOnce({ now: 10_000 });
+    expect(first.results[0]!.record.status).toBe("skipped");
+    const retired = [...f.store.batchExecutionRuns.values()][0]!;
+    expect(retired.submissionAttempted).not.toBe(true);
+    f.store.markets.set(marketId, { ...f.store.markets.get(marketId)!, fundingIndex: 7n });
+    const second = await new BatchExecutorService(f.executor as never, matcher, config, f.relay as never).runOnce({ now: 11_000 });
+    expect(second.results[0]!.record.status).toBe("settled");
+    expect(second.results[0]!.record.batchId).not.toBe(retired.batchId);
+    expect(proofs).toBe(2); expect(f.sends()).toBe(1); expect(f.commits()).toBe(1);
+    expect(f.store.batchExecutionRuns.get(retired.runId)?.status).toBe("skipped");
+    expect(f.store.orderLifecycle.get(f.ids[0]!)?.status).toBe("filled");
+  });
+
+  test("an attempted stale proof stays reserved instead of being resent or replanned", async () => {
+    const f = epochFixture();
+    const input = { batchId: "attempted-epoch", marketId, intentCommitments: f.ids };
+    const transcript = f.transcript(input), runId = key("attempted-epoch");
+    f.store.batchExecutionRuns.set(runId, { ...input, runId, startedAt: 1, status: "failed", phase: "batch-settlement",
+      submissionAttempted: true, settlementDigest: transcript.settlement.settlementDigest, settlementTranscript: transcript });
+    f.add(marketId, "epoch-fresh-long", 1n); f.add(marketId, "epoch-fresh-short", -1n);
+    let proofs = 0;
+    for (let retry = 0; retry < 2; retry++) {
+      const result = await new BatchExecutorService(f.executor as never, { createSettlementTranscript(value) {
+        proofs++; return f.transcript(value);
+      } }, config, f.relay as never).runOnce();
+      expect(result.results[0]!.record.status).toBe("failed");
+      expect(result.results[0]!.record.reason).toContain("stale or unbound");
+    }
+    expect(proofs).toBe(0); expect(f.sends()).toBe(0); expect(f.commits()).toBe(0);
+    expect(f.store.batchExecutionRuns.get(runId)).toMatchObject({ status: "failed", submissionAttempted: true,
+      intentCommitments: f.ids, settlementDigest: transcript.settlement.settlementDigest });
+    expect(f.store.batchExecutionRuns.get(runId)?.settlementTranscript).toEqual(transcript);
+  });
+
+  test("only exact already-landed confirmation can recover a legacy transcript without an entry epoch", async () => {
+    for (const exact of [true, false]) {
+      const f = epochFixture();
+      const input = { batchId: "legacy-epoch", marketId, intentCommitments: f.ids };
+      const transcript = f.transcript(input); delete transcript.settlement.entryFundingIndex;
+      const runId = key("legacy-epoch");
+      f.store.batchExecutionRuns.set(runId, { ...input, runId, startedAt: 1, status: "failed", phase: "batch-settlement",
+        submissionAttempted: true, settlementDigest: transcript.settlement.settlementDigest, settlementTranscript: transcript });
+      f.landed.add(exact ? transcript.settlement.settlementDigest : key("different-landed-digest"));
+      let proofs = 0;
+      const result = await new BatchExecutorService(f.executor as never, { createSettlementTranscript(value) {
+        proofs++; return f.transcript(value);
+      } }, config, f.relay as never).runOnce();
+      expect(proofs).toBe(0); expect(f.sends()).toBe(0);
+      expect(f.commits()).toBe(exact ? 1 : 0);
+      expect(result.results[0]!.record.status).toBe(exact ? "settled" : "failed");
+      expect(f.reads()).toBe(exact ? 0 : 1);
+      if (exact) expect(f.store.settlements.get(`${marketId}:${input.batchId}`)?.onchainConfirmed).toBe(true);
+      else expect(f.store.batchExecutionRuns.get(runId)?.submissionAttempted).toBe(true);
+    }
+  });
+});
 
 describe("same-market proof pipeline", () => {
   const marketId = "xlm-usd-perp";
@@ -160,6 +274,7 @@ describe("same-market proof pipeline", () => {
         throw new Error("saved second-slot proof must not be regenerated");
       } }, { intervalMs: 1000, settlementsOnchainRequired: true }, {
         isBatchSettled: () => alreadyLanded, positionRoot: () => f.store.positionMembershipRoot(),
+      marketFundingIndexAsync: async (id: string) => f.store.markets.get(id)!.fundingIndex,
         batchPositionAppendIndexAsync: async () => 0, settleBatch() { sends++; },
       } as never).runOnce();
       expect(sends).toBe(0);
@@ -215,6 +330,7 @@ describe("same-market proof pipeline", () => {
       const index = calls.push(input) - 1; await proofs[index]!.promise; return f.transcript(input);
     } }, { intervalMs: 1000, settlementsOnchainRequired: true }, {
       positionRoot: () => f.store.positionMembershipRoot(),
+      marketFundingIndexAsync: async (id: string) => f.store.markets.get(id)!.fundingIndex,
       batchPositionAppendIndexAsync: async () => f.store.positionCommitments.size,
       async isBatchSettledAsync(batchId: string) {
         if (batchId === calls[0]?.batchId && landed.has(batchId)) await confirmation.promise;
@@ -291,7 +407,8 @@ describe("same-market proof pipeline", () => {
     const landed = new Set<string>();
     let cancellationConfirmed = false;
     const relay = {
-      positionRoot: () => f.store.positionMembershipRoot(), batchPositionAppendIndexAsync: async () => 0,
+      positionRoot: () => f.store.positionMembershipRoot(),
+      marketFundingIndexAsync: async (id: string) => f.store.markets.get(id)!.fundingIndex, batchPositionAppendIndexAsync: async () => 0,
       isBatchSettled: (batchId: string) => landed.has(batchId),
       async isIntentCancelledAsync() {
         if (!cancellationConfirmed) throw new Error("cancellation RPC unavailable");
@@ -717,6 +834,7 @@ describe("batch progress and recovery", () => {
     let submits = 0;
     const relay = {
       positionRoot: () => f.store.positionMembershipRoot(),
+      marketFundingIndexAsync: async (id: string) => f.store.markets.get(id)!.fundingIndex,
       batchPositionAppendIndexAsync: async () => f.store.positionCommitments.size,
       isBatchSettled: () => landed,
       settleBatch() { submits += 1; landed = true; throw new Error("response lost"); },
@@ -740,6 +858,7 @@ describe("batch progress and recovery", () => {
       intervalMs: 1000, settlementsOnchainRequired: true,
     }, {
       positionRoot: () => f.store.positionMembershipRoot(),
+      marketFundingIndexAsync: async (id: string) => f.store.markets.get(id)!.fundingIndex,
       batchPositionAppendIndexAsync: async () => f.store.positionCommitments.size,
       isBatchSettled() { throw new Error("RPC unavailable"); },
       settleBatch() { submits += 1; },
@@ -1040,6 +1159,7 @@ test("parallel market proofs preserve chain/local append order through a stalled
     proofs += 1; await proofGate; return f.transcript(input);
   } }, { intervalMs: 1000, settlementsOnchainRequired: true }, {
     positionRoot: () => f.store.positionMembershipRoot(),
+      marketFundingIndexAsync: async (id: string) => f.store.markets.get(id)!.fundingIndex,
     batchPositionAppendIndexAsync: async () => f.store.positionCommitments.size,
     async isBatchSettledAsync(_batchId: string, marketId: string) {
       if (marketId === "a" && landed.has("a")) await confirmationGate;
@@ -1107,6 +1227,7 @@ describe("uncertain financial mutation gate", () => {
     const events: string[] = [];
     const relay = {
       positionRoot: () => f.store.positionMembershipRoot(),
+      marketFundingIndexAsync: async (id: string) => f.store.markets.get(id)!.fundingIndex,
       batchPositionAppendIndexAsync: async () => f.store.positionCommitments.size,
       isBatchSettled(_batch: string, market: string) { return market === "a" ? landedA : events.includes("chain:b"); },
       settleBatch(settlement: BatchSettlement) {
@@ -1139,6 +1260,7 @@ test("an external pair append cannot reorder the local batch tree, and confirmed
   let sends = 0;
   const relay = {
     positionRoot: () => f.store.positionMembershipRoot(),
+      marketFundingIndexAsync: async (id: string) => f.store.markets.get(id)!.fundingIndex,
     isBatchSettled: () => landed,
     batchPositionAppendIndexAsync: async () => 1,
     settleBatch() {

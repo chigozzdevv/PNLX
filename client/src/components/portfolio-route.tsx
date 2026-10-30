@@ -16,7 +16,7 @@ import { closePosition } from "@/lib/position-close";
 import { privateMarginNotes, reconcilePrivateMarginNotes } from "@/lib/private-margin-notes";
 import { PnlModal, type PnlModalProps } from "@/components/pnl-modal";
 import { depositPrivateMargin } from "@/lib/trade-submit";
-import { positionLegs } from "@/lib/position-groups";
+import { groupPositionRows, positionLegs } from "@/lib/position-groups";
 import { summarizePositionCloses } from "@/lib/position-close-summary";
 import type { ClosePositionResult } from "@/lib/position-close";
 import { useTradingData } from "@/lib/use-trading-data";
@@ -59,6 +59,10 @@ export function PortfolioRoute() {
     () => new Map(trading.data.markets.map((market) => [market.marketId, market])),
     [trading.data.markets],
   );
+  const closePreviewPosition = useMemo(() => pendingClosePosition
+    ? groupPositionRows(trading.data.positions.filter((position) => position.status === "open"), trading.data.orders)
+      .find((position) => position.id === pendingClosePosition.id) ?? null
+    : null, [pendingClosePosition, trading.data.positions, trading.data.orders]);
   const handleClosePosition = useCallback(async (position: PositionRow) => {
     if (!wallet.session) {
       setPositionActionMessage({ tone: "error", text: "Connect a wallet first" });
@@ -256,7 +260,7 @@ export function PortfolioRoute() {
           if (!closingPositionId) setPendingClosePosition(null);
         }}
         onConfirm={handleClosePosition}
-        position={pendingClosePosition}
+        position={closePreviewPosition}
       />
       <ActionToast
         message={positionActionMessage?.tone === "success" ? positionActionMessage.text : undefined}

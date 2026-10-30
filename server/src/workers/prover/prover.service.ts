@@ -10,6 +10,8 @@ import {
   commitConditionalOrder,
   commitIntent,
   fieldHashPair,
+  fieldHex,
+  FIELD_PRIME,
   hashFields,
   intentBindingFields,
   mod,
@@ -220,6 +222,26 @@ export class ProverService implements Prover {
   }
 
   proveFundingSettlement(input: FundingSettlementProofInput): FundingSettlementRecord {
+    const plan = this.fundingSettlementPlan(input);
+    return this.completeFundingSettlement(plan.input, plan.publicInputs,
+      buildProofArtifact(this.root, "funding-update", plan.options));
+  }
+
+  async proveFundingSettlementAsync(input: FundingSettlementProofInput): Promise<FundingSettlementRecord> {
+    const plan = this.fundingSettlementPlan(structuredClone(input));
+    const artifact = await buildProofArtifactAsync(this.root, "funding-update", plan.options);
+    return this.completeFundingSettlement(plan.input, plan.publicInputs, artifact);
+  }
+
+  private fundingSettlementPlan(input: FundingSettlementProofInput): {
+    input: FundingSettlementProofInput; publicInputs: Hex; options: ProofArtifactOptions;
+  } {
+    const maxSignedIndex = (1n << 127n) - 1n;
+    if (input.oldFundingIndex < -maxSignedIndex || input.oldFundingIndex > maxSignedIndex ||
+        input.newFundingIndex < -maxSignedIndex || input.newFundingIndex > maxSignedIndex ||
+        !Number.isSafeInteger(input.appliedAt) || !Number.isSafeInteger(input.elapsedMs) || !Number.isSafeInteger(input.intervalMs)) {
+      throw new Error("funding values exceed the protocol range");
+    }
     if (input.newFundingIndex === input.oldFundingIndex) {
       throw new Error("invalid funding index");
     }
@@ -232,13 +254,17 @@ export class ProverService implements Prover {
 
     const maxDelta = input.maxFundingDelta ?? 0n;
     const maxDeltaEnabled = input.maxFundingDelta === undefined ? 0n : 1n;
-    const fundingDelta = input.newFundingIndex - input.oldFundingIndex;
     const marketDigest = hashFields("market-id", [input.marketId]);
+    input = { ...input, cycleId: input.cycleId ?? fieldHex(BigInt(hashFields("funding-cycle-proof", [input.marketId,
+      input.appliedAt - input.elapsedMs, input.appliedAt, input.oldFundingIndex, input.newFundingIndex,
+      input.markPrice, input.premiumRate, input.intervalMs, input.maxFundingDelta ?? "uncapped"]))) };
+    if (!/^0x[0-9a-f]{64}$/i.test(input.cycleId!) || (BigInt(input.cycleId!) === 0n || BigInt(input.cycleId!) >= FIELD_PRIME)) throw new Error("funding cycle id must be nonzero bytes32");
     const oldIndex = signedParts(input.oldFundingIndex);
     const newIndex = signedParts(input.newFundingIndex);
     const premium = signedParts(input.premiumRate);
     const publicInputs = publicInputDigest("funding-update", [
       marketDigest,
+      input.cycleId!,
       oldIndex.abs,
       oldIndex.isNegative,
       newIndex.abs,
@@ -251,7 +277,7 @@ export class ProverService implements Prover {
       maxDelta,
       maxDeltaEnabled,
     ]);
-    const artifact = buildProofArtifact(this.root, "funding-update", {
+    const options: ProofArtifactOptions = {
       name: artifactName("funding", [
         input.marketId,
         input.oldFundingIndex,
@@ -260,6 +286,7 @@ export class ProverService implements Prover {
       ]),
       inputs: {
         market_id: field(marketDigest),
+        cycle_id: field(input.cycleId!),
         old_index_abs: oldIndex.abs,
         old_index_is_negative: oldIndex.isNegative,
         new_index_abs: newIndex.abs,
@@ -272,13 +299,17 @@ export class ProverService implements Prover {
         max_delta: maxDelta,
         max_delta_enabled: maxDeltaEnabled,
       },
-    });
-    const proof = this.bindArtifact("funding-update", publicInputs, artifact);
+    };
+    return { input, publicInputs, options };
+  }
 
+  private completeFundingSettlement(input: FundingSettlementProofInput, publicInputs: Hex, artifact: ProofArtifact): FundingSettlementRecord {
+    const proof = this.bindArtifact("funding-update", publicInputs, artifact);
     return {
+      cycleId: input.cycleId,
       appliedAt: input.appliedAt,
       elapsedMs: input.elapsedMs,
-      fundingDelta,
+      fundingDelta: input.newFundingIndex - input.oldFundingIndex,
       intervalMs: input.intervalMs,
       markPrice: input.markPrice,
       marketId: input.marketId,

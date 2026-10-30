@@ -72,9 +72,12 @@ test("an uncertain batch preserves the original proof and outputs across File re
     let original!: ExternalBatchSettlementTranscript;
     let sends = 0;
     let settled = false;
+    let chainFundingIndex = 0n;
+    let epochReads = 0;
     const committed: ExternalBatchSettlementTranscript[] = [];
     const relay = {
       positionRoot: () => store.positionMembershipRoot(),
+      marketFundingIndexAsync: async (id: string) => { expect(id).toBe(marketId); epochReads++; return chainFundingIndex; },
       isBatchSettled: (_batch: string, _market: string, digest: Hex) => settled && digest === original.settlement.settlementDigest,
       batchPositionAppendIndexAsync: async () => 0,
       settleBatch(_settlement: BatchSettlement) { sends++; settled = true; throw new Error("response lost after settlement"); },
@@ -83,10 +86,13 @@ test("an uncertain batch preserves the original proof and outputs across File re
       createSettlementTranscript(input) { original = transcript(store, input); return original; },
     }, { intervalMs: 1000, settlementsOnchainRequired: true }, relay as never).runOnce({ now: 100 });
     expect(first.results[0]!.record.status).toBe("failed");
+    expect(first.results[0]!.record.reason).toContain("response lost after settlement");
+    expect(epochReads).toBe(1);
     expect(committed).toEqual([]);
     const restarted = new FileProtocolStore(path);
     const market = restarted.markets.get(marketId)!;
     restarted.updateMarket({ ...market, fundingIndex: 77n, initialMarginRate: 999_999n, maxLeverage: 1n });
+    chainFundingIndex = 77n;
     let rematches = 0;
     const recovered = await new BatchExecutorService(executor(restarted, committed) as never, {
       createSettlementTranscript() { rematches++; throw new Error("original batch must not be reproved from current market"); },
@@ -94,6 +100,7 @@ test("an uncertain batch preserves the original proof and outputs across File re
     expect(recovered.results[0]!.record.status).toBe("settled");
     expect(rematches).toBe(0);
     expect(sends).toBe(1);
+    expect(epochReads).toBe(1); // An already landed exact batch is recovered at its original epoch.
     expect(JSON.parse(encode(committed))).toEqual(JSON.parse(encode([{ ...original, settlement: { ...original.settlement, onchainConfirmed: true } }])));
     expect(committed[0]!.positionOpenings.every((opening) => opening.fundingIndex === 0n)).toBe(true);
     expect(restarted.positionMembershipRoot()).not.toBe(store.positionMembershipRoot());
@@ -118,9 +125,10 @@ for (const method of ["settle", "commitExternal"] as const) {
       let store = new FileProtocolStore(path); seed(store);
       const input = { batchId: "client-order", marketId, intentCommitments: [...store.privateMatchIntents.keys()] };
       const original = transcript(store, input);
-      let settled = false; let sends = 0; let matches = 0;
+      let settled = false; let sends = 0; let matches = 0; let epochReads = 0;
       const committed: ExternalBatchSettlementTranscript[] = [];
       const relay = { enabled: true, positionRoot: () => store.positionMembershipRoot(),
+        marketFundingIndexAsync: async (id: string) => { expect(id).toBe(marketId); epochReads++; return store.markets.get(id)!.fundingIndex; },
         isBatchSettled: () => settled, batchPositionAppendIndexAsync: async () => 0,
         settleBatch(value: BatchSettlement) {
           sends++;
@@ -141,6 +149,7 @@ for (const method of ["settle", "commitExternal"] as const) {
       let service = createService();
       const submit = () => method === "settle" ? service.settle(input) : service.commitExternal(original);
       await expect(submit()).rejects.toThrow("response lost");
+      expect(epochReads).toBe(1);
       expect(committed).toHaveLength(0);
       store = new FileProtocolStore(path);
       store.updateMarket({ ...store.markets.get(marketId)!, fundingIndex: 123n, initialMarginRate: 999_999n });
@@ -156,6 +165,7 @@ for (const method of ["settle", "commitExternal"] as const) {
       expect(committed[0]!.positionOpenings.every((opening) => opening.fundingIndex === 0n)).toBe(true);
       expect(await submit()).toEqual(result);
       expect(committed).toHaveLength(1); expect(sends).toBe(1);
+      expect(epochReads).toBe(1);
       expect(matches).toBe(method === "settle" ? 1 : 0);
       expect(encode(result)).not.toContain("original-private-output-envelope");
       expect(encode(result)).not.toContain("settlementTranscript");
@@ -170,7 +180,9 @@ test("external API validates before journaling and rejects an unconfirmed over-b
     const original = transcript(store, { batchId: "client-order", marketId, intentCommitments: [...store.privateMatchIntents.keys()] });
     expect(original.settlement.fillCount).toBe(4);
     let sends = 0;
-    const relay = { enabled: true, isBatchSettled: () => false, settleBatch() { sends++; } };
+    const relay = { enabled: true, isBatchSettled: () => false,
+      marketFundingIndexAsync: async (id: string) => { expect(id).toBe(marketId); return store.markets.get(id)!.fundingIndex; },
+      settleBatch() { sends++; } };
     const target = executor(store, []);
     const worker = new BatchExecutorService(target as never, {} as never,
       { intervalMs: 1000, settlementsOnchainRequired: true }, relay as never);
