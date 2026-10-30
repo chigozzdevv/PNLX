@@ -28,6 +28,7 @@ function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCance
   let loseIntent = options.loseIntent ?? false;
   let loseClose = options.loseClose ?? false;
   let closeStatus: Record<string, unknown> = { canRetry: false, transactionStatus: "NOT_FOUND" };
+  let depositStatus: Record<string, unknown> = { canRetry: false, transactionStatus: "NOT_FOUND" };
   const fetcher: typeof fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const parsed = new URL(String(url));
     const path = parsed.pathname;
@@ -114,6 +115,13 @@ function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCance
       throw new Error("relay response lost");
     }
     if (path === "/notes/deposit-asset/recover-confirmed") return respond({ error: "transaction confirmation pending" }, 500);
+    if (path === "/notes/deposit-asset/status") {
+      expect(init?.headers).toHaveProperty("authorization", "Bearer test-token");
+      if (depositStatus.unavailable) throw new Error("status service unavailable");
+      const deposit = saved!.deposits["deposit-001"]!;
+      return respond({ status: { commitment: parsed.searchParams.get("commitment"), expectedTxHash: parsed.searchParams.get("expectedTxHash"),
+        from: ADDRESS, token: OBSERVATION_USDC, tokenDigest: ASSET, amount: deposit.amount, ...depositStatus } });
+    }
     throw new Error(`Unexpected test route ${path}`);
   }) as typeof fetch;
   const seed = new ObservationProtocol({ identity, fetch: fetcher, persist: async () => {} }).state;
@@ -174,6 +182,7 @@ function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCance
   } };
   return { adapter, make, calls, addOpening, confirmClose, addUnmatched, addResidual, confirmCancellation, get saved() { return saved!; },
     setCloseStatus(value: Record<string, unknown>) { closeStatus = value; },
+    setDepositStatus(value: Record<string, unknown>) { depositStatus = value; },
     get intentPosts() { return intentPosts; }, get closePosts() { return closePosts; }, get relayPosts() { return relayPosts; },
     get cancelPosts() { return cancelPosts; }, get refundPosts() { return refundPosts; } };
 }
@@ -342,6 +351,54 @@ describe("real observation protocol adapter safety", () => {
     await restarted.submitDeposit("deposit-001");
     expect(f.relayPosts).toBe(1);
     expect(f.calls.filter((call) => call.path === "/notes/deposit-asset/prepare-proven").length).toBe(1);
+  });
+
+  test("a conclusively failed unfunded deposit retains its envelope and atomically stages one replacement note", async () => {
+    const f = fixture();
+    await f.adapter.prepareDeposit("deposit-001", "100000000");
+    const original = await f.adapter.submitDeposit("deposit-001");
+    f.setDepositStatus({ transactionStatus: "FAILED", canRetry: true });
+    const resumed = f.make(f.saved);
+    const recovered = await resumed.reconcileDeposit("deposit-001");
+    expect(recovered.phase).toBe("preparing");
+    expect(recovered.commitment).not.toBe(original.commitment);
+    expect(recovered.txHash).toBeUndefined(); expect(recovered.signedXdr).toBeUndefined();
+    expect(recovered.failedAttempts).toHaveLength(1);
+    expect(recovered.failedAttempts![0]).toMatchObject({ commitment: original.commitment, txHash: original.txHash,
+      signedXdr: original.signedXdr, prepared: original.prepared, error: original.error });
+    expect(f.saved.notes.filter((note) => [original.commitment, recovered.commitment].includes(note.commitment)))
+      .toHaveLength(2);
+    expect(f.saved.notes.find((note) => note.commitment === original.commitment)!.status).toBe("pending");
+    expect(f.relayPosts).toBe(1);
+    expect(f.calls.filter((call) => call.path === "/notes/deposit-asset/prepare-proven")).toHaveLength(1);
+    const restarted = f.make(f.saved);
+    await restarted.reconcileDeposit("deposit-001");
+    const prepared = await restarted.prepareDeposit("deposit-001", "100000000");
+    expect(prepared.commitment).toBe(recovered.commitment);
+    expect(prepared.failedAttempts).toHaveLength(1);
+    expect(f.relayPosts).toBe(1);
+  });
+
+  test("deposit recovery rejects unknown, successful, funded or incorrectly bound status and retains the signed envelope", async () => {
+    const cases = [
+      { unavailable: true },
+      { transactionStatus: "NOT_FOUND", canRetry: true }, { transactionStatus: "SUCCESS", canRetry: true },
+      { transactionStatus: "FAILED", canRetry: false }, { transactionStatus: "FAILED", canRetry: true, from: "another-owner" },
+      { transactionStatus: "FAILED", canRetry: true, token: "another-token" },
+      { transactionStatus: "FAILED", canRetry: true, tokenDigest: ROOT },
+      { transactionStatus: "FAILED", canRetry: true, amount: "999" },
+      { transactionStatus: "FAILED", canRetry: true, commitment: ROOT },
+      { transactionStatus: "FAILED", canRetry: true, expectedTxHash: CLOSE_TX },
+    ];
+    for (const status of cases) {
+      const f = fixture(); await f.adapter.prepareDeposit("deposit-001", "100000000");
+      const original = await f.adapter.submitDeposit("deposit-001");
+      f.setDepositStatus(status);
+      const result = await f.make(f.saved).reconcileDeposit("deposit-001");
+      expect(result.phase).toBe("uncertain"); expect(result.commitment).toBe(original.commitment);
+      expect(result.txHash).toBe(original.txHash); expect(result.signedXdr).toBe(original.signedXdr);
+      expect(result.failedAttempts).toBeUndefined(); expect(f.relayPosts).toBe(1);
+    }
   });
 
   test("confirmed unmatched cancellation returns the original funded note and abandons the uncreated change", async () => {

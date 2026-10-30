@@ -10,6 +10,7 @@ import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
 import type { ProverService } from "@/workers/prover/prover.service";
 import type {
   AssetDepositNoteInput,
+  AssetDepositStatusInput,
   AssetDepositNoteResult,
   DepositNoteInput,
   DepositNoteResult,
@@ -39,6 +40,33 @@ export class NotesService {
     private readonly relayer?: Pick<RelayerService, "find">,
     private readonly depositRecovery?: ConfirmedDepositRecoveryReader,
   ) {}
+
+  async depositAssetStatus(input: AssetDepositStatusInput, authenticated?: string) {
+    if (!authenticated) throw new Error("authenticated deposit owner is required");
+    const store = this.executor.store;
+    const pending = store.pendingAssetDeposits.get(input.commitment);
+    if (!pending) throw new Error("pending asset deposit not found");
+    assertAuthenticatedAccount(authenticated, pending.from, "deposit owner");
+    this.assertCollateralToken(pending.token);
+    const result = { commitment: pending.commitment, expectedTxHash: input.expectedTxHash,
+      from: pending.from, token: pending.token, tokenDigest: pending.tokenDigest, amount: pending.amount,
+      transactionStatus: undefined as "SUCCESS" | "FAILED" | "NOT_FOUND" | undefined, canRetry: false };
+    const unchanged = () => store.pendingAssetDeposits.get(input.commitment) === pending &&
+      pending.commitment === input.commitment && pending.preparedTxHash === input.expectedTxHash &&
+      !pending.finalizedAt && !pending.confirmedRecovery && !pending.txHash &&
+      !store.marginCommitments.has(input.commitment) && pending.from === result.from &&
+      pending.token === result.token && pending.tokenDigest === result.tokenDigest && pending.amount === result.amount &&
+      pending.depositProof.commitment === pending.commitment && pending.depositProof.amount === pending.amount &&
+      pending.depositProof.tokenDigest === pending.tokenDigest;
+    if (!unchanged() || !this.onchain?.enabled) return result;
+    try {
+      result.transactionStatus = await this.onchain.depositTransactionStatusAsync(input.expectedTxHash);
+      if (result.transactionStatus !== "FAILED") return result;
+      const recorded = await this.onchain.isMarginCommitmentRecordedAsync(input.commitment);
+      result.canRetry = recorded === false && unchanged();
+    } catch { /* Missing or unavailable chain evidence never permits a replacement. */ }
+    return result;
+  }
 
   deposit(input: DepositNoteInput): DepositNoteResult {
     if (this.env.assetCustodyRequired) {

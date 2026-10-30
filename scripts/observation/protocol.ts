@@ -51,6 +51,8 @@ export interface DepositState {
   phase: "preparing" | "ready" | "submitting" | "uncertain" | "confirmed";
   prepared?: JsonObject; signedXdr?: string; relay?: JsonObject;
   txHash?: string; createdAt: number; confirmedAt?: number; error?: string;
+  failedAttempts?: Array<{ commitment: Hex; txHash: string; createdAt: number; observedAt: number;
+    prepared?: JsonObject; signedXdr?: string; relay?: JsonObject; error?: string }>;
 }
 export interface PositionOpening {
   entryFee?: string; entryPrice: string; fundingIndex: string; margin: string;
@@ -673,7 +675,31 @@ export class ObservationProtocol {
       const stored = this.note(deposit.commitment); stored.depositTxHash = deposit.txHash;
       await this.reconcileNotes();
       if (stored.status !== "available") throw new Error("Confirmed deposit note is not independently spendable");
-    } catch (error) { deposit.phase = "uncertain"; deposit.error = safeError(error); }
+    } catch (error) {
+      deposit.phase = "uncertain"; deposit.error = safeError(error);
+      // A missing confirmation is ambiguous. Only exact, owner-bound evidence of
+      // a failed envelope and an unfunded commitment permits a replacement note.
+      try {
+        if (!deposit.txHash || !/^0x[0-9a-f]{64}$/i.test(deposit.txHash)) throw new Error("Deposit transaction hash unavailable");
+        const query = new URLSearchParams({ commitment: deposit.commitment, expectedTxHash: deposit.txHash });
+        const { status } = await this.request<{ status: JsonObject }>(`/notes/deposit-asset/status?${query}`);
+        if (status.transactionStatus === "FAILED" && status.canRetry === true &&
+          same(status.commitment, deposit.commitment) && same(status.expectedTxHash, deposit.txHash) &&
+          status.from === this.data.address && status.token === this.data.collateralToken &&
+          same(status.tokenDigest, this.data.collateralDigest) && String(status.amount) === deposit.amount) {
+          const old = this.note(deposit.commitment);
+          assertNote(old, this.data);
+          if (old.status !== "pending" || old.amount !== deposit.amount) throw new Error("Failed deposit note is not pending");
+          const replacement = this.newNote(BigInt(deposit.amount));
+          (deposit.failedAttempts ??= []).push({ commitment: deposit.commitment, txHash: deposit.txHash,
+            createdAt: deposit.createdAt, observedAt: this.now(), prepared: deposit.prepared ? clone(deposit.prepared) : undefined,
+            signedXdr: deposit.signedXdr, relay: deposit.relay ? clone(deposit.relay) : undefined, error: deposit.error });
+          this.data.notes.push(replacement);
+          deposit.commitment = replacement.commitment; deposit.phase = "preparing"; deposit.createdAt = this.now();
+          delete deposit.prepared; delete deposit.signedXdr; delete deposit.relay; delete deposit.txHash; delete deposit.confirmedAt;
+        }
+      } catch { /* Preserve the uncertain envelope unless all replacement checks pass. */ }
+    }
     await this.save(); return clone(deposit);
   }
 

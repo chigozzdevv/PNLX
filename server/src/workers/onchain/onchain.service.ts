@@ -150,6 +150,20 @@ export class OnchainRelayService implements OnchainRelay {
     };
   }
 
+  depositTransactionStatusAsync(txHash: Hex): Promise<"SUCCESS" | "FAILED" | "NOT_FOUND"> {
+    if (!this.config.enabled) throw new Error("deposit status requires on-chain relay");
+    return this.relayer.readTransactionStatus(txHash);
+  }
+
+  async isMarginCommitmentRecordedAsync(commitment: Hex): Promise<boolean> {
+    if (!this.config.enabled) throw new Error("deposit status requires on-chain relay");
+    const result = await this.relayer.readAsync({ kind: "contract-invoke", payload: {
+      args: ["--commitment", bytes32(commitment)], contractId: contractId(this.deployment(), "shielded-pool"),
+      functionName: "has_commitment", send: "no",
+    } });
+    return parseAuthoritativeBoolean(result.stdout, "deposit commitment status");
+  }
+
   tokenDigest(token: string, source?: string): Hex {
     if (!this.config.enabled) throw new Error("asset token digest requires on-chain relay");
     if (!token) throw new Error("asset token digest requires token");

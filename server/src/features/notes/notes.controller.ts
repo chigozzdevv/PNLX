@@ -2,6 +2,7 @@ import { json, readJson } from "@/shared/http/json";
 import { authenticatedAddress } from "@/shared/http/auth-context";
 import {
   parseAssetDepositNote,
+  parseAssetDepositStatus,
   parseDepositNote,
   parseFinalizeAssetDeposit,
   parseRecoverConfirmedAssetDeposit,
@@ -15,6 +16,10 @@ import type { NotesService } from "@/features/notes/notes.service";
 
 export class NotesController {
   constructor(private readonly notes: NotesService) {}
+
+  async depositAssetStatus(request: Request): Promise<Response> {
+    return json({ status: await this.notes.depositAssetStatus(parseAssetDepositStatus(request), authenticatedAddress(request)) });
+  }
 
   membership(request: Request): Response {
     const commitment = new URL(request.url).searchParams.get("commitment");

@@ -66,7 +66,8 @@ function harness(state = createCampaign({ runId: "test-campaign", seed: "test-se
           data.notes.push({ amount: data.deposits[id]!.amount, assetDigest: ASSET, ownerCommitment: OWNER,
             walletAddress: wallet.address, status: "available", blinding: "0x1", commitment: "0x9", noteNullifier: "0x1",
             ownerDigest: "0x1", rhoDigest: "0x1", spendSecretDigest: "0x1" }); await save(); return structuredClone(data.deposits[id]!); },
-        async prepareOpen(spec) { actions.push(`prepare-open:${spec.leverage}`); data.cycles[spec.id] = { ...savedCycle(spec.id, "ready"), spec }; await save(); return read(spec.id); },
+        async prepareOpen(spec) { actions.push(`prepare-open:${spec.leverage}`);
+          data.cycles[spec.id] = { ...(data.cycles[spec.id] ?? savedCycle(spec.id)), phase: "ready", spec }; await save(); return read(spec.id); },
         async open(id) { actions.push("submit-open"); data.cycles[id]!.phase = "accepted"; await save(); return read(id); },
         async prepareClose(id) { actions.push("prepare-close"); data.cycles[id]!.phase = "closing";
           data.cycles[id]!.positions[0]!.closes.push({ phase: "ready", closeCommitment: "0xa", witness: {}, output: {} as any,
@@ -262,18 +263,220 @@ describe("one-time observation runner", () => {
     expect(h.state.pausedReason).toBeUndefined();
   });
 
-  test("each tick executes one saved opening phase and persists the initial wallet state first", async () => {
+  test("a transient deposit preparation failure resumes the same cycle without new funding", async () => {
+    const h = harness(); const { cycle, wallet, data } = attachActive(h, 0, "preparing");
+    delete data.cycles[cycle.adapterId]; cycle.fundingChecked = true;
+    const protocol = h.services.protocol;
+    let attempts = 0;
+    h.services.protocol = (wallet, persist) => {
+      const client = protocol(wallet, persist); const prepare = client.prepareDeposit.bind(client);
+      client.prepareDeposit = async (id, amount) => {
+        if (++attempts === 1) throw new Error("temporary preparation outage");
+        return prepare(id, amount);
+      };
+      return client;
+    };
+    const runner = h.runner();
+    await runner.tick();
+    expect(cycle.failureAlertedAt).toBe(START);
+    expect((wallet.protocol as ProtocolState).deposits[cycle.depositId]).toBeUndefined();
+    h.now(START + MINUTE_MS);
+    await runner.tick();
+    const saved = wallet.protocol as ProtocolState;
+    expect(attempts).toBe(2);
+    expect(Object.keys(saved.deposits)).toEqual([cycle.depositId]);
+    expect(saved.deposits[cycle.depositId]!.phase).toBe("submitting");
+    expect(cycle.failureAlertedAt).toBeDefined();
+    await runner.tick();
+    expect(cycle.failureAlertedAt).toBeUndefined();
+    expect(cycle.lastProgressAt).toBe(START + MINUTE_MS);
+    expect(cycle.error).toContain("temporary preparation outage");
+    expect(h.state.outbox.filter((entry) => entry.data.kind === "failed")).toHaveLength(1);
+    expect(h.actions).toEqual(["prepare-deposit", "submit-deposit", "reconcile-deposit", "prepare-open:1"]);
+    expect(h.state.wallets).toHaveLength(1);
+  });
+
+  test("a saved ready deposit resumes once and retains alerts until submission is reconciled", async () => {
+    const h = harness(); const { cycle, wallet, data } = attachActive(h, 0, "preparing");
+    delete data.cycles[cycle.adapterId]; cycle.fundingChecked = true;
+    cycle.failureAlertedAt = START - MINUTE_MS; cycle.stallAlertedAt = START - MINUTE_MS;
+    data.deposits[cycle.depositId] = { id: cycle.depositId, amount: "1000000000", commitment: "0x9", phase: "ready", createdAt: START - MINUTE_MS };
+    const runner = h.runner();
+    await runner.tick();
+    expect(h.actions).toEqual(["submit-deposit"]);
+    expect((wallet.protocol as ProtocolState).deposits[cycle.depositId]!.phase).toBe("submitting");
+    expect(cycle.failureAlertedAt).toBeDefined(); expect(cycle.stallAlertedAt).toBeDefined();
+    await runner.tick();
+    expect(h.actions.filter((action) => action === "submit-deposit")).toHaveLength(1);
+    expect(h.actions).toContain("reconcile-deposit");
+    expect(h.actions.some((action) => action.startsWith("prepare-open"))).toBe(true);
+    expect(h.actions).not.toContain("prepare-deposit"); expect(h.actions).not.toContain("fund");
+    expect(cycle.failureAlertedAt).toBeUndefined(); expect(cycle.stallAlertedAt).toBeUndefined();
+  });
+
+  test("saved intent preparation reuses its locked note and original terms after interruption", async () => {
+    const h = harness(); const { cycle, wallet, data, value } = attachActive(h, 0, "preparing");
+    value.spec = { ...value.spec, margin: "1000000000", leverage: 8, side: "short" };
+    value.intentCommitment = "0x123"; value.intent = { saved: "authorized intent" };
+    cycle.progressFingerprint = JSON.stringify(["preparing", [], [], [], undefined, undefined]);
+    cycle.failureAlertedAt = START - MINUTE_MS; cycle.stallAlertedAt = START - MINUTE_MS;
+    data.notes.push({ amount: "1000000000", assetDigest: ASSET, ownerCommitment: OWNER,
+      walletAddress: wallet.address, status: "locked", lockedByIntentCommitment: value.intentCommitment,
+      blinding: "0x1", commitment: value.noteCommitment, noteNullifier: "0x1", ownerDigest: "0x1", rhoDigest: "0x1", spendSecretDigest: "0x1" });
+    const original = structuredClone(value);
+    await h.runner().tick();
+    const saved = (wallet.protocol as ProtocolState).cycles[cycle.adapterId]!;
+    expect(h.actions).toEqual([`poll:${cycle.adapterId}`, "prepare-open:8"]);
+    expect(saved.phase).toBe("ready"); expect(saved.spec).toEqual(original.spec);
+    expect(saved.intentCommitment).toBe(original.intentCommitment); expect(saved.intent).toEqual(original.intent);
+    expect(saved.noteCommitment).toBe(original.noteCommitment);
+    expect((wallet.protocol as ProtocolState).notes[0]!.status).toBe("locked");
+    expect(cycle.failureAlertedAt).toBeUndefined(); expect(cycle.stallAlertedAt).toBeUndefined();
+  });
+
+  test("a successful preparation call without durable progress does not clear alerts", async () => {
+    const h = harness(); const { cycle, data } = attachActive(h, 0, "preparing");
+    delete data.cycles[cycle.adapterId]; cycle.fundingChecked = true;
+    cycle.failureAlertedAt = START - MINUTE_MS;
+    const deposit = { id: cycle.depositId, amount: "1000000000", commitment: "0x9" as const, phase: "preparing" as const, createdAt: START - MINUTE_MS };
+    data.deposits[cycle.depositId] = deposit;
+    const protocol = h.services.protocol;
+    h.services.protocol = (wallet, persist) => {
+      const client = protocol(wallet, persist);
+      client.prepareDeposit = async () => { h.actions.push("prepare-deposit"); return structuredClone(deposit); };
+      return client;
+    };
+    await h.runner().tick();
+    expect(h.actions).toEqual(["prepare-deposit"]);
+    expect(cycle.failureAlertedAt).toBe(START - MINUTE_MS);
+    expect(cycle.lastProgressAt).toBe(START - 20 * MINUTE_MS);
+    expect(h.state.pausedReason).toContain("uncertain");
+  });
+
+  test("first observation of unchanged saved intent preparation retains its failure alert", async () => {
+    const h = harness(); const { cycle, wallet, value } = attachActive(h, 0, "preparing");
+    cycle.failureAlertedAt = START - MINUTE_MS;
+    const protocol = h.services.protocol;
+    h.services.protocol = (wallet, persist) => {
+      const client = protocol(wallet, persist);
+      client.prepareOpen = async () => { h.actions.push("prepare-open-failed"); throw new Error("proof binding mismatch"); };
+      return client;
+    };
+    await h.runner().tick();
+    expect(h.actions).toEqual([`poll:${cycle.adapterId}`, "prepare-open-failed"]);
+    expect(cycle.failureAlertedAt).toBe(START - MINUTE_MS);
+    expect(cycle.error).toContain("proof binding mismatch");
+    expect((wallet.protocol as ProtocolState).cycles[cycle.adapterId]!.intentCommitment).toBe(value.intentCommitment);
+    expect(h.state.outbox.some((entry) => entry.data.kind === "resumed")).toBe(false);
+  });
+
+  test("uncertain deposits remain reconciliation-only when confirmation is unavailable", async () => {
+    const h = harness(); const { cycle, data } = attachActive(h, 0, "preparing");
+    delete data.cycles[cycle.adapterId]; cycle.fundingChecked = true; cycle.failureAlertedAt = START - MINUTE_MS;
+    data.deposits[cycle.depositId] = { id: cycle.depositId, amount: "1000000000", commitment: "0x9", phase: "uncertain", createdAt: START - MINUTE_MS };
+    const protocol = h.services.protocol;
+    h.services.protocol = (wallet, persist) => {
+      const client = protocol(wallet, persist);
+      client.reconcileDeposit = async (id) => { h.actions.push("reconcile-deposit"); return client.state.deposits[id]!; };
+      return client;
+    };
+    await h.runner().tick();
+    expect(h.actions).toEqual(["reconcile-deposit"]);
+    expect(cycle.failureAlertedAt).toBe(START - MINUTE_MS);
+    expect(h.state.pausedReason).toContain("uncertain");
+  });
+
+  test("a safely replaced failed deposit clears its own alert and resumes its saved ID after restart", async () => {
+    const h = harness(); const { cycle, wallet, data } = attachActive(h, 0, "preparing");
+    delete data.cycles[cycle.adapterId]; cycle.fundingChecked = true;
+    cycle.failureAlertedAt = START - MINUTE_MS; cycle.stallAlertedAt = START - MINUTE_MS;
+    data.deposits[cycle.depositId] = { id: cycle.depositId, amount: "1000000000", commitment: "0x9", phase: "uncertain", createdAt: START - MINUTE_MS };
+    const protocol = h.services.protocol;
+    h.services.protocol = (wallet, persist) => {
+      const client = protocol(wallet, persist);
+      client.reconcileDeposit = async (id) => {
+        h.actions.push("reconcile-deposit");
+        const snapshot = client.state; const deposit = snapshot.deposits[id]!;
+        deposit.phase = "preparing"; deposit.commitment = "0x10";
+        await persist(snapshot); return structuredClone(deposit);
+      };
+      return client;
+    };
+    h.services.health = async () => ({ ...h.health(), apiOk: false });
+    await h.runner().tick();
+    expect(h.actions).toEqual(["reconcile-deposit"]);
+    expect(cycle.failureAlertedAt).toBeUndefined(); expect(cycle.stallAlertedAt).toBeUndefined();
+    expect((wallet.protocol as ProtocolState).deposits[cycle.depositId]!.phase).toBe("preparing");
+    h.services.protocol = protocol; h.services.health = async () => h.health(); h.now(START + 2 * MINUTE_MS);
+    await h.runner().tick();
+    expect(h.actions).toEqual(["reconcile-deposit", "prepare-deposit", "submit-deposit"]);
+    expect(Object.keys((wallet.protocol as ProtocolState).deposits)).toEqual([cycle.depositId]);
+    expect(h.actions.filter((action) => action === "submit-deposit")).toHaveLength(1);
+    expect(h.actions).not.toContain("fund");
+  });
+
+  for (const blocker of ["uncertain", "historical-alert"] as const) {
+    test(`another cycle's ${blocker} blocks retrying a saved preparation`, async () => {
+      const h = harness(); const { cycle, data } = attachActive(h, 0, "preparing");
+      delete data.cycles[cycle.adapterId]; cycle.fundingChecked = true; cycle.failureAlertedAt = START - MINUTE_MS;
+      data.deposits[cycle.depositId] = { id: cycle.depositId, amount: "1000000000", commitment: "0x9", phase: "ready", createdAt: START - MINUTE_MS };
+      const other = attachActive(h, 1, blocker === "uncertain" ? "uncertain" : "accepted");
+      other.cycle.progressFingerprint = JSON.stringify([other.value.phase, [], [], [], undefined, undefined]);
+      if (blocker === "historical-alert") other.cycle.failureAlertedAt = START - MINUTE_MS;
+      await h.runner().tick();
+      expect(h.actions).toEqual([`poll:${other.cycle.adapterId}`]);
+      expect(cycle.failureAlertedAt).toBeDefined(); expect(h.state.pausedReason).toContain("uncertain");
+    });
+  }
+
+  for (const unavailable of ["health", "budget"] as const) {
+    test(`saved preparation recovery still requires ${unavailable}`, async () => {
+      const h = harness(); const { cycle, data } = attachActive(h, 0, "preparing");
+      delete data.cycles[cycle.adapterId]; cycle.fundingChecked = true; cycle.failureAlertedAt = START - MINUTE_MS;
+      data.deposits[cycle.depositId] = { id: cycle.depositId, amount: "1000000000", commitment: "0x9", phase: "ready", createdAt: START - MINUTE_MS };
+      h.services.health = async () => unavailable === "health" ? { ...h.health(), apiOk: false } :
+        { ...h.health(), budget: { at: START, chainId: 8453, creditWei: "0", gasWei: "0" } };
+      await h.runner().tick();
+      expect(h.actions).toEqual([]); expect(cycle.failureAlertedAt).toBeDefined();
+    });
+  }
+
+  test("fresh deposit preparation is durable and submitted in the same tick, then restart only reconciles", async () => {
     const h = harness(); const runner = h.runner();
     await runner.tick();
     expect(h.actions).toEqual(["create-wallet", "fund"]);
     expect(h.checkpoints.some((state) => state.cycles[0]!.status === "active" && Boolean(state.wallets[0]?.protocol))).toBe(true);
     h.actions.length = 0;
     await runner.tick();
-    expect(h.actions).toEqual(["prepare-deposit"]);
+    expect(h.actions).toEqual(["prepare-deposit", "submit-deposit"]);
+    const cycle = h.state.cycles[0]!;
+    const ready = h.checkpoints.findIndex((state) =>
+      (state.wallets[0]?.protocol as ProtocolState | undefined)?.deposits[cycle.depositId]?.phase === "ready");
+    const submitting = h.checkpoints.findIndex((state) =>
+      (state.wallets[0]?.protocol as ProtocolState | undefined)?.deposits[cycle.depositId]?.phase === "submitting");
+    expect(ready).toBeGreaterThanOrEqual(0); expect(submitting).toBeGreaterThan(ready);
     h.actions.length = 0;
-    await runner.tick();
-    expect(h.actions).toEqual(["submit-deposit"]);
+    await h.runner().tick();
+    expect(h.actions).toEqual(["reconcile-deposit", "prepare-open:1"]);
     expect(h.state.cycles.filter((cycle) => cycle.status === "active")).toHaveLength(1);
+  });
+
+  test("a lost immediate deposit submission response never submits a second envelope", async () => {
+    const h = harness(); const protocol = h.services.protocol;
+    h.services.protocol = (wallet, persist) => {
+      const client = protocol(wallet, persist); const submit = client.submitDeposit.bind(client);
+      client.submitDeposit = async (id) => { await submit(id); throw new Error("deposit response unavailable"); };
+      return client;
+    };
+    const runner = h.runner();
+    await runner.tick(); await runner.tick();
+    const cycle = h.state.cycles[0]!; const wallet = h.state.wallets[0]!;
+    expect((wallet.protocol as ProtocolState).deposits[cycle.depositId]!.phase).toBe("submitting");
+    expect(cycle.failureAlertedAt).toBeDefined();
+    await h.runner().tick();
+    expect(h.actions.filter((action) => action === "prepare-deposit")).toHaveLength(1);
+    expect(h.actions.filter((action) => action === "submit-deposit")).toHaveLength(1);
+    expect(h.actions).toContain("reconcile-deposit"); expect(cycle.failureAlertedAt).toBeUndefined();
   });
 
   test("a fresh campaign reuses a reconciled carried-forward wallet and private note without funding again", async () => {

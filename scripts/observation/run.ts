@@ -142,11 +142,19 @@ function unknownCycle(cycle: CycleState): boolean {
     Object.values(cycle.cancellations ?? {}).some((attempt) => ["submitting", "uncertain"].includes(attempt.phase)) ||
     Object.values(cycle.refunds ?? {}).some((attempt) => ["submitting", "uncertain"].includes(attempt.phase));
 }
-function unresolved(state: CampaignState): boolean {
-  return state.cycles.some((entry) => entry.status === "active" && (entry.stallAlertedAt !== undefined ||
-    entry.failureAlertedAt !== undefined || (protocolCycle(state, entry) && unknownCycle(protocolCycle(state, entry)!)))) ||
+function unresolved(state: CampaignState, retryingPreparation?: CampaignCycle): boolean {
+  return state.cycles.some((entry) => entry.status === "active" && ((entry !== retryingPreparation &&
+    (entry.stallAlertedAt !== undefined || entry.failureAlertedAt !== undefined)) ||
+    (protocolCycle(state, entry) && unknownCycle(protocolCycle(state, entry)!)))) ||
     state.wallets.some((wallet) => Object.values(protocolState(wallet)?.deposits ?? {}).some((deposit) =>
       ["submitting", "uncertain"].includes(deposit.phase)) || wallet.funding.some((action) => !action.confirmedAt));
+}
+function openingProgress(state: CampaignState, cycle: CampaignCycle): string {
+  const wallet = state.wallets.find((entry) => entry.source === cycle.walletSource);
+  const deposit = wallet && protocolState(wallet)?.deposits[cycle.depositId];
+  const opening = protocolCycle(state, cycle);
+  return JSON.stringify([cycle.fundingChecked, deposit && [deposit.phase, deposit.commitment, deposit.txHash],
+    opening && [opening.phase, opening.intentCommitment]]);
 }
 function iso(value: number | undefined): string | undefined { return value === undefined ? undefined : new Date(value).toISOString(); }
 function units(value: unknown, scale = 7): string | undefined {
@@ -263,7 +271,9 @@ export class ObservationRunner {
       cycle.progressFingerprint = fingerprint; cycle.lastProgressAt = now;
       // A previous stall/failure remains visible in the outbox, while confirmed
       // progress can unblock the campaign after the adapter resolves uncertainty.
-      if (!unknownCycle(value)) { delete cycle.stallAlertedAt; delete cycle.failureAlertedAt; }
+      if (!unknownCycle(value) && !["preparing", "ready"].includes(value.phase)) {
+        delete cycle.stallAlertedAt; delete cycle.failureAlertedAt;
+      }
       await this.save();
     }
     for (const position of value.positions) {
@@ -400,11 +410,9 @@ export class ObservationRunner {
         if (!saved) {
           const deposit = client.state.deposits[cycle.depositId];
           if (deposit && ["submitting", "uncertain"].includes(deposit.phase)) {
+            const before = openingProgress(this.state, cycle);
             const reconciled = await client.reconcileDeposit(cycle.depositId);
-            if (reconciled.phase === "confirmed") {
-              delete cycle.failureAlertedAt; delete cycle.stallAlertedAt; cycle.lastProgressAt = now;
-              await this.save();
-            }
+            if (["confirmed", "preparing"].includes(reconciled.phase)) await this.observeOpeningProgress(cycle, before);
           }
           continue;
         }
@@ -484,12 +492,14 @@ export class ObservationRunner {
         }
       }
     }
+    // Retry only this saved preparation's historical alerts. Every ambiguous
+    // submission and every other cycle's alerts still block opening work.
+    const preparing = this.state.cycles.find((cycle) => cycle.status === "active" &&
+      (!protocolCycle(this.state, cycle) || ["preparing", "ready"].includes(protocolCycle(this.state, cycle)!.phase)));
+    if (preparing && healthy && enoughBudget && now < this.state.plan.endsAt && !unresolved(this.state, preparing)) {
+      await this.advanceOpening(preparing, latest!); return;
+    }
     if (!this.state.pausedReason && now < this.state.plan.endsAt) {
-      // Finish saved preparations before assigning another wallet. A saved ready
-      // intent is never treated as a fresh intent after a restart.
-      const preparing = this.state.cycles.find((cycle) => cycle.status === "active" &&
-        (!protocolCycle(this.state, cycle) || ["preparing", "ready"].includes(protocolCycle(this.state, cycle)!.phase)));
-      if (preparing) { await this.advanceOpening(preparing, latest!); return; }
       const next = this.state.cycles.find((cycle) => cycle.status === "planned" && cycle.plan.plannedOpenAt <= now);
       if (next && this.state.cycles.filter((cycle) => cycle.status === "active").length < OBSERVATION_MAX_CONCURRENT &&
         (this.state.lastNewOpenAt === undefined || now - this.state.lastNewOpenAt >= NEW_OPEN_GAP_MS)) {
@@ -526,32 +536,51 @@ export class ObservationRunner {
     return cycle.plan.plannedOpenAt;
   }
   private async advanceOpening(cycle: CampaignCycle, health: HealthSample): Promise<void> {
-    const wallet = this.wallet(cycle); const client = this.client(wallet);
+    const before = openingProgress(this.state, cycle);
     try {
-      const saved = client.state;
-      const existing = saved.cycles[cycle.adapterId];
-      if (existing?.phase === "ready") { await client.open(cycle.adapterId); return; }
-      if (existing && existing.phase !== "preparing") return;
-      const margin = BigInt(cycle.plan.marginUsdc) * 10_000_000n;
-      const note = saved.notes.some((entry) => entry.status === "available" && entry.walletAddress === wallet.address &&
-        entry.ownerCommitment === saved.ownerCommitment && entry.assetDigest === saved.collateralDigest && BigInt(entry.amount) >= margin);
-      if (!note) {
-        const deposit = saved.deposits[cycle.depositId];
-        if (!deposit && !cycle.fundingChecked) {
-          await this.services.fund(wallet, () => this.save());
-          cycle.fundingChecked = true; await this.save(); return;
-        }
-        if (!deposit || deposit.phase === "preparing") { await client.prepareDeposit(cycle.depositId, "1000000000"); return; }
-        if (deposit.phase === "ready") { await client.submitDeposit(cycle.depositId); return; }
-        if (["submitting", "uncertain"].includes(deposit.phase)) { await client.reconcileDeposit(cycle.depositId); return; }
-        throw new Error("Confirmed deposit does not expose one available note sufficient for the planned margin");
-      }
-      const market = health.markets.find((entry) => entry.marketId.split(/[-_/]/)[0]?.toUpperCase() === cycle.plan.market);
-      if (!market) throw new Error("Planned market is unavailable in the deployed API");
-      const leverage = [8, 5, 3, 2, 1].find((value) => value <= cycle.plan.leverage && value <= market.maxLeverage);
-      if (!leverage) throw new Error("Market maximum leverage is unavailable");
-      await client.prepareOpen({ id: cycle.adapterId, marketId: market.marketId, margin: margin.toString(), leverage, side: cycle.plan.side });
+      await this.advanceOpeningPhase(cycle, health);
+      await this.observeOpeningProgress(cycle, before);
     } catch (error) { await this.failure(cycle, error); }
+  }
+  private async observeOpeningProgress(cycle: CampaignCycle, before: string): Promise<void> {
+    if (openingProgress(this.state, cycle) !== before && !unresolved(this.state, cycle)) {
+      cycle.lastProgressAt = this.services.now();
+      delete cycle.failureAlertedAt; delete cycle.stallAlertedAt;
+      await this.save();
+    }
+  }
+  private async advanceOpeningPhase(cycle: CampaignCycle, health: HealthSample): Promise<void> {
+    const wallet = this.wallet(cycle); const client = this.client(wallet);
+    const saved = client.state;
+    const existing = saved.cycles[cycle.adapterId];
+    if (existing?.phase === "ready") { await client.open(cycle.adapterId); return; }
+    if (existing?.phase === "preparing") { await client.prepareOpen(existing.spec); return; }
+    if (existing) return;
+    const margin = BigInt(cycle.plan.marginUsdc) * 10_000_000n;
+    const note = saved.notes.some((entry) => entry.status === "available" && entry.walletAddress === wallet.address &&
+      entry.ownerCommitment === saved.ownerCommitment && entry.assetDigest === saved.collateralDigest && BigInt(entry.amount) >= margin);
+    if (!note) {
+      const deposit = saved.deposits[cycle.depositId];
+      if (!deposit && !cycle.fundingChecked) {
+        await this.services.fund(wallet, () => this.save());
+        cycle.fundingChecked = true; await this.save(); return;
+      }
+      if (!deposit || deposit.phase === "preparing") {
+        // The simulated envelope binds the current tree footprint. Submit its
+        // durable preparation immediately rather than age it across ticks.
+        const prepared = await client.prepareDeposit(cycle.depositId, "1000000000");
+        if (prepared.phase === "ready") await client.submitDeposit(cycle.depositId);
+        return;
+      }
+      if (deposit.phase === "ready") { await client.submitDeposit(cycle.depositId); return; }
+      if (["submitting", "uncertain"].includes(deposit.phase)) { await client.reconcileDeposit(cycle.depositId); return; }
+      throw new Error("Confirmed deposit does not expose one available note sufficient for the planned margin");
+    }
+    const market = health.markets.find((entry) => entry.marketId.split(/[-_/]/)[0]?.toUpperCase() === cycle.plan.market);
+    if (!market) throw new Error("Planned market is unavailable in the deployed API");
+    const leverage = [8, 5, 3, 2, 1].find((value) => value <= cycle.plan.leverage && value <= market.maxLeverage);
+    if (!leverage) throw new Error("Market maximum leverage is unavailable");
+    await client.prepareOpen({ id: cycle.adapterId, marketId: market.marketId, margin: margin.toString(), leverage, side: cycle.plan.side });
   }
 }
 

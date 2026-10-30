@@ -1,5 +1,6 @@
 import type {
   AssetDepositNoteInput,
+  AssetDepositStatusInput,
   DepositNoteInput,
   FinalizeAssetDepositInput,
   RecoverConfirmedAssetDepositInput,
@@ -10,6 +11,16 @@ import type {
   WithdrawNoteInput,
 } from "@/features/notes/notes.model";
 import { parseProofMeta } from "@/features/intents/intents.schema";
+
+export function parseAssetDepositStatus(request: Request): AssetDepositStatusInput {
+  const query = new URL(request.url).searchParams;
+  const read = (name: string) => {
+    const value = query.get(name);
+    if (!value || !/^0x[0-9a-f]{64}$/i.test(value)) throw new Error(`${name} must be a 32-byte hex value`);
+    return value.toLowerCase() as `0x${string}`;
+  };
+  return { commitment: read("commitment"), expectedTxHash: read("expectedTxHash") };
+}
 
 export function parseDepositNote(input: Record<string, string>): DepositNoteInput {
   return {

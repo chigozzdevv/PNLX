@@ -54,6 +54,7 @@ export interface FinalizeAssetDepositInput extends ProvenAssetDepositNoteInput {
 }
 
 export interface RecoverConfirmedAssetDepositInput { commitment: Hex; }
+export interface AssetDepositStatusInput { commitment: Hex; expectedTxHash: Hex; }
 
 export interface RecoveredAssetDepositNoteResult extends AssetDepositNoteResult {
   confirmedRecovery: NonNullable<PendingAssetDepositRecord["confirmedRecovery"]>;
