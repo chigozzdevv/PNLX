@@ -143,9 +143,13 @@ function unknownCycle(cycle: CycleState): boolean {
     Object.values(cycle.refunds ?? {}).some((attempt) => ["submitting", "uncertain"].includes(attempt.phase));
 }
 function unresolved(state: CampaignState, retryingPreparation?: CampaignCycle): boolean {
-  return state.cycles.some((entry) => entry.status === "active" && ((entry !== retryingPreparation &&
-    (entry.stallAlertedAt !== undefined || entry.failureAlertedAt !== undefined)) ||
-    (protocolCycle(state, entry) && unknownCycle(protocolCycle(state, entry)!)))) ||
+  return state.cycles.some((entry) => {
+    if (entry.status !== "active") return false;
+    const value = protocolCycle(state, entry);
+    return (entry !== retryingPreparation &&
+      (value?.marginRootRetryPending || entry.stallAlertedAt !== undefined || entry.failureAlertedAt !== undefined)) ||
+      Boolean(value && unknownCycle(value));
+  }) ||
     state.wallets.some((wallet) => Object.values(protocolState(wallet)?.deposits ?? {}).some((deposit) =>
       ["submitting", "uncertain"].includes(deposit.phase)) || wallet.funding.some((action) => !action.confirmedAt));
 }
@@ -496,7 +500,9 @@ export class ObservationRunner {
     // submission and every other cycle's alerts still block opening work.
     const preparing = this.state.cycles.find((cycle) => cycle.status === "active" &&
       (!protocolCycle(this.state, cycle) || ["preparing", "ready"].includes(protocolCycle(this.state, cycle)!.phase)));
-    if (preparing && healthy && enoughBudget && now < this.state.plan.endsAt && !unresolved(this.state, preparing)) {
+    const preparingProtocol = preparing && protocolCycle(this.state, preparing);
+    if (preparing && healthy && enoughBudget && now < this.state.plan.endsAt &&
+      (!preparingProtocol?.retryAfterAt || now >= preparingProtocol.retryAfterAt) && !unresolved(this.state, preparing)) {
       await this.advanceOpening(preparing, latest!); return;
     }
     if (!this.state.pausedReason && now < this.state.plan.endsAt) {

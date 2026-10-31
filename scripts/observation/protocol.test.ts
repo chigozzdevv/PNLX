@@ -17,7 +17,8 @@ const identity: ProtocolIdentity = { source: "observation-trader", address: ADDR
   signMessage: async () => "signed-message", signTransaction: async () => "c2lnbmVk" };
 
 function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCancel?: boolean; loseRefund?: boolean;
-  failPersistAt?: string; healthNetwork?: string; challengeNetwork?: string } = {}) {
+  failPersistAt?: string; healthNetwork?: string; challengeNetwork?: string; staleMarginRootOnce?: boolean;
+  recoveryStatus?: { known: boolean; spent: boolean; activeIntentCommitment?: Hex } } = {}) {
   let saved: ProtocolState | undefined;
   let registeredKey: any = null;
   let portfolio: any = { ownerCommitment: OWNER, orders: [], positions: [], accountEvents: [] };
@@ -26,6 +27,9 @@ function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCance
   let lastClose: any;
   const calls: Array<{ path: string; body: any }> = [];
   let loseIntent = options.loseIntent ?? false;
+  let staleMarginRootOnce = options.staleMarginRootOnce ?? false;
+  let membershipRoot = ROOT;
+  let now = Date.now();
   let loseClose = options.loseClose ?? false;
   let closeStatus: Record<string, unknown> = { canRetry: false, transactionStatus: "NOT_FOUND" };
   let depositStatus: Record<string, unknown> = { canRetry: false, transactionStatus: "NOT_FOUND" };
@@ -52,7 +56,7 @@ function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCance
     if (path === "/markets") return respond({ markets: [{ marketId: SPEC.marketId, maxLeverage: "10", initialMarginRate: "100000", oraclePrice: "20000000", fundingIndex: "4" }] });
     if (path === "/notes/membership") {
       const commitment = parsed.searchParams.get("commitment");
-      return respond({ note: { commitment, membershipRoot: ROOT, membershipProof: { leaf: commitment, root: ROOT, indices: [], siblings: [] } } });
+      return respond({ note: { commitment, membershipRoot, membershipProof: { leaf: commitment, root: membershipRoot, indices: [], siblings: [] } } });
     }
     if (path === "/intent-validity") {
       const intent: TradeIntent = { ...body, limitPrice: BigInt(body.limitPrice), margin: BigInt(body.margin), size: BigInt(body.size) };
@@ -65,6 +69,11 @@ function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCance
       expect(saved?.cycles[SPEC.id]?.phase).toBe("submitting");
       expect(saved?.cycles[SPEC.id]?.intent).toEqual(body.intent);
       if (loseIntent) { loseIntent = false; throw new Error("connection lost after server accepted the intent"); }
+      if (staleMarginRootOnce) {
+        staleMarginRootOnce = false;
+        membershipRoot = fieldHex(790n);
+        return respond({ error: "intent margin root is not current", code: "STALE_MARGIN_ROOT" }, 409);
+      }
       return respond({ intentCommitment: body.validity.intentCommitment, ownerCommitment: OWNER, marketId: body.intent.marketId, submissionTxHash: TX });
     }
     if (path === "/portfolio") return respond({ portfolio });
@@ -87,7 +96,8 @@ function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCance
       if (options.loseRefund) throw new Error("refund claim response lost after chain acceptance");
       return respond({ amount: body.depositProof.amount, commitment: body.depositProof.commitment, claimTxHash: CLOSE_TX });
     }
-    if (path === "/notes/recovery-status") return respond({ notes: body.notes.map((note: any) => ({ commitment: note.commitment, known: true, spent: false })) });
+    if (path === "/notes/recovery-status") return respond({ notes: body.notes.map((note: any) => ({ commitment: note.commitment,
+      ...(options.recoveryStatus ?? { known: true, spent: false }) })) });
     if (path === "/position-closes/context") return respond({ context: { payoutAmount: "99990000", market: { marketId: SPEC.marketId, markPrice: "20000000", fundingIndex: "4" },
       positionRoot: ROOT, membershipProof: { leaf: parsed.searchParams.get("positionCommitment"), root: ROOT, indices: [], siblings: [] } } });
     if (path === "/position-closes/status") {
@@ -133,7 +143,7 @@ function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCance
     if (options.failPersistAt && state.cycles[SPEC.id]?.phase === options.failPersistAt) throw new Error("disk full");
     saved = JSON.parse(JSON.stringify(state));
   };
-  const make = (state: ProtocolState = seed) => new ObservationProtocol({ identity, state, fetch: fetcher, persist });
+  const make = (state: ProtocolState = seed) => new ObservationProtocol({ identity, state, fetch: fetcher, persist, now: () => now });
   const adapter = make();
   const addOpening = () => {
     const cycle = saved!.cycles[SPEC.id]!;
@@ -181,6 +191,7 @@ function fixture(options: { loseIntent?: boolean; loseClose?: boolean; loseCance
     order.status = "cancelled"; order.cancellationTxHash = CLOSE_TX;
   } };
   return { adapter, make, calls, addOpening, confirmClose, addUnmatched, addResidual, confirmCancellation, get saved() { return saved!; },
+    now(value: number) { now = value; },
     setCloseStatus(value: Record<string, unknown>) { closeStatus = value; },
     setDepositStatus(value: Record<string, unknown>) { depositStatus = value; },
     get intentPosts() { return intentPosts; }, get closePosts() { return closePosts; }, get relayPosts() { return relayPosts; },
@@ -242,6 +253,64 @@ describe("real observation protocol adapter safety", () => {
     expect(opened.positions[0]!.opening.entryFee).toBe("10000");
     expect(opened.positions[0]!.snapshot.settlementTxHash).toBe(TX);
     expect(opened.matching[0]!.matching.runId).toBe(ROOT);
+  });
+
+  test("stale margin roots reconcile the note, back off, and reprove the same intent against the new root", async () => {
+    const f = fixture({ staleMarginRootOnce: true });
+    const original = await f.adapter.prepareOpen(SPEC);
+    const rejected = await f.adapter.open(SPEC.id);
+    const retryAt = rejected.retryAfterAt!;
+    expect(rejected.phase).toBe("preparing");
+    expect(rejected.marginRootRetryPending).toBe(true);
+    expect(rejected.marginRootRetryCount).toBe(1);
+    expect(String(f.saved.notes[0]!.status)).toBe("available");
+    expect(f.intentPosts).toBe(1);
+
+    f.now(retryAt);
+    await expect(f.adapter.prepareOpen(SPEC)).resolves.toMatchObject({ phase: "ready" });
+    expect(f.calls.filter((call) => call.path === "/notes/membership")).toHaveLength(2);
+    expect(f.calls.filter((call) => call.path === "/intent-validity").at(-1)!.body.marginRoot).toBe(fieldHex(790n));
+    expect(f.saved.cycles[SPEC.id]!.intentCommitment).toBe(original.intentCommitment);
+
+    const accepted = await f.adapter.open(SPEC.id);
+    expect(accepted.phase).toBe("accepted");
+    expect(accepted.intentCommitment).toBe(original.intentCommitment);
+    expect(accepted.marginRootRetryCount).toBeUndefined();
+    expect(f.intentPosts).toBe(2);
+  });
+
+  test("a stale-root retry stays observation-only when note recovery says spent or actively locked", async () => {
+    for (const recoveryStatus of [
+      { known: true, spent: true },
+      { known: true, spent: false, activeIntentCommitment: fieldHex(999n) },
+    ]) {
+      const f = fixture({ staleMarginRootOnce: true, recoveryStatus });
+      await f.adapter.prepareOpen(SPEC);
+      const rejected = await f.adapter.open(SPEC.id);
+      expect(rejected.phase).toBe("uncertain");
+      expect(rejected.marginRootRetryPending).toBe(true);
+      await f.adapter.pollOpen(SPEC.id);
+      expect(f.intentPosts).toBe(1);
+      expect(f.saved.cycles[SPEC.id]!.phase).toBe("uncertain");
+    }
+  });
+
+  test("migrates the exact saved stale-root error after restart only after owner-note reconciliation", async () => {
+    const f = fixture();
+    await f.adapter.prepareOpen(SPEC);
+    f.saved.cycles[SPEC.id]!.phase = "uncertain";
+    f.saved.cycles[SPEC.id]!.error = "PNLX /intents returned 500: intent margin root is not current";
+    f.saved.notes[0]!.status = "locked";
+    f.saved.notes[0]!.lockedByIntentCommitment = f.saved.cycles[SPEC.id]!.intentCommitment;
+    const restarted = f.make(f.saved);
+
+    const recovered = await restarted.pollOpen(SPEC.id);
+
+    expect(recovered.phase).toBe("preparing");
+    expect(recovered.marginRootRetryPending).toBe(true);
+    expect(recovered.marginRootRetryCount).toBe(1);
+    expect(String(f.saved.notes[0]!.status)).toBe("available");
+    expect(f.intentPosts).toBe(0);
   });
 
   test("paired close output is durable before submission and unknown outcomes reconcile without duplicate closes", async () => {

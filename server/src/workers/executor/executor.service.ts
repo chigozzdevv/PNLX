@@ -24,6 +24,7 @@ import type {
 import type { ProofArtifact } from "@pnlx/proof-system";
 import { hasInitialMargin, hasMaxLeverage, maintenanceMargin } from "@pnlx/market-math";
 import { ProtocolStore } from "@/shared/state/store";
+import { StaleMarginRootError } from "@/shared/protocol/stale-margin-root.error";
 import { ProofCoordinatorService } from "@/workers/proof-coordinator/proof-coordinator.service";
 import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
 import {
@@ -87,7 +88,7 @@ export class ExecutorService implements PnlxExecutor {
       throw new Error("intent proof public binding mismatch");
     }
     if (input.validity.marginRoot !== this.store.marginMembershipRoot()) {
-      throw new Error("intent margin root is not current");
+      throw new StaleMarginRootError();
     }
     const privateMatchIntent = privateMatchIntentFromTradeIntent({
       intent: input.intent,

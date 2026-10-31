@@ -21,6 +21,7 @@ import type { OwnerOrderSnapshot, OwnerPositionSnapshot } from "../../server/src
 import {
   assertPositionOpeningAccountEvent, assertPositionCloseAccountEvent,
 } from "../../server/src/shared/protocol/account-event-binding";
+import { STALE_MARGIN_ROOT_CODE } from "../../server/src/shared/protocol/stale-margin-root.error";
 
 export const OBSERVATION_API_URL = "http://127.0.0.1:4000";
 export const OBSERVATION_NETWORK = "Test SDF Network ; September 2015";
@@ -110,6 +111,9 @@ export interface CycleState {
   refunds?: Record<string, { phase: "preparing" | "ready" | "submitting" | "uncertain" | "confirmed" | "zero";
     noteCommitment?: Hex; amount: string; proof?: JsonObject; txHash?: string; error?: string }>;
   cashReconciled?: boolean;
+  marginRootRetryPending?: boolean;
+  marginRootRetryCount?: number;
+  retryAfterAt?: number;
   matching: Array<{ observedAt: number; intentCommitment: Hex; matching: OwnerOrderSnapshot["matching"] }>;
   timings: Record<string, number>; error?: string;
 }
@@ -133,7 +137,7 @@ export interface ProtocolOptions {
   requestTimeoutMs?: number;
 }
 export class ProtocolApiError extends Error {
-  constructor(readonly path: string, readonly status: number, readonly detail: string) {
+  constructor(readonly path: string, readonly status: number, readonly detail: string, readonly code?: string) {
     super(`PNLX ${path} returned ${status}: ${detail}`);
   }
 }
@@ -308,6 +312,9 @@ export class ObservationProtocol {
         await this.save();
       }
       const note = this.note(cycle.noteCommitment); assertNote(note, this.data);
+      if (note.status !== "available" && !(note.status === "locked" && same(note.lockedByIntentCommitment, cycle.intentCommitment))) {
+        throw new Error("Observation input note is not confirmed available for its saved intent");
+      }
       const membership = await this.membership(note.commitment);
       const change = cycle.changeCommitment ? this.note(cycle.changeCommitment) : undefined;
       const validity = await this.prove("/intent-validity", { ...cycle.intent,
@@ -323,6 +330,8 @@ export class ObservationProtocol {
         !same(validity.noteNullifier, note.noteNullifier) || !same(validity.ownerDigest, note.ownerDigest) ||
         !same(validity.noteChangeCommitment, change?.commitment ?? ZERO) || !validity.positionSeed) throw new Error("Intent proof does not match the persisted authorized order");
       cycle.validity = validity; cycle.phase = "ready"; cycle.timings.preparedAt = this.now();
+      delete cycle.marginRootRetryPending; delete cycle.retryAfterAt;
+      note.status = "locked"; note.lockedByIntentCommitment = cycle.intentCommitment;
       await this.save(); return clone(cycle);
     });
   }
@@ -338,8 +347,14 @@ export class ObservationProtocol {
         const result = await this.request<JsonObject>("/intents", { intent: cycle.intent, validity: cycle.validity });
         const intent = result.intent ?? result;
         if (!same(intent.intentCommitment, cycle.intentCommitment) || !same(intent.ownerCommitment, this.data.ownerCommitment) || intent.marketId !== cycle.spec.marketId) throw new Error("Intent submission confirmation mismatch");
-        cycle.submitted = intent; cycle.phase = "accepted"; cycle.timings.acceptedAt = this.now(); await this.save();
-      } catch (error) { cycle.phase = "uncertain"; cycle.error = safeError(error); await this.save(); }
+        cycle.submitted = intent; cycle.phase = "accepted"; cycle.timings.acceptedAt = this.now();
+        delete cycle.marginRootRetryCount;
+        await this.save();
+      } catch (error) {
+        cycle.phase = "uncertain"; cycle.error = safeError(error);
+        if (isStaleMarginRootApiError(error)) cycle.marginRootRetryPending = true;
+        await this.save();
+      }
       return this.pollCycle(cycle);
     });
   }
@@ -463,6 +478,7 @@ export class ObservationProtocol {
   }
 
   private async pollCycle(cycle: CycleState): Promise<CycleState> {
+    if (cycle.phase === "uncertain" && isLegacyStaleMarginRootError(cycle.error)) cycle.marginRootRetryPending = true;
     const { portfolio } = await this.request<{ portfolio: JsonObject }>(`/portfolio?ownerCommitment=${this.data.ownerCommitment}`);
     if (!same(portfolio.ownerCommitment, this.data.ownerCommitment)) throw new Error("Portfolio belongs to another owner");
     const orders = portfolio.orders as OwnerOrderSnapshot[];
@@ -521,6 +537,23 @@ export class ObservationProtocol {
       cycle.orders.every((order) => order.status === "cancelled");
     if (fullyCancelled) { cycle.phase = "cancelled"; if (cycle.changeCommitment) this.note(cycle.changeCommitment).status = "spent"; }
     await this.reconcileNotes();
+    if (cycle.marginRootRetryPending) {
+      if (cycle.orders.length || snapshots.length) {
+        delete cycle.marginRootRetryPending;
+        delete cycle.marginRootRetryCount; delete cycle.retryAfterAt; delete cycle.error;
+      } else {
+        const note = this.data.notes.find((entry) => same(entry.commitment, cycle.noteCommitment));
+        if (note?.status === "available" && !note.lockedByIntentCommitment) {
+          cycle.phase = "preparing";
+          delete cycle.validity; delete cycle.submitted; delete cycle.error;
+          cycle.marginRootRetryCount = (cycle.marginRootRetryCount ?? 0) + 1;
+          cycle.retryAfterAt = this.now() + marginRootRetryDelay(cycle.marginRootRetryCount);
+        } else if (cycle.phase === "preparing") {
+          cycle.phase = "uncertain";
+          delete cycle.retryAfterAt;
+        }
+      }
+    }
     const residuals = cycle.orders.filter((order) => order.isResidual && order.status === "cancelled");
     const refundsReady = residuals.every((order) => {
       const refund = cycle.refunds?.[order.intentCommitment.toLowerCase()];
@@ -656,7 +689,8 @@ export class ObservationProtocol {
         else if (status.known) {
           // The absence of an accepted intent does not release a possibly submitted input.
           const ambiguous = Object.values(this.data.cycles).some((cycle) => same(cycle.noteCommitment, note.commitment) &&
-            ["preparing", "ready", "submitting", "uncertain", "accepted"].includes(cycle.phase));
+            ["preparing", "ready", "submitting", "uncertain", "accepted"].includes(cycle.phase) &&
+            !(cycle.phase === "uncertain" && cycle.marginRootRetryPending));
           if (!ambiguous) { note.status = "available"; delete note.lockedByIntentCommitment; }
         }
       }
@@ -795,7 +829,9 @@ export class ObservationProtocol {
         redirect: "error" });
       status = response.status;
       const value = await response.json() as JsonObject;
-      if (!response.ok) throw new ProtocolApiError(path.split("?")[0]!, status, typeof value.error === "string" ? value.error.slice(0, 300) : "request failed");
+      if (!response.ok) throw new ProtocolApiError(path.split("?")[0]!, status,
+        typeof value.error === "string" ? value.error.slice(0, 300) : "request failed",
+        typeof value.code === "string" ? value.code : undefined);
       return value as T;
     } finally {
       this.data.requests.push({ at: started, path: `${origin === this.apiUrl ? "api" : "prover"}:${path.split("?")[0]}`, method: body === undefined ? "GET" : "POST", ms: this.now() - started, ...(status === undefined ? {} : { status }) });
@@ -875,6 +911,17 @@ function positive(value: string, label: string): bigint { if (!/^\d+$/.test(valu
 function validateId(id: string): void { if (!/^[a-zA-Z0-9_-]{1,100}$/.test(id) || ["__proto__", "constructor", "prototype"].includes(id)) throw new Error("Invalid observation operation id"); }
 function random(): string { return randomBytes(32).toString("hex"); }
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value, (_key, item) => typeof item === "bigint" ? item.toString() : item)) as T; }
+function isStaleMarginRootApiError(error: unknown): error is ProtocolApiError {
+  return error instanceof ProtocolApiError && error.path === "/intents" &&
+    ((error.status === 409 && error.code === STALE_MARGIN_ROOT_CODE) ||
+      (error.status === 500 && error.detail === "intent margin root is not current"));
+}
+function isLegacyStaleMarginRootError(error: string | undefined): boolean {
+  return error === "PNLX /intents returned 500: intent margin root is not current";
+}
+function marginRootRetryDelay(attempt: number): number {
+  return Math.min(30 * 60_000, 60_000 * 2 ** Math.min(Math.max(attempt - 1, 0), 5));
+}
 function safeError(error: unknown): string { return error instanceof ProtocolApiError ? error.message : "Request/confirmation unavailable; reconcile the saved operation without resubmitting"; }
 function isContextRejection(error: unknown): boolean {
   return error instanceof ProtocolApiError && error.status === 500 && [

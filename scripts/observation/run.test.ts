@@ -67,7 +67,9 @@ function harness(state = createCampaign({ runId: "test-campaign", seed: "test-se
             walletAddress: wallet.address, status: "available", blinding: "0x1", commitment: "0x9", noteNullifier: "0x1",
             ownerDigest: "0x1", rhoDigest: "0x1", spendSecretDigest: "0x1" }); await save(); return structuredClone(data.deposits[id]!); },
         async prepareOpen(spec) { actions.push(`prepare-open:${spec.leverage}`);
-          data.cycles[spec.id] = { ...(data.cycles[spec.id] ?? savedCycle(spec.id)), phase: "ready", spec }; await save(); return read(spec.id); },
+          data.cycles[spec.id] = { ...(data.cycles[spec.id] ?? savedCycle(spec.id)), phase: "ready", spec };
+          delete data.cycles[spec.id]!.marginRootRetryPending; delete data.cycles[spec.id]!.retryAfterAt;
+          await save(); return read(spec.id); },
         async open(id) { actions.push("submit-open"); data.cycles[id]!.phase = "accepted"; await save(); return read(id); },
         async prepareClose(id) { actions.push("prepare-close"); data.cycles[id]!.phase = "closing";
           data.cycles[id]!.positions[0]!.closes.push({ phase: "ready", closeCommitment: "0xa", witness: {}, output: {} as any,
@@ -261,6 +263,40 @@ describe("one-time observation runner", () => {
     expect(h.actions.some((action) => action.startsWith("prepare-open"))).toBe(true);
     expect(h.actions).not.toContain("submit-deposit");
     expect(h.state.pausedReason).toBeUndefined();
+  });
+
+  test("stale-root recovery holds new opens during backoff, then retries the saved preparation once", async () => {
+    const h = harness();
+    const { cycle, wallet, value } = attachActive(h, 0, "preparing");
+    const savedValue = () => (wallet.protocol as ProtocolState).cycles[cycle.adapterId]!;
+    cycle.fundingChecked = true;
+    value.marginRootRetryPending = true;
+    value.marginRootRetryCount = 1;
+    value.retryAfterAt = START + MINUTE_MS;
+    cycle.failureAlertedAt = START - MINUTE_MS;
+    cycle.stallAlertedAt = START - MINUTE_MS;
+    h.state.pausedReason = "An existing execution is stalled or uncertain.";
+
+    await h.runner().tick();
+
+    expect(h.actions).toEqual([`poll:${cycle.adapterId}`]);
+    expect(h.state.pausedReason).toContain("uncertain");
+    expect(h.actions).not.toContain("create-wallet");
+    expect(h.actions).not.toContain("fund");
+
+    h.now(START + MINUTE_MS);
+    await h.runner().tick();
+
+    expect(h.actions.filter((action) => action === `prepare-open:${value.spec.leverage}`)).toHaveLength(1);
+    expect(savedValue().phase).toBe("ready");
+    expect(savedValue().marginRootRetryPending).toBeUndefined();
+    expect(h.actions).not.toContain("create-wallet");
+    expect(h.actions).not.toContain("fund");
+
+    await h.runner().tick();
+
+    expect(h.actions.filter((action) => action === "submit-open")).toHaveLength(1);
+    expect(h.state.cycles.filter((entry) => entry.status === "active")).toHaveLength(1);
   });
 
   test("a transient deposit preparation failure resumes the same cycle without new funding", async () => {

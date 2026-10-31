@@ -1,4 +1,5 @@
 import { setAuthenticatedContext, type AuthContext } from "@/shared/http/auth-context";
+import { StaleMarginRootError } from "@/shared/protocol/stale-margin-root.error";
 
 export type Handler = (request: Request) => Response | Promise<Response>;
 export type Authenticator =
@@ -47,6 +48,9 @@ export class Router {
       return await record.handler(request);
     } catch (error) {
       const message = error instanceof Error ? error.message : "internal error";
+      if (error instanceof StaleMarginRootError) {
+        return Response.json({ error: message, code: error.code }, { status: 409 });
+      }
       return Response.json({ error: message }, { status: 500 });
     }
   }

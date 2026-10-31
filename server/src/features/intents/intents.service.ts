@@ -6,6 +6,7 @@ import { assertIdenticalIntentSubmission, type PendingIntentSubmission } from "@
 import type { ProtocolStore } from "@/shared/state/store";
 import type { ServerEnv } from "@/config/env";
 import { assertAuthenticatedAccount } from "@/shared/http/auth-context";
+import { StaleMarginRootError } from "@/shared/protocol/stale-margin-root.error";
 import { assertSubmittedRelay } from "@/shared/protocol/onchain-submission";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { OnchainRelay, OnchainRelayResult } from "@/workers/onchain/onchain.model";
@@ -168,7 +169,7 @@ export class IntentsService {
     assertAuthenticatedAccount(authenticated, input.intent.owner, "owner");
     this.syncSecureNotes();
     if (input.marginRoot !== this.executor.store.marginMembershipRoot()) {
-      throw new Error("intent margin root is not current");
+      throw new StaleMarginRootError();
     }
     const validity = this.prover.proveIntentValidity(input);
     return {
@@ -180,7 +181,7 @@ export class IntentsService {
   async proveAndSubmitDurable(input: ProveAndSubmitIntentInput, authenticated?: string): Promise<ProveAndSubmitIntentResult> {
     assertAuthenticatedAccount(authenticated, input.intent.owner, "owner");
     this.syncSecureNotes();
-    if (input.marginRoot !== this.executor.store.marginMembershipRoot()) throw new Error("intent margin root is not current");
+    if (input.marginRoot !== this.executor.store.marginMembershipRoot()) throw new StaleMarginRootError();
     const validity = this.prover.proveIntentValidityAsync
       ? await this.prover.proveIntentValidityAsync(input) : this.prover.proveIntentValidity(input);
     return { intent: await this.submitDurable({ intent: input.intent, validity }, authenticated), validity };
