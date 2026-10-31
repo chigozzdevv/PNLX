@@ -315,6 +315,19 @@ export class OnchainRelayService implements OnchainRelay {
     ])] };
   }
 
+  async fenceIntentSubmissionAsync(intentCommitment: Hex): Promise<void> {
+    if (!this.config.enabled) throw new Error("intent submission fence requires on-chain relay");
+    const relay = await this.invokePayloadAsync("intent", {
+      contractId: contractId(this.deployment(), "intent-registry"),
+      functionName: "is_active_intent",
+      args: ["--intent_commitment", bytes32(intentCommitment)],
+      send: "yes",
+    });
+    if (!relay.submitted || !relay.txHash || await this.relayer.readTransactionStatus(relay.txHash) !== "SUCCESS") {
+      throw new Error("intent submission fence is not confirmed");
+    }
+  }
+
   residualMargin(intentCommitment: Hex): bigint {
     if (!this.config.enabled) throw new Error("residual claim requires on-chain relay");
     const result = this.relayer.read({

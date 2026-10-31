@@ -95,6 +95,34 @@ export class IntentsService {
     return { recovered, pending: this.executor.store.pendingIntentSubmissions.size };
   }
 
+  async discardUnregisteredPendingIntent(
+    intentCommitment: Hex,
+    expectedCreatedAt: number,
+    canDiscard: () => Promise<boolean>,
+  ): Promise<boolean> {
+    return this.withSubmissionLock(intentCommitment, async () => {
+      const store = this.executor.store;
+      const pending = store.pendingIntentSubmissions.get(intentCommitment);
+      if (!pending || pending.createdAt !== expectedCreatedAt || !this.onchain?.enabled ||
+          await this.registered(intentCommitment) || !await canDiscard() ||
+          await this.registered(intentCommitment)) return false;
+      if (store.pendingIntentSubmissions.get(intentCommitment) !== pending) return false;
+      store.removePendingIntentSubmission(intentCommitment);
+      await this.flush();
+      return true;
+    });
+  }
+
+  async confirmUnregisteredIntentAbsent(intentCommitment: Hex, canRelease: () => Promise<boolean>): Promise<boolean> {
+    return this.withSubmissionLock(intentCommitment, async () => {
+      const store = this.executor.store;
+      if (!this.onchain?.enabled || store.pendingIntentSubmissions.has(intentCommitment) ||
+          store.intents.has(intentCommitment) || await this.registered(intentCommitment) || !await canRelease()) return false;
+      return !store.pendingIntentSubmissions.has(intentCommitment) && !store.intents.has(intentCommitment) &&
+        !await this.registered(intentCommitment);
+    });
+  }
+
   private async finishPreparedSubmission(pending: PendingIntentSubmission, alreadyRegistered: boolean): Promise<IntentRecord> {
     let relay: OnchainRelayResult | undefined;
     if (!alreadyRegistered) {

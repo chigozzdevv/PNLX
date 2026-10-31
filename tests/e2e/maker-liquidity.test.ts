@@ -1,13 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import {
+  fieldHex,
+  ownerCommitment,
   secureMarginCommitment,
   hashFields,
 } from "@pnlx/crypto";
-import type { PrivateMatchIntent } from "@pnlx/protocol-types";
+import type { Hex, IntentRecord, PrivateMatchIntent } from "@pnlx/protocol-types";
+import { ProtocolStore } from "@/shared/state/store";
+import { ExecutorService } from "@/workers/executor/executor.service";
+import { BatchExecutorService } from "@/workers/batch-executor/batch-executor.service";
 import {
   buildMakerChangeNote,
   eligibleMakerNotes,
   MakerLiquidityService,
+  makerPendingQuoteIsValid,
   makerQuoteForIntent,
   finalizedMakerNotes,
   selectMakerNoteAllocations,
@@ -41,6 +47,65 @@ const payload: PrivateMatchIntent = {
   positionSeed: hashFields("fixture-position-seed", ["client"]),
   signedSize: 505_689_001n,
 };
+
+test("idle batch workers recover maker collateral without matching or overlapping recovery", async () => {
+  const executor = new ExecutorService({}, new ProtocolStore());
+  const maker = new MakerLiquidityService(executor, undefined as never, undefined,
+    { intentRegistryOnchainRequired: false });
+  let release!: () => void;
+  let started!: () => void;
+  const waiting = new Promise<void>((resolve) => { release = resolve; });
+  const entered = new Promise<void>((resolve) => { started = resolve; });
+  let recoveries = 0;
+  Reflect.set(maker, "recoverMakerNotes", async () => {
+    recoveries++;
+    started();
+    await waiting;
+    return { notes: [], blockedNotes: new Set() };
+  });
+  const batch = new BatchExecutorService(executor, {
+    createSettlementTranscript() { throw new Error("idle recovery must not create a trade"); },
+  }, { intervalMs: 5 }, undefined, maker);
+  try {
+    batch.start();
+    await entered;
+    await Bun.sleep(30);
+    expect(recoveries).toBe(1);
+    release();
+    await Bun.sleep(10);
+    expect(recoveries).toBe(1);
+  } finally {
+    release();
+    batch.stop();
+  }
+});
+
+test("maker admission and settlement wait for recovery and resume after a recovery failure", async () => {
+  const maker = new MakerLiquidityService(new ExecutorService({}, new ProtocolStore()), undefined as never,
+    undefined, { intentRegistryOnchainRequired: false });
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => { release = resolve; });
+  const events: string[] = [];
+  Reflect.set(maker, "recoverMakerNotes", async () => {
+    events.push("recover");
+    await waiting;
+    throw new Error("temporary registry failure");
+  });
+  Reflect.set(maker, "ensureMarketLiquidity", async () => {
+    events.push("admit");
+    return { created: 0, skipped: 0 };
+  });
+  Reflect.set(maker, "finalizeMakerSettlement", async () => { events.push("settle"); });
+  const recovering = maker.recover().catch((error) => error as Error);
+  const admission = maker.ensureForMarket({ batchId: "waiting", marketId: "xlm-usd-perp" });
+  const settlement = maker.finalizeSettlement({} as never);
+  await Bun.sleep(5);
+  expect(events).toEqual(["recover"]);
+  release();
+  expect(await recovering).toMatchObject({ message: "temporary registry failure" });
+  await Promise.all([admission, settlement]);
+  expect(events).toEqual(["recover", "admit", "settle"]);
+});
 
 describe("maker note allocation", () => {
   test("uses only notes from the configured maker account", () => {
@@ -171,6 +236,19 @@ function makerNote(label: string, amount: bigint) {
 }
 
 describe("house maker price policy", () => {
+  test("retries a quote only when it still crosses and remains favorable to the maker", () => {
+    const buy = { signedSize: 1n, limitPrice: 10_100n };
+    expect(makerPendingQuoteIsValid(buy, 10_050n, 10_000n)).toBe(true);
+    expect(makerPendingQuoteIsValid(buy, 10_101n, 10_000n)).toBe(false);
+    expect(makerPendingQuoteIsValid(buy, 9_999n, 10_000n)).toBe(false);
+    const sell = { signedSize: -1n, limitPrice: 9_900n };
+    expect(makerPendingQuoteIsValid(sell, 9_950n, 10_000n)).toBe(true);
+    expect(makerPendingQuoteIsValid(sell, 9_899n, 10_000n)).toBe(false);
+    expect(makerPendingQuoteIsValid(sell, 10_001n, 10_000n)).toBe(false);
+    expect(makerPendingQuoteIsValid({ signedSize: 1n, limitPrice: 10_300n }, 10_201n, 10_000n)).toBe(false);
+    expect(makerPendingQuoteIsValid({ signedSize: -1n, limitPrice: 9_700n }, 9_799n, 10_000n)).toBe(false);
+  });
+
   test("quotes both sides from the reference rather than copying a client limit", () => {
     expect(makerQuoteForIntent({ signedSize: 1n, limitPrice: 101n }, 100n)).toBe(100n);
     expect(makerQuoteForIntent({ signedSize: -1n, limitPrice: 99n }, 100n)).toBe(100n);
@@ -203,6 +281,141 @@ describe("house maker price policy", () => {
     expect(() => makerQuoteForIntent({ signedSize: 1n, limitPrice: 100n }, 100n, 10_000n)).toThrow("invalid maker price policy");
   });
 });
+
+describe("maker collateral recovery", () => {
+  test("reconciles an on-chain active maker order already marked cancelled locally", async () => {
+    const fixture = cancelledMakerFixture();
+    const blocked = await fixture.reconcile();
+    expect(blocked.size).toBe(0);
+    expect(fixture.cancellations()).toBe(1);
+    expect(fixture.active()).toBe(false);
+    expect(fixture.store.orderLifecycle.get(fixture.intentId)?.status).toBe("cancelled");
+    expect((await fixture.reconcile()).size).toBe(0);
+    expect(fixture.cancellations()).toBe(1);
+  });
+
+  test("keeps collateral unavailable if cancellation cannot be confirmed or the note was spent", async () => {
+    const fixture = cancelledMakerFixture(true);
+    const blocked = await fixture.reconcile();
+    expect(blocked.has(fixture.note.commitment)).toBe(true);
+    expect(fixture.cancellations()).toBe(0);
+    expect(fixture.active()).toBe(true);
+  });
+
+  test("does not reuse an available note belonging to a locally open order", async () => {
+    const fixture = cancelledMakerFixture();
+    fixture.store.orderLifecycle.set(fixture.intentId, {
+      ...fixture.store.orderLifecycle.get(fixture.intentId)!, status: "open",
+    });
+    expect((await fixture.reconcile()).has(fixture.note.commitment)).toBe(true);
+    expect(fixture.cancellations()).toBe(0);
+  });
+
+  test("cancels an orphaned active maker order on-chain before releasing its note", async () => {
+    const fixture = cancelledMakerFixture();
+    const source = fieldHex(210n);
+    fixture.store.orderLifecycle.set(source, { intentCommitment: source, batchId: "source", marketId: "xlm-usd-perp",
+      ownerCommitment: fieldHex(211n), status: "cancelled", createdAt: 1, updatedAt: 2 });
+    fixture.store.orderLifecycle.set(fixture.intentId, { ...fixture.store.orderLifecycle.get(fixture.intentId)!, status: "open" });
+    fixture.onchain.isIntentActiveAsync = async (id?: Hex) => id === source ? false : fixture.active();
+    fixture.onchain.isIntentCancelledAsync = async (id?: Hex) => id === source ? true : !fixture.active();
+    const locked = { ...fixture.note, status: "locked" as const, lockedByIntentCommitment: fixture.intentId,
+      sourceIntentCommitment: source };
+    const result = await fixture.reap(locked);
+    expect(fixture.cancellations()).toBe(1);
+    expect(fixture.active()).toBe(false);
+    expect(fixture.store.orderLifecycle.get(fixture.intentId)?.status).toBe("cancelled");
+    expect(result.notes[0].status).toBe("available");
+  });
+
+  test("fences an unregistered maker submission before releasing a terminal source's note", async () => {
+    for (const sourceStatus of ["cancelled", "filled", "partially-filled"] as const) {
+      const fixture = orphanedMakerFixture(sourceStatus);
+      const result = await fixture.reap();
+      expect(result.changed).toBe(true);
+      expect(result.notes[0].status).toBe("available");
+      expect(fixture.fences()).toBe(1);
+      expect(fixture.store.pendingIntentSubmissions.size).toBe(0);
+    }
+  });
+
+  test("retains the maker note if the fence fails or the pending order becomes registered", async () => {
+    for (const outcome of ["failed", "registered"] as const) {
+      const fixture = orphanedMakerFixture("cancelled", outcome);
+      const result = await fixture.reap();
+      expect(result.changed).toBe(false);
+      expect(result.notes[0].status).toBe("locked");
+      expect(fixture.fences()).toBe(1);
+      expect(fixture.store.pendingIntentSubmissions.size).toBe(1);
+    }
+  });
+
+  test("recovers a locked note if the process stopped after removing its fenced journal", async () => {
+    const fixture = orphanedMakerFixture("cancelled");
+    fixture.store.pendingIntentSubmissions.clear();
+    const result = await fixture.reap();
+    expect(result.changed).toBe(true);
+    expect(result.notes[0].status).toBe("available");
+    expect(fixture.fences()).toBe(1);
+  });
+});
+
+function cancelledMakerFixture(spent = false) {
+  const wallet = "GCB7PYWNYIRTSLTHGPX6OCIP256PPX2Q5TZOZSNCVRIWZJI7MU5COC7J";
+  const makerNote = { ...note, walletAddress: wallet, ownerCommitment: ownerCommitment(wallet) };
+  const intentId = fieldHex(201n);
+  const store = new ProtocolStore();
+  store.intents.set(intentId, { intentCommitment: intentId, batchId: "maker-auto-test", marketId: "xlm-usd-perp",
+    noteNullifier: makerNote.noteNullifier, ownerCommitment: makerNote.ownerCommitment } as IntentRecord);
+  store.orderLifecycle.set(intentId, { intentCommitment: intentId, batchId: "maker-auto-test", marketId: "xlm-usd-perp",
+    ownerCommitment: makerNote.ownerCommitment, status: "cancelled", createdAt: 1, updatedAt: 1 });
+  let active = true;
+  let cancellations = 0;
+  const onchain = { enabled: true, isSecureNullifierSpentAsync: async () => spent,
+    isIntentActiveAsync: async (_id?: Hex) => active, isIntentCancelledAsync: async (_id?: Hex) => !active,
+    cancelIntentAsync: async () => {
+      cancellations++;
+      active = false;
+      return { relays: [{ functionName: "cancel", submitted: true, txHash: fieldHex(202n) }] };
+    } };
+  const service = new MakerLiquidityService(new ExecutorService({}, store), {} as never, onchain as never,
+    { intentRegistryOnchainRequired: true });
+  return { store, note: makerNote, intentId, onchain, active: () => active, cancellations: () => cancellations,
+    reconcile: () => Reflect.get(service, "reconcileCancelledMakerIntents").call(service, [makerNote]) as Promise<Set<Hex>>,
+    reap: (locked: unknown) =>
+      Reflect.get(service, "reapOrphanedMakerIntents").call(service, [locked]) as Promise<{changed: boolean; notes: Array<{status: string}>}> };
+}
+
+function orphanedMakerFixture(sourceStatus: "cancelled" | "filled" | "partially-filled", outcome: "success" | "failed" | "registered" = "success") {
+  const wallet = "GCB7PYWNYIRTSLTHGPX6OCIP256PPX2Q5TZOZSNCVRIWZJI7MU5COC7J";
+  const makerNote = { ...note, walletAddress: wallet, ownerCommitment: ownerCommitment(wallet), status: "locked" as const,
+    lockedByIntentCommitment: fieldHex(301n), sourceIntentCommitment: fieldHex(302n) };
+  const store = new ProtocolStore();
+  store.orderLifecycle.set(makerNote.sourceIntentCommitment, { intentCommitment: makerNote.sourceIntentCommitment,
+    batchId: "source", marketId: "xlm-usd-perp", ownerCommitment: fieldHex(303n), status: sourceStatus,
+    ...(sourceStatus === "partially-filled" ? { residualCommitment: fieldHex(304n) } : {}), createdAt: 1, updatedAt: 2 });
+  store.pendingIntentSubmissions.set(makerNote.lockedByIntentCommitment, {
+    intentCommitment: makerNote.lockedByIntentCommitment, createdAt: 1,
+    intent: { batchId: "maker-auto-test", owner: wallet, noteNullifier: makerNote.noteNullifier,
+      nonce: `${makerNote.sourceIntentCommitment}:${makerNote.commitment}:maker-nonce`,
+      salt: `${makerNote.sourceIntentCommitment}:${makerNote.commitment}:maker-salt` },
+    validity: { noteCommitment: makerNote.commitment },
+    prepared: { record: { intentCommitment: makerNote.lockedByIntentCommitment, ownerCommitment: makerNote.ownerCommitment } },
+  } as never);
+  let registered = false;
+  let fences = 0;
+  const onchain = { enabled: true, isIntentRegisteredAsync: async () => registered,
+    isIntentActiveAsync: async () => false, isIntentCancelledAsync: async () => true,
+    fenceIntentSubmissionAsync: async () => {
+      fences++;
+      if (outcome === "failed") throw new Error("fence unavailable");
+      if (outcome === "registered") registered = true;
+    } };
+  const service = new MakerLiquidityService(new ExecutorService({}, store), {} as never, onchain as never,
+    { intentRegistryOnchainRequired: true });
+  return { store, fences: () => fences,
+    reap: () => Reflect.get(service, "reapOrphanedMakerIntents").call(service, [makerNote]) as Promise<{changed: boolean; notes: typeof makerNote[]}> };
+}
 
 test("settlement replay preserves an existing child note in either store order", () => {
   const makerIntent = hashFields("maker-replay", ["intent"]);

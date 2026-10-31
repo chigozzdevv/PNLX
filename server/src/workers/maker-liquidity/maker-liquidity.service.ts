@@ -15,9 +15,11 @@ import type {
   TradeIntent,
 } from "@pnlx/protocol-types";
 import {IntentsService} from "@/features/intents/intents.service";
+import {OrdersService} from "@/features/orders/orders.service";
 import {
   claimMakerNote,
   readMakerNotes,
+  releaseMakerNote,
   saveMakerNotes,
   type StoredMakerNoteRecord,
 } from "@/shared/maker-note-store";
@@ -69,6 +71,20 @@ export function makerQuoteForIntent(payload: Pick<PrivateMatchIntent,"signedSize
   return quote;
 }
 
+export function makerPendingQuoteIsValid(
+  payload: Pick<PrivateMatchIntent,"signedSize"|"limitPrice">,
+  price: bigint,
+  referencePrice: bigint,
+): boolean {
+  if (price <= 0n || referencePrice <= 0n) return false;
+  const buys = payload.signedSize > 0n;
+  if (buys ? price > payload.limitPrice || price < referencePrice : price < payload.limitPrice || price > referencePrice) {
+    return false;
+  }
+  const deviation = price > referencePrice ? price - referencePrice : referencePrice - price;
+  return deviation * 10_000n <= referencePrice * 200n;
+}
+
 export interface MakerLiquidityRunResult {
   created: number;
   skipped: number;
@@ -76,6 +92,9 @@ export interface MakerLiquidityRunResult {
 
 export class MakerLiquidityService {
   private readonly intents:IntentsService;
+  private readonly orders:OrdersService;
+  private readonly confirmedCancelledMakerOrders = new Set<Hex>();
+  private noteOperation: Promise<unknown> = Promise.resolve();
   constructor(
     private readonly executor: ExecutorService,
     private readonly prover: ProverService,
@@ -89,34 +108,67 @@ export class MakerLiquidityService {
       vault: string;
     },
     private readonly claimNote:typeof claimMakerNote=claimMakerNote,
-  ) {this.intents=new IntentsService(executor,prover,onchain,env);}
+  ) {
+    this.intents=new IntentsService(executor,prover,onchain,env);
+    this.orders=new OrdersService(executor,prover,onchain,env);
+  }
 
-  async ensureForMarket(input: {
+  ensureForMarket(input: {
     batchId: string;
     marketId: string;
   }): Promise<MakerLiquidityRunResult> {
     if (this.env.makerWalletAddress && input.marketId !== "xlm-usd-perp") {
-      return { created: 0, skipped: 0 };
+      return Promise.resolve({ created: 0, skipped: 0 });
     }
+    return this.withMakerNotes(() => this.ensureMarketLiquidity(input));
+  }
+
+  recover(): Promise<void> {
+    return this.withMakerNotes(async () => { await this.recoverMakerNotes(); });
+  }
+
+  private withMakerNotes<T>(operation: () => Promise<T>): Promise<T> {
+    const work = this.noteOperation.then(operation);
+    this.noteOperation = work.catch(() => undefined);
+    return work;
+  }
+
+  private async recoverMakerNotes(): Promise<{ notes: StoredMakerNote[]; blockedNotes: Set<Hex> }> {
     await this.intents.recoverPendingIntents();
     let notes = normalizeMakerNotes(await readMakerNotes());
+    const blockedNotes = await this.reconcileCancelledMakerIntents(notes);
     const knownIntents=new Map(this.executor.store.intents);
     for(const pending of this.executor.store.pendingIntentSubmissions.values())knownIntents.set(pending.intentCommitment,pending.prepared.record);
-    const unlocked = unlockStaleMakerLocks(notes, knownIntents);
+    const unlocked = unlockStaleMakerLocks(notes, knownIntents, blockedNotes, !this.onchain?.enabled);
     if (unlocked.changed) {
       await saveMakerNotes(unlocked.notes.filter((note, index) => note !== notes[index]));
       notes = unlocked.notes;
     }
-    const reaped = this.reapOrphanedMakerIntents(notes);
+    const reaped = await this.reapOrphanedMakerIntents(notes, blockedNotes);
     if (reaped.changed) {
-      await saveMakerNotes(reaped.notes.filter((note, index) => note !== notes[index]));
-      notes = reaped.notes;
+      let releasedAll = true;
+      for (let index = 0; index < notes.length; index++) {
+        const previous = notes[index]!;
+        if (previous === reaped.notes[index]) continue;
+        if (!await releaseMakerNote(previous.commitment, previous.lockedByIntentCommitment!, previous.sourceIntentCommitment!)) {
+          releasedAll = false;
+        }
+      }
+      notes = releasedAll ? reaped.notes : normalizeMakerNotes(await readMakerNotes());
       await this.flushStore();
     }
     this.indexMakerMarginCommitments(notes);
     if (this.ensureMakerAccountKeys(notes)) {
       await this.flushStore();
     }
+    return { notes, blockedNotes };
+  }
+
+  private async ensureMarketLiquidity(input: {
+    batchId: string;
+    marketId: string;
+  }): Promise<MakerLiquidityRunResult> {
+    const { notes, blockedNotes } = await this.recoverMakerNotes();
     const makerOwners = new Set(
       eligibleMakerNotes(notes, this.env.makerWalletAddress).map((note) => noteOwnerCommitment(note)),
     );
@@ -134,7 +186,7 @@ export class MakerLiquidityService {
     let skipped = 0;
     let currentNotes = notes;
     for (const clientIntent of openClientIntents) {
-      created += await this.resumePendingMakerIntents(clientIntent,currentNotes,backing);
+      created += await this.resumePendingMakerIntents(clientIntent,currentNotes,backing,blockedNotes);
       if (hasLockedMakerForSource(currentNotes, clientIntent.intentCommitment)) {
         skipped += 1;
         continue;
@@ -157,7 +209,8 @@ export class MakerLiquidityService {
           })
         : eligibleMakerNotes(currentNotes.filter(note=>!note.vaultAllocationId));
       const allocations = selectMakerNoteAllocations(
-        makerNotes.filter((note) => this.executor.store.marginCommitments.has(note.commitment)),
+        makerNotes.filter((note) => !blockedNotes.has(note.commitment) &&
+          this.executor.store.marginCommitments.has(note.commitment)),
         payload,
       );
       if (allocations.length === 0) {
@@ -198,6 +251,7 @@ export class MakerLiquidityService {
     source:IntentRecord,
     notes:StoredMakerNote[],
     backing?:Awaited<ReturnType<MakerLiquidityService["currentVaultBacking"]>>,
+    blockedNotes:ReadonlySet<Hex>=new Set(),
   ):Promise<number> {
     const store=this.executor.store;
     if(store.orderLifecycle.get(source.intentCommitment)?.status!=="open")return 0;
@@ -218,7 +272,7 @@ export class MakerLiquidityService {
     let resumed=0;
     for(let index=0;index<notes.length;index++) {
       const note=notes[index]!;
-      if(!allowed.has(note.commitment))continue;
+      if(!allowed.has(note.commitment)||blockedNotes.has(note.commitment))continue;
       const expectedNonce=`${source.intentCommitment}:${note.commitment}:maker-nonce`;
       const pending=note.status==="locked"&&note.sourceIntentCommitment===source.intentCommitment&&
         note.lockedByIntentCommitment?store.pendingIntentSubmissions.get(note.lockedByIntentCommitment):
@@ -234,15 +288,21 @@ export class MakerLiquidityService {
         pending.prepared.record.ownerCommitment!==noteOwnerCommitment(note)||
         intent.margin<=0n||intent.margin>BigInt(note.amount)||intent.margin>payload!.margin||
         intent.size<=0n||intent.size>(payload!.signedSize<0n?-payload!.signedSize:payload!.signedSize)||
-        intent.side!==(payload!.signedSize>=0n?"short":"long")||intent.limitPrice!==quote)continue;
+        intent.side!==(payload!.signedSize>=0n?"short":"long")||
+        !makerPendingQuoteIsValid(payload!,intent.limitPrice,market!.oraclePrice))continue;
       try {
-        await this.intents.submitDurable({intent,validity},intent.owner,{beforeSubmit:async()=>{
+        const submitted = await this.intents.submitDurable({intent,validity},intent.owner,{beforeSubmit:async()=>{
           if(store.orderLifecycle.get(source.intentCommitment)?.status!=="open")throw new MakerNoteClaimUnavailable();
+          if(!await this.isMakerNoteUnspent(note))throw new MakerNoteClaimUnavailable();
           if(!await this.claimNote(note.commitment,pending.intentCommitment,source.intentCommitment,
             note.vaultAllocationId))throw new MakerNoteClaimUnavailable();
         }});
         notes[index]={...note,status:"locked",lockedByIntentCommitment:pending.intentCommitment,
           sourceIntentCommitment:source.intentCommitment};
+        if(store.orderLifecycle.get(source.intentCommitment)?.status!=="open") {
+          await this.orders.cancelDurable({intentCommitment:submitted.intentCommitment},note.walletAddress);
+          continue;
+        }
         resumed++;
       }catch(error){if(!(error instanceof MakerNoteClaimUnavailable))throw error;}
     }
@@ -269,7 +329,11 @@ export class MakerLiquidityService {
       deployedPrincipal, seriesPrincipals, vault: this.vaultBacking.vault };
   }
 
-  async finalizeSettlement(settlement: BatchSettlement): Promise<void> {
+  finalizeSettlement(settlement: BatchSettlement): Promise<void> {
+    return this.withMakerNotes(() => this.finalizeMakerSettlement(settlement));
+  }
+
+  private async finalizeMakerSettlement(settlement: BatchSettlement): Promise<void> {
     const filled = new Set(
       settlement.orderUpdates
         .filter((update) => update.status === "filled" || update.status === "partially-filled")
@@ -348,41 +412,201 @@ export class MakerLiquidityService {
     }) as IntentValidityRecord;
 
     try {
-      return await this.intents.submitDurable({intent,validity},intent.owner,{beforeSubmit:async()=>{
+      const submitted = await this.intents.submitDurable({intent,validity},intent.owner,{beforeSubmit:async()=>{
+        if(this.executor.store.orderLifecycle.get(input.clientIntent.intentCommitment)?.status!=="open")throw new MakerNoteClaimUnavailable();
+        if(!await this.isMakerNoteUnspent(input.note))throw new MakerNoteClaimUnavailable();
         if(!await this.claimNote(input.note.commitment,validity.intentCommitment,
           input.clientIntent.intentCommitment,input.note.vaultAllocationId))throw new MakerNoteClaimUnavailable();
       }});
+      if(this.executor.store.orderLifecycle.get(input.clientIntent.intentCommitment)?.status!=="open") {
+        await this.orders.cancelDurable({intentCommitment:submitted.intentCommitment},input.note.walletAddress);
+        return undefined;
+      }
+      return submitted;
     } catch (error) {
       if(error instanceof MakerNoteClaimUnavailable)return undefined;
       throw error;
     }
   }
 
-  private reapOrphanedMakerIntents(notes: StoredMakerNote[]): { changed: boolean; notes: StoredMakerNote[] } {
-    let changed = false;
-    const next = notes.map((note) => {
-      if (note.status !== "locked" || !note.lockedByIntentCommitment || !note.sourceIntentCommitment) {
-        return note;
+  private async reconcileCancelledMakerIntents(notes: StoredMakerNote[]): Promise<Set<Hex>> {
+    const blocked = new Set<Hex>();
+    if (!this.onchain?.enabled) return blocked;
+    for (const note of notes) {
+      if (note.status !== "available" && note.status !== "locked") continue;
+      if (this.executor.store.spentNullifiers.has(note.noteNullifier)) {
+        blocked.add(note.commitment);
+        continue;
       }
-      if(this.executor.store.pendingIntentSubmissions.has(note.lockedByIntentCommitment))return note;
-      if (this.executor.store.orderLifecycle.get(note.sourceIntentCommitment)?.status === "open") {
-        return note;
+      for (const intent of this.executor.store.intents.values()) {
+        if (intent.noteNullifier !== note.noteNullifier) continue;
+        const status = this.executor.store.orderLifecycle.get(intent.intentCommitment)?.status;
+        if (status === "open" || status === "partially-filled") {
+          if (note.lockedByIntentCommitment !== intent.intentCommitment) blocked.add(note.commitment);
+          continue;
+        }
+        if (status !== "cancelled") {
+          blocked.add(note.commitment);
+          continue;
+        }
+        if (this.confirmedCancelledMakerOrders.has(intent.intentCommitment)) continue;
+        try {
+          if (this.isMakerOrderForNote(intent, note)) {
+            await this.orders.cancelDurable({ intentCommitment: intent.intentCommitment }, note.walletAddress);
+          } else {
+            if (!this.onchain.isIntentActiveAsync || !this.onchain.isIntentCancelledAsync ||
+                await this.onchain.isIntentActiveAsync(intent.intentCommitment) !== false ||
+                await this.onchain.isIntentCancelledAsync(intent.intentCommitment) !== true) {
+              throw new Error("prior intent cancellation is unconfirmed");
+            }
+          }
+          this.confirmedCancelledMakerOrders.add(intent.intentCommitment);
+        } catch {
+          blocked.add(note.commitment);
+          break;
+        }
+      }
+    }
+    return blocked;
+  }
+
+  private async isMakerNoteUnspent(note: StoredMakerNote): Promise<boolean> {
+    if (!this.onchain?.enabled) return true;
+    if (!this.onchain.isSecureNullifierSpentAsync) return false;
+    return await this.onchain.isSecureNullifierSpentAsync(note.noteNullifier) === false;
+  }
+
+  private isMakerOrderForNote(intent: IntentRecord, note: StoredMakerNote): boolean {
+    return intent.batchId.startsWith(`${MAKER_BATCH_PREFIX}-`) &&
+      intent.noteNullifier === note.noteNullifier &&
+      intent.ownerCommitment.toLowerCase() === noteOwnerCommitment(note).toLowerCase();
+  }
+
+  private async reapOrphanedMakerIntents(notes: StoredMakerNote[], blockedNotes: ReadonlySet<Hex> = new Set()): Promise<{ changed: boolean; notes: StoredMakerNote[] }> {
+    let changed = false;
+    const next: StoredMakerNote[] = [];
+    for (const note of notes) {
+      if (note.status !== "locked" || !note.lockedByIntentCommitment || !note.sourceIntentCommitment ||
+          blockedNotes.has(note.commitment)) {
+        next.push(note);
+        continue;
+      }
+      if (!this.isSourceLocallyTerminal(note.sourceIntentCommitment)) {
+        next.push(note);
+        continue;
+      }
+      const pending = this.executor.store.pendingIntentSubmissions.get(note.lockedByIntentCommitment);
+      let discarded = false;
+      if (pending) {
+        if (!this.isOrphanedMakerSubmission(pending, note)) {
+          next.push(note);
+          continue;
+        }
+        try {
+          discarded = await this.intents.discardUnregisteredPendingIntent(
+            note.lockedByIntentCommitment,
+            pending.createdAt,
+            () => this.fenceTerminalMakerIntent(note, pending.intentCommitment),
+          );
+        } catch {
+          discarded = false;
+        }
+        if (!discarded) {
+          next.push(note);
+          continue;
+        }
       }
       const makerOrder = this.executor.store.orderLifecycle.get(note.lockedByIntentCommitment);
-      if (makerOrder?.status === "filled") return note;
-      if (makerOrder && makerOrder.status !== "cancelled") {
-        this.executor.store.cancelOrder(note.lockedByIntentCommitment);
+      const makerIntent = this.executor.store.intents.get(note.lockedByIntentCommitment);
+      if (!makerOrder && !discarded) {
+        try {
+          if (!await this.intents.confirmUnregisteredIntentAbsent(note.lockedByIntentCommitment,
+            () => this.fenceTerminalMakerIntent(note, note.lockedByIntentCommitment!))) {
+            next.push(note);
+            continue;
+          }
+        } catch {
+          next.push(note);
+          continue;
+        }
+      }
+      if (makerOrder) {
+        if (!makerIntent || !this.isMakerOrderForNote(makerIntent, note) ||
+            (makerOrder.status !== "open" && makerOrder.status !== "cancelled")) {
+          next.push(note);
+          continue;
+        }
+        if (makerOrder.status === "open") {
+          if (!await this.isSourceTerminalConfirmed(note.sourceIntentCommitment)) {
+            next.push(note);
+            continue;
+          }
+          try {
+            await this.orders.cancelDurable({ intentCommitment: makerIntent.intentCommitment }, note.walletAddress);
+            this.confirmedCancelledMakerOrders.add(makerIntent.intentCommitment);
+          } catch {
+            next.push(note);
+            continue;
+          }
+        }
       }
       changed = true;
-      return {
+      next.push({
         ...note,
         lockedByIntentCommitment: undefined,
         sourceIntentCommitment: undefined,
         status: "available" as const,
         updatedAt: Date.now(),
-      };
-    });
+      });
+    }
     return { changed, notes: next };
+  }
+
+  private isOrphanedMakerSubmission(pending: {
+    intentCommitment: Hex;
+    intent: TradeIntent;
+    validity: IntentValidityRecord;
+    prepared: { record: IntentRecord };
+  }, note: StoredMakerNote): boolean {
+    const source = note.sourceIntentCommitment;
+    return Boolean(source && pending.intentCommitment === note.lockedByIntentCommitment &&
+      pending.prepared.record.intentCommitment === pending.intentCommitment &&
+      pending.intent.batchId.startsWith(`${MAKER_BATCH_PREFIX}-`) &&
+      pending.intent.nonce === `${source}:${note.commitment}:maker-nonce` &&
+      pending.intent.salt === `${source}:${note.commitment}:maker-salt` &&
+      pending.intent.noteNullifier === note.noteNullifier &&
+      pending.intent.owner === note.walletAddress &&
+      pending.validity.noteCommitment === note.commitment &&
+      pending.prepared.record.ownerCommitment === noteOwnerCommitment(note));
+  }
+
+  private async fenceTerminalMakerIntent(note: StoredMakerNote, intentCommitment: Hex): Promise<boolean> {
+    const source = note.sourceIntentCommitment;
+    if (!source || !this.onchain?.fenceIntentSubmissionAsync) return false;
+    if (!this.isSourceLocallyTerminal(source) || !await this.isSourceTerminalConfirmed(source)) return false;
+    await this.onchain.fenceIntentSubmissionAsync(intentCommitment);
+    return this.isSourceLocallyTerminal(source) && this.isSourceTerminalConfirmed(source);
+  }
+
+  private isSourceLocallyTerminal(intentCommitment: Hex): boolean {
+    const source = this.executor.store.orderLifecycle.get(intentCommitment);
+    return source?.status === "cancelled" || source?.status === "filled" ||
+      (source?.status === "partially-filled" && Boolean(source.residualCommitment));
+  }
+
+  private async isSourceTerminalConfirmed(intentCommitment: Hex): Promise<boolean> {
+    if (!this.onchain?.enabled || !this.onchain.isIntentActiveAsync || !this.onchain.isIntentCancelledAsync) {
+      return false;
+    }
+    try {
+      const [active, cancelled] = await Promise.all([
+        this.onchain.isIntentActiveAsync(intentCommitment),
+        this.onchain.isIntentCancelledAsync(intentCommitment),
+      ]);
+      return active === false && cancelled === true;
+    } catch {
+      return false;
+    }
   }
 
   private indexMakerMarginCommitments(notes: StoredMakerNote[]): void {
@@ -638,6 +862,8 @@ function lockMakerNote(
 function unlockStaleMakerLocks(
   notes: StoredMakerNote[],
   intents: Map<string, IntentRecord>,
+  blockedNotes: ReadonlySet<Hex>,
+  allowUnknown: boolean,
 ): { changed: boolean; notes: StoredMakerNote[] } {
   let changed = false;
   const next = notes.map((note) => {
@@ -645,6 +871,8 @@ function unlockStaleMakerLocks(
       note.status !== "locked" ||
       !note.lockedByIntentCommitment ||
       note.vaultAllocationId ||
+      blockedNotes.has(note.commitment) ||
+      !allowUnknown ||
       intents.has(note.lockedByIntentCommitment)
     ) {
       return note;

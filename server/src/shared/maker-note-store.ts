@@ -282,6 +282,27 @@ export async function claimMakerNote(
   }
 }
 
+export async function releaseMakerNote(
+  commitment: string,
+  intentCommitment: string,
+  sourceIntentCommitment: string,
+): Promise<boolean> {
+  const config = requiredMongoConfig();
+  const client = new MongoClient(config.uri);
+  try {
+    await client.connect();
+    const result = await client.db(config.database).collection<MakerNoteDocument>(config.collection).updateOne(
+      { _id: makerNoteDocumentId(config.namespace, commitment), namespace: config.namespace, status: "locked",
+        lockedByIntentCommitment: intentCommitment, sourceIntentCommitment },
+      { $set: { status: "available", updatedAt: Date.now() },
+        $unset: { lockedByIntentCommitment: "", sourceIntentCommitment: "" } },
+    );
+    return result.modifiedCount === 1;
+  } finally {
+    await client.close();
+  }
+}
+
 function requiredMongoConfig(): {
   collection: string;
   database: string;

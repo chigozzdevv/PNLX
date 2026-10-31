@@ -3,7 +3,7 @@ import { contractPublicInputHash, publicField, publicU128 } from "@pnlx/proof-sy
 import type { OrderLifecycleRecord } from "@pnlx/protocol-types";
 import type { ServerEnv } from "@/config/env";
 import type { ExecutorService } from "@/workers/executor/executor.service";
-import type { OnchainRelayService } from "@/workers/onchain/onchain.service";
+import type { OnchainRelay, OnchainRelayResult } from "@/workers/onchain/onchain.model";
 import type { ProverService } from "@/workers/prover/prover.service";
 import { assertSubmittedRelay } from "@/shared/protocol/onchain-submission";
 import { withPositionMutation } from "@/shared/protocol/position-mutation";
@@ -24,7 +24,7 @@ export class OrdersService {
   constructor(
     private readonly executor: ExecutorService,
     private readonly prover: ProverService,
-    private readonly onchain?: OnchainRelayService,
+    private readonly onchain?: OnchainRelay,
     private readonly env: Pick<ServerEnv, "intentRegistryOnchainRequired"> & Partial<Pick<ServerEnv, "collateralTokenDigest">> = {
       intentRegistryOnchainRequired: false,
     },
@@ -90,7 +90,7 @@ export class OrdersService {
   }
 
   private syncSecureNotes(): void {
-    if (!this.onchain?.enabled) throw new Error("secure note reader unavailable");
+    if (!this.onchain?.enabled || !this.onchain.secureNoteSnapshot) throw new Error("secure note reader unavailable");
     const notes = this.onchain.secureNoteSnapshot([...this.executor.store.marginCommitments]);
     if (notes.root !== this.executor.store.marginMembershipRoot()) {
       this.executor.store.replaceMarginCommitments(notes.commitments);
@@ -137,7 +137,7 @@ export class OrdersService {
       const activeBefore = await this.onchain.isIntentActiveAsync(input.intentCommitment);
       if (typeof cancelledBefore !== "boolean" || typeof activeBefore !== "boolean" ||
           cancelledBefore === activeBefore) throw new Error("intent cancellation status is inconsistent or unavailable");
-      let relay: ReturnType<OnchainRelayService["cancelIntent"]> | undefined;
+      let relay: OnchainRelayResult | undefined;
       let cancellationError: unknown;
       if (!cancelledBefore) {
         try {
@@ -206,7 +206,7 @@ export class OrdersService {
 }
 
 function relayTxHash(
-  result: ReturnType<OnchainRelayService["cancelIntent"]> | undefined,
+  result: OnchainRelayResult | undefined,
   functionName: string,
 ) {
   return result?.relays.find((relay) => relay.functionName === functionName && relay.submitted)?.txHash;

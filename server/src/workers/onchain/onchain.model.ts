@@ -131,6 +131,8 @@ export interface OnchainRelay {
   submitIntent(record: IntentRecord): OnchainRelayResult;
   submitIntentAsync?(record: IntentRecord): Promise<OnchainRelayResult>;
   cancelIntent(intentCommitment: Hex): OnchainRelayResult;
+  cancelIntentAsync?(intentCommitment: Hex): Promise<OnchainRelayResult>;
+  fenceIntentSubmissionAsync?(intentCommitment: Hex): Promise<void>;
   residualMargin(intentCommitment: Hex): bigint;
   claimedResidual(intentCommitment: Hex): Hex | undefined;
   claimResidual(intentCommitment: Hex, commitment: Hex, proof: ProofMeta): OnchainRelayResult;

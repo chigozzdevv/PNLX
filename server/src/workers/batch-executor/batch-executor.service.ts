@@ -52,6 +52,8 @@ export class BatchExecutorService {
   private readonly marketRuns: Map<string, Promise<BatchExecutorMarketResult>>;
   private readonly activeReservations: Map<Hex, "fresh" | "recovery">;
   private timer: ReturnType<typeof setInterval> | undefined;
+  private makerRecovery: Promise<void> | undefined;
+  private makerRecoveryAfter = 0;
 
   constructor(
     private readonly executor: ExecutorService,
@@ -165,6 +167,7 @@ export class BatchExecutorService {
     if (this.timer) return;
     this.startOracleRefresh();
     this.timer = setInterval(() => {
+      this.recoverMakerLiquidity();
       const startedAt = Date.now();
       for (const marketId of this.marketIds(input.marketId)) {
         if (this.marketRuns.has(marketId) || this.isCoolingDown(marketId, startedAt, input)) continue;
@@ -174,14 +177,27 @@ export class BatchExecutorService {
       }
     }, this.config.intervalMs);
     (this.timer as { unref?: () => void }).unref?.();
+    this.recoverMakerLiquidity();
   }
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+    this.makerRecoveryAfter = 0;
     if (this.oracleTimer) clearInterval(this.oracleTimer);
     this.oracleTimer = undefined;
     for (const controller of this.oracleControllers) controller.abort();
+  }
+
+  private recoverMakerLiquidity(): void {
+    if (!this.makerLiquidity || this.makerRecovery || Date.now() < this.makerRecoveryAfter) return;
+    const work = this.makerLiquidity.recover().catch((error) => {
+      console.error(`[BatchExecutorService] maker recovery failed: ${errorMessage(error)}`);
+    }).finally(() => {
+      this.makerRecoveryAfter = this.timer ? Date.now() + 30_000 : 0;
+      this.makerRecovery = undefined;
+    });
+    this.makerRecovery = work;
   }
 
   private startOracleRefresh(): void {

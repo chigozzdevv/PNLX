@@ -25,6 +25,9 @@ test("maker admission survives registry acceptance before local commit without d
       status:"available",walletAddress:wallet};
     store.addMarginCommitment(note.commitment);
     const clientIntent={intentCommitment:fieldHex(10n),marketId:"xlm-usd-perp"} as IntentRecord;
+    store.orderLifecycle.set(clientIntent.intentCommitment, { intentCommitment: clientIntent.intentCommitment,
+      batchId: "source", marketId: "xlm-usd-perp", ownerCommitment: fieldHex(11n),
+      status: "open", createdAt: 1, updatedAt: 1 });
     const payload={marketId:"xlm-usd-perp",signedSize:1_000_000_000n,margin:200_000_000n,
       limitPrice:100_000_000n} as PrivateMatchIntent;
     const input={batchId:"maker-journal-recovery",clientIntent,margin:200_000_000n,note,payload,
@@ -36,6 +39,8 @@ test("maker admission survives registry acceptance before local commit without d
     const onchain={enabled:true,
       secureNoteSnapshot:()=>({commitments:[note.commitment],root:store.marginMembershipRoot()}),
       isIntentRegisteredAsync:async()=>Boolean(registered),
+      isSecureNoteRootKnownAsync:async()=>true,
+      isSecureNullifierSpentAsync:async()=>false,
       intentMatchingPayloadCommitmentAsync:async()=>{
         if(interrupted)throw new Error("simulated process loss after registry acceptance");
         return registered!.matchingPayloadCommitment;
@@ -95,7 +100,7 @@ test("a claimed unregistered maker journal resumes its exact order after restart
     const source=fieldHex(10n);
     const clientIntent={intentCommitment:source,marketId:"xlm-usd-perp"} as IntentRecord;
     const payload={marketId:"xlm-usd-perp",signedSize:1_000_000_000n,margin:200_000_000n,
-      limitPrice:100_000_000n} as PrivateMatchIntent;
+      limitPrice:101_000_000n} as PrivateMatchIntent;
     store.intents.set(source,clientIntent);store.privateMatchIntents.set(source,payload);
     const lifecycle={intentCommitment:source,batchId:"source",marketId:"xlm-usd-perp",
       ownerCommitment:fieldHex(11n),status:"open" as const,createdAt:1,updatedAt:1};
@@ -107,6 +112,8 @@ test("a claimed unregistered maker journal resumes its exact order after restart
     const onchain={enabled:true,
       secureNoteSnapshot:()=>({commitments:[note.commitment],root:store.marginMembershipRoot()}),
       isIntentRegisteredAsync:async(commitment:Hex)=>accepted?.intentCommitment===commitment,
+      isSecureNoteRootKnownAsync:async()=>true,
+      isSecureNullifierSpentAsync:async()=>false,
       intentMatchingPayloadCommitmentAsync:async()=>accepted!.matchingPayloadCommitment,
       isIntentActiveAsync:async()=>true,intentSubmissionSequenceAsync:async()=>9n,
       submitIntentAsync:async(record:IntentRecord)=>{
@@ -127,6 +134,7 @@ test("a claimed unregistered maker journal resumes its exact order after restart
     const before=[...store.pendingIntentSubmissions.values()][0]!;
     const seed=before.prepared.privateMatchIntent.positionSeed;
     store=new FileProtocolStore(path);executor=new ExecutorService({},store);stopAfterClaim=false;
+    store.updateMarket({...store.markets.get("xlm-usd-perp")!,oraclePrice:99_500_000n});
     const recovered=new IntentsService(executor,prover,onchain as never,{intentRegistryOnchainRequired:true});
     expect(await recovered.recoverPendingIntents()).toEqual({recovered:0,pending:1});
     maker=new MakerLiquidityService(executor,prover,onchain as never,{intentRegistryOnchainRequired:true},undefined,claim);

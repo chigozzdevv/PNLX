@@ -243,6 +243,24 @@ describe("prepared intent write-ahead recovery", () => {
     output = '"true"';
     expect(await onchain.isIntentRegisteredAsync(key("intent"))).toBe(true);
   });
+
+  test("a submission fence requires a confirmed on-chain transaction", async () => {
+    const txHash = key("fence-tx");
+    let status = "NOT_FOUND";
+    const relayer = {
+      relayAsync: async (request: { payload: { functionName: string; send: string } }) => {
+        expect(request.payload.functionName).toBe("is_active_intent");
+        expect(request.payload.send).toBe("yes");
+        return { submitted: true, txHash };
+      },
+      readTransactionStatus: async (hash: Hex) => { expect(hash).toBe(txHash); return status; },
+    };
+    const onchain = new OnchainRelayService(relayer as never, { enabled: true,
+      deployment: { contracts: { "intent-registry": "registry" } } } as never);
+    await expect(onchain.fenceIntentSubmissionAsync(key("intent"))).rejects.toThrow("fence is not confirmed");
+    status = "SUCCESS";
+    await expect(onchain.fenceIntentSubmissionAsync(key("intent"))).resolves.toBeUndefined();
+  });
 });
 
 function statePath() { const dir = mkdtempSync(join(tmpdir(), "pnlx-intent-journal-")); dirs.push(dir); return join(dir, "state.json"); }
