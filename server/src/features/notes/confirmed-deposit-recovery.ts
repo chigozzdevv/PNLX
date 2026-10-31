@@ -11,6 +11,7 @@ export interface ConfirmedDepositRecoveryReader {
   }>;
 }
 const PASSPHRASES:Record<string,string>={testnet:"Test SDF Network ; September 2015",mainnet:"Public Global Stellar Network ; September 2015"};
+const LEAF_READ_CONCURRENCY=10;
 export function depositRecoveryNetworkHash(passphrase:string):Hex{return hashFields("stellar-network-passphrase",[passphrase]);}
 function hex(value:unknown,label:string):Hex {
   if(typeof value!=="string"||!/^(0x)?[0-9a-f]{64}$/i.test(value))throw new Error(`invalid ${label}`);
@@ -21,7 +22,7 @@ export class StellarConfirmedDepositRecovery implements ConfirmedDepositRecovery
   async read(pending:PendingAssetDepositRecord,cached:Hex[]) {
     const env=this.env,deployment=loadDeploymentRegistry(env.stellarDeploymentFile),pool=deployment?.contracts["shielded-pool"];
     if(!env.stellarOnchainRelay||env.stellarRelayerMode!=="stellar-cli"||!pool||deployment?.network!==env.stellarNetwork||PASSPHRASES[env.stellarNetwork]!==env.stellarNetworkPassphrase)throw new Error("confirmed deposit recovery network or pool is unavailable");
-    const txHash=hex(pending.preparedTxHash,"prepared deposit transaction hash"),deadline=Date.now()+60_000;
+    const txHash=hex(pending.preparedTxHash,"prepared deposit transaction hash"),deadline=Date.now()+90_000;
     const timeout=()=>{const remaining=deadline-Date.now();if(remaining<=0)throw new Error("confirmed deposit recovery read deadline exceeded");return Math.min(remaining,20_000);};
     const rpc=async(method:string,params?:Record<string,unknown>)=>{
       const response=await this.fetcher(env.stellarRpcUrl,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method,...(params?{params}:{})}),signal:AbortSignal.timeout(timeout())});
@@ -52,7 +53,7 @@ export class StellarConfirmedDepositRecovery implements ConfirmedDepositRecovery
       const raw=await read("secure_note_count");
       if(!((typeof raw==="number"&&Number.isSafeInteger(raw))||(typeof raw==="string"&&/^\d+$/.test(raw))))throw new Error("invalid secure note count");
       const count=Number(raw);if(!Number.isSafeInteger(count)||count<0||count>(1<<20))throw new Error("invalid secure note count");
-      const append=async(prefix:Hex[])=>{if(count-prefix.length>4096)throw new Error("secure note recovery exceeds read budget");const result=[...prefix];for(let index=result.length;index<count;index++)result.push(hex(await read("secure_note_leaf",["--index",String(index)]),"secure note leaf"));return result;};
+      const append=async(prefix:Hex[])=>{if(count-prefix.length>4096)throw new Error("secure note recovery exceeds read budget");const result=[...prefix];for(let offset=result.length;offset<count;offset+=LEAF_READ_CONCURRENCY){const leaves=await Promise.all(Array.from({length:Math.min(LEAF_READ_CONCURRENCY,count-offset)},(_,index)=>read("secure_note_leaf",["--index",String(offset+index)])));result.push(...leaves.map((leaf)=>hex(leaf,"secure note leaf")));}return result;};
       commitments=cached.length<=count?await append(cached):await append([]);
       if(secureMarginRoot(commitments)!==root)commitments=await append([]);
       if(secureMarginRoot(commitments)!==root)throw new Error("confirmed deposit secure note tree does not match its leaves");
