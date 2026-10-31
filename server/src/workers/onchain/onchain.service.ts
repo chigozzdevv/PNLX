@@ -164,6 +164,15 @@ export class OnchainRelayService implements OnchainRelay {
     return parseAuthoritativeBoolean(result.stdout, "deposit commitment status");
   }
 
+  async isSecureNoteRootKnownAsync(root: Hex): Promise<boolean> {
+    if (!this.config.enabled) throw new Error("secure note root status requires on-chain relay");
+    const result = await this.relayer.readAsync({ kind: "contract-invoke", payload: {
+      args: ["--root", bytes32(root)], contractId: contractId(this.deployment(), "shielded-pool"),
+      functionName: "has_secure_note_root", send: "no",
+    } });
+    return parseAuthoritativeBoolean(result.stdout, "secure note root status");
+  }
+
   tokenDigest(token: string, source?: string): Hex {
     if (!this.config.enabled) throw new Error("asset token digest requires on-chain relay");
     if (!token) throw new Error("asset token digest requires token");

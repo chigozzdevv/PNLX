@@ -87,7 +87,7 @@ export class ExecutorService implements PnlxExecutor {
     ) {
       throw new Error("intent proof public binding mismatch");
     }
-    if (input.validity.marginRoot !== this.store.marginMembershipRoot()) {
+    if (!input.historicalMarginRootVerified && input.validity.marginRoot !== this.store.marginMembershipRoot()) {
       throw new StaleMarginRootError();
     }
     const privateMatchIntent = privateMatchIntentFromTradeIntent({

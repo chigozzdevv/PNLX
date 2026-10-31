@@ -104,6 +104,7 @@ export interface OnchainRelay {
   isPositionCloseSettledAsync?(closeCommitment: Hex): Promise<boolean>;
   positionCloseAppendIndexAsync?(closeCommitment: Hex): Promise<number>;
   secureNoteSnapshot?(cached?: Hex[]): { commitments: Hex[]; root: Hex };
+  isSecureNoteRootKnownAsync?(root: Hex): Promise<boolean>;
   assetBalance(token: string, account: string, source?: string): bigint;
   deposit(commitment: Hex): OnchainRelayResult;
   depositAsset(input: AssetDepositRelayInput): OnchainRelayResult;

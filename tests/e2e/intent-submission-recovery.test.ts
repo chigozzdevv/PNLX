@@ -82,6 +82,44 @@ describe("prepared intent write-ahead recovery", () => {
     expect(submissions).toBe(2);
   });
 
+  test("submits a retained historical root only when the note nullifier is still unspent", async () => {
+    const store = new ProtocolStore();
+    store.addMarginCommitment(key("source-note"));
+    const input = fixture(store);
+    const historicalRoot = input.validity.marginRoot;
+    store.addMarginCommitment(key("newer-note"));
+    let registered = false;
+    let submissions = 0;
+    const onchain = {
+      ...chain(store, input, { registered: () => registered, submit: () => { submissions++; registered = true; } }),
+      isSecureNoteRootKnownAsync: async (root: Hex) => root === historicalRoot,
+      isSecureNullifierSpentAsync: async () => false,
+    };
+    const result = await new IntentsService(new ExecutorService({}, store), prover as never, onchain as never, env)
+      .submitDurable(input, input.intent.owner);
+    expect(result.marginRoot).toBe(historicalRoot);
+    expect(submissions).toBe(1);
+
+    for (const state of ["unknown-root", "spent-note"] as const) {
+      const nextStore = new ProtocolStore();
+      nextStore.addMarginCommitment(key("source-note"));
+      const nextInput = fixture(nextStore, state);
+      nextStore.addMarginCommitment(key("newer-note"));
+      let relays = 0;
+      const nextOnchain = {
+        ...chain(nextStore, nextInput, { registered: () => false, submit: () => { relays++; } }),
+        isSecureNoteRootKnownAsync: async () => state !== "unknown-root",
+        isSecureNullifierSpentAsync: async () => state === "spent-note",
+      };
+      const nextService = new IntentsService(new ExecutorService({}, nextStore), prover as never, nextOnchain as never, env);
+      await expect(nextService.submitDurable(nextInput, nextInput.intent.owner)).rejects.toThrow(
+        state === "unknown-root" ? "intent margin root is not current" : "intent note nullifier is already spent",
+      );
+      expect(nextStore.pendingIntentSubmissions.size).toBe(0);
+      expect(relays).toBe(0);
+    }
+  });
+
   test("mismatching registry payloads and inactive accepted intents cannot activate local orders", async () => {
     for (const mismatch of [true, false]) {
       const store = new ProtocolStore();
@@ -229,6 +267,7 @@ function chain(_store: ProtocolStore, input: ReturnType<typeof fixture>, state: 
   registered: () => boolean; submit: (record: IntentRecord) => void;
 }) {
   return { enabled: true, secureNoteSnapshot: (commitments: Hex[]) => ({ commitments, root: secureMarginRoot(commitments) }),
+    isSecureNoteRootKnownAsync: async () => true, isSecureNullifierSpentAsync: async () => false,
     isIntentRegisteredAsync: async () => state.registered(),
     intentMatchingPayloadCommitmentAsync: async () => input.validity.matchingPayloadCommitment,
     isIntentActiveAsync: async () => true,

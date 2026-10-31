@@ -33,6 +33,21 @@ function fixture() {
 }
 
 describe("owner-bound failed-deposit status", () => {
+  test("reads historical secure note roots from the configured pool", async () => {
+    const calls: unknown[] = []; let stdout: string | undefined = "true";
+    const chain = new OnchainRelayService({ async readAsync(input: unknown) { calls.push(input); return { stdout }; } } as never,
+      { enabled: true, deployment: { contracts: { "shielded-pool": "configured-pool" } } as never });
+    const root = fieldHex(7n);
+    expect(await chain.isSecureNoteRootKnownAsync(root)).toBe(true);
+    expect(calls[0]).toEqual({ kind: "contract-invoke", payload: { args: ["--root", root.slice(2)],
+      contractId: "configured-pool", functionName: "has_secure_note_root", send: "no" } });
+    stdout = "false"; expect(await chain.isSecureNoteRootKnownAsync(root)).toBe(false);
+    for (const invalid of [undefined, "", "null", '"false"', "0", "unknown"]) {
+      stdout = invalid;
+      await expect(chain.isSecureNoteRootKnownAsync(root)).rejects.toThrow("invalid secure note root status");
+    }
+  });
+
   test("reads the configured pool and accepts only an authoritative boolean", async () => {
     const calls: unknown[] = []; let stdout: string | undefined = "false";
     const chain = new OnchainRelayService({ async readAsync(input: unknown) { calls.push(input); return { stdout }; } } as never,

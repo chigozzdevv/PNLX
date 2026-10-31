@@ -59,9 +59,15 @@ export class IntentsService {
           await this.persistConditionalPolicy(input);
           return local;
         }
+        const historicalMarginRootVerified = await this.verifyOnchainMarginRoot(
+          input.validity.marginRoot,
+          input.validity.noteNullifier,
+        );
         store.recordProof(input.validity.proof);
         pending = { intentCommitment: input.validity.intentCommitment, createdAt: Date.now(),
-          intent: input.intent, validity: input.validity, prepared: this.executor.prepareIntent(input),
+          intent: input.intent, validity: input.validity, prepared: this.executor.prepareIntent({
+            intent: input.intent, validity: input.validity, historicalMarginRootVerified,
+          }),
           conditionalPolicy: input.conditionalPolicy, replacementOf: options.replacementOf };
         store.addPendingIntentSubmission(pending);
         pending = store.pendingIntentSubmissions.get(pending.intentCommitment)!;
@@ -181,7 +187,7 @@ export class IntentsService {
   async proveAndSubmitDurable(input: ProveAndSubmitIntentInput, authenticated?: string): Promise<ProveAndSubmitIntentResult> {
     assertAuthenticatedAccount(authenticated, input.intent.owner, "owner");
     this.syncSecureNotes();
-    if (input.marginRoot !== this.executor.store.marginMembershipRoot()) throw new StaleMarginRootError();
+    await this.verifyOnchainMarginRoot(input.marginRoot, input.intent.noteNullifier);
     const validity = this.prover.proveIntentValidityAsync
       ? await this.prover.proveIntentValidityAsync(input) : this.prover.proveIntentValidity(input);
     return { intent: await this.submitDurable({ intent: input.intent, validity }, authenticated), validity };
@@ -303,5 +309,17 @@ export class IntentsService {
     if (notes.root !== this.executor.store.marginMembershipRoot()) {
       this.executor.store.replaceMarginCommitments(notes.commitments);
     }
+  }
+
+  private async verifyOnchainMarginRoot(root: Hex, noteNullifier: Hex): Promise<boolean> {
+    if (!this.env.intentRegistryOnchainRequired) return false;
+    if (!this.onchain?.enabled || !this.onchain.isSecureNoteRootKnownAsync || !this.onchain.isSecureNullifierSpentAsync) {
+      throw new Error("on-chain secure note recovery readers are required");
+    }
+    if (!await this.onchain.isSecureNoteRootKnownAsync(root)) throw new StaleMarginRootError();
+    if (await this.onchain.isSecureNullifierSpentAsync(noteNullifier)) {
+      throw new Error("intent note nullifier is already spent");
+    }
+    return true;
   }
 }

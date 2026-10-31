@@ -17,6 +17,7 @@ export interface ExecutorConfig {
 export interface SubmitIntentInput {
   intent: TradeIntent;
   validity: IntentValidityRecord;
+  historicalMarginRootVerified?: boolean;
 }
 
 export interface PreparedIntentSubmission {
