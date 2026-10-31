@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { APP_HOME_HREF } from "@/lib/app-url";
 
 export function LandingCtaSection() {
   return (
@@ -8,7 +9,7 @@ export function LandingCtaSection() {
         <p>Connect your Stellar wallet and trade with shielded state, private execution, and proof-backed settlement.</p>
       </div>
 
-      <Link className="landing-cta-button" href="/trade">
+      <Link className="landing-cta-button" href={APP_HOME_HREF}>
         Start Trading
       </Link>
     </section>

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
+import { APP_HOME_HREF } from "@/lib/app-url";
 
 const landingLinks = [
   { label: "Product", href: "#product" },
@@ -45,7 +46,7 @@ export function LandingHeader() {
       </nav>
 
       <nav className="landing-nav-actions" aria-label="Primary navigation">
-        <Link className="landing-launch-button" href="/trade">
+        <Link className="landing-launch-button" href={APP_HOME_HREF}>
           Launch App
           <ArrowUpRight size={16} />
         </Link>

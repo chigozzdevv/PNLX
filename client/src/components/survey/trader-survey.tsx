@@ -12,12 +12,12 @@ import { apiPath } from "@/lib/api-path";
 import { CountrySelect } from "./country-select";
 import styles from "./trader-survey.module.css";
 
-export function TraderSurvey({ previewConfirmation = false }: { previewConfirmation?: boolean } = {}) {
+export function TraderSurvey() {
   const [answers, setAnswers] = useState<SurveyAnswers>(emptySurveyAnswers);
   const [step, setStep] = useState<SurveyStep>("about");
   const [errors, setErrors] = useState<SurveyErrors>({});
   const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(previewConfirmation);
+  const [submitted, setSubmitted] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
   const submissionId = useRef("");
   const busy = useRef(false);

@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import { APP_HOME_HREF } from "@/lib/app-url";
 
 const footerLinks = [
   { label: "Product", href: "#product" },
@@ -7,7 +8,7 @@ const footerLinks = [
   { label: "Protocol", href: "#protocol" },
   { label: "Questions", href: "#questions" },
   { label: "Survey", href: "/survey" },
-  { label: "Launch App", href: "/trade" },
+  { label: "Launch App", href: APP_HOME_HREF },
 ];
 
 export function LandingFooter() {

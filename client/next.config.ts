@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const clientRoot = dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ["127.0.0.1"],
+  allowedDevOrigins: ["127.0.0.1", "app.localhost"],
   transpilePackages: ["@pnlx/survey"],
   env: {
     NEXT_PUBLIC_PNLX_PROVER_URL: process.env.NEXT_PUBLIC_PNLX_PROVER_URL ?? "/api/prover",
