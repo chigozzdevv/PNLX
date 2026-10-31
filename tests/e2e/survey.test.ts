@@ -6,6 +6,7 @@ import {
 import { Router } from "@/shared/http/router";
 import { registerSurveyRoute } from "@/features/survey/survey.route";
 import type { SurveyRepository } from "@/features/survey/survey.repository";
+import { DEFAULT_PRODUCTION_WEB_ORIGINS, webOrigins } from "@/shared/http/cors";
 
 const submissionId = "9cc3098c-a5ca-493e-8d7e-b5146e213123";
 function validAnswers() {
@@ -20,7 +21,7 @@ function setup(repository?: SurveyRepository, now?: () => number) {
   // Check that survey submission explicitly bypasses wallet authentication.
   const router = new Router({ protectMutations: true, authenticate: () => new Response(null, { status: 401 }) });
   registerSurveyRoute(router, {
-    allowedOrigins: new Set(["https://www.pnl.family"]), now,
+    allowedOrigins: webOrigins(DEFAULT_PRODUCTION_WEB_ORIGINS), now,
     repository: repository ?? { async save(submission) {
       if (records.has(submission.submissionId)) return false;
       records.set(submission.submissionId, submission); return true;
@@ -35,6 +36,14 @@ function setup(repository?: SurveyRepository, now?: () => number) {
 }
 
 describe("survey boundaries and branching", () => {
+  test.each(["https://pnlx.trade", "https://www.pnlx.trade", "https://www.pnl.family", "https://pnl.family"])(
+    "accepts survey submissions from the compatible frontend origin %s", async (origin) => {
+      const { request, records } = setup();
+      expect((await request(undefined, { origin })).status).toBe(201);
+      expect(records.size).toBe(1);
+    },
+  );
+
   test("accepts several platforms, retaining only known answer fields", () => {
     const result = parseSurveySubmission({ submissionId, answers: { ...validAnswers(), wallet: "do not collect", $set: { admin: true } } });
     expect(result.errors).toEqual({});

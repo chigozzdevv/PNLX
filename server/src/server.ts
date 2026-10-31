@@ -1,13 +1,13 @@
 import { loadEnv } from "@/config/env";
 import { createAppRuntimeAsync } from "@/app";
-import { browserCors, webOrigins } from "@/shared/http/cors";
+import { browserCors, DEFAULT_PRODUCTION_WEB_ORIGINS, webOrigins } from "@/shared/http/cors";
 
 const env = loadEnv();
 const app = await createAppRuntimeAsync();
 app.liquidityHistory?.start();
 const allowedOrigins = webOrigins(process.env.PNLX_WEB_ORIGINS ?? (
   process.env.NODE_ENV === "production"
-    ? "https://www.pnl.family"
+    ? DEFAULT_PRODUCTION_WEB_ORIGINS
     : "http://localhost:3000,http://127.0.0.1:3000"
 ));
 

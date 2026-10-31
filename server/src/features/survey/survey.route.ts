@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { parseSurveySubmission, SURVEY_MAX_BYTES } from "@pnlx/survey";
 import type { Router } from "@/shared/http/router";
-import { webOrigins } from "@/shared/http/cors";
+import { DEFAULT_PRODUCTION_WEB_ORIGINS, webOrigins } from "@/shared/http/cors";
 import { MongoSurveyRepository, type SurveyRepository } from "./survey.repository";
 
 type SurveyRouteOptions = {
@@ -20,7 +20,7 @@ export function registerSurveyRoute(router: Router, options: SurveyRouteOptions)
   const repository = options.repository ?? new MongoSurveyRepository(options.uri ?? "", options.database ?? "pnlx");
   const origins = options.allowedOrigins ?? webOrigins(process.env.PNLX_WEB_ORIGINS ?? (
     process.env.NODE_ENV === "production"
-      ? "https://www.pnl.family,https://pnl.family"
+      ? DEFAULT_PRODUCTION_WEB_ORIGINS
       : "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3002,http://127.0.0.1:3002"
   ));
   const now = options.now ?? Date.now;

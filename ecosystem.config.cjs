@@ -51,7 +51,7 @@ module.exports = {
       env: {
         NEXT_PUBLIC_PNLX_PROVER_URL: "/api/prover",
         NODE_ENV: "production",
-        NEXT_PUBLIC_PNLX_API_URL: "https://api.pnl.family",
+        NEXT_PUBLIC_PNLX_API_URL: "https://api.pnlx.trade",
         PNLX_PROVER_URL: "http://127.0.0.1:4101",
         PORT: "3000",
       },

@@ -1,5 +1,6 @@
 const ALLOWED_METHODS = "GET, POST, PUT, PATCH, DELETE";
 const ALLOWED_HEADERS = "authorization, content-type";
+export const DEFAULT_PRODUCTION_WEB_ORIGINS = "https://pnlx.trade,https://www.pnlx.trade,https://www.pnl.family,https://pnl.family";
 
 export function browserCors(
   handle: (request: Request) => Response | Promise<Response>,

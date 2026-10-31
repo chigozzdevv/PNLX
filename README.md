@@ -113,6 +113,16 @@ bun run prover:client
 bun run client:dev
 ```
 
+### 4.4 Hosted Domains
+
+For a release on `pnlx.trade`, set `NEXT_PUBLIC_PNLX_API_URL=https://api.pnlx.trade` before building the frontend. Keep the API's existing domain working during migration and allow both frontend domains:
+
+```sh
+PNLX_WEB_ORIGINS=https://pnlx.trade,https://www.pnlx.trade,https://www.pnl.family,https://pnl.family
+```
+
+Keep `NEXT_PUBLIC_PNLX_PROVER_URL=/api/prover` and the existing server-side `PNLX_PROVER_URL` upstream; a hosted Vercel frontend requires its reachable HTTPS upstream. Keep the old frontend accessible until users reconnect the same wallet on the new domain and verify their private balance and position details recover. Browser storage is separate for each origin; the backend network and storage scope stay unchanged.
+
 ---
 
 ## 5. Testing & Verification
