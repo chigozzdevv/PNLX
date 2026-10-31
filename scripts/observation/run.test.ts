@@ -77,7 +77,9 @@ function harness(state = createCampaign({ runId: "test-campaign", seed: "test-se
           await save(); return read(id); },
         async close(id) { actions.push("submit-close"); data.cycles[id]!.positions[0]!.closes.at(-1)!.phase = "submitting"; await save(); return read(id); },
         async cancelOpen(id) { actions.push("cancel-open"); data.cycles[id]!.activeOrders = []; await save(); return read(id); },
-        async recoverCash(id) { actions.push("recover-cash"); data.cycles[id]!.cashReconciled = true; await save(); return read(id); },
+        async recoverCash(id) { actions.push("recover-cash"); data.cycles[id]!.cashReconciled = true;
+          if (data.cycles[id]!.positions.every((position) => position.snapshot.status !== "open")) data.cycles[id]!.phase = "closed";
+          await save(); return read(id); },
       };
     },
   };
@@ -565,6 +567,27 @@ describe("one-time observation runner", () => {
     expect(cycle.status).toBe("active");
     await h.runner().tick();
     expect(cycle.status).toBe("closed");
+  });
+
+  test("recovers cancelled residual collateral when a stale open phase has no open position", async () => {
+    const h = harness(); const { cycle, value } = attachActive(h);
+    cycle.failureAlertedAt = START - MINUTE_MS;
+    value.positions[0]!.snapshot.status = "closed";
+    value.positions[0]!.snapshot.lifecycleTxHash = HASH as `0x${string}`;
+    value.positions[0]!.confirmedClose = { closeCommitment: "0xa", settlementTxHash: HASH,
+      markPrice: "23000000", netPnl: "0", fundingPayment: "0", entryFee: "0", closeFee: "0",
+      grossPricePnl: "0", returnedMargin: "100000000", pairedPayoutAdjustment: "0", payoutCapped: false, accountingComplete: true };
+    value.orders = [{ batchId: "batch-1", createdAt: START, intentCommitment: "0x10", isResidual: true,
+      matching: { message: "Order cancelled", state: "settled" }, matchingPayloadCommitment: "0x11",
+      marketId: "xlm-usd-perp", status: "cancelled", updatedAt: START }];
+    value.activeOrders = [];
+    value.cashReconciled = false;
+    await h.runner().tick();
+    expect(h.actions).toContain("recover-cash");
+    expect(h.actions).not.toContain("submit-open");
+    await h.runner().tick();
+    expect(cycle.status).toBe("closed");
+    expect(h.state.pausedReason).toBeUndefined();
   });
 
   test("close emails use the winning close timestamps and verified net cash P&L", async () => {

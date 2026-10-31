@@ -153,6 +153,15 @@ function unresolved(state: CampaignState, retryingPreparation?: CampaignCycle): 
     state.wallets.some((wallet) => Object.values(protocolState(wallet)?.deposits ?? {}).some((deposit) =>
       ["submitting", "uncertain"].includes(deposit.phase)) || wallet.funding.some((action) => !action.confirmedAt));
 }
+function needsCashRecovery(cycle: CycleState): boolean {
+  if (cycle.activeOrders.length || cycle.positions.some((position) => position.snapshot.status === "open")) return false;
+  const pendingResidual = cycle.orders.some((order) => {
+    if (!order.isResidual || order.status !== "cancelled") return false;
+    const phase = cycle.refunds?.[order.intentCommitment.toLowerCase()]?.phase;
+    return phase !== "confirmed" && phase !== "zero";
+  });
+  return pendingResidual || (["closed", "cancelled"].includes(cycle.phase) && !cycle.cashReconciled);
+}
 function openingProgress(state: CampaignState, cycle: CampaignCycle): string {
   const wallet = state.wallets.find((entry) => entry.source === cycle.walletSource);
   const deposit = wallet && protocolState(wallet)?.deposits[cycle.depositId];
@@ -451,7 +460,7 @@ export class ObservationRunner {
         if (value.activeOrders?.length && (value.positions.length > 0 || now - (cycle.startedAt ?? now) >= STALL_MS)) {
           await client.cancelOpen(cycle.adapterId); return;
         }
-        if (["closed", "cancelled"].includes(value.phase) && !value.cashReconciled) {
+        if (needsCashRecovery(value)) {
           await client.recoverCash(cycle.adapterId); return;
         }
       } catch (error) { await this.failure(cycle, error); return; }
