@@ -266,7 +266,16 @@ describe("real observation protocol adapter safety", () => {
     expect(String(f.saved.notes[0]!.status)).toBe("available");
     expect(f.intentPosts).toBe(1);
 
+    f.now(retryAt - 30_000);
+    const polled = await f.adapter.pollOpen(SPEC.id);
+    expect(polled.phase).toBe("preparing");
+    expect(polled.marginRootRetryCount).toBe(1);
+    expect(polled.retryAfterAt).toBe(retryAt);
+
     f.now(retryAt);
+    const due = await f.adapter.pollOpen(SPEC.id);
+    expect(due.marginRootRetryCount).toBe(1);
+    expect(due.retryAfterAt).toBe(retryAt);
     await expect(f.adapter.prepareOpen(SPEC)).resolves.toMatchObject({ phase: "ready" });
     expect(f.calls.filter((call) => call.path === "/notes/membership")).toHaveLength(2);
     expect(f.calls.filter((call) => call.path === "/intent-validity").at(-1)!.body.marginRoot).toBe(fieldHex(790n));

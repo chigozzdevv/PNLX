@@ -544,10 +544,12 @@ export class ObservationProtocol {
       } else {
         const note = this.data.notes.find((entry) => same(entry.commitment, cycle.noteCommitment));
         if (note?.status === "available" && !note.lockedByIntentCommitment) {
-          cycle.phase = "preparing";
-          delete cycle.validity; delete cycle.submitted; delete cycle.error;
-          cycle.marginRootRetryCount = (cycle.marginRootRetryCount ?? 0) + 1;
-          cycle.retryAfterAt = this.now() + marginRootRetryDelay(cycle.marginRootRetryCount);
+          if (cycle.phase !== "preparing" || !cycle.retryAfterAt) {
+            cycle.phase = "preparing";
+            delete cycle.validity; delete cycle.submitted; delete cycle.error;
+            cycle.marginRootRetryCount = (cycle.marginRootRetryCount ?? 0) + 1;
+            cycle.retryAfterAt = this.now() + marginRootRetryDelay(cycle.marginRootRetryCount);
+          }
         } else if (cycle.phase === "preparing") {
           cycle.phase = "uncertain";
           delete cycle.retryAfterAt;
