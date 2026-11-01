@@ -14,6 +14,7 @@ import {setAuthenticatedAddress} from "@/shared/http/auth-context";
 import {FileProtocolStore} from "@/shared/state/persistent-store";
 import {ProtocolStore} from "@/shared/state/store";
 import {ExecutorService} from "@/workers/executor/executor.service";
+import {ledgerRows} from "../helpers/secure-note-ledger";
 
 const h=(label:string)=>hashFields("confirmed-deposit-test",[label]),owner="GDEPOSITOWNER",commitment=h("funded-note"),preparedTxHash=h("prepared-tx"),tokenDigest=h("token"),pool="C"+"A".repeat(55),token="C"+"B".repeat(55),passphrase="Test SDF Network ; September 2015";
 const paths:string[]=[];afterEach(()=>{for(const path of paths.splice(0))rmSync(path,{recursive:true,force:true});});
@@ -27,6 +28,7 @@ function scenario(existingStore?:ProtocolStore){
  const commands:string[][]=[],rpcMethods:string[]=[];
  const fetcher=(async(_url:Parameters<typeof fetch>[0],init?:RequestInit)=>{const request=JSON.parse(String(init?.body));rpcMethods.push(request.method);if(request.method==="getTransaction"&&state.gate)await state.gate;return Response.json({result:request.method==="getNetwork"?{passphrase:state.network}:{status:state.status,ledger:state.ledger,envelopeXdr:Buffer.from("public signed transaction envelope fixture").toString("base64")}});}) as unknown as typeof fetch;
  const command=async(argv:string[])=>{commands.push(argv);if(argv[1]==="tx"&&argv[2]==="hash")return {status:0,stdout:state.hashQuoted?JSON.stringify(state.actualHash):state.actualHash.slice(2),stderr:""};
+  if(argv[1]==="contract"&&argv[2]==="read")return {status:0,stdout:ledgerRows(argv,state.tree,state.rootOverride),stderr:""};
   const index=argv.indexOf("--"),method=argv[index+1];const result=method==="token_digest"?state.tokenDigest:method==="has_commitment"?state.funded:method==="secure_note_root"?state.rootOverride??secureMarginRoot(state.tree):method==="secure_note_count"?state.tree.length:method==="secure_note_leaf"?state.tree[Number(argv[index+3])]:undefined;
   if(result===undefined)throw Error("unexpected read");return {status:0,stdout:JSON.stringify(result),stderr:""};};
  const reader=new StellarConfirmedDepositRecovery(env,fetcher,command),prover={assertBoundProof(proof:any,id:string,expected:Hex){if(id!=="secure-deposit-note"||proof.publicInputHash!==expected)throw Error("proof public input mismatch");}},onchain=new Proxy({enabled:true},{get(target,key){if(key==="enabled")return target.enabled;throw Error("no custody write or synchronous read may run");}});
@@ -42,7 +44,7 @@ describe("confirmed deposit response recovery",()=>{
   expect(f.store.marginCommitments.has(commitment)).toBe(true);expect(f.store.hasProof(f.pending.depositProof.proof)).toBe(true);expect(f.store.pendingAssetDeposits.get(commitment)?.relayId).toBeUndefined();
   const restarted=new FileProtocolStore(file.path),before=f.rpcMethods.length,again=await f.service(restarted).recoverConfirmedDepositAsset({commitment},owner);
   expect(again.confirmedRecovery).toEqual(result.confirmedRecovery);expect(f.rpcMethods.length).toBe(before);expect(restarted.marginCommitments.size).toBe(2);expect(restarted.pendingAssetDeposits.get(other.commitment)).toEqual(other);
-  expect(f.commands.every(args=>args[1]==="tx"&&args[2]==="hash"||args.includes("--send")&&args[args.indexOf("--send")+1]==="no")).toBe(true);expect(f.commands.some(args=>args.includes("--build-only")||args.includes("sign")||args.includes("send"))).toBe(false);
+    expect(f.commands.every(args=>args[1]==="tx"&&args[2]==="hash"||args[1]==="contract"&&args[2]==="read"||args.includes("--send")&&args[args.indexOf("--send")+1]==="no")).toBe(true);expect(f.commands.some(args=>args.includes("--build-only")||args.includes("sign")||args.includes("send"))).toBe(false);
  });
  test("owner authentication is mandatory and checked before any network or custody action",async()=>{const f=scenario();for(const address of [undefined,"GOTHEROWNER"])await expect(f.service().recoverConfirmedDepositAsset({commitment},address)).rejects.toThrow();expect(f.rpcMethods).toEqual([]);expect(f.commands).toEqual([]);expect(f.store.pendingAssetDeposits.get(commitment)?.finalizedAt).toBeUndefined();});
  test("missing durable owner metadata cannot bypass authenticated account binding",async()=>{const f=scenario();f.pending.from="";await expect(f.service().recoverConfirmedDepositAsset({commitment},owner)).rejects.toThrow("owner is missing");expect(f.rpcMethods).toEqual([]);});
