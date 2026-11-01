@@ -178,6 +178,7 @@ export class MakerLiquidityService {
       .filter((intent) => this.executor.store.orderLifecycle.get(intent.intentCommitment)?.status === "open")
       .sort((left, right) => left.intentCommitment.localeCompare(right.intentCommitment));
     if (openClientIntents.length === 0) return { created: 0, skipped: 0 };
+    this.syncMakerMarginCommitments();
     const backing = this.env.makerWalletAddress
       ? await this.currentVaultBacking()
       : undefined;
@@ -365,14 +366,7 @@ export class MakerLiquidityService {
       input.margin,
       input.clientIntent.intentCommitment,
     );
-    if (this.onchain?.enabled && this.env.intentRegistryOnchainRequired) {
-      if (!this.onchain.secureNoteSnapshot) throw new Error("secure note reader unavailable");
-      const snapshot = this.onchain.secureNoteSnapshot(
-        [...this.executor.store.marginCommitments]);
-      if (snapshot.root !== this.executor.store.marginMembershipRoot()) {
-        this.executor.store.replaceMarginCommitments(snapshot.commitments);
-      }
-    }
+    this.syncMakerMarginCommitments();
     const membershipProof = this.executor.store.marginMembershipProof(input.note.commitment);
     const intent: TradeIntent = {
       batchId: input.batchId,
@@ -610,10 +604,20 @@ export class MakerLiquidityService {
   }
 
   private indexMakerMarginCommitments(notes: StoredMakerNote[]): void {
+    if (this.onchain?.enabled) return;
     for (const note of notes) {
       if (note.status === "spent" || note.status === "pending") continue;
       if (this.executor.store.marginCommitments.has(note.commitment)) continue;
       this.executor.store.addMarginCommitment(note.commitment);
+    }
+  }
+
+  private syncMakerMarginCommitments(): void {
+    if (!this.onchain?.enabled) return;
+    if (!this.onchain.secureNoteSnapshot) throw new Error("secure note reader unavailable");
+    const snapshot = this.onchain.secureNoteSnapshot([...this.executor.store.marginCommitments]);
+    if (snapshot.root !== this.executor.store.marginMembershipRoot()) {
+      this.executor.store.replaceMarginCommitments(snapshot.commitments);
     }
   }
 

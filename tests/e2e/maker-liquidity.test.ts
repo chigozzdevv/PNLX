@@ -3,6 +3,7 @@ import {
   fieldHex,
   ownerCommitment,
   secureMarginCommitment,
+  secureMarginRoot,
   hashFields,
 } from "@pnlx/crypto";
 import type { Hex, IntentRecord, PrivateMatchIntent } from "@pnlx/protocol-types";
@@ -105,6 +106,44 @@ test("maker admission and settlement wait for recovery and resume after a recove
   expect(await recovering).toMatchObject({ message: "temporary registry failure" });
   await Promise.all([admission, settlement]);
   expect(events).toEqual(["recover", "admit", "settle"]);
+});
+
+test("maker wallet availability cannot append unconfirmed notes to the on-chain membership cache", () => {
+  const store = new ProtocolStore(), confirmed = fieldHex(901n);
+  store.addMarginCommitment(confirmed);
+  const maker = new MakerLiquidityService(new ExecutorService({}, store), {} as never,
+    { enabled: true } as never, { intentRegistryOnchainRequired: true });
+  Reflect.get(maker, "indexMakerMarginCommitments").call(maker, [note]);
+  expect([...store.marginCommitments]).toEqual([confirmed]);
+});
+
+test("maker selection refreshes confirmed membership and excludes wallet notes absent from the chain", async () => {
+  const store = new ProtocolStore(), funded = { ...note, commitment: fieldHex(902n) };
+  store.addMarginCommitment(note.commitment);
+  store.addMarket({ marketId: payload.marketId, oraclePrice: payload.limitPrice, fundingIndex: 0n,
+    initialMarginRate: 100_000n, maintenanceMarginRate: 50_000n, maxLeverage: 10n });
+  const source = { intentCommitment: payload.intentCommitment, marketId: payload.marketId } as IntentRecord;
+  store.intents.set(source.intentCommitment, source);
+  store.privateMatchIntents.set(source.intentCommitment, payload);
+  store.orderLifecycle.set(source.intentCommitment, { intentCommitment: source.intentCommitment,
+    batchId: "source", marketId: source.marketId, ownerCommitment: payload.ownerCommitment,
+    status: "open", createdAt: 1, updatedAt: 1 });
+  let reads = 0;
+  const maker = new MakerLiquidityService(new ExecutorService({}, store), {} as never,
+    { enabled: true, secureNoteSnapshot: () => {
+      reads++;
+      return { commitments: [funded.commitment], root: secureMarginRoot([funded.commitment]) };
+    } } as never, { intentRegistryOnchainRequired: true });
+  Reflect.set(maker, "recoverMakerNotes", async () => ({ notes: [note, funded], blockedNotes: new Set() }));
+  const selected: Hex[] = [];
+  Reflect.set(maker, "submitMakerIntent", async (input: { note: { commitment: Hex } }) => {
+    selected.push(input.note.commitment);
+    return undefined;
+  });
+  await maker.ensureForMarket({ batchId: "confirmed-selection", marketId: source.marketId });
+  expect(reads).toBe(1);
+  expect(selected).toEqual([funded.commitment]);
+  expect([...store.marginCommitments]).toEqual([funded.commitment]);
 });
 
 describe("maker note allocation", () => {
