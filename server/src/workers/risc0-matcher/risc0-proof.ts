@@ -394,11 +394,12 @@ async function runQueuedBoundlessProver(
 ): Promise<ProverRun> {
   const requestPath = join(proofDir, "request.json");
   let request = resumableBoundlessRequest(requestPath);
-  const releaseSubmission = request ? () => {} : await acquireBoundlessSubmission();
+  const releaseSubmission = request && boundlessSubmissionAcknowledged(requestPath)
+    ? () => {} : await acquireBoundlessSubmission();
   try {
     // A request may have become resumable while waiting for the submission turn.
     request ??= resumableBoundlessRequest(requestPath);
-    if (request) releaseSubmission();
+    if (request && boundlessSubmissionAcknowledged(requestPath)) releaseSubmission();
     return await new Promise((resolve) => {
       const metadataPath = join(proofDir, "proof.json");
       const target = runtime.command ?? boundlessProverCommand(root, inputPath, proofDir);
@@ -407,10 +408,8 @@ async function runQueuedBoundlessProver(
         detached: process.platform !== "win32",
         env: {
           ...process.env,
-          ...(request ? {
-            BOUNDLESS_REQUEST_EXPIRES_AT: String(request.expiresAt),
-            BOUNDLESS_REQUEST_ID: request.requestId,
-          } : {}),
+          BOUNDLESS_REQUEST_EXPIRES_AT: request ? String(request.expiresAt) : undefined,
+          BOUNDLESS_REQUEST_ID: request?.requestId,
           BOUNDLESS_IGNORE_PREFLIGHT: process.env.BOUNDLESS_IGNORE_PREFLIGHT ?? "1",
           PATH: risc0ToolPath(process.env.HOME || "", process.env.PATH),
           PNLX_EXPECTED_BATCH_MATCH_IMAGE_ID: RISC0_BATCH_MATCH_IMAGE_ID,
@@ -424,7 +423,7 @@ async function runQueuedBoundlessProver(
         error: "prover deadline exceeded", metadataPath, stderr, stdout, status: null,
       }), timeoutMs);
       const completionTimer = setInterval(() => {
-        if (resumableBoundlessRequest(requestPath)) releaseSubmission();
+        if (boundlessSubmissionAcknowledged(requestPath)) releaseSubmission();
         if (risc0ProofMetadataReady(metadataPath)) finish({ metadataPath, stderr, stdout, status: 0 });
       }, 250);
       completionTimer.unref?.();
@@ -516,18 +515,30 @@ export function resumableBoundlessRequest(
   if (!existsSync(requestPath)) return undefined;
   try {
     const request = JSON.parse(readFileSync(requestPath, "utf8")) as {
-      expires_at?: unknown;
-      request_id?: unknown;
+      expires_at?: unknown; request_id?: unknown; submitted?: unknown; request?: unknown;
+      max_price_usd_micro?: unknown;
     };
     if (
       typeof request.expires_at !== "number" || !Number.isSafeInteger(request.expires_at) ||
-      request.expires_at <= Math.floor(Date.now() / 1_000) ||
-      typeof request.request_id !== "string" || !/^0x[0-9a-f]{1,64}$/i.test(request.request_id)
-    ) return undefined;
+      request.expires_at <= 0 ||
+      typeof request.request_id !== "string" || !/^0x[0-9a-f]{1,64}$/i.test(request.request_id) ||
+      BigInt(request.request_id) === 0n ||
+      (request.submitted !== undefined && typeof request.submitted !== "boolean") ||
+      (request.submitted === false && (!request.request || typeof request.request !== "object" || Array.isArray(request.request)))
+    ) throw new Error("invalid Boundless request journal");
     assertHex(request.request_id, "Boundless request id");
     return { expiresAt: request.expires_at, requestId: request.request_id };
   } catch {
-    return undefined;
+    throw new Error("invalid Boundless request journal; reconciliation required before another paid submission");
+  }
+}
+
+function boundlessSubmissionAcknowledged(requestPath: string): boolean {
+  try {
+    if (!resumableBoundlessRequest(requestPath)) return false;
+    return JSON.parse(readFileSync(requestPath, "utf8")).submitted !== false;
+  } catch {
+    return false;
   }
 }
 

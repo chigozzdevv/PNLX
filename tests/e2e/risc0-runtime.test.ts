@@ -165,6 +165,56 @@ describe("Boundless submission start gate", () => {
     });
   });
 
+  test("an expired request keeps its original identity while another submission holds the gate", async () => {
+    await withControlledHosts(async (createHost) => {
+      const submitting = createHost("submitting"), expired = createHost("expired", { resume: true, expired: true });
+      const waiting = createHost("waiting");
+      submitting.start(); await waitForFile(submitting.started);
+      expired.start(); waiting.start();
+      await waitForFile(expired.started);
+      expect(JSON.parse(readFileSync(expired.started, "utf8")).requestId).toBe("0x1234");
+      expect(existsSync(waiting.started)).toBe(false);
+      expired.stop(); await expired.result();
+      submitting.acknowledge(); await waitForFile(waiting.started);
+      submitting.stop(); waiting.stop();
+    });
+  });
+
+  test("a prepared request retains the submission gate until its original submission is acknowledged", async () => {
+    await withControlledHosts(async (createHost) => {
+      const prepared = createHost("prepared", { resume: true, prepared: true });
+      const waiting = createHost("waiting");
+      prepared.start(); waiting.start();
+      await waitForFile(prepared.started);
+      await Bun.sleep(300);
+      expect(existsSync(waiting.started)).toBe(false);
+      expect(JSON.parse(readFileSync(prepared.started, "utf8")).requestId).toBe("0x1234");
+      prepared.acknowledge();
+      await waitForFile(waiting.started);
+      prepared.stop(); waiting.stop();
+    });
+  });
+
+  test("a fresh job cannot inherit a different job's recovery identity from the environment", async () => {
+    const previousId = process.env.BOUNDLESS_REQUEST_ID;
+    const previousExpiry = process.env.BOUNDLESS_REQUEST_EXPIRES_AT;
+    process.env.BOUNDLESS_REQUEST_ID = "0xdead";
+    process.env.BOUNDLESS_REQUEST_EXPIRES_AT = "1";
+    try {
+      await withControlledHosts(async (createHost) => {
+        const fresh = createHost("fresh"); fresh.start();
+        await waitForFile(fresh.started);
+        expect(JSON.parse(readFileSync(fresh.started, "utf8")).requestId).toBeUndefined();
+        fresh.stop(); await fresh.result();
+      });
+    } finally {
+      if (previousId === undefined) delete process.env.BOUNDLESS_REQUEST_ID;
+      else process.env.BOUNDLESS_REQUEST_ID = previousId;
+      if (previousExpiry === undefined) delete process.env.BOUNDLESS_REQUEST_EXPIRES_AT;
+      else process.env.BOUNDLESS_REQUEST_EXPIRES_AT = previousExpiry;
+    }
+  });
+
   for (const outcome of ["failure", "timeout", "throw"] as const) {
     test(`a ${outcome} releases the next new submission`, async () => {
       await withControlledHosts(async (createHost) => {
@@ -186,7 +236,7 @@ describe("Boundless submission start gate", () => {
   });
 });
 
-type ControlledHostOptions = { resume?: boolean; outcome?: "failure" | "timeout" | "throw" };
+type ControlledHostOptions = { resume?: boolean; prepared?: boolean; expired?: boolean; outcome?: "failure" | "timeout" | "throw" };
 
 async function withControlledHosts(work: (createHost: (name: string, options?: ControlledHostOptions) => {
   started: string; acknowledge(): void; stop(): void; start(): void; result(): ReturnType<typeof runBoundlessProver>;
@@ -199,8 +249,10 @@ async function withControlledHosts(work: (createHost: (name: string, options?: C
     mkdirSync(directory);
     const request = join(directory, "request.json"), started = join(directory, "started.json");
     const publish = join(directory, "publish.json"), exit = join(directory, "exit");
-    const metadata = JSON.stringify({ request_id: "0x1234", expires_at: Math.floor(Date.now() / 1_000) + 60 });
-    if (options.resume) writeFileSync(request, metadata);
+    const expires_at = Math.floor(Date.now() / 1_000) + (options.expired ? -60 : 60);
+    const metadata = JSON.stringify({ request_id: "0x1234", expires_at, submitted: true });
+    if (options.resume) writeFileSync(request, options.prepared ?
+      JSON.stringify({ request_id: "0x1234", expires_at, submitted: false, request: {}, max_price_usd_micro: 150_000 }) : metadata);
     const script = `const fs=require("node:fs");
       fs.writeFileSync(${JSON.stringify(started)},JSON.stringify({pid:process.pid,requestId:process.env.BOUNDLESS_REQUEST_ID}));
       ${options.resume ? "" : `fs.writeFileSync(${JSON.stringify(request)},"{");`}

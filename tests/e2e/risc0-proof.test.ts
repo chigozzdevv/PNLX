@@ -116,7 +116,7 @@ describe("RISC0 Groth16 proof artifacts", () => {
     expect(risc0ProofMetadataReady(metadataPath)).toBe(true);
   });
 
-  test("resumes only unexpired Boundless requests", () => {
+  test("retains expired Boundless requests for fulfillment recovery without a new payment", () => {
     const proofDir = mkdtempSync(join(tmpdir(), "pnlx-risc0-request-"));
     const requestPath = join(proofDir, "request.json");
     const requestId = `0x${"12".repeat(32)}`;
@@ -129,7 +129,21 @@ describe("RISC0 Groth16 proof artifacts", () => {
     });
 
     writeFileSync(requestPath, JSON.stringify({ expires_at: now - 1, request_id: requestId }));
-    expect(resumableBoundlessRequest(requestPath)).toBeUndefined();
+    expect(resumableBoundlessRequest(requestPath)).toEqual({ expiresAt: now - 1, requestId });
+    rmSync(proofDir, { recursive: true, force: true });
+  });
+
+  test("a damaged or incomplete request journal cannot authorize another paid submission", () => {
+    const proofDir = mkdtempSync(join(tmpdir(), "pnlx-risc0-request-invalid-"));
+    const path = join(proofDir, "request.json");
+    try {
+      expect(resumableBoundlessRequest(path)).toBeUndefined();
+      for (const value of ["{", "null", "{}", JSON.stringify({ request_id: "0x0", expires_at: 10 }),
+        JSON.stringify({ request_id: "0x1234", expires_at: 10, submitted: false })]) {
+        writeFileSync(path, value);
+        expect(() => resumableBoundlessRequest(path)).toThrow("reconciliation required");
+      }
+    } finally { rmSync(proofDir, { recursive: true, force: true }); }
   });
 });
 

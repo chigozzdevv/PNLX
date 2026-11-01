@@ -2,6 +2,7 @@ use alloy::{primitives::U256, signers::local::PrivateKeySigner};
 use anyhow::{anyhow, Context, Result};
 use boundless_market::{
     client::FundingMode,
+    contracts::RequestStatus,
     input::GuestEnv,
     price_oracle::{Amount, Asset},
     request_builder::OfferParams,
@@ -15,6 +16,9 @@ use sha2::{Digest as ShaDigest, Sha256};
 use std::{env, fs, path::PathBuf, str::FromStr, time::Duration};
 use tracing_subscriber::{filter::LevelFilter, prelude::*, EnvFilter};
 use url::Url;
+
+mod request_journal;
+use request_journal::{RecoveryAction, RequestJournal};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_BATCH_MATCH_CYCLES: u64 = 100_000_000;
@@ -65,12 +69,6 @@ struct ProofOutput {
     journal_path: String,
     seal_digest: String,
     seal_path: String,
-}
-
-#[derive(Serialize)]
-struct RequestOutput {
-    expires_at: u64,
-    request_id: String,
 }
 
 struct GuestProgram {
@@ -158,6 +156,7 @@ async fn run(args: Args, program: GuestProgram) -> Result<()> {
         .as_ref()
         .expect("validated output directory");
     fs::create_dir_all(output_dir).context("create output directory")?;
+    let _job_lock = request_journal::lock_job(output_dir)?;
 
     let input_bytes = fs::read(input_path).context("read prover input")?;
     let request: ProofRequest =
@@ -165,9 +164,8 @@ async fn run(args: Args, program: GuestProgram) -> Result<()> {
     let proved = prove_request(&request);
     let journal = Journal::new(proved.journal.clone());
 
-    let cycles = preflight(&program.bytes, &request, &proved.journal)?;
-    tracing::info!("RISC0 batch-match preflight completed in {cycles} cycles");
     if args.preflight_only {
+        preflight(&program.bytes, &request, &proved.journal)?;
         return Ok(());
     }
 
@@ -183,13 +181,11 @@ async fn run(args: Args, program: GuestProgram) -> Result<()> {
         .await
         .context("failed to build Boundless client")?;
 
-    let fulfillment = if let Some((request_id, expires_at)) = existing_request()? {
-        tracing::info!("Fetching fulfilled Boundless request {:x}", request_id);
-        client
-            .wait_for_request_fulfillment(request_id, POLL_INTERVAL, expires_at)
-            .await
-            .context("wait for existing Boundless proof fulfillment")?
+    let mut saved = if let Some(saved) = existing_request(output_dir)? {
+        saved
     } else {
+        let cycles = preflight(&program.bytes, &request, &proved.journal)?;
+        tracing::info!("RISC0 batch-match preflight completed in {cycles} cycles");
         let env = GuestEnv::builder()
             .write(&request)
             .context("encode zkVM input for Boundless")?;
@@ -203,14 +199,51 @@ async fn run(args: Args, program: GuestProgram) -> Result<()> {
             .with_offer(default_offer()?)
             .with_groth16_proof();
 
-        let (request_id, expires_at) = client.submit(proof_request).await?;
-        write_request_metadata(output_dir, request_id, expires_at)?;
-        tracing::info!("Boundless batch-match request {:x} submitted", request_id);
-        client
-            .wait_for_request_fulfillment(request_id, POLL_INTERVAL, expires_at)
-            .await
-            .context("wait for Boundless proof fulfillment")?
+        let proof_request = client.build_request(proof_request).await?;
+        let saved = RequestJournal::prepared(proof_request, configured_max_price()?)?;
+        saved.validate_binding(program.image_id, &proved.journal)?;
+        request_journal::write(output_dir, &saved)?;
+        saved
     };
+    saved.validate_binding(program.image_id, &proved.journal)?;
+    let request_id = saved.id()?;
+    let status = client
+        .boundless_market
+        .get_status(request_id, Some(saved.expires_at))
+        .await?;
+    let accepted = matches!(&status, RequestStatus::Locked | RequestStatus::Fulfilled);
+    let maximum = if matches!(&status, RequestStatus::Unknown) && saved.submitted == Some(false) {
+        configured_max_price()?
+    } else {
+        DEFAULT_MAX_PRICE_USD_MICRO
+    };
+    match saved.action(status, maximum)? {
+        RecoveryAction::PublishOriginal => {
+            let (submitted_id, expires_at) = client
+                .submit_request(
+                    saved
+                        .request
+                        .as_ref()
+                        .context("saved Boundless payload is missing")?,
+                )
+                .await?;
+            if submitted_id != request_id || expires_at != saved.expires_at {
+                anyhow::bail!("Boundless submission changed the saved request identity");
+            }
+            saved.submitted = Some(true);
+            request_journal::write(output_dir, &saved)?;
+        }
+        RecoveryAction::RecoverOriginal => {
+            if saved.submitted == Some(false) && accepted {
+                saved.submitted = Some(true);
+                request_journal::write(output_dir, &saved)?;
+            }
+        }
+    }
+    let fulfillment = client
+        .wait_for_request_fulfillment(request_id, POLL_INTERVAL, saved.expires_at)
+        .await
+        .context("recover original Boundless proof fulfillment")?;
     let fulfillment_data = fulfillment.data().context("decode Boundless fulfillment")?;
     let image_id = fulfillment_data
         .image_id()
@@ -232,8 +265,8 @@ async fn run(args: Args, program: GuestProgram) -> Result<()> {
     let journal_path = output_dir.join("journal.bin");
     let seal_path = output_dir.join("seal.bin");
     let metadata_path = output_dir.join("proof.json");
-    fs::write(&journal_path, &journal_bytes).context("write journal")?;
-    fs::write(&seal_path, &seal).context("write seal")?;
+    request_journal::write_atomic(output_dir, "journal.bin", &journal_bytes)?;
+    request_journal::write_atomic(output_dir, "seal.bin", &seal)?;
 
     let output = ProofOutput {
         image_id: format!("0x{}", hex::encode(<[u8; 32]>::from(image_id))),
@@ -242,8 +275,11 @@ async fn run(args: Args, program: GuestProgram) -> Result<()> {
         seal_digest: format!("0x{}", hex::encode(Sha256::digest(&seal))),
         seal_path: seal_path.display().to_string(),
     };
-    fs::write(&metadata_path, serde_json::to_vec_pretty(&output)?)
-        .context("write proof metadata")?;
+    request_journal::write_atomic(
+        output_dir,
+        "proof.json",
+        &serde_json::to_vec_pretty(&output)?,
+    )?;
     println!("{}", metadata_path.display());
     Ok(())
 }
@@ -324,33 +360,51 @@ fn verify_image_id(image_id: Digest, expected: &str) -> Result<()> {
     Ok(())
 }
 
-fn existing_request() -> Result<Option<(U256, u64)>> {
-    let Some(raw_id) = env::var("BOUNDLESS_REQUEST_ID").ok() else {
-        return Ok(None);
-    };
-    let request_id = parse_u256(&raw_id).context("parse BOUNDLESS_REQUEST_ID")?;
-    let expires_at = env::var("BOUNDLESS_REQUEST_EXPIRES_AT")
-        .context("BOUNDLESS_REQUEST_EXPIRES_AT is required when resuming a request")?
-        .parse::<u64>()
-        .context("parse BOUNDLESS_REQUEST_EXPIRES_AT")?;
-    Ok(Some((request_id, expires_at)))
+fn existing_request(output_dir: &PathBuf) -> Result<Option<RequestJournal>> {
+    let saved = request_journal::read(output_dir)?;
+    match (
+        env::var("BOUNDLESS_REQUEST_ID").ok(),
+        env::var("BOUNDLESS_REQUEST_EXPIRES_AT").ok(),
+    ) {
+        (None, None) => Ok(saved),
+        (Some(request_id), Some(expires_at)) => {
+            let provided = RequestJournal {
+                request_id,
+                expires_at: expires_at.parse().context("parse saved Boundless expiry")?,
+                request: None,
+                submitted: None,
+                max_price_usd_micro: None,
+            };
+            if let Some(saved) = saved {
+                if saved.id()? != provided.id()? || saved.expires_at != provided.expires_at {
+                    anyhow::bail!("Boundless environment conflicts with the saved request");
+                }
+                Ok(Some(saved))
+            } else {
+                provided.id()?;
+                request_journal::write(output_dir, &provided)?;
+                Ok(Some(provided))
+            }
+        }
+        _ => anyhow::bail!("incomplete Boundless recovery identity; reconciliation required"),
+    }
 }
 
-fn write_request_metadata(output_dir: &PathBuf, request_id: U256, expires_at: u64) -> Result<()> {
-    let output = RequestOutput {
-        expires_at,
-        request_id: format!("0x{request_id:x}"),
-    };
-    fs::write(
-        output_dir.join("request.json"),
-        serde_json::to_vec_pretty(&output)?,
-    )
-    .context("write Boundless request metadata")
+fn configured_max_price() -> Result<u64> {
+    let price = env_u256("BOUNDLESS_MAX_PRICE_USD_MICRO", DEFAULT_MAX_PRICE_USD_MICRO)?;
+    validate_max_price(price)
+}
+
+fn validate_max_price(price: U256) -> Result<u64> {
+    if price > U256::from(DEFAULT_MAX_PRICE_USD_MICRO) {
+        anyhow::bail!("Boundless proof offer exceeds the approved $0.15 ceiling");
+    }
+    Ok(price.to::<u64>())
 }
 
 fn default_offer() -> Result<OfferParams> {
     let min_price = env_u256("BOUNDLESS_MIN_PRICE_USD_MICRO", DEFAULT_MIN_PRICE_USD_MICRO)?;
-    let max_price = env_u256("BOUNDLESS_MAX_PRICE_USD_MICRO", DEFAULT_MAX_PRICE_USD_MICRO)?;
+    let max_price = U256::from(configured_max_price()?);
     let lock_collateral = env_u256(
         "BOUNDLESS_LOCK_COLLATERAL_ZKC_WEI",
         DEFAULT_LOCK_COLLATERAL_ZKC_WEI,
@@ -459,6 +513,13 @@ mod tests {
     #[test]
     fn rejects_invalid_price_range() {
         assert!(validate_offer(U256::from(2), U256::from(1), 300, 1_800, 3_600).is_err());
+    }
+
+    #[test]
+    fn enforces_the_approved_fifteen_cent_ceiling() {
+        assert_eq!(validate_max_price(U256::from(150_000)).unwrap(), 150_000);
+        assert!(validate_max_price(U256::from(150_001)).is_err());
+        assert!(validate_max_price(U256::MAX).is_err());
     }
 
     #[test]
