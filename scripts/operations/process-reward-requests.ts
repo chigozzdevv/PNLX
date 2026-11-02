@@ -7,7 +7,7 @@ import { creditRewards } from "./credit-rewards";
 if (import.meta.main) await processRewardRequests(process.argv.slice(2));
 
 export async function processRewardRequests(argv: string[]): Promise<void> {
-  const env = loadEnv();
+  const env = loadEnv({ validateRuntime: false });
   if (env.stellarNetwork !== "testnet" || !env.mongodbUri) throw new Error("Testnet MongoDB is required");
   const registry = JSON.parse(readFileSync(resolve(env.stellarDeploymentFile), "utf8")) as
     { contracts: Record<string, string>; network: string };

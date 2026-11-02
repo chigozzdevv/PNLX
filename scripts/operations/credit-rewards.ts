@@ -36,7 +36,7 @@ export async function creditRewards(argv: string[]): Promise<void> {
   if (!/^G[A-Z2-7]{55}$/.test(owner) || !["rebate", "referral"].includes(kind)) {
     throw new Error("valid owner and reward kind are required");
   }
-  const env = loadEnv();
+  const env = loadEnv({ validateRuntime: false });
   if (env.stellarNetwork !== "testnet" || !env.mongodbUri || !env.collateralTokenContract) {
     throw new Error("Testnet, MongoDB and USDC contract are required");
   }
@@ -47,11 +47,12 @@ export async function creditRewards(argv: string[]): Promise<void> {
     registry.feeDestinations.treasury !== env.treasuryAddress) {
     throw new Error("reward escrow, fee pool and treasury must match the deployment");
   }
-  const treasury = run(["stellar", "keys", "address", source]).trim();
+  const treasury = /^G[A-Z2-7]{55}$/.test(source)
+    ? source : run(["stellar", "keys", "address", source]).trim();
   if (treasury !== registry.feeDestinations.treasury) throw new Error("source is not the configured treasury");
 
   const state = await MongoProtocolStore.connect({ uri: env.mongodbUri,
-    database: env.mongodbDatabase, collection: env.mongodbCollection });
+    database: env.mongodbDatabase, collection: env.mongodbCollection, documentId: env.stellarNetwork });
   let earned: bigint;
   try {
     const ownerId = ownerCommitment(owner);

@@ -1,0 +1,17 @@
+[Unit]
+Description=PNLX Testnet reward distribution
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PNLX
+EnvironmentFile=/home/ubuntu/PNLX/.env
+Environment=PATH=/home/ubuntu/.bun/bin:/home/ubuntu/.cargo/bin:/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=TREASURY_ADDRESS=GBYSI3TGYUERHKZTHQ7Q4AOYOM4X2BXWCQLWEOF3ZMCUE7YXYF7XG2PY
+ExecStart=/home/ubuntu/.bun/bin/bun scripts/operations/distribute-fees.ts --source pnlx-testnet
+ExecStart=/home/ubuntu/.bun/bin/bun scripts/operations/process-reward-requests.ts --treasury-source pnlx-treasury --execute
+TimeoutStartSec=10min
+UMask=0077
+NoNewPrivileges=true

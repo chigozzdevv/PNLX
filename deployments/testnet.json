@@ -17,7 +17,8 @@
     "position-close": "CDTPAULZ2IC3427X3WGU5OAFK277HWEQ3EAL6MUDTT4QY4ZART7GTG4N",
     "disclosure-verifier": "CCWQJBFQWV63ZQMSDTQJ6NWZX4VITZNYJLSQI5AYREC7GYG3EHCCR4HZ",
     "liquidity-vault": "CAU23XCVR5EMOMCMAZ3CIKJAHS7QREUUX7QX5B5QECUPZ2NQMKOLAT2M",
-    "legacy-pair-exit": "CCSSI66X6HBQ7DC7EC2CBKYAERVLJYWTO5WV6V2EDNLZZ43XMZUEYAGJ"
+    "legacy-pair-exit": "CCSSI66X6HBQ7DC7EC2CBKYAERVLJYWTO5WV6V2EDNLZZ43XMZUEYAGJ",
+    "rewards-escrow": "CBKR3AEFDHPXHXXZKGVZGCT7XP3CLNHMUN6CIGB4QJ32DRD34GTGVFK2"
   },
   "network": "testnet",
   "risc0VerifierStack": {
@@ -85,7 +86,8 @@
     "liquidity-vault": "0x5f58cb281a55a31b30af708c6a299e32573099aba9320d5fc5402b09da0d98f6",
     "legacy-pair-exit": "0xafdd874c12e144fbee20cb479cfc590949380b417a2d6dae798a99632aaf4f8e",
     "legacy-position-close-pair-proof-verifier": "0x671fc838a286644c6eee5aeb0dac7d6e86ee7e099f48bd7452fb6f1da6895152",
-    "position-close-pair-proof-verifier": "0x671fc838a286644c6eee5aeb0dac7d6e86ee7e099f48bd7452fb6f1da6895152"
+    "position-close-pair-proof-verifier": "0x671fc838a286644c6eee5aeb0dac7d6e86ee7e099f48bd7452fb6f1da6895152",
+    "rewards-escrow": "0x6cb6a803c86e3a19ea9a1fb6a3a19995ed5726eda5008cd001e51902d2874730"
   },
   "legacyPairExit": {
     "helper": "CCSSI66X6HBQ7DC7EC2CBKYAERVLJYWTO5WV6V2EDNLZZ43XMZUEYAGJ",

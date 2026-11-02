@@ -1,0 +1,11 @@
+[Unit]
+Description=Maintain PNLX Testnet reward storage daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15min
+Unit=pnlx-rewards-keepalive.service
+
+[Install]
+WantedBy=timers.target

@@ -15,7 +15,7 @@ interface Grant {
 if (import.meta.main) await keepaliveRewards(process.argv.slice(2));
 
 export async function keepaliveRewards(argv: string[]): Promise<void> {
-  const env = loadEnv();
+  const env = loadEnv({ validateRuntime: false });
   if (env.stellarNetwork !== "testnet" || !env.mongodbUri) throw new Error("Testnet MongoDB is required");
   const registry = JSON.parse(readFileSync(resolve(env.stellarDeploymentFile), "utf8")) as
     { contracts: Record<string, string>; network: string };

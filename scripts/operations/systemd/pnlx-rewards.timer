@@ -1,0 +1,10 @@
+[Unit]
+Description=Process PNLX Testnet rewards every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+Unit=pnlx-rewards.service
+
+[Install]
+WantedBy=timers.target
