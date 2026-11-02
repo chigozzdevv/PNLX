@@ -5,6 +5,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
 import { TermsGate } from "@/components/terms-gate";
+import { LoadingDots } from "@/components/loading-dots";
+import { accountEquity } from "@/lib/account-equity";
 import { formatUsd, shortAddress } from "@/lib/format";
 import { APP_HOME_HREF } from "@/lib/app-url";
 import { saveSlippagePercent, useSlippagePercent } from "@/lib/trade-settings";
@@ -23,6 +25,7 @@ const navItems: Array<{ href: string; id: AppView; label: string }> = [
 
 interface AppShellProps {
   account?: AccountSnapshot | null;
+  equity?: number | null;
   activeView: AppView;
   children: ReactNode;
   onOpenDeposit?: () => void;
@@ -33,6 +36,7 @@ interface AppShellProps {
 
 export function AppShell({
   account,
+  equity,
   activeView,
   children,
   onOpenDeposit,
@@ -90,6 +94,7 @@ export function AppShell({
             {wallet.session ? account !== undefined ? (
               <CollateralBalanceMenu
                 account={account ?? undefined}
+                equity={equity}
                 onOpenDeposit={onOpenDeposit}
                 onRepairCollateral={onRepairCollateral}
                 showRepairCollateral={showRepairCollateral}
@@ -194,46 +199,50 @@ export function AppShell({
 }
 
 function LoadedCollateralBalanceMenu({ session }: { session: NonNullable<WalletSessionController["session"]> }) {
-  const trading = useTradingData(session);
+  const trading = useTradingData(session, 0, undefined, { autoRefresh: true });
   const account = !trading.loading && !trading.error && trading.data.account.address === session.address
     ? trading.data.account : undefined;
 
-  return <CollateralBalanceMenu account={account} loading={trading.loading} />;
+  return <CollateralBalanceMenu account={account} equity={account ? accountEquity(account, trading.data.positions).equity : null} loading={trading.loading} />;
 }
 
 function CollateralBalanceMenu({
   account,
+  equity,
   loading = false,
   onOpenDeposit,
   onRepairCollateral,
   showRepairCollateral = false,
 }: {
   account?: AccountSnapshot;
+  equity?: number | null;
   loading?: boolean;
   onOpenDeposit?: () => void;
   onRepairCollateral?: () => void;
   showRepairCollateral?: boolean;
 }) {
-  const totalCollateral = account?.accountValue == null ? "—" : formatUsd(account.accountValue);
+  const totalEquity = equity == null ? null : formatUsd(equity, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   return (
     <details className="balance-menu" name="pnlx-header-menu">
       <summary
-        aria-label={totalCollateral !== "—" ? `Total collateral ${totalCollateral}. Show collateral breakdown` : "Collateral balance unavailable. Show details"}
+        aria-label={totalEquity ? `Equity ${totalEquity}. Show account balances` : "Loading equity. Show account balances"}
         className="balance-trigger"
+        title="Account equity includes open P&L."
       >
-        <strong>{totalCollateral}</strong>
+        <strong>{totalEquity ?? <LoadingDots label="Loading equity" />}</strong>
         <ChevronDown aria-hidden="true" className="balance-chevron" size={13} />
       </summary>
       <div className="balance-popover">
-        <span className="balance-popover-heading">Collateral</span>
+        <span className="balance-popover-heading">Account</span>
         {account ? (
           <dl aria-label="Collateral breakdown">
+            <div><dt>Equity</dt><dd>{totalEquity ?? <LoadingDots label="Loading equity" />}</dd></div>
             <div><dt>Available</dt><dd>{account.availableShieldedUsdc == null ? "—" : formatUsd(account.availableShieldedUsdc)}</dd></div>
             <div><dt>In use</dt><dd>{formatUsd(account.lockedMargin)}</dd></div>
             <div><dt>Pending</dt><dd>{formatUsd(account.pendingShieldedUsdc)}</dd></div>
           </dl>
-        ) : <p className="balance-popover-unavailable">{loading ? "Loading balance…" : "Balance unavailable."}</p>}
+        ) : <div className="balance-popover-unavailable"><LoadingDots label={loading ? "Loading balances" : "Updating balances"} /></div>}
         {onOpenDeposit || (showRepairCollateral && onRepairCollateral) ? (
           <div className="balance-popover-action">
             {onOpenDeposit ? (

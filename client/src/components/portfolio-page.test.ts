@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { AppShell } from "@/components/app-shell";
 import { PortfolioPage } from "@/components/portfolio-page";
 import { emptyLiquidityAccount } from "@/lib/liquidity-account";
+import { accountEquity } from "@/lib/account-equity";
 import { applyLatestOnchainMarks } from "@/lib/use-trading-data";
 import type { WalletSessionController } from "@/lib/use-wallet-session";
 import type { MarketDisplay, PositionRow, TradingLiveData } from "@/types/trading";
@@ -114,8 +115,8 @@ describe("portfolio balance availability", () => {
       wallet,
     };
     const markup = renderToStaticMarkup(createElement(AppShell, shellProps));
-    expect(markup).toContain('aria-label="Collateral balance unavailable. Show details"');
-    expect(markup).toContain("Balance unavailable.");
+    expect(markup).toContain('aria-label="Loading equity. Show account balances"');
+    expect(markup).toContain('aria-label="Updating balances"');
     expect(markup).not.toContain("$0.00");
     expect(markup).not.toContain("Collateral breakdown");
   });
@@ -131,6 +132,23 @@ describe("portfolio balance availability", () => {
 });
 
 describe("portfolio equity after entry fees", () => {
+  test("uses the same equity in the header and portfolio while keeping spendable collateral separate", () => {
+    const trading = markedPortfolio(10_000_000n, 22_000_000n, "0");
+    trading.account.availableShieldedUsdc = 25;
+    trading.account.accountValue! += 25;
+    const valuation = accountEquity(trading.account, trading.positions);
+    const page = renderToStaticMarkup(createElement(PortfolioPage, { connected: true, trading }));
+    const shellProps: Parameters<typeof AppShell>[0] = {
+      account: trading.account, equity: valuation.equity, activeView: "portfolio", children: createElement("main"),
+      wallet: { session: { address: "GTESTWALLET", expiresAt: 1_000, ownerCommitment: "0x01", token: "test" },
+        status: "connected", error: undefined, connect: async () => undefined, disconnect: () => undefined },
+    };
+    const shell = renderToStaticMarkup(createElement(AppShell, shellProps));
+    expect(valuation.equity).toBe(126);
+    expect(page).toContain('class="portfolio-account-value">$126.00</strong>');
+    expect(shell).toContain('aria-label="Equity $126.00. Show account balances"');
+    expect(shell).toContain("$25.00");
+  });
   test("includes accrued funding once alongside the already-paid entry fee", () => {
     for (const [index, equity, pnl] of [["2000000", "$97.00", "−$3.00"], ["-2000000", "$101.00", "+$1.00"]]) {
       const trading = markedPortfolio(10_000_000n, 20_000_000n, index);

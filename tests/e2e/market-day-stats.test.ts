@@ -92,7 +92,7 @@ describe("rolling 24h reference market statistics", () => {
     expect(a.stale).toBe(false);
   });
 
-  test("provider failures and incomplete replacements retain the last verified snapshot as stale", async () => {
+  test("missed refreshes retain a verified snapshot and only become delayed after two minutes", async () => {
     let now = AS_OF + 10_000;
     let mode: "good" | "http-error" | "incomplete" = "good";
     const service = new MarketDayStatsService(async () => mode === "http-error"
@@ -100,8 +100,10 @@ describe("rolling 24h reference market statistics", () => {
       : Response.json(mode === "incomplete" ? rows(AS_OF + MINUTE).slice(1) : rows()), () => now);
     const verified = await service.stats(MARKET);
     now += MINUTE; mode = "http-error";
-    expect(await service.stats(MARKET)).toEqual({ ...verified, stale: true });
+    expect(await service.stats(MARKET)).toEqual(verified);
     mode = "incomplete";
+    expect(await service.stats(MARKET)).toEqual(verified);
+    now += MINUTE;
     expect(await service.stats(MARKET)).toEqual({ ...verified, stale: true });
   });
 
@@ -123,7 +125,7 @@ describe("rolling 24h reference market statistics", () => {
     pending[1](Response.json(rows(AS_OF + MINUTE)));
     const latest = await newer;
     pending[0](Response.json(rows()));
-    expect((await older).stale).toBe(true);
+    expect(await older).toEqual(latest);
     expect(await service.stats(MARKET)).toEqual(latest);
   });
 

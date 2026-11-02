@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { LoadingDots } from "@/components/loading-dots";
 import { useWalletSession } from "@/lib/use-wallet-session";
 import { claimReward, getRewards, type RewardKind, type RewardsAccount } from "@/lib/rewards";
 import { formatVaultUnits } from "@/lib/liquidity-vault";
@@ -162,7 +163,7 @@ export function RewardsContent({ claiming, connected, copied, failure, loading, 
   const rows = rewards ? rewardRows(rewards).filter((row) => (row.claimable !== null && row.claimable > 0n) || row.pending > 0n) : [];
   const balancesPublished = Boolean(rewards?.rebate && rewards.referral);
   const failureLabel = failure?.operation === "claim" ? "Claim failed"
-    : failure?.operation === "copy" ? "Link not copied" : "Rewards unavailable";
+    : failure?.operation === "copy" ? "Link not copied" : "Couldn’t refresh rewards";
 
   return (
     <main className="account-page rewards-page">
@@ -173,24 +174,26 @@ export function RewardsContent({ claiming, connected, copied, failure, loading, 
         </button> : null}
       </div>
 
-      <section aria-label="Claimable reward balances" className="account-stats rewards-stats">
+      <section aria-label={balancesPublished ? "Claimable reward balances" : "Earned rewards"} className="account-stats rewards-stats">
         {rewardTypes.map(({ name, kind }) => (
           <div className="account-stat" key={kind}>
             <span>{name}</span>
-            <strong title={failure?.operation === "load" ? `Last loaded balance. ${failure.detail}` : `Claimable ${name.toLowerCase()}`}>
-              {rewards?.[kind] ? rewardAmount(rewards[kind].claimable) : loading ? "…" : "—"}
+            <strong title={failure?.operation === "load" ? "Last confirmed balance. Try refreshing."
+              : rewards?.[kind] ? `Available to claim.` : "Earned rewards awaiting distribution."}>
+              {rewards?.[kind] ? rewardAmount(rewards[kind].claimable) : rewards?.accrued
+                ? rewardAmount(rewards.accrued[kind]) : connected || loading ? <LoadingDots label={`Updating ${name.toLowerCase()}`} /> : "—"}
             </strong>
           </div>
         ))}
       </section>
 
       {referralStatus ? <div className="rewards-notice" role="status" title={referralStatus.detail}>
-        {referralStatus.linked ? "Referral linked" : "Referral unavailable"}
+        {referralStatus.linked ? "Referral linked" : "Couldn’t link referral"}
       </div> : null}
 
       <section aria-labelledby="rewards-claims-title" className="page-section rewards-claims">
         <div className="page-section-heading"><h2 id="rewards-claims-title">Claims</h2></div>
-        {failure ? <div className="rewards-notice rewards-failure" role="alert" title={failure.detail}>
+        {failure ? <div className="rewards-notice rewards-failure" role="alert">
           <span>{failureLabel}</span>
           {failure.operation === "load" ? <button className="page-action-secondary" onClick={onRetry} type="button">Retry</button> : null}
         </div> : null}
@@ -209,15 +212,15 @@ export function RewardsContent({ claiming, connected, copied, failure, loading, 
                 {pending > 0n ? <div className="rewards-claim-value">
                   <strong>{rewardAmount(pending)} <small>USDC</small></strong>
                   <span className="rewards-pending-label" title={rewards?.[kind]
-                    ? "Awaiting credit to the rewards contract" : "Accrued rewards; claimable balance has not been published"}>Pending</span>
+                    ? "Awaiting reward distribution." : "Earned rewards, not yet available to claim."}>Pending</span>
                 </div> : null}
               </div>
             </li>
           ))}
         </ul> : failure?.operation !== "load" ? <div className="page-empty-state" aria-label={loading ? "Loading rewards" : undefined}
-          role={loading ? "status" : undefined} title={connected && !loading && !balancesPublished ? "Claimable reward balances have not been published" : undefined}>
-          {!connected ? "Connect wallet to view rewards" : loading ? "…" : balancesPublished ? "Nothing to claim"
-            : <span aria-label="Claimable reward balances have not been published">—</span>}
+          role={loading ? "status" : undefined}>
+          {!connected ? "Connect wallet to view rewards" : loading ? <LoadingDots label="Loading rewards" /> : balancesPublished ? "Nothing to claim"
+            : rewards?.accrued ? "Claims aren’t open yet." : <LoadingDots label="Updating earned rewards" />}
         </div> : null}
       </section>
     </main>

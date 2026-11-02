@@ -29,7 +29,7 @@ const tiers: TierBenefit[] = [
   { tier: "Platinum", threshold: 3_000, feeRebatePercent: 15, referralSharePercent: 10, creditDropWeight: 3 },
 ];
 
-const PARTIAL_POINTS_DESCRIPTION = "Verified activity only; some historical settlement details are missing.";
+const PARTIAL_POINTS_DESCRIPTION = "Verified points. Some of your trades could not be included.";
 
 export function PointsPage() {
   const wallet = useWalletSession();

@@ -51,6 +51,13 @@ export interface VaultPosition {
 }
 
 export interface VaultHistory {
+  performance?: {
+    apy: number | null;
+    returnPct: number | null;
+    from: string | null;
+    asOf: string | null;
+    status: "available" | "insufficient" | "stale";
+  };
   stale: boolean;
   observedAt: string | null;
   activity: Array<{ id: string; kind: "supply" | "allocation" | "return" | "withdrawal";
@@ -101,8 +108,8 @@ export async function getVaultAccount(session: WalletSession): Promise<VaultAcco
   return response.account;
 }
 
-export async function getVaultHistory(): Promise<VaultHistory> {
-  return pnlxGet<VaultHistory>("/liquidity-vault/history");
+export async function getVaultHistory(signal?: AbortSignal): Promise<VaultHistory> {
+  return pnlxGet<VaultHistory>("/liquidity-vault/history", undefined, signal);
 }
 
 export function parseVaultUnits(value: string): bigint {

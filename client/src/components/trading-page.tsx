@@ -5,6 +5,8 @@ import { ActionToast } from "@/components/action-toast";
 import { AppShell } from "@/components/app-shell";
 import { ChartToolbar } from "@/components/chart-toolbar";
 import { MarketHeader } from "@/components/market-header";
+import { LoadingDots } from "@/components/loading-dots";
+import { accountEquity } from "@/lib/account-equity";
 import { OrderTicket, type OrderTicketSubmitInput } from "@/components/order-ticket";
 import { PnlModal, type PnlModalProps } from "@/components/pnl-modal";
 import { PositionsTable, type PositionsTableView } from "@/components/positions-table";
@@ -53,7 +55,7 @@ export function TradingPage() {
   const [pendingOrders, setPendingOrders] = useState<ServerOwnerOrderSnapshot[]>([]);
   const [optimisticOrderClock, setOptimisticOrderClock] = useState(0);
   const selectedMarketId = DEFAULT_MARKET_ID;
-  const trading = useTradingData(wallet.session, refreshKey, selectedMarketId);
+  const trading = useTradingData(wallet.session, refreshKey, selectedMarketId, { autoRefresh: true });
   const recordsMatchWallet = Boolean(wallet.session && trading.data.account.address === wallet.session.address);
   const [chartInterval, setChartInterval] = useState<CandleInterval>("15m");
   const [ticketMode, setTicketMode] = useState<"trade" | "deposit">("trade");
@@ -302,7 +304,8 @@ export function TradingPage() {
 
   return (
     <AppShell
-      account={trading.data.account}
+      account={trading.loading || trading.error ? null : trading.data.account}
+      equity={trading.loading || trading.error ? null : accountEquity(trading.data.account, trading.data.positions).equity}
       activeView="trade"
       onOpenDeposit={displaySelectedMarket && orderDraft ? () => {
         setTicketMode("deposit");
@@ -331,6 +334,7 @@ export function TradingPage() {
                 indicators={chartIndicators}
                 interval={chartInterval}
                 loadingMore={candles.loadingMore}
+                reconnecting={!candles.loading && !candles.live}
                 onFullscreen={() => priceChartRef.current?.toggleFullscreen()}
                 onIndicatorToggle={(indicator) => {
                   setChartIndicators((current) => current.includes(indicator)
@@ -354,7 +358,7 @@ export function TradingPage() {
                   />
                   {candles.loading || candles.error ? (
                     <div className="chart-data-status">
-                      {candles.loading ? "Loading chart" : candles.error}
+                      {candles.loading ? <LoadingDots label="Loading chart" /> : candles.error}
                     </div>
                   ) : null}
                 </div>

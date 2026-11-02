@@ -67,6 +67,18 @@ describe("reward accrual", () => {
     expect(result.complete).toBe(false);
   });
 
+  test("ignores incomplete settlements belonging only to other wallets", () => {
+    const store = new ProtocolStore();
+    for (let number = 0; number < 4; number += 1) addFill(store, number);
+    const expected = new RewardAccrualService(store).forOwner(TAKER, [], START + 4 * 86_400_000);
+    const unrelated = addFill(store, 20, OTHER);
+    const payload = store.privateMatchIntents.get(unrelated.takerIntents[0])!;
+    store.privateMatchIntents.set(payload.intentCommitment, { ...payload, ownerCommitment: OTHER });
+    store.intents.set(payload.intentCommitment, { ...store.intents.get(payload.intentCommitment)!, ownerCommitment: OTHER });
+    store.marketSettlementVolumes.delete(unrelated.settlementDigest);
+    expect(new RewardAccrualService(store).forOwner(TAKER, [], START + 4 * 86_400_000)).toEqual(expected);
+  });
+
   test("pays referral share only for a pre-registered external taker", () => {
     const store = new ProtocolStore();
     for (let number = 0; number < 3; number += 1) addFill(store, number);

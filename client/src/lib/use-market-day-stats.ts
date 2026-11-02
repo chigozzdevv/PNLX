@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { parseMarketDayStats } from "@/lib/market-day-stats";
+import { parseMarketDayStats, refreshMarketDayStatsAge } from "@/lib/market-day-stats";
 import { pnlxGet } from "@/lib/pnlx-api";
 import type { MarketDayStats } from "@/types/trading";
 
@@ -13,6 +13,7 @@ export function useMarketDayStats(marketId?: string): MarketDayStats | undefined
     let active = true;
     let pending: AbortController | undefined;
     const refresh = async () => {
+      if (active) setSnapshot((previous) => previous?.marketId === marketId ? refreshMarketDayStatsAge(previous) : undefined);
       if (pending) return;
       const request = new AbortController();
       pending = request;
@@ -22,7 +23,7 @@ export function useMarketDayStats(marketId?: string): MarketDayStats | undefined
         const stats = parseMarketDayStats(payload, marketId);
         if (active && !request.signal.aborted) setSnapshot(stats);
       } catch {
-        if (active) setSnapshot((previous) => previous?.marketId === marketId ? { ...previous, stale: true } : undefined);
+        if (active) setSnapshot((previous) => previous?.marketId === marketId ? refreshMarketDayStatsAge(previous) : undefined);
       } finally {
         window.clearTimeout(timeout);
         if (pending === request) pending = undefined;
@@ -30,8 +31,6 @@ export function useMarketDayStats(marketId?: string): MarketDayStats | undefined
     };
     const resume = () => {
       if (document.visibilityState === "hidden") return;
-      setSnapshot((previous) => previous?.marketId === marketId && Date.now() - previous.asOf > 120_000
-        ? { ...previous, stale: true } : previous);
       void refresh();
     };
     void refresh();

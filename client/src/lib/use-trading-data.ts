@@ -112,10 +112,11 @@ export function createTradingDataRefresh(
     clearScheduled();
     pending = Promise.resolve().then(load).then((data) => {
       if (!active) return;
-      needsRefresh = data.account.pendingShieldedUsdc > 0 || groupOwnerOrders(data.orders).some(isActiveOrderGroup);
+      needsRefresh = data.account.pendingShieldedUsdc > 0 || groupOwnerOrders(data.orders).some(isActiveOrderGroup) ||
+        data.positions.some((position) => position.status === "open");
       onData(data);
     }).catch((error: unknown) => {
-      if (active) onError(error);
+      if (active) { needsRefresh = true; onError(error); }
     }).finally(() => {
       pending = undefined;
       if (active && options.autoRefresh && needsRefresh && visible()) {
@@ -131,7 +132,7 @@ export function createTradingDataRefresh(
     refresh,
     visibilityChanged() {
       clearScheduled();
-      if (options.autoRefresh && needsRefresh && visible()) void refresh();
+      if (options.autoRefresh && visible()) void refresh();
     },
     dispose() {
       active = false;
@@ -247,12 +248,14 @@ export function useTradingData(
     if (!autoRefresh || document.visibilityState !== "hidden") void refresh.refresh();
     if (autoRefresh) {
       window.addEventListener("focus", refresh.visibilityChanged);
+      window.addEventListener("online", refresh.visibilityChanged);
       document.addEventListener("visibilitychange", refresh.visibilityChanged);
     }
 
     return () => {
       refresh.dispose();
       window.removeEventListener("focus", refresh.visibilityChanged);
+      window.removeEventListener("online", refresh.visibilityChanged);
       document.removeEventListener("visibilitychange", refresh.visibilityChanged);
     };
   }, [autoRefresh, emptyData, privateNotesVersion, refreshKey, session]);

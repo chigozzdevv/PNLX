@@ -27,7 +27,7 @@ describe("points completeness", () => {
       points: { ...points, activePoints: 35, lifetimePoints: 35, complete: false },
     }));
     expect(markup).toContain("35");
-    expect(markup).toContain("Verified activity only; some historical settlement details are missing.");
+    expect(markup).toContain("Verified points. Some of your trades could not be included.");
     expect(markup).not.toContain('role="progressbar"');
     expect(markup).not.toContain("Some settled activity is still being reconciled.");
   });
@@ -64,6 +64,15 @@ describe("reward claim states", () => {
     expect(markup).not.toContain("$0.00");
     expect(markup).not.toContain("Nothing to claim");
     expect(markup).not.toContain("No rewards yet");
+    expect(markup).toContain('aria-label="Earned rewards"');
+  });
+
+  test("shows verified zero earned rewards without implying they can already be claimed", () => {
+    const markup = renderToStaticMarkup(createElement(RewardsContent, { ...rewardProps,
+      rewards: { contractId: null, rebate: null, referral: null, accrued: { rebate: "0", referral: "0" } } }));
+    expect(markup).toContain("$0.00");
+    expect(markup).toContain("Claims aren’t open yet.");
+    expect(markup).not.toContain(">Claim</button>");
   });
 
   test("shows nothing to claim after rewards have been fully claimed", () => {

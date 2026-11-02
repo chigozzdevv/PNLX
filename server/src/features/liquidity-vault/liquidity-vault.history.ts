@@ -1,5 +1,6 @@
 import { MongoClient, type Db } from "mongodb";
 import type { LiquidityVaultService } from "@/features/liquidity-vault/liquidity-vault.service";
+import { vaultPerformance, type VaultPerformance } from "@/features/liquidity-vault/liquidity-vault.performance";
 
 const TRANSFER_TOPIC = "AAAADwAAAAh0cmFuc2Zlcg==";
 const POLL_MS = 60_000;
@@ -60,7 +61,7 @@ export class LiquidityVaultHistory {
     this.timer.unref?.();
   }
 
-  async history(): Promise<{ activity: VaultActivity[]; assets: VaultAssetPoint[]; stale: boolean; observedAt: string | null }> {
+  async history(): Promise<{ activity: VaultActivity[]; assets: VaultAssetPoint[]; stale: boolean; observedAt: string | null; performance: VaultPerformance }> {
     const stale = this.syncFailed || !this.lastPoll || Date.now() - this.lastPoll > 2 * POLL_MS;
     const client = new MongoClient(this.config.uri);
     try {
@@ -76,11 +77,16 @@ export class LiquidityVaultHistory {
         db.collection<StoredPoint>("vault_asset_points")
           .findOne({ ...pointFilter, at: { $lt: since } }, { sort: { at: -1 } }),
       ]);
+      const timeline = previous ? [previous, ...assets] : assets;
+      const flows = timeline.length ? await db.collection<StoredActivity>("vault_activity").find({ ...pointFilter,
+        kind: { $in: ["supply", "withdrawal"] }, at: { $gte: timeline[0].at } }).sort({ at: 1 }).toArray() : [];
+      const observedAt = this.lastSnapshot ? new Date(this.lastSnapshot).toISOString() : null;
       return {
         activity: activity.map(({ id, kind, amount, at, ledger, txHash }) => ({ id, kind, amount, at, ledger, txHash })),
-        assets: (previous ? [previous, ...assets] : assets).map(({ at, assets: amount }) => ({ at, assets: amount })),
+        assets: timeline.map(({ at, assets: amount }) => ({ at, assets: amount })),
         stale,
-        observedAt: this.lastSnapshot ? new Date(this.lastSnapshot).toISOString() : null,
+        observedAt,
+        performance: vaultPerformance(timeline, flows, observedAt, stale),
       };
     } finally {
       await client.close();

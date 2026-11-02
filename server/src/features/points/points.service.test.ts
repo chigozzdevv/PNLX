@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { hashFields, ownerCommitment } from "@pnlx/crypto";
 import { fillFees, notional, PRICE_SCALE } from "@pnlx/market-math";
 import type { BatchSettlement, Hex, IntentRecord, PositionCloseRecord, PositionLifecycleRecord, PrivateMatchIntent } from "@pnlx/protocol-types";
-import { PointsService } from "@/features/points/points.service";
+import { confirmedFills, PointsService } from "@/features/points/points.service";
 import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
 import { ProtocolStore } from "@/shared/state/store";
-import { matchingPayloadCommitment } from "@/workers/batch-matcher/private-intent";
+import { assertPrivateMatchIntent, matchingPayloadCommitment } from "@/workers/batch-matcher/private-intent";
 
 const MAKER = `0x${"11".repeat(32)}` as Hex;
 const TAKER = `0x${"22".repeat(32)}` as Hex;
@@ -89,6 +89,37 @@ describe("confirmed trade points", () => {
     expect(unreconciled.lifetimePoints).toBe(0);
     expect(unreconciled.complete).toBe(false);
     store.settlements.set("xlm-usd-perp:batch", { ...settlement, feeConfigHash: DIGEST });
+    expect(new PointsService(store).snapshot(TAKER, NOW + 1).complete).toBe(false);
+  });
+
+  test("validates historical payload hashes without allowing those payloads through the current order validator", () => {
+    const { store, settlement } = fixture();
+    const commitments: Hex[] = [];
+    for (const id of [MAKER_INTENT, TAKER_INTENT]) {
+      const current = store.privateMatchIntents.get(id)!;
+      const { ownerDigest: _ownerDigest, positionSeed: _positionSeed, ...historical } = current;
+      const commitment = hashFields("matching-payload", [historical.intentCommitment, historical.marketId,
+        historical.ownerCommitment, historical.signedSize, historical.limitPrice, historical.margin,
+        historical.noteNullifier, historical.noteChangeCommitment, historical.sourceIntentCommitment ?? "0x0"]);
+      commitments.push(commitment);
+      store.privateMatchIntents.set(id, historical as PrivateMatchIntent);
+      store.intents.set(id, { ...store.intents.get(id)!, matchingPayloadCommitment: commitment });
+      expect(() => assertPrivateMatchIntent(store.intents.get(id)!, historical as PrivateMatchIntent)).toThrow();
+    }
+    const historicalSettlement = { ...settlement, matchingPayloadCommitments: commitments };
+    store.settlements.set("xlm-usd-perp:batch", historicalSettlement);
+    expect(new PointsService(store).snapshot(TAKER, NOW + 1)).toMatchObject({ activePoints: 100, complete: true });
+    store.privateMatchIntents.set(TAKER_INTENT, { ...store.privateMatchIntents.get(TAKER_INTENT)!, margin: 1n });
+    expect(confirmedFills(historicalSettlement, store)).toBeNull();
+  });
+
+  test("unrelated incomplete settlements cannot mark this wallet's points incomplete", () => {
+    const { store, settlement } = fixture();
+    store.settlements.set("xlm-usd-perp:unrelated", { ...settlement,
+      settlementDigest: `0x${"99".repeat(32)}`, makerIntents: [], takerIntents: [],
+      matchingPayloadCommitments: [], newCommitments: [] });
+    expect(new PointsService(store).snapshot(TAKER, NOW + 1)).toMatchObject({ activePoints: 100, complete: true });
+    store.settlements.set("xlm-usd-perp:related", { ...settlement, settlementDigest: `0x${"88".repeat(32)}` });
     expect(new PointsService(store).snapshot(TAKER, NOW + 1).complete).toBe(false);
   });
 

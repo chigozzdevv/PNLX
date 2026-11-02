@@ -1,6 +1,6 @@
 import { ownerCommitment } from "@pnlx/crypto";
 import type { Hex } from "@pnlx/protocol-types";
-import { confirmedFills, PointsService } from "@/features/points/points.service";
+import { confirmedFills, PointsService, settlementTouchesOwners } from "@/features/points/points.service";
 import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
 import type { ProtocolStore } from "@/shared/state/store";
 import type { ReferralAttribution } from "@/features/rewards/rewards.referrals";
@@ -28,17 +28,26 @@ export class RewardAccrualService {
     let complete = true;
     if (owner === this.operator) return { rebate, referral, eligibleTreasuryFees, complete };
     const seen = new Set<Hex>();
+    const ownerOnly = new Set([owner]);
     for (const settlement of this.store.settlements.values()) {
       if (!settlement.onchainConfirmed || seen.has(settlement.settlementDigest)) continue;
-      seen.add(settlement.settlementDigest);
-      if (settlement.feeConfigHash !== FEE_CONFIG_HASH) continue;
       const settledAt = this.store.marketSettlementVolumes.get(settlement.settlementDigest)?.settledAt;
+      const relatedOwners = new Set([owner, ...referrals.filter((entry) => entry.referrer === owner &&
+        entry.registeredAt < (settledAt ?? now)).map((entry) => entry.referred)]);
+      if (!settlementTouchesOwners(settlement, this.store, relatedOwners)) continue;
+      seen.add(settlement.settlementDigest);
+      if (settlement.feeConfigHash !== FEE_CONFIG_HASH) { complete = false; continue; }
       if (settledAt === undefined) { complete = false; continue; }
       if (settledAt > now) continue;
       const fills = confirmedFills(settlement, this.store);
       if (!fills) { complete = false; continue; }
-      const rate = this.points.snapshot(owner, settledAt - 1).benefits.feeRebatePercent;
-      const referralRate = this.points.snapshot(owner, settledAt - 1).benefits.referralSharePercent;
+      if (!settlementTouchesOwners(settlement, this.store, ownerOnly) &&
+        !fills.some((fill) => fill.maker !== owner && referrals.some((entry) => entry.referrer === owner &&
+          entry.referred === fill.taker && entry.registeredAt < settledAt))) continue;
+      const tier = this.points.snapshot(owner, settledAt - 1);
+      if (!tier.complete) { complete = false; continue; }
+      const rate = tier.benefits.feeRebatePercent;
+      const referralRate = tier.benefits.referralSharePercent;
       for (const fill of fills) {
         if (fill.maker === fill.taker) continue;
         if (fill.taker === owner) {

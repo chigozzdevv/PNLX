@@ -1,5 +1,12 @@
 import type { MarketDayStats } from "@/types/trading";
 
+export const MARKET_DAY_STATS_MAX_AGE_MS = 120_000;
+
+export function refreshMarketDayStatsAge(stats: MarketDayStats, now = Date.now()): MarketDayStats {
+  const stale = now - stats.asOf > MARKET_DAY_STATS_MAX_AGE_MS;
+  return stats.stale === stale ? stats : { ...stats, stale };
+}
+
 export function parseMarketDayStats(payload: unknown, marketId: string, now = Date.now()): MarketDayStats {
   if (!payload || typeof payload !== "object") throw new Error("Missing reference market statistics");
   const stats = payload as MarketDayStats;
@@ -14,5 +21,5 @@ export function parseMarketDayStats(payload: unknown, marketId: string, now = Da
     Math.abs(stats.change24h - (stats.lastPrice / stats.open24h - 1) * 100) > 0.000001) {
     throw new Error("Invalid reference market statistics");
   }
-  return { ...stats, stale: stats.stale || now - stats.asOf > 120_000 };
+  return refreshMarketDayStatsAge(stats, now);
 }

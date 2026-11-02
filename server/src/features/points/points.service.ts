@@ -1,4 +1,4 @@
-import { ownerCommitment } from "@pnlx/crypto";
+import { hashFields, ownerCommitment } from "@pnlx/crypto";
 import { fillFees, notional } from "@pnlx/market-math";
 import type { BatchSettlement, Hex, PrivateMatchIntent } from "@pnlx/protocol-types";
 import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
@@ -25,8 +25,10 @@ export class PointsService {
     const daily = new Map<string, DayValue>();
     let complete = true;
     const operator = this.makerAddress ? ownerCommitment(this.makerAddress.trim().toUpperCase()) : undefined;
+    const owners = new Set([owner]);
     for (const settlement of this.store.settlements.values()) {
-      if (!settlement.onchainConfirmed) continue;
+      if (!settlement.onchainConfirmed || owner === operator ||
+        !settlementTouchesOwners(settlement, this.store, owners)) continue;
       if (settlement.feeConfigHash !== FEE_CONFIG_HASH) {
         complete = false;
         continue;
@@ -92,6 +94,18 @@ export class PointsService {
   }
 }
 
+export function settlementTouchesOwners(settlement: BatchSettlement, store: ProtocolStore, owners: ReadonlySet<Hex>): boolean {
+  const ids = [...(settlement.makerIntents ?? []), ...(settlement.takerIntents ?? [])];
+  if (ids.some((id) => {
+    const record = store.intents.get(id) ?? store.residualOrders.get(id) ?? store.privateMatchIntents.get(id);
+    return record !== undefined && owners.has(record.ownerCommitment);
+  })) return true;
+  return settlement.newCommitments?.some((id) => {
+    const position = store.positionLifecycle.get(id);
+    return position?.settlementDigest === settlement.settlementDigest && owners.has(position.ownerCommitment);
+  }) ?? false;
+}
+
 export function confirmedFills(
   settlement: BatchSettlement,
   store: ProtocolStore,
@@ -114,8 +128,8 @@ export function confirmedFills(
     if (!maker || !taker || makerId === takerId || maker.marketId !== settlement.marketId || taker.marketId !== settlement.marketId ||
       (maker.signedSize > 0n) === (taker.signedSize > 0n)) return null;
     if (!validIntent(store, maker) || !validIntent(store, taker)) return null;
-    if (!settlement.matchingPayloadCommitments.includes(matchingPayloadCommitment(maker)) ||
-      !settlement.matchingPayloadCommitments.includes(matchingPayloadCommitment(taker))) return null;
+    if (!settlement.matchingPayloadCommitments.includes(accountingPayloadCommitment(maker)) ||
+      !settlement.matchingPayloadCommitments.includes(accountingPayloadCommitment(taker))) return null;
     const makerRemaining = remaining.get(makerId) ?? abs(maker.signedSize);
     const takerRemaining = remaining.get(takerId) ?? abs(taker.signedSize);
     const size = makerRemaining < takerRemaining ? makerRemaining : takerRemaining;
@@ -169,9 +183,27 @@ function validIntent(store: ProtocolStore, payload: PrivateMatchIntent): boolean
   const record = store.intents.get(payload.intentCommitment) ?? store.residualOrders.get(payload.intentCommitment);
   if (!record) return false;
   try {
-    assertPrivateMatchIntent(record, payload);
+    if (payload.ownerDigest !== undefined || payload.positionSeed !== undefined) {
+      assertPrivateMatchIntent(record, payload);
+    } else {
+      if (payload.intentCommitment !== record.intentCommitment || payload.marketId !== record.marketId ||
+        payload.ownerCommitment !== record.ownerCommitment || payload.noteNullifier !== record.noteNullifier ||
+        ("noteChangeCommitment" in record ? payload.noteChangeCommitment !== record.noteChangeCommitment
+          : payload.noteChangeCommitment !== "0x0") ||
+        accountingPayloadCommitment(payload) !== record.matchingPayloadCommitment) return false;
+    }
     return true;
   } catch {
     return false;
   }
+}
+
+function accountingPayloadCommitment(payload: PrivateMatchIntent): Hex {
+  if (payload.ownerDigest !== undefined || payload.positionSeed !== undefined) return matchingPayloadCommitment(payload);
+  if (typeof payload.signedSize !== "bigint" || payload.signedSize === 0n ||
+    typeof payload.limitPrice !== "bigint" || payload.limitPrice <= 0n ||
+    typeof payload.margin !== "bigint" || payload.margin <= 0n) throw new Error("Invalid historical fill");
+  return hashFields("matching-payload", [payload.intentCommitment, payload.marketId, payload.ownerCommitment,
+    payload.signedSize, payload.limitPrice, payload.margin, payload.noteNullifier,
+    payload.noteChangeCommitment, payload.sourceIntentCommitment ?? "0x0"]);
 }

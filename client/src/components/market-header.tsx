@@ -1,5 +1,6 @@
 import Image from "next/image";
-import { formatCompact, formatNumber, formatPct, formatUsd } from "@/lib/format";
+import { LoadingDots } from "@/components/loading-dots";
+import { formatCompact, formatNumber, formatPct } from "@/lib/format";
 import type { MarketDayStats, MarketDisplay } from "@/types/trading";
 
 interface MarketHeaderProps {
@@ -12,16 +13,16 @@ interface HeaderMetric {
   label: string;
   value: string | null;
   description: string;
-  badge?: string;
+  updating?: boolean;
   tone?: "positive" | "negative";
 }
 
-function fundingMetric(market: MarketDisplay, loading: boolean): HeaderMetric {
+function fundingMetric(market: MarketDisplay): HeaderMetric {
   const funding = market.funding;
   if (!funding) return {
     label: "Est. funding",
-    value: market.fundingRate !== null && Number.isFinite(market.fundingRate) ? formatPct(market.fundingRate, 4) : loading ? null : "—",
-    description: "PNLX funding estimate. Settlement status is unavailable.",
+    value: market.fundingRate !== null && Number.isFinite(market.fundingRate) ? formatPct(market.fundingRate, 4) : null,
+    description: "Estimated payment between long and short positions.",
   };
   const interval = funding.intervalMs;
   const period = interval > 0 && Number.isFinite(interval)
@@ -29,20 +30,15 @@ function fundingMetric(market: MarketDisplay, loading: boolean): HeaderMetric {
       : interval % 60_000 === 0 ? `${interval / 60_000}m` : `${interval / 1_000}s`
     : undefined;
   const settling = funding.settlementStatus === "running";
-  const settlement = settling ? "Automatic funding settlement is running."
-    : funding.settlementStatus === "paused" ? "Automatic funding settlement is paused; this rate is an estimate."
-      : "Funding settlement is unavailable; this rate is an estimate.";
-  const sampledAt = funding.sampledAt !== null && funding.sampledAt > 0
-    ? ` Last sample: ${new Date(funding.sampledAt).toISOString()}.` : "";
-  const progress = `${funding.sampleCount}/${funding.minimumSamples} premium samples`;
+  const settlement = settling ? "" : " Funding payments are paused.";
+  const description = funding.status === "ready" ? "Estimated payment between long and short positions."
+    : funding.status === "warming" || funding.status === "stale" ? "Updating the funding estimate."
+      : "More buy and sell liquidity is needed to calculate funding.";
   return {
     label: `${settling ? "Funding" : "Est. funding"}${period ? ` · ${period}` : ""}`,
     value: funding.status === "ready" && funding.rate !== null && Number.isFinite(funding.rate)
-      ? formatPct(funding.rate, 4) : "—",
-    description: `${funding.reason ?? (funding.status === "warming" ? `Collecting ${progress}.`
-      : funding.status === "stale" ? `PNLX funding samples are out of date (${progress}).`
-        : funding.status === "unavailable" ? "Two-sided funding depth is unavailable."
-          : funding.source === "fixed" ? "Configured PNLX funding estimate." : `PNLX funding estimate from ${progress}.`)} ${settlement}${sampledAt}`,
+      ? formatPct(funding.rate, 4) : null,
+    description: `${description}${settlement}`,
   };
 }
 
@@ -52,15 +48,13 @@ function openInterestMetric(market: MarketDisplay, loading: boolean): HeaderMetr
   if (!available) return {
     label: "Open interest",
     value: market.openInterestDetails?.status === "incomplete" || !loading ? "—" : null,
-    description: market.openInterestDetails?.reason ?? "PNLX has not published a complete open-interest aggregate.",
+    description: "Updating the total size of open positions.",
   };
   const size = market.openInterest!;
-  const notional = market.markPrice !== undefined && Number.isFinite(market.markPrice) && market.markPrice > 0
-    ? ` ${formatUsd(size * market.markPrice)} at the current verified mark.` : "";
   return {
     label: "Open interest",
     value: `${formatCompact(size)} ${market.baseAsset}`,
-    description: `PNLX open interest counts one side of matched positions (half the total open size). ${formatNumber(size, 7)} ${market.baseAsset}.${notional}`,
+    description: `Total open ${market.baseAsset} position size, counting each matched pair once.`,
   };
 }
 
@@ -69,29 +63,27 @@ export function MarketHeader({ dayStats, loading = false, selectedMarket }: Mark
   const priceDigits = markPrice !== undefined && markPrice < 10 ? 5 : 2;
   const reference = dayStats?.marketId === selectedMarket.marketId ? dayStats : undefined;
   const referenceDescription = reference
-    ? `Hyperliquid ${selectedMarket.baseAsset} reference trades. Rolling 24h ending ${new Date(reference.asOf).toISOString()}, using complete 1m candles.${reference.stale ? " Last verified data; refresh is delayed." : ""}`
-    : `Hyperliquid ${selectedMarket.baseAsset} reference-price statistics are loading or temporarily unavailable.`;
+    ? `24h reference prices from Hyperliquid. Updated ${new Date(reference.asOf).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.${reference.stale ? " Refreshing." : ""}`
+    : "Loading 24h reference prices from Hyperliquid.";
   const stats: HeaderMetric[] = [
     {
       label: "24h change",
-      value: reference ? formatPct(reference.change24h, 2) : "—",
+      value: reference ? formatPct(reference.change24h, 2) : null,
       description: referenceDescription,
-      badge: reference?.stale ? "Stale" : undefined,
+      updating: reference?.stale,
       tone: reference ? reference.change24h < 0 ? "negative" : reference.change24h > 0 ? "positive" : undefined : undefined,
     },
     {
       label: "24h high",
-      value: reference ? `$${formatNumber(reference.high24h, reference.high24h < 10 ? 5 : 2)}` : "—",
+      value: reference ? `$${formatNumber(reference.high24h, reference.high24h < 10 ? 5 : 2)}` : null,
       description: referenceDescription,
-      badge: reference?.stale ? "Stale" : undefined,
     },
     {
       label: "24h low",
-      value: reference ? `$${formatNumber(reference.low24h, reference.low24h < 10 ? 5 : 2)}` : "—",
+      value: reference ? `$${formatNumber(reference.low24h, reference.low24h < 10 ? 5 : 2)}` : null,
       description: referenceDescription,
-      badge: reference?.stale ? "Stale" : undefined,
     },
-    fundingMetric(selectedMarket, loading),
+    fundingMetric(selectedMarket),
     openInterestMetric(selectedMarket, loading),
     {
       label: "All-time PNLX volume",
@@ -128,23 +120,13 @@ export function MarketHeader({ dayStats, loading = false, selectedMarket }: Mark
             <div className="metric-item" key={stat.label} title={stat.description}>
               <span>{stat.label}</span>
               <strong className={stat.tone ? `metric-${stat.tone}` : undefined}>
-                {stat.value ?? <MetricDots label={stat.label} />}
-                {stat.badge ? <small className="market-metric-badge">{stat.badge}</small> : null}
+                {stat.value ?? <LoadingDots label={`Loading ${stat.label}`} />}
+                {stat.updating ? <LoadingDots label="Updating 24h market data" /> : null}
               </strong>
             </div>
           ))}
         </div>
       </div>
     </section>
-  );
-}
-
-function MetricDots({ label }: { label: string }) {
-  return (
-    <span aria-label={`${label} data pending`} className="market-metric-dots" role="status">
-      <span aria-hidden="true" />
-      <span aria-hidden="true" />
-      <span aria-hidden="true" />
-    </span>
   );
 }

@@ -32,9 +32,9 @@ export function positionLiquidationDisplay(position: PositionRow, market?: RiskM
     value: estimate.status === "price" ? formatUsd(estimate.price, {
       minimumFractionDigits: estimate.price < 1 ? 4 : 2, maximumFractionDigits: 8,
     }) : "—",
-    title: estimate.status === "unavailable" ? "Private position details or current risk data are unavailable."
-      : estimate.status === "none" ? "No positive liquidation threshold at the current funding index. Paired positions may still close when the counterparty is distressed."
-        : `Estimate from committed margin, maintenance rate and the funding index.${positionLegs(position).length > 1 ? " Shows the first fill threshold; fills remain separately margined." : ""} Paired positions can close when either side is distressed.`,
+    title: estimate.status === "unavailable" ? "Waiting for current position and risk data."
+      : estimate.status === "none" ? "No liquidation price at current funding. Your position may still close if its paired position is liquidated."
+        : `Estimated liquidation price, including funding.${positionLegs(position).length > 1 ? " Shows the earliest liquidation price across your fills." : ""} Your position may also close if its paired position is liquidated.`,
   };
 }
 

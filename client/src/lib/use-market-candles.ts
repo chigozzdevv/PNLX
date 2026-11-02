@@ -257,6 +257,17 @@ export function startMarketCandleFeed(options: CandleFeedOptions): () => void {
     if (source && now() - Math.max(connectedAt, lastStreamCheck) > silenceMs) reconnect();
     reportHealth();
   }, options.timing?.watchdog ?? 2_000);
+  const resume = () => {
+    if (!active || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
+    reconnectMs = options.timing?.reconnect ?? 1_000;
+    if (!streamHealthy || now() - lastStreamCheck > silenceMs) reconnect();
+    void refresh();
+  };
+  if (typeof window !== "undefined") {
+    window.addEventListener("online", resume);
+    window.addEventListener("focus", resume);
+    document.addEventListener("visibilitychange", resume);
+  }
   void refresh();
   connect();
   return () => {
@@ -266,6 +277,11 @@ export function startMarketCandleFeed(options: CandleFeedOptions): () => void {
     clearInterval(watchdog);
     if (snapshotTimer) clearTimeout(snapshotTimer);
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (typeof window !== "undefined") {
+      window.removeEventListener("online", resume);
+      window.removeEventListener("focus", resume);
+      document.removeEventListener("visibilitychange", resume);
+    }
   };
 }
 

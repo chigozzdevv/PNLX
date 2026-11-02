@@ -3,6 +3,7 @@
 import { Eye, EyeOff } from "lucide-react";
 import { useState } from "react";
 import { PortfolioRecords } from "@/components/portfolio-records";
+import { accountEquity } from "@/lib/account-equity";
 import { formatUsd } from "@/lib/format";
 import type { OwnerOrderGroup } from "@/lib/order-groups";
 import type { PositionRow, TradingLiveData } from "@/types/trading";
@@ -36,15 +37,9 @@ export function PortfolioPage({
 }: PortfolioPageProps) {
   const [balancesHidden, setBalancesHidden] = useState(false);
   const accountReady = connected && !loading && !dataError && trading.account.accountValue !== null;
-  const openPositions = trading.positions.filter((position) => position.status === "open");
-  const livePnl = accountReady && openPositions.every((position) =>
-    position.unrealizedPnl !== undefined && Number.isFinite(position.unrealizedPnl))
-    ? openPositions.reduce((total, position) => total + position.unrealizedPnl!, 0)
-    : null;
-  // Committed collateral already includes entry fees or rebates; net P&L includes them too.
-  const entryFees = openPositions.reduce((total, position) => total + (position.entryFee ?? 0), 0);
-  const accountValue = livePnl !== null && trading.account.accountValue !== null
-    ? trading.account.accountValue + livePnl + entryFees : null;
+  const valuation = accountReady ? accountEquity(trading.account, trading.positions) : null;
+  const livePnl = valuation?.unrealizedPnl ?? null;
+  const accountValue = valuation?.equity ?? null;
 
   return (
     <main className="account-page portfolio-page">
@@ -62,7 +57,7 @@ export function PortfolioPage({
       <section aria-busy={connected && loading} aria-label="Account overview" className="portfolio-overview">
         <div className="portfolio-account-row">
           <div>
-            <span className="portfolio-overview-label">Account value</span>
+            <span className="portfolio-overview-label">Equity</span>
             <div className="portfolio-account-value-row">
               <strong className="portfolio-account-value">
                 {balancesHidden && accountValue !== null ? "••••••" : portfolioUsd(accountValue)}

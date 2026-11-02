@@ -27,7 +27,7 @@ export class MarketDayStatsService {
     if (current) return current;
     const request = this.load(marketId, asset.symbol, asOf).catch((error: unknown) => {
       const previous = this.snapshots.get(marketId);
-      if (previous) return { ...previous, stale: true };
+      if (previous) return { ...previous, stale: this.now() - previous.asOf > 2 * MINUTE_MS };
       throw error;
     }).finally(() => this.inflight.delete(key));
     this.inflight.set(key, request);
@@ -44,8 +44,10 @@ export class MarketDayStatsService {
     });
     if (!response.ok) throw new Error(`reference statistics provider failed with ${response.status}`);
     const stats = parseMarketDayStats(await response.json(), marketId, symbol, from, asOf, this.now());
+    const latest = this.snapshots.get(marketId);
+    if (latest && latest.asOf > stats.asOf) return { ...latest, stale: this.now() - latest.asOf > 2 * MINUTE_MS };
     if (stats.asOf >= (this.snapshots.get(marketId)?.asOf ?? 0)) this.snapshots.set(marketId, stats);
-    return { ...stats, stale: stats.asOf !== Math.floor(this.now() / MINUTE_MS) * MINUTE_MS };
+    return { ...stats, stale: this.now() - stats.asOf > 2 * MINUTE_MS };
   }
 }
 

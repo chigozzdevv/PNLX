@@ -9,7 +9,7 @@ import {
   createTradingDataRefresh,
   selectTradeMarkets,
 } from "@/lib/use-trading-data";
-import type { MarketDisplay, ServerMarketConfig, TradingLiveData } from "@/types/trading";
+import type { MarketDisplay, PositionRow, ServerMarketConfig, TradingLiveData } from "@/types/trading";
 import { emptyLiquidityAccount } from "@/lib/liquidity-account";
 
 const now = 1_000_000;
@@ -103,8 +103,8 @@ describe("funding and open-interest summaries", () => {
     expect(markup).toContain("+0.0100%");
     expect(markup).not.toContain(">Paused<");
     expect(markup).toContain("10 XLM");
-    expect(markup).toContain("$3.00 at the current verified mark");
-    expect(markup).toContain("half the total open size");
+    expect(markup).toContain("counting each matched pair once");
+    expect(markup).not.toContain("current verified mark");
     const stale = applyLatestOnchainMarks(refreshed, new Map(), now);
     const staleMarkup = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket: stale.markets[0] }));
     expect(staleMarkup).toContain("10 XLM");
@@ -120,49 +120,48 @@ describe("funding and open-interest summaries", () => {
       loading: true,
       selectedMarket: { ...available, openInterestDetails: undefined },
     }));
-    expect(pending).toContain('aria-label="Open interest data pending"');
-    expect(pending).toContain('class="market-metric-dots"');
+    expect(pending).toContain('aria-label="Loading Open interest"');
     const incomplete = renderToStaticMarkup(createElement(MarketHeader, {
       selectedMarket: { ...available, openInterest: null,
         openInterestDetails: { ...available.openInterestDetails!, status: "incomplete", reason: "Incomplete aggregate" } },
     }));
-    expect(incomplete).toContain('title="Incomplete aggregate"');
+    expect(incomplete).toContain('title="Updating the total size of open positions."');
     expect(incomplete).toContain("<span>Open interest</span><strong>—</strong>");
-    expect(incomplete).not.toContain('aria-label="Open interest data pending"');
-    expect(incomplete).not.toContain('class="market-metric-dots"');
+    expect(incomplete).not.toContain('aria-label="Loading Open interest"');
     expect(incomplete).not.toContain(">Unavailable<");
   });
 
-  test("keeps resolved missing funding stable and uses dots only before a summary arrives", () => {
+  test("shows dots whenever a funding estimate is unavailable", () => {
     for (const status of ["warming", "stale", "unavailable"] as const) {
       const selectedMarket = applyMarketSummaries(data(), [{ ...summary, funding: { ...summary.funding!, status, rate: null, sampleCount: 3 } }]).markets[0];
       const markup = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket }));
-      expect(markup).toContain('<span>Est. funding · 1h</span><strong>—</strong>');
+      expect(markup).toContain('aria-label="Loading Est. funding · 1h"');
       expect(markup).not.toContain('data pending');
       expect(markup).not.toContain('class="market-metric-dots"');
       expect(markup).not.toMatch(/>(Warming|Stale|Unavailable)</);
       expect(markup).not.toContain(">Paused<");
-      expect(markup).toContain(status === "unavailable" ? "Two-sided funding depth is unavailable" : "3/10 premium samples");
+      expect(markup).toContain(status === "unavailable" ? "More buy and sell liquidity is needed" : "Updating the funding estimate");
+      expect(markup).not.toContain("premium samples");
       expect(markup).not.toContain("+0.0100%");
     }
     const missingDepth = applyMarketSummaries(data(), [{ ...summary, funding: { ...summary.funding!,
       status: "unavailable", rate: null, reason: "insufficient two-sided impact depth", coverageMs: 0,
       requiredCoverageMs: 3_600_000 } }]).markets[0];
     const gap = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket: missingDepth }));
-    expect(gap).toContain('title="insufficient two-sided impact depth');
+    expect(gap).toContain('title="More buy and sell liquidity is needed');
     expect(gap).not.toContain("0.0000%");
     const blocked = applyMarketSummaries(data(), [{ ...summary, funding: { ...summary.funding!, settlementStatus: "blocked" } }]).markets[0];
     const markup = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket: blocked }));
     expect(markup).not.toContain(">Blocked<");
     expect(markup).toContain("+0.0100%");
-    expect(markup).toContain("Funding settlement is unavailable");
+    expect(markup).toContain("Funding payments are paused");
     const missing = renderToStaticMarkup(createElement(MarketHeader, { loading: true, selectedMarket: market }));
-    expect(missing).toContain('aria-label="Est. funding data pending"');
-    expect(missing).toContain('aria-label="Open interest data pending"');
+    expect(missing).toContain('aria-label="Loading Est. funding"');
+    expect(missing).toContain('aria-label="Loading Open interest"');
     expect(missing).not.toContain(">Unavailable<");
     const loadedLegacy = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket: market }));
     expect(loadedLegacy).not.toContain('class="market-metric-dots"');
-    expect(loadedLegacy).toContain('<span>Est. funding</span><strong>—</strong>');
+    expect(loadedLegacy).toContain('aria-label="Loading Est. funding"');
     expect(loadedLegacy).toContain('<span>Open interest</span><strong>—</strong>');
   });
 });
@@ -222,7 +221,7 @@ describe("public market summary refresh", () => {
 });
 
 function accountData(pending = 0): TradingLiveData {
-  return { ...data(), account: { ...emptyLiquidityAccount, pendingShieldedUsdc: pending }, orders: [] };
+  return { ...data(), account: { ...emptyLiquidityAccount, pendingShieldedUsdc: pending }, orders: [], positions: [] };
 }
 
 function refreshClock() {
@@ -246,6 +245,24 @@ function refreshClock() {
 }
 
 describe("pending account refresh", () => {
+  test("refreshes open positions until they close and refreshes idle balances again on focus", async () => {
+    const clock = refreshClock();
+    let calls = 0;
+    const open = accountData();
+    open.positions = [{ id: "open", status: "open" } as PositionRow];
+    const refresh = createTradingDataRefresh(async () => ++calls === 1 ? open : accountData(),
+      () => undefined, () => undefined, { autoRefresh: true, schedule: clock.schedule });
+    await refresh.refresh();
+    expect(clock.callbacks.size).toBe(1);
+    clock.fire();
+    await refresh.refresh();
+    expect(calls).toBe(2);
+    expect(clock.callbacks.size).toBe(0);
+    refresh.visibilityChanged();
+    await refresh.refresh();
+    expect(calls).toBe(3);
+    refresh.dispose();
+  });
   test("coalesces focus events and schedules only after the full slow request completes", async () => {
     const clock = refreshClock();
     let calls = 0;

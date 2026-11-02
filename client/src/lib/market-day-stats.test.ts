@@ -35,13 +35,12 @@ describe("reference day statistics", () => {
     expect(markup).toContain("+5.00%");
     expect(markup).toContain("$0.22000");
     expect(markup).toContain("$0.19000");
-    expect(markup).toContain("Hyperliquid XLM reference trades");
-    expect(markup).toContain("complete 1m candles");
+    expect(markup).toContain("24h reference prices from Hyperliquid");
     expect(markup).toContain("All-time PNLX volume");
     expect(markup).toContain("20.43K XLM");
   });
 
-  test("keeps genuine zero change, styles losses, and marks a retained stale snapshot", () => {
+  test("keeps retained figures and shows one updating indicator for the shared snapshot", () => {
     const flat = { ...stats, lastPrice: stats.open24h, change24h: 0 };
     expect(parseMarketDayStats(flat, stats.marketId, stats.fetchedAt).change24h).toBe(0);
     const markup = renderToStaticMarkup(createElement(MarketHeader, {
@@ -49,16 +48,20 @@ describe("reference day statistics", () => {
     }));
     expect(markup).toContain('class="metric-negative"');
     expect(markup).toContain("-5.00%");
-    expect(markup).toContain("Stale");
-    expect(markup).toContain("Last verified data");
-    expect(markup.match(/market-metric-badge/g)).toHaveLength(3);
+    expect(markup).not.toContain("Stale");
+    expect(markup).not.toContain("market-metric-badge");
+    expect(markup.match(/aria-label="Updating 24h market data"/g)).toHaveLength(1);
   });
 
   test("does not show fabricated zero statistics before the reference feed loads", () => {
     const markup = renderToStaticMarkup(createElement(MarketHeader, { selectedMarket: market }));
     for (const label of ["24h change", "24h high", "24h low"]) {
-      expect(markup).toContain(`<span>${label}</span><strong>—</strong>`);
+      expect(markup).toContain(`aria-label="Loading ${label}"`);
     }
     expect(markup).not.toContain("0.00%");
+  });
+
+  test("a fresh verified snapshot remains usable after one missed refresh", () => {
+    expect(parseMarketDayStats({ ...stats, stale: true }, stats.marketId, stats.fetchedAt).stale).toBe(false);
   });
 });

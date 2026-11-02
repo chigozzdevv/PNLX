@@ -1,6 +1,7 @@
 "use client";
 
 import { Activity, Check, Maximize2, Minimize2, RotateCcw } from "lucide-react";
+import { LoadingDots } from "@/components/loading-dots";
 import type { ChartIndicatorId } from "@/lib/chart-indicators";
 import type { CandleInterval } from "@/lib/use-market-candles";
 
@@ -9,6 +10,7 @@ interface ChartToolbarProps {
   indicators: ChartIndicatorId[];
   interval: CandleInterval;
   loadingMore: boolean;
+  reconnecting?: boolean;
   onFullscreen: () => void;
   onIndicatorToggle: (indicator: ChartIndicatorId) => void;
   onIntervalChange: (interval: CandleInterval) => void;
@@ -30,6 +32,7 @@ export function ChartToolbar({
   indicators,
   interval,
   loadingMore,
+  reconnecting = false,
   onFullscreen,
   onIndicatorToggle,
   onIntervalChange,
@@ -82,7 +85,9 @@ export function ChartToolbar({
           </div>
         </details>
 
-        {loadingMore ? <span className="chart-stream-status">Loading history</span> : null}
+        {loadingMore || reconnecting ? <span className="chart-feed-status" title={reconnecting ? "Reconnecting chart" : "Loading earlier candles"}>
+          <LoadingDots label={reconnecting ? "Reconnecting chart" : "Loading earlier candles"} />
+        </span> : null}
         <button aria-label="Reset chart view" className="chart-icon-button" title="Reset chart view" type="button" onClick={onReset}>
           <RotateCcw size={15} />
         </button>

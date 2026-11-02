@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { ActionToast } from "@/components/action-toast";
 import { AppShell } from "@/components/app-shell";
+import { accountEquity } from "@/lib/account-equity";
 import { ManageFundsModal, type ManageFundsBalance } from "@/components/manage-funds-modal";
 import { PortfolioPage } from "@/components/portfolio-page";
 import { PositionCloseDialog } from "@/components/position-close-dialog";
@@ -219,7 +220,9 @@ export function PortfolioRoute() {
   }, [wallet.session]);
 
   return (
-    <AppShell account={accountLoading || trading.error ? null : trading.data.account} activeView="portfolio" wallet={wallet}>
+    <AppShell account={accountLoading || trading.error ? null : trading.data.account}
+      equity={accountLoading || trading.error ? null : accountEquity(trading.data.account, trading.data.positions).equity}
+      activeView="portfolio" wallet={wallet}>
       <PortfolioPage
         actionMessage={positionActionMessage?.tone === "error" ? positionActionMessage : undefined}
         cancellingOrderId={cancellingOrderId}

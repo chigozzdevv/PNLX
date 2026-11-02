@@ -8,7 +8,6 @@ import { AppShell } from "@/components/app-shell";
 import {
   formatVaultUnits,
   formatVaultSharePrice,
-  getVaultHistory,
   parseVaultUnits,
   quoteVaultAction,
   quoteVaultWithdrawalClaim,
@@ -23,6 +22,8 @@ import {
 } from "@/lib/liquidity-vault";
 import { useLiquidityVault } from "@/lib/use-liquidity-vault";
 import { useWalletSession } from "@/lib/use-wallet-session";
+import { VaultApy } from "@/components/vault-apy";
+import { LoadingDots } from "@/components/loading-dots";
 import type { WalletSession } from "@/lib/wallet-auth";
 
 type DialogMode = "deposit" | "withdraw";
@@ -73,11 +74,9 @@ export function LiquidityPoolDetails() {
   const queryDialog: DialogMode | null = requestedAction === "supply" ? "deposit" : requestedAction === "withdraw" ? "withdraw" : null;
   const [dismissedAction, setDismissedAction] = useState<string | null>(null);
   const [manualDialog, setManualDialog] = useState<DialogMode | null>(null);
-  const [history, setHistory] = useState<VaultHistory | null>(null);
-  const [historyError, setHistoryError] = useState(false);
-  const [historyKey, setHistoryKey] = useState(0);
+  const { history, historyError } = vault;
   const [chartRange, setChartRange] = useState<VaultChartRange>("7D");
-  const [chartNow, setChartNow] = useState(0);
+  const chartNow = history?.observedAt ? Date.parse(history.observedAt) : 0;
   const dialog = manualDialog ?? (dismissedAction === requestedAction ? null : queryDialog);
   const status = vault.status;
   const account = vault.account;
@@ -87,16 +86,6 @@ export function LiquidityPoolDetails() {
     : status?.currentSeriesShares !== undefined
       ? vaultSharePrice(BigInt(status.currentSeriesAssets), BigInt(status.currentSeriesShares))
       : null;
-
-  useEffect(() => {
-    let active = true;
-    const load = () => void getVaultHistory().then((result) => {
-      if (active) { setHistory(result); setHistoryError(false); setChartNow(Date.now()); }
-    }).catch(() => { if (active) setHistoryError(true); });
-    load();
-    const timer = window.setInterval(load, 30_000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [historyKey]);
 
   function closeDialog() {
     setManualDialog(null);
@@ -117,7 +106,7 @@ export function LiquidityPoolDetails() {
         <section aria-busy={Boolean(wallet.session) && vault.loading} aria-label="Your liquidity" className="liquidity-overview">
           <div className="liquidity-account-row">
             <div>
-              <span className="portfolio-overview-label">Your liquidity</span>
+              <span className="portfolio-overview-label">{account?.equity === null ? "Your liquidity at cost" : "Your liquidity"}</span>
               {!wallet.session ? (
                 <><strong className="liquidity-account-value">—</strong><p className="liquidity-wallet-hint">Connect wallet to view your position</p></>
               ) : vault.loading ? (
@@ -126,8 +115,8 @@ export function LiquidityPoolDetails() {
                 <p className="liquidity-wallet-hint" role="alert">{vault.accountError}</p>
               ) : account && recordedValue !== undefined ? (
                 <>
-                  <strong className="liquidity-account-value">${formatVaultUnits(account.equity ?? recordedValue)}{account.equity === null ? <sup>*</sup> : null}</strong>
-                  <span className="liquidity-value-note">{formatVaultUnits(account.shares, 4)} shares{account.equity === null ? " · *Unsettled P&L excluded" : null}</span>
+                  <strong className="liquidity-account-value" title={account.equity === null ? "Excludes unsettled P&L." : undefined}>${formatVaultUnits(account.equity ?? recordedValue)}</strong>
+                  <span className="liquidity-value-note">{formatVaultUnits(account.shares, 4)} shares</span>
                 </>
               ) : (
                 <p className="liquidity-wallet-hint">—</p>
@@ -140,7 +129,7 @@ export function LiquidityPoolDetails() {
           </div>
 
           <div className="account-stats liquidity-supporting-values">
-            <div className="account-stat portfolio-supporting-value"><span>Pool APY</span><strong aria-label="APY unavailable" className="liquidity-apy-placeholder" title="APY is not available yet">—</strong></div>
+            <div className="account-stat portfolio-supporting-value"><span>Est. APY</span><VaultApy history={history} /></div>
             <div className="account-stat portfolio-supporting-value"><span>Assets at cost</span><strong>{status ? `$${formatVaultUnits(status.totalAssetsAtCost)}` : "—"}</strong></div>
           </div>
           {vault.statusError ? <p className="liquidity-data-error" role="alert">{vault.statusError} <button onClick={vault.refresh} type="button">Retry</button></p> : null}
@@ -148,7 +137,7 @@ export function LiquidityPoolDetails() {
 
         <section aria-label="Total liquidity" className="liquidity-performance">
           <div className="page-section-heading liquidity-section-heading">
-            <h2>Total liquidity</h2>
+            <h2 title="Pool assets at cost. Excludes unsettled P&L.">Pool liquidity at cost</h2>
             <div aria-label="Chart range" className="liquidity-chart-ranges" role="group">
               {(["1D", "7D", "30D"] as const).map((range) => (
                 <button aria-pressed={chartRange === range} className={chartRange === range ? "active" : ""} key={range}
@@ -159,7 +148,7 @@ export function LiquidityPoolDetails() {
           <PoolAssetsChart points={selectVaultAssetPoints(history?.assets ?? [], chartRange,
             chartNow, history?.stale ? null : history?.observedAt)} />
           <div className="liquidity-detail-grid">
-            <div><span>{account && BigInt(account.shares) > 0n ? "Your share price at cost" : "Share price"}</span><strong>{sharePrice !== null ? <>${formatVaultSharePrice(sharePrice)}{account?.equity === null ? <sup>*</sup> : null}</> : "—"}</strong></div>
+            <div><span>{account && BigInt(account.shares) > 0n ? "Your share price at cost" : "Share price at cost"}</span><strong>{sharePrice !== null ? `$${formatVaultSharePrice(sharePrice)}` : "—"}</strong></div>
             <div><span>Liquid USDC</span><strong>{status ? `$${formatVaultUnits(status.liquidAssets)}` : "—"}</strong></div>
             <div><span>Deployed principal</span><strong>{status ? `$${formatVaultUnits(status.deployedPrincipal)}` : "—"}</strong></div>
           </div>
@@ -167,7 +156,8 @@ export function LiquidityPoolDetails() {
         </section>
 
         <section aria-label="Recent liquidity activity" className="liquidity-activity">
-          <div className="page-section-heading liquidity-section-heading liquidity-activity-heading"><h2>Recent activity</h2></div>
+          <div className="page-section-heading liquidity-section-heading liquidity-activity-heading"><h2>Recent activity</h2>
+            {history?.activity.length && (historyError || history.stale) ? <LoadingDots label="Updating pool activity" /> : null}</div>
           {history?.activity.length ? (
             <div className="liquidity-activity-list">
               {history.activity.slice(0, 6).map((item) => (
@@ -177,7 +167,8 @@ export function LiquidityPoolDetails() {
                 </div>
               ))}
             </div>
-          ) : <p className="liquidity-activity-empty">{historyError || history?.stale ? "Activity unavailable." : history ? "No recent pool activity." : "Loading activity…"}</p>}
+          ) : <div className="liquidity-activity-empty">{historyError || history?.stale || !history
+            ? <LoadingDots label="Loading pool activity" /> : "No recent pool activity."}</div>}
         </section>
       </main>
       {dialog ? (
@@ -187,7 +178,7 @@ export function LiquidityPoolDetails() {
           error={wallet.error}
           mode={dialog}
           onClose={closeDialog}
-          onComplete={() => { vault.refresh(); setHistoryKey((current) => current + 1); }}
+          onComplete={vault.refresh}
           onConnect={wallet.connect}
           session={wallet.session}
           status={status}

@@ -3,6 +3,7 @@
 import { ArrowUpRight } from "lucide-react";
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
+import { VaultApy } from "@/components/vault-apy";
 import { shortAddress } from "@/lib/format";
 import { formatVaultUnits } from "@/lib/liquidity-vault";
 import { useLiquidityVault } from "@/lib/use-liquidity-vault";
@@ -31,7 +32,7 @@ export function LiquidityPoolsPage() {
             <div className="liquidity-pool-head-main">
               <span>Pool</span>
               <span>Operator</span>
-              <span>APY</span>
+              <span>Est. APY</span>
               <span>Assets at cost</span>
               <span>Your positions</span>
             </div>
@@ -52,7 +53,7 @@ export function LiquidityPoolsPage() {
                     title={status.maker}
                   >{shortAddress(status.maker)}</a>)</span></strong>
                 </span>
-                <span className="liquidity-pool-cell"><small>APY</small><strong aria-label="APY unavailable" className="liquidity-apy-placeholder" title="APY is not available yet">—</strong></span>
+                <span className="liquidity-pool-cell"><small>Est. APY</small><VaultApy history={vault.history} /></span>
                 <span className="liquidity-pool-cell"><small>Assets at cost</small><strong>${formatVaultUnits(status.totalAssetsAtCost)}</strong></span>
                 <span className="liquidity-pool-cell">
                   <small>Your positions</small>
