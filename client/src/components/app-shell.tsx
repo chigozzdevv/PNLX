@@ -4,6 +4,7 @@ import { ChevronDown, Gift, LogOut, Menu, Moon, Plus, Settings, Sun, Wallet } fr
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { TermsGate } from "@/components/terms-gate";
 import { formatUsd, shortAddress } from "@/lib/format";
 import { APP_HOME_HREF } from "@/lib/app-url";
 import { saveSlippagePercent, useSlippagePercent } from "@/lib/trade-settings";
@@ -70,7 +71,7 @@ export function AppShell({
   }, []);
 
   return (
-    <div className={`app-shell app-shell-${activeView} min-h-screen bg-[var(--surface-page)] text-[var(--text-primary)]`}>
+    <TermsGate className={`app-shell app-shell-${activeView} min-h-screen bg-[var(--surface-page)] text-[var(--text-primary)]`}>
       <header className="app-header sticky top-0 z-40 backdrop-blur-xl">
         <div className="app-header-inner flex min-w-0 items-center gap-3 md:gap-4">
           <Link className="app-brand" href={APP_HOME_HREF} aria-label="PNLX home">
@@ -188,7 +189,7 @@ export function AppShell({
       {connected && wallet.error ? <p className="private-backup-warning" role="alert">{wallet.error}</p> : null}
 
       <div className="app-content px-2 pb-12 pt-2 md:px-3">{children}</div>
-    </div>
+    </TermsGate>
   );
 }
 
