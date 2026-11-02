@@ -3,6 +3,7 @@
 import { ArrowLeft, CircleDollarSign, Plus } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ActionToast } from "@/components/action-toast";
+import { OrderReviewDialog, type OrderReview } from "@/components/order-review-dialog";
 import { USDC_SCALE, usdcToProtocolAmount } from "@/lib/asset-units";
 import { formatNumber, formatUsd } from "@/lib/format";
 import { useSlippagePercent } from "@/lib/trade-settings";
@@ -63,6 +64,7 @@ export function OrderTicket({
   onModeChange,
   onSubmit,
   order,
+  session,
 }: OrderTicketProps) {
   const [side, setSide] = useState<Side>(order.side);
   const [orderType, setOrderType] = useState<"market" | "limit">("market");
@@ -72,6 +74,9 @@ export function OrderTicket({
   const [submitError, setSubmitError] = useState<string | undefined>();
   const [submitSuccess, setSubmitSuccess] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const [review, setReview] = useState<OrderReview | null>(null);
+  const [reviewError, setReviewError] = useState<string | undefined>();
   const [depositing, setDepositing] = useState(false);
   const [margin, setMargin] = useState(() => readStoredMargin(market.marketId, order.collateral));
   const [fundAmount, setFundAmount] = useState(() => readStoredMargin(market.marketId, order.collateral));
@@ -189,40 +194,40 @@ export function OrderTicket({
   }
 
   async function submitOrder() {
-    if (!canSubmit) return;
-    if (!connected) {
-      setSubmitError("Connect a wallet first");
+    if (!review || submittingRef.current) return;
+    if (!connected || (session?.address ?? null) !== review.walletAddress) {
+      setReviewError("Your wallet changed. Close this review and reconnect before trading.");
       return;
     }
     if (!onSubmit) {
-      setSubmitError("Trading submission is not configured");
+      setReviewError("Trading submission is not configured");
+      return;
+    }
+    if (market.marketId !== review.marketId || !priceReady) {
+      setReviewError("Market price is unavailable. Close this review and try again.");
+      return;
+    }
+    if (!(availableCollateralValue >= review.input.margin)) {
+      setReviewError("Insufficient available collateral. Close this review to add funds.");
       return;
     }
 
-    setSubmitError(undefined);
-    setSubmitSuccess(undefined);
+    submittingRef.current = true;
+    setReviewError(undefined);
     setSubmitting(true);
     try {
-      await onSubmit({
-        collateralAsset: order.collateralAsset,
-        leverage,
-        limitPrice: executionLimitPrice,
-        margin,
-        orderType,
-        side,
-        sizingPrice,
-        stopLossPrice: tpSlEnabled ? stopLossPrice : null,
-        takeProfitPrice: tpSlEnabled ? takeProfitPrice : null,
-      });
+      await onSubmit(review.input);
+      setReview(null);
       setSubmitSuccess("Order submitted");
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : "Trade submission failed");
+      setReviewError(error instanceof Error ? error.message : "Trade submission failed");
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
 
-  async function primaryAction() {
+  async function primaryAction(event: React.MouseEvent<HTMLButtonElement>) {
     if (!connected) {
       await onConnect?.();
       return;
@@ -232,7 +237,34 @@ export function OrderTicket({
       onModeChange("deposit");
       return;
     }
-    await submitOrder();
+    if (!canSubmit) return;
+    setSubmitError(undefined);
+    setSubmitSuccess(undefined);
+    setReviewError(undefined);
+    setReview({
+      baseAsset: market.baseAsset,
+      entryPrice: activePrice,
+      exposure,
+      input: {
+        collateralAsset: order.collateralAsset,
+        leverage,
+        limitPrice: executionLimitPrice,
+        margin,
+        orderType,
+        side,
+        sizingPrice,
+        stopLossPrice: tpSlEnabled ? stopLossPrice : null,
+        takeProfitPrice: tpSlEnabled ? takeProfitPrice : null,
+      },
+      inputMode: event.detail === 0 ? "keyboard" : "pointer",
+      liquidationPrice,
+      marketId: market.marketId,
+      maxTakerFee,
+      pair: market.pair,
+      size,
+      slippagePercent,
+      walletAddress: session?.address ?? null,
+    });
   }
 
   async function depositMargin(amount = fundAmount) {
@@ -536,7 +568,7 @@ export function OrderTicket({
       <div className="ticket-primary-area">
         <button
           className="primary-trade-button"
-          aria-busy={primaryBusy}
+          aria-busy={depositing}
           data-side={side}
           disabled={primaryDisabled}
           type="button"
@@ -544,10 +576,8 @@ export function OrderTicket({
         >
           {connecting ? "Connecting…" : !connected
             ? "Connect Wallet"
-              : primaryBusy
-                ? depositing
-                  ? "Depositing"
-                  : "Submitting"
+              : depositing
+                ? "Depositing"
               : !hasEnoughCollateral
                 ? "Add funds"
                 : side === "long"
@@ -564,6 +594,15 @@ export function OrderTicket({
         </>
       )}
       <ActionToast message={submitSuccess} onDismiss={() => setSubmitSuccess(undefined)} />
+      {review ? (
+        <OrderReviewDialog
+          error={reviewError}
+          onClose={() => { if (!submittingRef.current) setReview(null); }}
+          onConfirm={submitOrder}
+          review={review}
+          submitting={submitting}
+        />
+      ) : null}
     </section>
   );
 }
