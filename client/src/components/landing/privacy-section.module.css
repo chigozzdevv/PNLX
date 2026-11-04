@@ -1,0 +1,361 @@
+.section {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.85fr);
+  align-items: center;
+  gap: clamp(48px, 6vw, 100px);
+  padding: clamp(64px, 6vw, 96px) var(--page-gutter) clamp(64px, 6vw, 96px);
+  background: var(--surface-page);
+  scroll-margin-top: calc(var(--header-top) + var(--header-height) + 48px);
+}
+
+.copy {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.heading {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: clamp(36px, 3.6vw, 54px);
+  font-weight: 500;
+  letter-spacing: -0.045em;
+  line-height: 1.12;
+}
+
+.heading span {
+  color: var(--text-muted);
+}
+
+.copy > p {
+  max-width: 30ch;
+  margin: 24px 0 0;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1.65;
+  letter-spacing: -0.012em;
+}
+
+.illustration {
+  --candle-height: 280px;
+  grid-column: 1;
+  grid-row: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(64px, 0.6fr) minmax(0, 1fr);
+  align-items: start;
+  margin: 0;
+}
+
+.intent,
+.record {
+  min-width: 0;
+}
+
+.label {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+.record .label {
+  white-space: nowrap;
+}
+
+.candles,
+.publicCandle {
+  position: relative;
+  height: var(--candle-height);
+}
+
+.candles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: center;
+  gap: clamp(18px, 2.1vw, 34px);
+}
+
+.candles > span,
+.publicCandle > span {
+  position: relative;
+  display: block;
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+}
+
+.candles > span {
+  max-width: 52px;
+  justify-self: center;
+  background: var(--surface-raised);
+}
+
+.candles > span::before,
+.publicCandle > span::before {
+  position: absolute;
+  inset: -28px auto -28px 50%;
+  z-index: 0;
+  width: 1px;
+  background: var(--line-strong);
+  content: "";
+}
+
+.candles > span::after,
+.publicCandle > span::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: inherit;
+  content: "";
+}
+
+.candles > span:nth-child(1) {
+  height: 92px;
+  margin-top: 44px;
+}
+
+.candles > span:nth-child(2) {
+  height: 160px;
+  margin-top: -26px;
+}
+
+.candles > span:nth-child(3) {
+  height: 120px;
+  justify-self: end;
+}
+
+.publicCandle {
+  display: grid;
+  align-items: center;
+  justify-items: start;
+}
+
+.publicCandle > span {
+  width: 56px;
+  height: 180px;
+  border-color: color-mix(in srgb, var(--text-primary) 55%, transparent);
+  background: linear-gradient(180deg, #f3eee5, #ebe6dc 75%, #ddc2ae);
+  box-shadow: 0 0 28px rgb(235 230 220 / 6%);
+}
+
+.publicCandle > span::before {
+  background: color-mix(in srgb, var(--text-primary) 40%, transparent);
+}
+
+.cipher {
+  position: absolute;
+  z-index: 1;
+  inset: 8px 5px;
+  overflow: hidden;
+  color: rgb(36 32 27 / 42%);
+  font: 7px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace;
+  letter-spacing: 0.055em;
+  text-align: center;
+  white-space: pre;
+  mask-image: linear-gradient(transparent, #000 10%, #000 88%, transparent);
+}
+
+.caption {
+  display: grid;
+  gap: 9px;
+  margin-top: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
+.intentText {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.connection {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px minmax(0, 1fr);
+  align-items: center;
+  height: var(--candle-height);
+  padding-inline: 8px;
+}
+
+.lane {
+  position: relative;
+  height: 1px;
+  overflow: hidden;
+  background: var(--line-strong);
+}
+
+.signal {
+  display: block;
+  height: 100%;
+  background: var(--accent-orange);
+  opacity: 0;
+}
+
+.lock {
+  width: 26px;
+  height: 26px;
+  justify-self: center;
+  color: var(--text-primary);
+}
+
+.shackle {
+  transform-origin: 10px 14px;
+}
+
+.digest {
+  color: var(--text-muted);
+  font: 12px/1.625 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .illustration[data-entered="true"] .signal {
+    animation: transmit 600ms 180ms ease-in-out both;
+  }
+
+  .illustration[data-entered="true"] .outputSignal {
+    animation-delay: 1.1s;
+  }
+
+  .illustration[data-entered="true"] .shackle {
+    animation: lock 400ms 700ms ease-out both;
+  }
+
+  .illustration[data-entered="true"] .publicCandle > span {
+    animation: illuminate 700ms 1.4s ease-out both;
+  }
+
+  .illustration[data-entered="true"] .record .caption {
+    animation: reveal 400ms 1.6s ease-out both;
+  }
+
+  .illustration[data-entered="true"] .cipher {
+    animation: inscribe 650ms 1.6s ease-out both;
+  }
+}
+
+@keyframes transmit {
+  0% { transform: translateX(-100%); opacity: 0; }
+  20%, 70% { opacity: 1; }
+  100% { transform: translateX(100%); opacity: 0; }
+}
+
+@keyframes lock {
+  from { transform: translateY(-3px); }
+  to { transform: translateY(0); }
+}
+
+@keyframes illuminate {
+  from { opacity: 0.18; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes reveal {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes inscribe {
+  from { clip-path: inset(0 0 100%); }
+  to { clip-path: inset(0); }
+}
+
+@media (max-width: 1040px) {
+  .section {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 48px;
+  }
+
+  .copy,
+  .illustration {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  .copy > p {
+    max-width: 44ch;
+  }
+
+  .illustration {
+    width: 100%;
+    max-width: 580px;
+  }
+}
+
+@media (max-width: 600px) {
+  .section {
+    padding-block: 56px;
+    gap: 40px;
+  }
+
+  .heading {
+    font-size: clamp(34px, 7vw, 44px);
+  }
+
+  .copy > p {
+    margin-top: 20px;
+    font-size: 14px;
+  }
+
+  .illustration {
+    --candle-height: 224px;
+    grid-template-columns: minmax(0, 1.4fr) 48px minmax(0, 1fr);
+  }
+
+  .candles {
+    gap: 12px;
+  }
+
+  .candles > span:nth-child(1) {
+    height: 65px;
+    margin-top: 30px;
+  }
+
+  .candles > span:nth-child(2) {
+    height: 122px;
+    margin-top: -20px;
+  }
+
+  .candles > span:nth-child(3) {
+    height: 84px;
+  }
+
+  .publicCandle > span {
+    width: 38px;
+    height: 144px;
+  }
+
+  .cipher {
+    font-size: 5px;
+    line-height: 1.8;
+  }
+
+  .candles > span::before,
+  .publicCandle > span::before {
+    top: -20px;
+    bottom: -20px;
+  }
+
+  .connection {
+    padding-inline: 4px;
+    grid-template-columns: minmax(0, 1fr) 26px minmax(0, 1fr);
+  }
+
+  .lock {
+    width: 22px;
+    height: 22px;
+  }
+
+  .label {
+    font-size: 12px;
+  }
+
+  .intentText {
+    font-size: 11px;
+  }
+
+  .digest {
+    font-size: 10px;
+  }
+}

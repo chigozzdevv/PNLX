@@ -11,6 +11,7 @@ export function proxy(request: NextRequest) {
     const destination = request.nextUrl.clone();
     destination.protocol = "https:";
     destination.hostname = "app.pnlx.trade";
+    destination.port = "";
     destination.pathname = "/";
     return NextResponse.redirect(destination, 308);
   }

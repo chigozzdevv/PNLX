@@ -1,27 +1,36 @@
-import { LandingCtaSection } from "@/components/landing/sections/cta";
-import { LandingFooter } from "@/components/landing/sections/footer";
-import { LandingHeader } from "@/components/landing/sections/header";
-import { LandingHero } from "@/components/landing/sections/hero";
-import { LandingInfrastructureSection } from "@/components/landing/sections/infrastructure";
-import { LandingPrivacySection } from "@/components/landing/sections/privacy";
-import { LandingQuestionsSection } from "@/components/landing/sections/questions";
-import { LandingTradingExperienceSection } from "@/components/landing/sections/trading-experience";
-import { LandingVerifiabilitySection } from "@/components/landing/sections/verifiability";
+import Image from "next/image";
+import Link from "next/link";
+import { AppLink } from "./app-link";
+import { Hero } from "./hero";
+import { Navigation } from "./navigation";
+import { PrivacySection } from "./privacy-section";
+import { TradeWalkthrough } from "./trade-walkthrough";
+import { ToolsSection } from "./tools-section";
+import styles from "./landing.module.css";
 
 export function LandingPage() {
   return (
-    <div className="landing-shell">
-      <LandingHeader />
+    <div className={styles.page} id="top">
+      <Navigation />
       <main>
-        <LandingHero />
-        <LandingPrivacySection />
-        <LandingInfrastructureSection />
-        <LandingTradingExperienceSection />
-        <LandingVerifiabilitySection />
-        <LandingQuestionsSection />
-        <LandingCtaSection />
+        <Hero />
+        <TradeWalkthrough />
+        <PrivacySection />
+        <ToolsSection />
+        <section id="get-started" className={styles.closing} aria-labelledby="closing-title">
+          <h2 id="closing-title">Try PNLX on Testnet.</h2>
+          <AppLink>Launch app</AppLink>
+        </section>
       </main>
-      <LandingFooter />
+      <footer id="footer" className={styles.footer}>
+        <a href="#top" aria-label="PNLX, back to top">
+          <Image alt="" src="/pnlx-logo.png" width={92} height={17} />
+        </a>
+        <nav aria-label="Footer">
+          <Link href="/survey">Survey</Link>
+          <Link href="/terms">Terms</Link>
+        </nav>
+      </footer>
     </div>
   );
 }
