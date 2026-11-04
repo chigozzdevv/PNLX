@@ -57,7 +57,7 @@ export function TradingPage() {
   const selectedMarketId = DEFAULT_MARKET_ID;
   const trading = useTradingData(wallet.session, refreshKey, selectedMarketId, { autoRefresh: true });
   const recordsMatchWallet = Boolean(wallet.session && trading.data.account.address === wallet.session.address);
-  const [chartInterval, setChartInterval] = useState<CandleInterval>("15m");
+  const [chartInterval, setChartInterval] = useState<CandleInterval>("4h");
   const [ticketMode, setTicketMode] = useState<"trade" | "deposit">("trade");
   const [chartIndicators, setChartIndicators] = useState<ChartIndicatorId[]>([]);
   const [chartFullscreen, setChartFullscreen] = useState(false);

@@ -1,14 +1,21 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Share } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import Image from "next/image";
+import { Check, Download, Share } from "lucide-react";
+import { LoadingDots } from "@/components/loading-dots";
 import {
   formatNumber,
   formatPct,
   formatSignedPnlUsd,
   settlementAmountSign,
 } from "@/lib/format";
-import { createPnlShareCardFile } from "@/lib/pnl-share-card";
+import {
+  createPnlShareCardFile,
+  PNL_CARD_BACKGROUND,
+  PNL_CARD_LOGO,
+  preloadPnlShareCardAssets,
+} from "@/lib/pnl-share-card";
 
 export interface PnlModalProps {
   closePrice: number;
@@ -41,9 +48,35 @@ export function PnlModal({
   txHash,
 }: PnlModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const shareActionsRef = useRef<HTMLDivElement>(null);
   const shareButtonRef = useRef<HTMLButtonElement>(null);
+  const shareOptionsId = useId();
   const onCloseRef = useRef(onClose);
-  const [shareStatus, setShareStatus] = useState<"idle" | "sharing" | "shared" | "copied" | "downloaded">("idle");
+  const [shareOptionsOpen, setShareOptionsOpen] = useState(false);
+  const [assetsStatus, setAssetsStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [shareStatus, setShareStatus] = useState<"idle" | "sharing" | "downloading" | "shared" | "copied" | "downloaded" | "error">("idle");
+  const visible = isOpen && assetsStatus !== "loading";
+  const preparingImage = shareStatus === "sharing" || shareStatus === "downloading";
+
+  useEffect(() => {
+    if (!shareOptionsOpen) return;
+    function handleOutsidePress(event: PointerEvent) {
+      if (event.target instanceof Node && !shareActionsRef.current?.contains(event.target)) {
+        setShareOptionsOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", handleOutsidePress);
+    return () => document.removeEventListener("pointerdown", handleOutsidePress);
+  }, [shareOptionsOpen]);
+
+  useEffect(() => {
+    let active = true;
+    preloadPnlShareCardAssets().then(
+      () => { if (active) setAssetsStatus("ready"); },
+      () => { if (active) setAssetsStatus("error"); },
+    );
+    return () => { active = false; };
+  }, [isOpen]);
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -56,15 +89,22 @@ export function PnlModal({
   }, [shareStatus]);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!visible) return;
     const previouslyFocused = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : undefined;
-    const focusFrame = requestAnimationFrame(() => shareButtonRef.current?.focus({ preventScroll: true }));
+    const focusFrame = requestAnimationFrame(() => dialogRef.current?.focus({ preventScroll: true }));
+    const previousOverflow = document.documentElement.style.overflow;
+    document.documentElement.style.overflow = "hidden";
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
+        if (shareActionsRef.current?.querySelector("[data-share-options]")) {
+          setShareOptionsOpen(false);
+          shareButtonRef.current?.focus({ preventScroll: true });
+          return;
+        }
         setShareStatus("idle");
         onCloseRef.current();
         return;
@@ -93,10 +133,11 @@ export function PnlModal({
     document.addEventListener("keydown", handleKeyDown);
     return () => {
       cancelAnimationFrame(focusFrame);
+      document.documentElement.style.overflow = previousOverflow;
       document.removeEventListener("keydown", handleKeyDown);
       if (previouslyFocused?.isConnected) previouslyFocused.focus();
     };
-  }, [isOpen]);
+  }, [visible]);
 
   if (!isOpen) return null;
 
@@ -108,12 +149,11 @@ export function PnlModal({
     : grossPricePnl + fundingImpact + feeImpact;
   const netPnlSign = settlementAmountSign(netRealizedPnl);
   const pnlPercent = initialMargin && initialMargin > 0 ? (netRealizedPnl / initialMargin) * 100 : undefined;
+  const formattedPnl = formatSignedPnlUsd(netRealizedPnl);
   const txUrl = txHash ? `https://stellar.expert/explorer/testnet/tx/${txHash.replace(/^0x/, "")}` : undefined;
-  const compactTxHash = txHash
-    ? `${txHash.replace(/^0x/, "").slice(0, 4)}...${txHash.slice(-4)}`.toUpperCase()
-    : undefined;
-  async function handleShare() {
-    setShareStatus("sharing");
+  async function handleShare(action: "share" | "download") {
+    setShareOptionsOpen(false);
+    setShareStatus(action === "download" ? "downloading" : "sharing");
     try {
       const imageFile = await createPnlShareCardFile({
         closePrice,
@@ -126,7 +166,8 @@ export function PnlModal({
       });
 
       if (
-        typeof navigator.share === "function"
+        action === "share"
+        && typeof navigator.share === "function"
         && typeof navigator.canShare === "function"
         && navigator.canShare({ files: [imageFile] })
       ) {
@@ -145,12 +186,14 @@ export function PnlModal({
         }
       }
 
-      if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
-        await navigator.clipboard.write([
-          new ClipboardItem({ "image/png": imageFile }),
-        ]);
-        setShareStatus("copied");
-        return;
+      if (action === "share" && navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+        try {
+          await navigator.clipboard.write([
+            new ClipboardItem({ "image/png": imageFile }),
+          ]);
+          setShareStatus("copied");
+          return;
+        } catch {}
       }
 
       const imageUrl = URL.createObjectURL(imageFile);
@@ -158,22 +201,24 @@ export function PnlModal({
       download.download = imageFile.name;
       download.href = imageUrl;
       download.click();
-      window.setTimeout(() => URL.revokeObjectURL(imageUrl), 0);
+      window.setTimeout(() => URL.revokeObjectURL(imageUrl), 1_000);
       setShareStatus("downloaded");
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         setShareStatus("idle");
         return;
       }
-      setShareStatus("idle");
+      setShareStatus("error");
     }
   }
 
   return (
     <div
       className="pnl-modal-overlay"
+      hidden={!visible}
       onPointerDown={(event) => {
         if (event.target !== event.currentTarget) return;
+        setShareOptionsOpen(false);
         setShareStatus("idle");
         onClose();
       }}
@@ -184,71 +229,84 @@ export function PnlModal({
         className="pnl-modal-container"
         ref={dialogRef}
         role="dialog"
+        tabIndex={-1}
       >
-        <div className="pnl-modal-header">
-          <div className="pnl-modal-header-row">
+        {assetsStatus === "ready" ? <div aria-hidden="true" className="pnl-modal-art" style={{ backgroundImage: `url(${PNL_CARD_BACKGROUND})` }} /> : null}
+        <div aria-hidden="true" className="pnl-modal-shade" />
+        <header className="pnl-modal-header">
+          {assetsStatus === "ready" ? (
+            <Image alt="PNLX" className="pnl-modal-logo" height={21} src={PNL_CARD_LOGO} unoptimized width={112} />
+          ) : <span className="pnl-modal-brand">PNLX</span>}
+          <div className="pnl-modal-share-actions" ref={shareActionsRef}>
             <button
               aria-label="Share PNL card"
+              aria-expanded={shareOptionsOpen}
+              aria-controls={shareOptionsId}
               className="pnl-modal-share"
-              disabled={shareStatus === "sharing"}
-              onClick={handleShare}
+              disabled={preparingImage}
+              onClick={() => setShareOptionsOpen((open) => !open)}
               ref={shareButtonRef}
               type="button"
             >
-              <Share aria-hidden="true" size={20} />
+              {preparingImage ? <LoadingDots /> : ["shared", "copied", "downloaded"].includes(shareStatus)
+                ? <Check aria-hidden="true" size={20} />
+                : <Share aria-hidden="true" size={20} />}
             </button>
+            {shareOptionsOpen ? (
+              <div aria-label="Share options" className="pnl-modal-share-options" data-share-options id={shareOptionsId} role="group">
+                <button onClick={() => void handleShare("share")} type="button"><Share aria-hidden="true" size={16} />Share</button>
+                <button onClick={() => void handleShare("download")} type="button"><Download aria-hidden="true" size={16} />Download</button>
+              </div>
+            ) : null}
           </div>
+        </header>
+
+        <div className="pnl-modal-market">
+          <h3>{pairName}</h3>
+          <span className="pnl-modal-side">{side === "long" ? "Long" : "Short"}</span>
+        </div>
+        <div className="pnl-modal-pnl-section">
+          <span className="pnl-modal-pnl-label">Realized P&L</span>
+          <strong className="pnl-modal-pnl-val" style={{ fontSize: `min(var(--pnl-amount-size), ${136 / Math.max(formattedPnl.length, 8)}cqi)` }}>
+            {formattedPnl}
+          </strong>
+          {pnlPercent === undefined ? null : (
+            <div className="pnl-modal-return">
+              <span className={`pnl-modal-pnl-percent ${valueClass(netPnlSign)}`}>{formatPct(pnlPercent)}</span>
+              <span>return</span>
+            </div>
+          )}
         </div>
 
-        <div className="pnl-modal-body">
-          <div className="pnl-modal-pnl-section">
-            <span className="pnl-modal-pnl-label">PNL</span>
-            <strong className={`pnl-modal-pnl-val ${valueClass(netPnlSign)}`}>
-              {formatSignedPnlUsd(netRealizedPnl)}
-            </strong>
-            {pnlPercent === undefined ? null : (
-              <span className={`pnl-modal-pnl-percent ${valueClass(netPnlSign)}`}>
-                {formatPct(pnlPercent)}
-              </span>
-            )}
-          </div>
-
-          <div className="pnl-modal-market">
-            <h3>{pairName}</h3>
-            <span className={`pnl-modal-side pnl-modal-side-${side}`}>
-              {side === "long" ? "Long" : "Short"} · Market
-            </span>
-          </div>
-
+        <div className="pnl-modal-bottom">
           <div className="pnl-modal-breakdown">
             <div className="pnl-modal-row">
-              <span className="pnl-modal-label">Entry</span>
-              <span className="pnl-modal-value">{formatNumber(entryPrice, 4)}</span>
+              <span className="pnl-modal-label">Entry price</span>
+              <span className="pnl-modal-value">${formatNumber(entryPrice, 4)}</span>
             </div>
             <div className="pnl-modal-row">
-              <span className="pnl-modal-label">Exit</span>
-              <span className="pnl-modal-value">{formatNumber(closePrice, 4)}</span>
+              <span className="pnl-modal-label">Exit price</span>
+              <span className="pnl-modal-value">${formatNumber(closePrice, 4)}</span>
             </div>
           </div>
-
-          {txHash ? (
-            <a className="pnl-modal-tx-link" href={txUrl} rel="noopener noreferrer" target="_blank">
-              <span>
-                <small>SETTLEMENT TX</small>
-                <strong>{compactTxHash}</strong>
-              </span>
-            </a>
-          ) : null}
-          <p aria-live="polite" className="pnl-modal-share-status">
-            {shareStatus === "shared"
-              ? "PNL card image shared"
-              : shareStatus === "copied"
-                ? "PNL card image copied"
-                : shareStatus === "downloaded"
-                  ? "PNL card image downloaded"
-                  : ""}
-          </p>
+          <footer className="pnl-modal-footer">
+            <span>pnlx.trade</span>
+            {txUrl ? (
+              <a aria-label="View settlement transaction on Stellar Testnet" href={txUrl} rel="noopener noreferrer" target="_blank">Stellar Testnet</a>
+            ) : <span>Stellar Testnet</span>}
+          </footer>
         </div>
+        <p aria-live="polite" className="pnl-modal-share-status">
+          {shareStatus === "shared"
+            ? "PNL card image shared"
+            : shareStatus === "copied"
+              ? "PNL card image copied"
+              : shareStatus === "downloaded"
+                ? "PNL card image downloaded"
+                : shareStatus === "error"
+                  ? "Image could not be saved or shared. Try again."
+                  : ""}
+        </p>
       </div>
     </div>
   );

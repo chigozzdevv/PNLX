@@ -8,6 +8,7 @@ import "./points-page.css";
 import "./rewards-page.css";
 import "./portfolio-liquidity.css";
 import "./mobile-shell.css";
+import "./pnl-modal.css";
 
 const inter = localFont({
   src: "./fonts/InterVariable.woff2",
