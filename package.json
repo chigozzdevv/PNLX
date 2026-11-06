@@ -1,6 +1,7 @@
 {
   "name": "pnlx",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "workspaces": [
     "client",
