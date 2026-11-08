@@ -25,6 +25,8 @@ services:
     init: true
     env_file:
       - /opt/pnlx/.env
+    ports:
+      - 127.0.0.1:4000:4000
     environment:
       NODE_ENV: production
       PNLX_API_HOST: 0.0.0.0
@@ -68,6 +70,18 @@ services:
       start_period: 60s
     mem_limit: 1g
     cpus: 1.0
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.3
+    container_name: pnlx-cloudflared
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run", "--token-file", "/etc/cloudflared/token"]
+    network_mode: host
+    volumes:
+      - /opt/pnlx/cloudflared/token:/etc/cloudflared/token:ro
+    depends_on:
+      api:
+        condition: service_healthy
 
   matcher:
     image: local/pnlx-app:f0f1ef4
