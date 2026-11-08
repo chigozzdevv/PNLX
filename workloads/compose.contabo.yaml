@@ -19,7 +19,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: local/pnlx-app:f0f1ef4
+    image: local/pnlx-app:2058a2d
     container_name: pnlx-api
     restart: unless-stopped
     init: true
@@ -85,7 +85,7 @@ services:
         condition: service_healthy
 
   matcher:
-    image: local/pnlx-app:f0f1ef4
+    image: local/pnlx-app:2058a2d
     container_name: pnlx-matcher
     restart: unless-stopped
     init: true
@@ -117,7 +117,7 @@ services:
     cpus: 1.0
 
   prover:
-    image: local/pnlx-app:f0f1ef4
+    image: local/pnlx-app:2058a2d
     container_name: pnlx-prover
     restart: unless-stopped
     init: true
@@ -141,7 +141,7 @@ services:
     cpus: 2.0
 
   vault-maker:
-    image: local/pnlx-app:f0f1ef4
+    image: local/pnlx-app:2058a2d
     container_name: pnlx-vault-maker
     restart: unless-stopped
     init: true
