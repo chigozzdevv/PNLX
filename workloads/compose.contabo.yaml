@@ -58,6 +58,7 @@ services:
         aliases:
           - pnlx-api
     volumes:
+      - app-state:/app/.pnlx
       - /run/pnlx-risc0-wrap:/run/pnlx-risc0-wrap
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4000/health >/dev/null"]
