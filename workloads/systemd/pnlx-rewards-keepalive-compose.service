@@ -1,0 +1,12 @@
+[Unit]
+Description=Maintain PNLX Testnet rewards contract storage
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/docker exec pnlx-api bun scripts/operations/keepalive-rewards.ts --source pnlx-testnet --execute
+TimeoutStartSec=20min
+UMask=0077

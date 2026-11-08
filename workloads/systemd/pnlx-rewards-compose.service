@@ -1,0 +1,13 @@
+[Unit]
+Description=PNLX Testnet rewards on Compose
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/docker exec pnlx-api bun scripts/operations/distribute-fees.ts --source pnlx-testnet
+ExecStart=/usr/bin/docker exec --env TREASURY_ADDRESS=GBYSI3TGYUERHKZTHQ7Q4AOYOM4X2BXWCQLWEOF3ZMCUE7YXYF7XG2PY pnlx-api bun scripts/operations/process-reward-requests.ts --treasury-source pnlx-treasury --execute
+TimeoutStartSec=10min
+UMask=0077

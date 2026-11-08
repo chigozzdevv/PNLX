@@ -75,6 +75,7 @@ services:
     image: cloudflare/cloudflared:2026.10.3
     container_name: pnlx-cloudflared
     restart: unless-stopped
+    user: "65532:65532"
     command: ["tunnel", "--no-autoupdate", "run", "--token-file", "/etc/cloudflared/token"]
     network_mode: host
     volumes:
