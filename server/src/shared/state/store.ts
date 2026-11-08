@@ -452,7 +452,7 @@ export class ProtocolStore {
   updateSettlementTransactions(
     settlementDigest: Hex,
     transactions: Pick<BatchSettlement, "proofVerificationTxHash" | "settlementTxHash"> & {
-      boundlessRequestId?: Hex;
+      proverJobId?: string;
     },
   ): BatchSettlement {
     const entry = [...this.settlements.entries()].find(([, settlement]) =>
@@ -460,12 +460,12 @@ export class ProtocolStore {
     );
     if (!entry) throw new Error("unknown settlement");
     const [key, settlement] = entry;
-    const { boundlessRequestId, ...transactionHashes } = transactions;
+    const { proverJobId, ...transactionHashes } = transactions;
     const updated = {
       ...settlement,
       ...transactionHashes,
-      proof: boundlessRequestId
-        ? { ...settlement.proof, boundlessRequestId }
+      proof: proverJobId
+        ? { ...settlement.proof, proverJobId }
         : settlement.proof,
     };
     this.settlements.set(key, updated);

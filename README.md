@@ -32,6 +32,9 @@ Testnet contract addresses link to their **Stellar.expert** records:
 | `proof-ledger` | Registers settled proof digests to prevent double-spending | [`CAMYT425B3UZVDGXVJATUU35QQKXKXNOBZU4SHRMCMSJHYCJATCWZFDK`](https://stellar.expert/explorer/testnet/contract/CAMYT425B3UZVDGXVJATUU35QQKXKXNOBZU4SHRMCMSJHYCJATCWZFDK) |
 | `governance` | Enforces timelocked multisig controls for upgrades/configs | [`CBDBUPESYVEB5YIBMFK5TJOW54RHMUYNL7C47TLM6DHTUCEKJGK57UBK`](https://stellar.expert/explorer/testnet/contract/CBDBUPESYVEB5YIBMFK5TJOW54RHMUYNL7C47TLM6DHTUCEKJGK57UBK) |
 | `intent-registry` | Registers trade intents for off-chain matching and execution | [`CAAD5DA5XMJEMOHUGXDAGFGZPZY35ZM3QJ6DT43XM625BJWEH3ONQOWY`](https://stellar.expert/explorer/testnet/contract/CAAD5DA5XMJEMOHUGXDAGFGZPZY35ZM3QJ6DT43XM625BJWEH3ONQOWY) |
+| `rewards-escrow` | Escrows trading rewards — fee rebates, referral shares and credit drops, funded from treasury fees | [`CBKR3AEFDHPXHXXZKGVZGCT7XP3CLNHMUN6CIGB4QJ32DRD34GTGVFK2`](https://stellar.expert/explorer/testnet/contract/CBKR3AEFDHPXHXXZKGVZGCT7XP3CLNHMUN6CIGB4QJ32DRD34GTGVFK2) |
+| `liquidity-vault` | Maker liquidity vault: vault series principals, maker allocations and settlement controls | [`CAU23XCVR5EMOMCMAZ3CIKJAHS7QREUUX7QX5B5QECUPZ2NQMKOLAT2M`](https://stellar.expert/explorer/testnet/contract/CAU23XCVR5EMOMCMAZ3CIKJAHS7QREUUX7QX5B5QECUPZ2NQMKOLAT2M) |
+| `legacy-pair-exit` | Migration exit path for pre-secure-pool paired positions (deployed as the helper instance) | [`CCSSI66X6HBQ7DC7EC2CBKYAERVLJYWTO5WV6V2EDNLZZ43XMZUEYAGJ`](https://stellar.expert/explorer/testnet/contract/CCSSI66X6HBQ7DC7EC2CBKYAERVLJYWTO5WV6V2EDNLZZ43XMZUEYAGJ) |
 
 ### 2.2 RISC Zero Verifier Stack
 
@@ -56,6 +59,10 @@ Testnet contract addresses link to their **Stellar.expert** records:
 | `disclosure-proof-verifier` | Noir verifier gating selective data disclosures | [`CCLRH5JFLZVNYDDZR4TGYGTSJT3V36YFLWOMAIYS3VXDVM6NISV6UMEK`](https://stellar.expert/explorer/testnet/contract/CCLRH5JFLZVNYDDZR4TGYGTSJT3V36YFLWOMAIYS3VXDVM6NISV6UMEK) |
 | `funding-update-proof-verifier` | Noir verifier validating fee distributions across pool notes | [`CA7ER7J3TMYYTGGVB4667AJMFGI2TDT3DOOOW6RKNXPN6JZTQX6ZZPLG`](https://stellar.expert/explorer/testnet/contract/CA7ER7J3TMYYTGGVB4667AJMFGI2TDT3DOOOW6RKNXPN6JZTQX6ZZPLG) |
 | `liquidation-check-proof-verifier` | Noir verifier checking position status on liquidations | [`CACARSSG3I5J553TSN2PMNF6AQJTF5GVZCYIEBTIVZ54TQZUEZLWSDGB`](https://stellar.expert/explorer/testnet/contract/CACARSSG3I5J553TSN2PMNF6AQJTF5GVZCYIEBTIVZ54TQZUEZLWSDGB) |
+| `secure-deposit-note-proof-verifier` | Noir verifier for the current-generation shielded deposit notes | [`CBUGPTG67S5DUV4G4FGXVZ2TFTICDX6MLDFWF3TNU35EMOYO47MVHNUD`](https://stellar.expert/explorer/testnet/contract/CBUGPTG67S5DUV4G4FGXVZ2TFTICDX6MLDFWF3TNU35EMOYO47MVHNUD) |
+| `secure-withdraw-proof-verifier` | Noir verifier for secure-note withdrawals | [`CCKF6LEUQMKMYK5KRGDG6STSYWRIX7BN4DHBTN4XKIPTPIPZAOIM5EGX`](https://stellar.expert/explorer/testnet/contract/CCKF6LEUQMKMYK5KRGDG6STSYWRIX7BN4DHBTN4XKIPTPIPZAOIM5EGX) |
+| `position-close-pair-proof-verifier` | Noir verifier for paired position closes | [`CBGYFRLMXBNLYLV52OELKZGY3ORHH4Y3CC5KKEZLZ52MS6W6VBLMM54H`](https://stellar.expert/explorer/testnet/contract/CBGYFRLMXBNLYLV52OELKZGY3ORHH4Y3CC5KKEZLZ52MS6W6VBLMM54H) |
+| `legacy-position-close-pair-proof-verifier` | Noir verifier for legacy paired position closes (deployed as the verifier instance) | [`CDQ26APYCECVS4NHT5KBNG6BC2KVBWMNHQIEITGF7RJDOMPHO7F4IDIU`](https://stellar.expert/explorer/testnet/contract/CDQ26APYCECVS4NHT5KBNG6BC2KVBWMNHQIEITGF7RJDOMPHO7F4IDIU) |
 
 ---
 
@@ -122,6 +129,33 @@ PNLX_WEB_ORIGINS=https://pnlx.trade,https://www.pnlx.trade,https://www.pnl.famil
 ```
 
 Keep `NEXT_PUBLIC_PNLX_PROVER_URL=/api/prover` and the existing server-side `PNLX_PROVER_URL` upstream; a hosted Vercel frontend requires its reachable HTTPS upstream. Keep the old frontend accessible until users reconnect the same wallet on the new domain and verify their private balance and position details recover. Browser storage is separate for each origin; the backend network and storage scope stay unchanged.
+
+### 4.5 RunPod Proof Worker
+
+Batch proofs run on a RunPod Serverless GPU endpoint running `deploy/runpod/Dockerfile`. Build from the repository root after `cargo build --release --manifest-path risc0/batch-match/host/Cargo.toml` (the build produces the pinned guest ELF the image embeds):
+
+```sh
+docker build --platform linux/amd64 -f deploy/runpod/Dockerfile -t <registry>/<user>/pnlx-prover:<tag> .
+docker push <registry>/<user>/pnlx-prover:<tag>
+```
+
+Create the endpoint with: RTX 4090 (Secure Cloud), FlashBoot on, workers min 0 / max 2, 1800 s execution timeout, and `PNLX_WORKER_AUTH_TOKEN` in the endpoint environment. Then set in `.env`:
+
+```sh
+PNLX_PROVER_BACKEND=runpod
+RUNPOD_API_KEY=
+RUNPOD_ENDPOINT_ID=
+PNLX_WORKER_AUTH_TOKEN=
+```
+
+`PNLX_PROVER_BACKEND=local` proves on this machine instead (development only). Smoke-test the endpoint with a fixture:
+
+```sh
+INPUT_B64=$(base64 < risc0/batch-match/core/tests/fixtures/partial-match.json)
+curl -s -X POST "https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_ID/runsync" \
+  -H "Authorization: Bearer $RUNPOD_API_KEY" -H "Content-Type: application/json" \
+  -d "{\"input\":{\"input_json_b64\":\"$INPUT_B64\",\"auth\":\"$PNLX_WORKER_AUTH_TOKEN\"}}"
+```
 
 ---
 

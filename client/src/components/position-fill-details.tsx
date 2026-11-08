@@ -72,10 +72,8 @@ export function PositionFillDetails({
                   <ReceiptLink hash={fill.settlementTxHash} label={`Settlement transaction for fill ${fillNumber}`} />
                 </FillField>
               ) : null}
-              {fill.boundlessRequestId ? (
-                <FillField label="Boundless">
-                  <ReceiptLink boundless hash={fill.boundlessRequestId} label={`Boundless request for fill ${fillNumber}`} />
-                </FillField>
+              {fill.proverJobId ? (
+                <FillField label="Prover job">{fill.proverJobId}</FillField>
               ) : null}
               <FillField label="Batch">{fill.batchId}</FillField>
               <FillField label="Est. liq."><span title={liquidation.title}>{liquidation.value}</span></FillField>
@@ -101,13 +99,11 @@ function FillField({ children, label }: { children: ReactNode; label: string }) 
   return <div><dt>{label}</dt><dd>{children}</dd></div>;
 }
 
-function ReceiptLink({ boundless = false, hash, label }: { boundless?: boolean; hash: Hex; label: string }) {
+function ReceiptLink({ hash, label }: { hash: Hex; label: string }) {
   return (
     <a
       aria-label={label}
-      href={boundless
-        ? `https://explorer.boundless.network/orders/${hash}`
-        : `https://stellar.expert/explorer/testnet/tx/${hash.replace(/^0x/i, "")}`}
+      href={`https://stellar.expert/explorer/testnet/tx/${hash.replace(/^0x/i, "")}`}
       rel="noreferrer"
       target="_blank"
       title={hash}

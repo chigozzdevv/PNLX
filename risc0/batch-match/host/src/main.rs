@@ -1,40 +1,29 @@
-use alloy::{primitives::U256, signers::local::PrivateKeySigner};
 use anyhow::{anyhow, Context, Result};
-use boundless_market::{
-    client::FundingMode,
-    contracts::RequestStatus,
-    input::GuestEnv,
-    price_oracle::{Amount, Asset},
-    request_builder::OfferParams,
-    Client, Deployment, StorageUploaderConfig,
-};
 use clap::Parser;
 use pnlx_risc0_batch_match_core::{prove_request, ProofRequest};
-use risc0_zkvm::{compute_image_id, default_executor, sha::Digest, ExecutorEnv, Journal};
+use risc0_ethereum_contracts::encode_seal;
+use risc0_zkvm::{
+    compute_image_id, default_executor, default_prover, sha::Digest, ExecutorEnv, Prover,
+    ProverOpts, Receipt,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as ShaDigest, Sha256};
-use std::{env, fs, path::PathBuf, str::FromStr, time::Duration};
+use std::{env, fs, path::PathBuf, str::FromStr, time::Instant};
 use tracing_subscriber::{filter::LevelFilter, prelude::*, EnvFilter};
-use url::Url;
 
 mod request_journal;
-use request_journal::{RecoveryAction, RequestJournal};
+use request_journal::{lock_job, write_atomic};
 
-const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_BATCH_MATCH_CYCLES: u64 = 100_000_000;
-const DEFAULT_LOCK_COLLATERAL_ZKC_WEI: &str = "20000000000000000000";
-const DEFAULT_MIN_PRICE_USD_MICRO: u64 = 20_000;
-const DEFAULT_MAX_PRICE_USD_MICRO: u64 = 150_000;
-const DEFAULT_RAMP_UP_PERIOD_SECONDS: u32 = 300;
-const DEFAULT_LOCK_TIMEOUT_SECONDS: u32 = 1_800;
-const DEFAULT_TIMEOUT_SECONDS: u32 = 3_600;
 const GROTH16_SEAL_BYTES: usize = 260;
+const MIN_SEGMENT_PO2: u32 = 13;
+const MAX_SEGMENT_PO2: u32 = 24;
 
 #[derive(Parser, Debug)]
 #[clap(
     author,
     version,
-    about = "Submit a PNLX batch-match Groth16 proof request to Boundless"
+    about = "Prove a PNLX batch-match settlement locally with a RISC Zero Groth16 seal"
 )]
 struct Args {
     input_path: Option<PathBuf>,
@@ -48,18 +37,6 @@ struct Args {
 
     #[clap(long)]
     preflight_only: bool,
-
-    #[clap(long, env = "BOUNDLESS_RPC_URL")]
-    rpc_url: Option<Url>,
-
-    #[clap(long, env = "BOUNDLESS_PRIVATE_KEY")]
-    private_key: Option<PrivateKeySigner>,
-
-    #[clap(flatten, next_help_heading = "Storage Uploader")]
-    storage_config: StorageUploaderConfig,
-
-    #[clap(flatten, next_help_heading = "Boundless Market Deployment")]
-    deployment: Option<Deployment>,
 }
 
 #[derive(Serialize)]
@@ -112,8 +89,7 @@ impl GuestProgram {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(
@@ -123,7 +99,7 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let mut args = Args::parse();
+    let args = Args::parse();
     let program =
         GuestProgram::load(env::var_os("RISC0_BATCH_MATCH_PROGRAM_PATH").map(PathBuf::from))?;
     if args.print_image_id {
@@ -136,152 +112,82 @@ async fn main() -> Result<()> {
     }
     let input_path = args
         .input_path
-        .take()
+        .clone()
         .ok_or_else(|| anyhow!("INPUT_PATH is required unless an inspection flag is used"))?;
     let output_dir = args
         .output_dir
-        .take()
+        .clone()
         .ok_or_else(|| anyhow!("OUTPUT_DIR is required unless an inspection flag is used"))?;
-    args.input_path = Some(input_path);
-    args.output_dir = Some(output_dir);
-    run(args, program).await
+    run(args, program, input_path, output_dir)
 }
 
-async fn run(args: Args, program: GuestProgram) -> Result<()> {
+fn run(args: Args, program: GuestProgram, input_path: PathBuf, output_dir: PathBuf) -> Result<()> {
     reject_dev_mode()?;
+    guard_prover_selection()?;
     program.verify_pin()?;
-    let input_path = args.input_path.as_ref().expect("validated input path");
-    let output_dir = args
-        .output_dir
-        .as_ref()
-        .expect("validated output directory");
-    fs::create_dir_all(output_dir).context("create output directory")?;
-    let _job_lock = request_journal::lock_job(output_dir)?;
+    fs::create_dir_all(&output_dir).context("create output directory")?;
+    let _job_lock = lock_job(&output_dir)?;
 
-    let input_bytes = fs::read(input_path).context("read prover input")?;
+    let input_bytes = fs::read(&input_path).context("read prover input")?;
     let request: ProofRequest =
         serde_json::from_slice(&input_bytes).context("parse prover input")?;
     let proved = prove_request(&request);
-    let journal = Journal::new(proved.journal.clone());
 
+    let cycles = preflight(&program.bytes, &request, &proved.journal)?;
     if args.preflight_only {
-        preflight(&program.bytes, &request, &proved.journal)?;
+        println!("preflight cycles: {cycles}");
         return Ok(());
     }
+    tracing::info!("batch-match preflight completed in {cycles} cycles");
 
-    let client = Client::builder()
-        .with_rpc_url(required_url(args.rpc_url)?)
-        .with_deployment(args.deployment)
-        .with_uploader_config(&args.storage_config)
-        .await?
-        .config_storage_layer(|config| config.inline_input_max_bytes(0))
-        .with_funding_mode(FundingMode::AvailableBalance)
-        .with_private_key(required_private_key(args.private_key)?)
-        .build()
-        .await
-        .context("failed to build Boundless client")?;
-
-    let mut saved = if let Some(saved) = existing_request(output_dir)? {
-        saved
-    } else {
-        let cycles = preflight(&program.bytes, &request, &proved.journal)?;
-        tracing::info!("RISC0 batch-match preflight completed in {cycles} cycles");
-        let env = GuestEnv::builder()
-            .write(&request)
-            .context("encode zkVM input for Boundless")?;
-        let proof_request = client
-            .new_request()
-            .with_program(program.bytes.clone())
-            .with_env(env)
-            .with_image_id(program.image_id)
-            .with_cycles(cycles)
-            .with_journal(journal)
-            .with_offer(default_offer()?)
-            .with_groth16_proof();
-
-        let proof_request = client.build_request(proof_request).await?;
-        let saved = RequestJournal::prepared(proof_request, configured_max_price()?)?;
-        saved.validate_binding(program.image_id, &proved.journal)?;
-        request_journal::write(output_dir, &saved)?;
-        saved
-    };
-    saved.validate_binding(program.image_id, &proved.journal)?;
-    let request_id = saved.id()?;
-    let status = client
-        .boundless_market
-        .get_status(request_id, Some(saved.expires_at))
-        .await?;
-    let accepted = matches!(&status, RequestStatus::Locked | RequestStatus::Fulfilled);
-    let maximum = if matches!(&status, RequestStatus::Unknown) && saved.submitted == Some(false) {
-        configured_max_price()?
-    } else {
-        DEFAULT_MAX_PRICE_USD_MICRO
-    };
-    match saved.action(status, maximum)? {
-        RecoveryAction::PublishOriginal => {
-            let (submitted_id, expires_at) = client
-                .submit_request(
-                    saved
-                        .request
-                        .as_ref()
-                        .context("saved Boundless payload is missing")?,
-                )
-                .await?;
-            if submitted_id != request_id || expires_at != saved.expires_at {
-                anyhow::bail!("Boundless submission changed the saved request identity");
-            }
-            saved.submitted = Some(true);
-            request_journal::write(output_dir, &saved)?;
-        }
-        RecoveryAction::RecoverOriginal => {
-            if saved.submitted == Some(false) && accepted {
-                saved.submitted = Some(true);
-                request_journal::write(output_dir, &saved)?;
-            }
-        }
-    }
-    let fulfillment = client
-        .wait_for_request_fulfillment(request_id, POLL_INTERVAL, saved.expires_at)
-        .await
-        .context("recover original Boundless proof fulfillment")?;
-    let fulfillment_data = fulfillment.data().context("decode Boundless fulfillment")?;
-    let image_id = fulfillment_data
-        .image_id()
-        .ok_or_else(|| anyhow!("missing Boundless image id"))?;
-    let journal_bytes = fulfillment_data
-        .journal()
-        .ok_or_else(|| anyhow!("missing Boundless journal"))?
-        .to_vec();
-
-    if journal_bytes != proved.journal {
-        anyhow::bail!("Boundless journal does not match expected batch public input bytes");
-    }
-    if Digest::from(<[u8; 32]>::from(image_id)) != program.image_id {
-        anyhow::bail!("Boundless image id does not match PNLX batch-match guest");
+    let receipt = prove_groth16(&program, &request)?;
+    if receipt.journal.bytes != proved.journal {
+        anyhow::bail!("prover journal does not match expected batch public input bytes");
     }
 
-    let seal = fulfillment.seal.to_vec();
+    let seal = encode_seal(&receipt).context("encode Groth16 on-chain seal")?;
     validate_groth16_seal(&seal)?;
     let journal_path = output_dir.join("journal.bin");
     let seal_path = output_dir.join("seal.bin");
     let metadata_path = output_dir.join("proof.json");
-    request_journal::write_atomic(output_dir, "journal.bin", &journal_bytes)?;
-    request_journal::write_atomic(output_dir, "seal.bin", &seal)?;
+    write_atomic(&output_dir, "journal.bin", &proved.journal)?;
+    write_atomic(&output_dir, "seal.bin", &seal)?;
 
     let output = ProofOutput {
-        image_id: format!("0x{}", hex::encode(<[u8; 32]>::from(image_id))),
-        journal_digest: format!("0x{}", hex::encode(Sha256::digest(&journal_bytes))),
+        image_id: format!("0x{}", hex::encode(program.image_id.as_bytes())),
+        journal_digest: format!("0x{}", hex::encode(Sha256::digest(&proved.journal))),
         journal_path: journal_path.display().to_string(),
         seal_digest: format!("0x{}", hex::encode(Sha256::digest(&seal))),
         seal_path: seal_path.display().to_string(),
     };
-    request_journal::write_atomic(
-        output_dir,
+    write_atomic(
+        &output_dir,
         "proof.json",
         &serde_json::to_vec_pretty(&output)?,
     )?;
     println!("{}", metadata_path.display());
     Ok(())
+}
+
+fn prove_groth16(program: &GuestProgram, request: &ProofRequest) -> Result<Receipt> {
+    let mut builder = ExecutorEnv::builder();
+    builder.write(request).context("encode zkVM proving input")?;
+    if let Some(po2) = configured_segment_po2()? {
+        builder.segment_limit_po2(po2);
+    }
+    let env = builder.build().context("build zkVM proving environment")?;
+    let opts = ProverOpts::groth16();
+    let started = Instant::now();
+    let info = default_prover()
+        .prove_with_opts(env, &program.bytes, &opts)
+        .context("prove batch-match guest locally")?;
+    let proving_elapsed = started.elapsed();
+    let receipt = info.receipt;
+    receipt
+        .verify(program.image_id)
+        .context("verify locally produced batch-match receipt")?;
+    tracing::info!("batch-match Groth16 proof completed in {proving_elapsed:?}");
+    Ok(receipt)
 }
 
 fn preflight(program: &[u8], request: &ProofRequest, expected_journal: &[u8]) -> Result<u64> {
@@ -307,35 +213,15 @@ fn preflight(program: &[u8], request: &ProofRequest, expected_journal: &[u8]) ->
 fn validate_groth16_seal(seal: &[u8]) -> Result<()> {
     if seal.len() != GROTH16_SEAL_BYTES {
         anyhow::bail!(
-            "Boundless returned a malformed Groth16 seal: expected {} bytes, received {}",
+            "prover returned a malformed Groth16 seal: expected {} bytes, received {}",
             GROTH16_SEAL_BYTES,
             seal.len()
         );
     }
     if seal.iter().all(|byte| *byte == 0) {
-        anyhow::bail!("Boundless returned an all-zero Groth16 seal");
+        anyhow::bail!("prover returned an all-zero Groth16 seal");
     }
     Ok(())
-}
-
-fn required_url(value: Option<Url>) -> Result<Url> {
-    value
-        .or_else(|| {
-            env::var("RPC_URL")
-                .ok()
-                .and_then(|raw| Url::parse(&raw).ok())
-        })
-        .ok_or_else(|| anyhow!("BOUNDLESS_RPC_URL or RPC_URL is required for Boundless proving"))
-}
-
-fn required_private_key(value: Option<PrivateKeySigner>) -> Result<PrivateKeySigner> {
-    if let Some(value) = value {
-        return Ok(value);
-    }
-    env::var("PRIVATE_KEY")
-        .context("BOUNDLESS_PRIVATE_KEY or PRIVATE_KEY is required for Boundless proving")?
-        .parse()
-        .context("parse Boundless private key")
 }
 
 fn reject_dev_mode() -> Result<()> {
@@ -347,9 +233,45 @@ fn reject_dev_mode() -> Result<()> {
         })
         .unwrap_or(false);
     if enabled {
-        anyhow::bail!("RISC0_DEV_MODE must be disabled for Boundless Groth16 batch-match proving");
+        anyhow::bail!("RISC0_DEV_MODE must be disabled for Groth16 batch-match proving");
     }
     Ok(())
+}
+
+fn guard_prover_selection() -> Result<()> {
+    match env::var("RISC0_PROVER") {
+        Ok(value) if value.eq_ignore_ascii_case("local") => Ok(()),
+        Ok(value) => Err(anyhow!(
+            "RISC0_PROVER={value} is not supported; unset it or set RISC0_PROVER=local"
+        )),
+        Err(_) => Ok(()),
+    }?;
+    for variable in ["BONSAI_API_URL", "BONSAI_API_KEY"] {
+        if env::var_os(variable).is_some() {
+            anyhow::bail!(
+                "{variable} is set; remote Bonsai proving is retired, unset it to prove locally"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn configured_segment_po2() -> Result<Option<u32>> {
+    let raw = match env::var("PNLX_SEGMENT_PO2") {
+        Ok(raw) => raw,
+        Err(env::VarError::NotPresent) => return Ok(None),
+        Err(error) => return Err(error).context("read PNLX_SEGMENT_PO2"),
+    };
+    let po2 = raw
+        .trim()
+        .parse::<u32>()
+        .with_context(|| format!("parse PNLX_SEGMENT_PO2={raw}"))?;
+    if !(MIN_SEGMENT_PO2..=MAX_SEGMENT_PO2).contains(&po2) {
+        anyhow::bail!(
+            "PNLX_SEGMENT_PO2={po2} is outside the supported {MIN_SEGMENT_PO2}..={MAX_SEGMENT_PO2} range"
+        );
+    }
+    Ok(Some(po2))
 }
 
 fn verify_image_id(image_id: Digest, expected: &str) -> Result<()> {
@@ -358,120 +280,6 @@ fn verify_image_id(image_id: Digest, expected: &str) -> Result<()> {
         anyhow::bail!("batch-match guest image ID does not match the pinned deployment image ID: expected {expected}, built {actual}");
     }
     Ok(())
-}
-
-fn existing_request(output_dir: &PathBuf) -> Result<Option<RequestJournal>> {
-    let saved = request_journal::read(output_dir)?;
-    match (
-        env::var("BOUNDLESS_REQUEST_ID").ok(),
-        env::var("BOUNDLESS_REQUEST_EXPIRES_AT").ok(),
-    ) {
-        (None, None) => Ok(saved),
-        (Some(request_id), Some(expires_at)) => {
-            let provided = RequestJournal {
-                request_id,
-                expires_at: expires_at.parse().context("parse saved Boundless expiry")?,
-                request: None,
-                submitted: None,
-                max_price_usd_micro: None,
-            };
-            if let Some(saved) = saved {
-                if saved.id()? != provided.id()? || saved.expires_at != provided.expires_at {
-                    anyhow::bail!("Boundless environment conflicts with the saved request");
-                }
-                Ok(Some(saved))
-            } else {
-                provided.id()?;
-                request_journal::write(output_dir, &provided)?;
-                Ok(Some(provided))
-            }
-        }
-        _ => anyhow::bail!("incomplete Boundless recovery identity; reconciliation required"),
-    }
-}
-
-fn configured_max_price() -> Result<u64> {
-    let price = env_u256("BOUNDLESS_MAX_PRICE_USD_MICRO", DEFAULT_MAX_PRICE_USD_MICRO)?;
-    validate_max_price(price)
-}
-
-fn validate_max_price(price: U256) -> Result<u64> {
-    if price > U256::from(DEFAULT_MAX_PRICE_USD_MICRO) {
-        anyhow::bail!("Boundless proof offer exceeds the approved $0.15 ceiling");
-    }
-    Ok(price.to::<u64>())
-}
-
-fn default_offer() -> Result<OfferParams> {
-    let min_price = env_u256("BOUNDLESS_MIN_PRICE_USD_MICRO", DEFAULT_MIN_PRICE_USD_MICRO)?;
-    let max_price = U256::from(configured_max_price()?);
-    let lock_collateral = env_u256(
-        "BOUNDLESS_LOCK_COLLATERAL_ZKC_WEI",
-        DEFAULT_LOCK_COLLATERAL_ZKC_WEI,
-    )?;
-    let ramp_up_period = env_u32(
-        "BOUNDLESS_RAMP_UP_PERIOD_SECONDS",
-        DEFAULT_RAMP_UP_PERIOD_SECONDS,
-    )?;
-    let lock_timeout = env_u32(
-        "BOUNDLESS_LOCK_TIMEOUT_SECONDS",
-        DEFAULT_LOCK_TIMEOUT_SECONDS,
-    )?;
-    let timeout = env_u32("BOUNDLESS_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)?;
-
-    validate_offer(min_price, max_price, ramp_up_period, lock_timeout, timeout)?;
-
-    Ok(OfferParams::builder()
-        .min_price(Amount::new(min_price, Asset::USD))
-        .max_price(Amount::new(max_price, Asset::USD))
-        .lock_collateral(Amount::new(lock_collateral, Asset::ZKC))
-        .ramp_up_period(ramp_up_period)
-        .lock_timeout(lock_timeout)
-        .timeout(timeout)
-        .into())
-}
-
-fn validate_offer(
-    min_price: U256,
-    max_price: U256,
-    ramp_up_period: u32,
-    lock_timeout: u32,
-    timeout: u32,
-) -> Result<()> {
-    if min_price > max_price {
-        anyhow::bail!("Boundless minimum price cannot exceed maximum price");
-    }
-    if ramp_up_period >= lock_timeout {
-        anyhow::bail!("Boundless ramp-up period must be shorter than lock timeout");
-    }
-    if lock_timeout >= timeout {
-        anyhow::bail!("Boundless lock timeout must be shorter than request timeout");
-    }
-    Ok(())
-}
-
-fn env_u256(name: &str, default: impl ToString) -> Result<U256> {
-    match env::var(name) {
-        Ok(raw) => parse_u256(&raw).with_context(|| format!("parse {name}")),
-        Err(env::VarError::NotPresent) => parse_u256(&default.to_string()),
-        Err(error) => Err(error).with_context(|| format!("read {name}")),
-    }
-}
-
-fn env_u32(name: &str, default: u32) -> Result<u32> {
-    match env::var(name) {
-        Ok(raw) => raw.trim().parse().with_context(|| format!("parse {name}")),
-        Err(env::VarError::NotPresent) => Ok(default),
-        Err(error) => Err(error).with_context(|| format!("read {name}")),
-    }
-}
-
-fn parse_u256(raw: &str) -> Result<U256> {
-    let trimmed = raw.trim();
-    if let Some(hex) = trimmed.strip_prefix("0x") {
-        return U256::from_str_radix(hex, 16).context("parse hex U256");
-    }
-    U256::from_str(trimmed).context("parse decimal U256")
 }
 
 fn batch_match_cycles() -> Result<u64> {
@@ -499,32 +307,43 @@ mod tests {
     }
 
     #[test]
-    fn accepts_production_offer_ordering() {
-        assert!(validate_offer(
-            U256::from(DEFAULT_MIN_PRICE_USD_MICRO),
-            U256::from(DEFAULT_MAX_PRICE_USD_MICRO),
-            DEFAULT_RAMP_UP_PERIOD_SECONDS,
-            DEFAULT_LOCK_TIMEOUT_SECONDS,
-            DEFAULT_TIMEOUT_SECONDS,
-        )
-        .is_ok());
+    fn groth16_seal_validation_enforces_length_and_nonzero_bytes() {
+        let mut seal = vec![0u8; GROTH16_SEAL_BYTES];
+        assert!(validate_groth16_seal(&seal).is_err());
+        seal[0] = 0x73;
+        assert!(validate_groth16_seal(&seal).is_ok());
+        seal.push(0);
+        assert!(validate_groth16_seal(&seal).is_err());
+        seal.truncate(GROTH16_SEAL_BYTES - 1);
+        assert!(validate_groth16_seal(&seal).is_err());
     }
 
     #[test]
-    fn rejects_invalid_price_range() {
-        assert!(validate_offer(U256::from(2), U256::from(1), 300, 1_800, 3_600).is_err());
+    fn segment_po2_configuration_rejects_out_of_range_values() {
+        assert!(configured_segment_po2().unwrap().is_none());
+        std::env::set_var("PNLX_SEGMENT_PO2", "18");
+        assert_eq!(configured_segment_po2().unwrap(), Some(18));
+        std::env::set_var("PNLX_SEGMENT_PO2", "12");
+        assert!(configured_segment_po2().is_err());
+        std::env::set_var("PNLX_SEGMENT_PO2", "25");
+        assert!(configured_segment_po2().is_err());
+        std::env::set_var("PNLX_SEGMENT_PO2", "not-a-number");
+        assert!(configured_segment_po2().is_err());
+        std::env::remove_var("PNLX_SEGMENT_PO2");
     }
 
     #[test]
-    fn enforces_the_approved_fifteen_cent_ceiling() {
-        assert_eq!(validate_max_price(U256::from(150_000)).unwrap(), 150_000);
-        assert!(validate_max_price(U256::from(150_001)).is_err());
-        assert!(validate_max_price(U256::MAX).is_err());
-    }
-
-    #[test]
-    fn rejects_invalid_deadline_ordering() {
-        assert!(validate_offer(U256::ZERO, U256::from(1), 1_800, 1_800, 3_600).is_err());
-        assert!(validate_offer(U256::ZERO, U256::from(1), 300, 3_600, 3_600).is_err());
+    fn only_the_local_prover_selection_is_accepted() {
+        std::env::remove_var("BONSAI_API_URL");
+        std::env::remove_var("BONSAI_API_KEY");
+        std::env::set_var("RISC0_PROVER", "local");
+        assert!(guard_prover_selection().is_ok());
+        std::env::set_var("RISC0_PROVER", "ipc");
+        assert!(guard_prover_selection().is_err());
+        std::env::remove_var("RISC0_PROVER");
+        assert!(guard_prover_selection().is_ok());
+        std::env::set_var("BONSAI_API_URL", "https://example.invalid");
+        assert!(guard_prover_selection().is_err());
+        std::env::remove_var("BONSAI_API_URL");
     }
 }

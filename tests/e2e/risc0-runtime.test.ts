@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { hashFields } from "@pnlx/crypto";
 import type { Hex, PrivateMatchIntent } from "@pnlx/protocol-types";
 import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
-import { prepareRisc0SettlementDraft, RISC0_BATCH_MATCH_IMAGE_ID, runBoundlessProver, runRisc0Prover } from "@/workers/risc0-matcher/risc0-proof";
+import { prepareRisc0SettlementDraft, RISC0_BATCH_MATCH_IMAGE_ID, runLocalProver, runRisc0Prover } from "@/workers/risc0-matcher/risc0-proof";
 
 const hash = (value: Uint8Array | string): Hex => `0x${createHash("sha256").update(value).digest("hex")}`;
 function fixture() {
@@ -118,7 +118,7 @@ describe("RISC0 private witness lifecycle", () => {
     await withFixture(async (f) => {
       const start = Date.now();
       await expect(runRisc0Prover(f.root, f.input, f.draft, (root, inputPath, proofDir) =>
-        runBoundlessProver(root, inputPath, proofDir, {
+        runLocalProver(root, inputPath, proofDir, {
           timeoutMs: 50, command: { command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"] },
         }))).rejects.toThrow("prover deadline exceeded");
       expect(Date.now() - start).toBeLessThan(2000);
@@ -127,96 +127,24 @@ describe("RISC0 private witness lifecycle", () => {
   });
 });
 
-describe("Boundless submission start gate", () => {
-  test("waits for complete request acknowledgement while allowing fulfillment processes to overlap", async () => {
+describe("prover slot gate", () => {
+  test("serializes concurrent prover runs until the active run releases", async () => {
     await withControlledHosts(async (createHost) => {
       const first = createHost("first"), second = createHost("second");
       first.start(); second.start();
       await waitForFile(first.started);
-      // A partial write must neither release the submission turn nor crash its watcher.
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await Bun.sleep(300);
       expect(existsSync(second.started)).toBe(false);
-      first.acknowledge();
-      await waitForFile(second.started);
-      for (const host of [first, second]) {
-        const { pid } = JSON.parse(readFileSync(host.started, "utf8"));
-        expect(() => process.kill(pid, 0)).not.toThrow();
-      }
-      first.stop(); second.stop();
+      first.stop();
       expect((await first.result()).status).toBe(0);
+      await waitForFile(second.started);
+      second.stop();
       expect((await second.result()).status).toBe(0);
     });
   });
 
-  test("an existing request resumes past a held gate without unlocking other new submissions", async () => {
-    await withControlledHosts(async (createHost) => {
-      const submitting = createHost("submitting"), resumed = createHost("resumed", { resume: true });
-      const waiting = createHost("waiting");
-      submitting.start(); await waitForFile(submitting.started);
-      resumed.start(); waiting.start();
-      await waitForFile(resumed.started);
-      expect(JSON.parse(readFileSync(resumed.started, "utf8")).requestId).toBe("0x1234");
-      expect(existsSync(waiting.started)).toBe(false);
-      resumed.stop(); await resumed.result();
-      expect(existsSync(waiting.started)).toBe(false);
-      submitting.acknowledge();
-      await waitForFile(waiting.started);
-      submitting.stop(); waiting.stop();
-    });
-  });
-
-  test("an expired request keeps its original identity while another submission holds the gate", async () => {
-    await withControlledHosts(async (createHost) => {
-      const submitting = createHost("submitting"), expired = createHost("expired", { resume: true, expired: true });
-      const waiting = createHost("waiting");
-      submitting.start(); await waitForFile(submitting.started);
-      expired.start(); waiting.start();
-      await waitForFile(expired.started);
-      expect(JSON.parse(readFileSync(expired.started, "utf8")).requestId).toBe("0x1234");
-      expect(existsSync(waiting.started)).toBe(false);
-      expired.stop(); await expired.result();
-      submitting.acknowledge(); await waitForFile(waiting.started);
-      submitting.stop(); waiting.stop();
-    });
-  });
-
-  test("a prepared request retains the submission gate until its original submission is acknowledged", async () => {
-    await withControlledHosts(async (createHost) => {
-      const prepared = createHost("prepared", { resume: true, prepared: true });
-      const waiting = createHost("waiting");
-      prepared.start(); waiting.start();
-      await waitForFile(prepared.started);
-      await Bun.sleep(300);
-      expect(existsSync(waiting.started)).toBe(false);
-      expect(JSON.parse(readFileSync(prepared.started, "utf8")).requestId).toBe("0x1234");
-      prepared.acknowledge();
-      await waitForFile(waiting.started);
-      prepared.stop(); waiting.stop();
-    });
-  });
-
-  test("a fresh job cannot inherit a different job's recovery identity from the environment", async () => {
-    const previousId = process.env.BOUNDLESS_REQUEST_ID;
-    const previousExpiry = process.env.BOUNDLESS_REQUEST_EXPIRES_AT;
-    process.env.BOUNDLESS_REQUEST_ID = "0xdead";
-    process.env.BOUNDLESS_REQUEST_EXPIRES_AT = "1";
-    try {
-      await withControlledHosts(async (createHost) => {
-        const fresh = createHost("fresh"); fresh.start();
-        await waitForFile(fresh.started);
-        expect(JSON.parse(readFileSync(fresh.started, "utf8")).requestId).toBeUndefined();
-        fresh.stop(); await fresh.result();
-      });
-    } finally {
-      if (previousId === undefined) delete process.env.BOUNDLESS_REQUEST_ID;
-      else process.env.BOUNDLESS_REQUEST_ID = previousId;
-      if (previousExpiry === undefined) delete process.env.BOUNDLESS_REQUEST_EXPIRES_AT;
-      else process.env.BOUNDLESS_REQUEST_EXPIRES_AT = previousExpiry;
-    }
-  });
-
   for (const outcome of ["failure", "timeout", "throw"] as const) {
-    test(`a ${outcome} releases the next new submission`, async () => {
+    test(`a ${outcome} releases the next prover run`, async () => {
       await withControlledHosts(async (createHost) => {
         const first = createHost("first", { outcome });
         const second = createHost("second");
@@ -232,46 +160,36 @@ describe("Boundless submission start gate", () => {
   }
 
   test("invalid deadlines still throw before a prover is queued", () => {
-    expect(() => runBoundlessProver(".", "unused", "unused", { timeoutMs: 0 })).toThrow("invalid RISC0 prover deadline");
+    expect(() => runLocalProver(".", "unused", "unused", { timeoutMs: 0 })).toThrow("invalid RISC0 prover deadline");
   });
 });
 
-type ControlledHostOptions = { resume?: boolean; prepared?: boolean; expired?: boolean; outcome?: "failure" | "timeout" | "throw" };
+type ControlledHostOptions = { outcome?: "failure" | "timeout" | "throw" };
 
 async function withControlledHosts(work: (createHost: (name: string, options?: ControlledHostOptions) => {
-  started: string; acknowledge(): void; stop(): void; start(): void; result(): ReturnType<typeof runBoundlessProver>;
+  started: string; stop(): void; start(): void; result(): ReturnType<typeof runLocalProver>;
 }) => Promise<void>) {
-  const root = mkdtempSync(join(tmpdir(), "pnlx-boundless-submit-"));
-  const runs: ReturnType<typeof runBoundlessProver>[] = [];
+  const root = mkdtempSync(join(tmpdir(), "pnlx-prover-slot-"));
+  const runs: ReturnType<typeof runLocalProver>[] = [];
   const stops: Array<() => void> = [];
   const createHost = (name: string, options: ControlledHostOptions = {}) => {
     const directory = join(root, name);
     mkdirSync(directory);
-    const request = join(directory, "request.json"), started = join(directory, "started.json");
-    const publish = join(directory, "publish.json"), exit = join(directory, "exit");
-    const expires_at = Math.floor(Date.now() / 1_000) + (options.expired ? -60 : 60);
-    const metadata = JSON.stringify({ request_id: "0x1234", expires_at, submitted: true });
-    if (options.resume) writeFileSync(request, options.prepared ?
-      JSON.stringify({ request_id: "0x1234", expires_at, submitted: false, request: {}, max_price_usd_micro: 150_000 }) : metadata);
+    const started = join(directory, "started.json"), exit = join(directory, "exit");
     const script = `const fs=require("node:fs");
-      fs.writeFileSync(${JSON.stringify(started)},JSON.stringify({pid:process.pid,requestId:process.env.BOUNDLESS_REQUEST_ID}));
-      ${options.resume ? "" : `fs.writeFileSync(${JSON.stringify(request)},"{");`}
+      fs.writeFileSync(${JSON.stringify(started)},JSON.stringify({pid:process.pid}));
       ${options.outcome === "failure" ? "process.exit(7);" : ""}
-      let published=false;
       setInterval(()=>{
-        if(!published&&fs.existsSync(${JSON.stringify(publish)})){
-          fs.writeFileSync(${JSON.stringify(request)},fs.readFileSync(${JSON.stringify(publish)}));published=true;
-        }
         if(fs.existsSync(${JSON.stringify(exit)}))process.exit(0);
       },10);`;
-    let run: ReturnType<typeof runBoundlessProver>;
+    let run: ReturnType<typeof runLocalProver>;
     const stop = () => writeFileSync(exit, "stop");
     stops.push(stop);
     return {
-      started, stop, acknowledge: () => writeFileSync(publish, metadata),
+      started, stop,
       start() {
-        // Separate roots still share the process-wide signer submission gate.
-        run = runBoundlessProver(directory, join(directory, "input.json"), directory, {
+        // Separate roots still share the process-wide prover slot gate.
+        run = runLocalProver(directory, join(directory, "input.json"), directory, {
           timeoutMs: options.outcome === "timeout" ? 100 : 3_000,
           command: { command: options.outcome === "throw" ? "" : process.execPath, args: ["-e", script] },
         });

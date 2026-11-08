@@ -1,0 +1,19 @@
+# Build context whitelist for the RunPod worker image (only applies when
+# building with -f deploy/runpod/Dockerfile). Keeps the context tiny.
+*
+!risc0
+!deploy
+risc0/batch-match/target/debug
+risc0/batch-match/target/release
+risc0/batch-match/methods/guest/target
+risc0/batch-match/target/riscv-guest/*
+!risc0/batch-match/target/riscv-guest/pnlx-risc0-methods
+risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/*
+!risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest
+risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/*
+!risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/riscv32im-risc0-zkvm-elf
+risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/riscv32im-risc0-zkvm-elf/*
+!risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/riscv32im-risc0-zkvm-elf/docker
+risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/riscv32im-risc0-zkvm-elf/docker/*
+!risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/riscv32im-risc0-zkvm-elf/docker/batch_match.bin
+.DS_Store

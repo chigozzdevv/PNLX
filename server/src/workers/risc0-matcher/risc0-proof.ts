@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, join } from "node:path";
 import { hashFields } from "@pnlx/crypto";
 import type { ProofArtifact } from "@pnlx/proof-system";
 import type { BatchSettlement, Hex, ProofMeta } from "@pnlx/protocol-types";
@@ -34,7 +34,7 @@ export function risc0VerifierIdentity(parametersHash:Hex,imageId:Hex):Hex {
 }
 
 interface Risc0ProverOutput {
-  boundless_request_id?: Hex;
+  prover_job_id?: string;
   image_id: Hex;
   journal_digest: Hex;
   journal_path: string;
@@ -72,7 +72,7 @@ export async function createRisc0BatchSettlement(
   const expectedJournalDigest = batchSettlementPublicInputHash({
     ...draft,
     proof: proofMeta({
-      boundlessRequestId: proverOutput.boundless_request_id,
+      proverJobId: proverOutput.prover_job_id,
       imageId: proverOutput.image_id,
       journalDigest: proverOutput.journal_digest,
       sealDigest: proverOutput.seal_digest,
@@ -83,7 +83,7 @@ export async function createRisc0BatchSettlement(
   }
 
   const proof = proofMeta({
-    boundlessRequestId: proverOutput.boundless_request_id,
+    proverJobId: proverOutput.prover_job_id,
     imageId: proverOutput.image_id,
     journalDigest: proverOutput.journal_digest,
     sealDigest: proverOutput.seal_digest,
@@ -167,13 +167,13 @@ export function prepareRisc0SettlementDraft(input: SettlementProofInput): Omit<B
 }
 
 function proofMeta(receipt: {
-  boundlessRequestId?: Hex;
+  proverJobId?: string;
   imageId: Hex;
   journalDigest: Hex;
   sealDigest: Hex;
 }): ProofMeta {
   return {
-    boundlessRequestId: receipt.boundlessRequestId,
+    proverJobId: receipt.proverJobId,
     circuitHash: RISC0_BATCH_MATCH_CIRCUIT_HASH,
     circuitId: RISC0_BATCH_MATCH_CIRCUIT_ID,
     circuitKey: RISC0_BATCH_MATCH_CIRCUIT_KEY,
@@ -224,7 +224,7 @@ export async function runRisc0Prover(
   root: string,
   input: SettlementProofInput,
   draft: Omit<BatchSettlement, "proof">,
-  runProver = runBoundlessProver,
+  runProver: Risc0ProverRunner = defaultProverRunner(),
 ): Promise<Risc0ProverOutput> {
   const proofDir = join(root, ".pnlx", "risc0", safeName(`${input.batchId}-${input.market.marketId}`));
   const digest = inputHash(input);
@@ -253,7 +253,7 @@ export async function runRisc0Prover(
       if (result.status !== 0) {
         const reason = result.error === "prover deadline exceeded" ? result.error : "prover execution failed";
         // Child output can contain witness data or input URLs. Never send it to API errors/logs.
-        throw new Error(`Boundless RISC0 Groth16 batch prover failed: ${reason} (status ${result.status ?? "unknown"})`);
+        throw new Error(`RISC0 Groth16 batch prover failed: ${reason} (status ${result.status ?? "unknown"})`);
       }
       const output = readRisc0ProverOutput(result.metadataPath, expectedSelector);
       if (!output) throw new Error("RISC0 proof metadata was not written");
@@ -273,14 +273,6 @@ function readRisc0ProverOutput(
 ): Risc0ProverOutput | undefined {
   if (!existsSync(metadataPath)) return undefined;
   const output = JSON.parse(readFileSync(metadataPath, "utf8")) as Risc0ProverOutput;
-  const requestPath = join(dirname(metadataPath), "request.json");
-  if (existsSync(requestPath)) {
-    const request = JSON.parse(readFileSync(requestPath, "utf8")) as { request_id?: unknown };
-    if (typeof request.request_id === "string") {
-      assertHex(request.request_id, "Boundless request id");
-      output.boundless_request_id = request.request_id.toLowerCase() as Hex;
-    }
-  }
   assertHex32(output.image_id, "RISC0 image id");
   assertHex32(output.journal_digest, "RISC0 journal digest");
   assertHex32(output.seal_digest, "RISC0 seal digest");
@@ -350,12 +342,6 @@ function assertHex32(value: unknown, label: string): asserts value is Hex {
   }
 }
 
-function assertHex(value: unknown, label: string): asserts value is Hex {
-  if (typeof value !== "string" || !/^0x[0-9a-fA-F]+$/.test(value)) {
-    throw new Error(`${label} is not valid hex`);
-  }
-}
-
 function batchMatchImageId(): Hex {
   const path = join(process.cwd(), "risc0/batch-match/image-id.json");
   const value = JSON.parse(readFileSync(path, "utf8")) as { imageId?: unknown };
@@ -364,12 +350,12 @@ function batchMatchImageId(): Hex {
 }
 
 // Operators run one active matcher process per signer; this gate is local to that process.
-let boundlessSubmissionTurn = Promise.resolve();
+let proverSlotTurn = Promise.resolve();
 
-async function acquireBoundlessSubmission(): Promise<() => void> {
-  const previous = boundlessSubmissionTurn;
+async function acquireProverSlot(): Promise<() => void> {
+  const previous = proverSlotTurn;
   let release!: () => void;
-  boundlessSubmissionTurn = new Promise<void>((resolve) => { release = resolve; });
+  proverSlotTurn = new Promise<void>((resolve) => { release = resolve; });
   await previous;
   let released = false;
   return () => {
@@ -379,38 +365,172 @@ async function acquireBoundlessSubmission(): Promise<() => void> {
   };
 }
 
-export function runBoundlessProver(
+export type Risc0ProverRunner = (
+  root: string, inputPath: string, proofDir: string,
+) => Promise<ProverRun>;
+
+function runpodConfigured(): boolean {
+  return Boolean(process.env.RUNPOD_API_KEY && process.env.RUNPOD_ENDPOINT_ID);
+}
+
+export function defaultProverRunner(): Risc0ProverRunner {
+  const raw = process.env.PNLX_PROVER_BACKEND ?? "";
+  const backend = raw === "" ? (runpodConfigured() ? "runpod" : "local") : raw;
+  if (backend === "runpod") {
+    if (!runpodConfigured()) {
+      throw new Error("RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID are required for the RunPod prover backend");
+    }
+    return runRunpodProver;
+  }
+  if (backend === "local") return runLocalProver;
+  throw new Error(`PNLX_PROVER_BACKEND=${raw} is not supported; use runpod or local`);
+}
+
+export async function runRunpodProver(
+  _root: string, inputPath: string, proofDir: string,
+  runtime: { timeoutMs?: number } = {},
+): Promise<ProverRun> {
+  const timeoutMs = runtime.timeoutMs ?? Number(process.env.PNLX_RISC0_PROVER_TIMEOUT_MS ?? 65 * 60_000);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error("invalid RISC0 prover deadline");
+  const endpointId = process.env.RUNPOD_ENDPOINT_ID ?? "";
+  const apiKey = process.env.RUNPOD_API_KEY ?? "";
+  if (!endpointId || !apiKey) {
+    throw new Error("RUNPOD_ENDPOINT_ID and RUNPOD_API_KEY are required for the RunPod prover");
+  }
+  const releaseSlot = await acquireProverSlot();
+  try {
+    const auth = process.env.PNLX_WORKER_AUTH_TOKEN;
+    const submitted = await runpodApi(endpointId, apiKey, "POST", "runsync", {
+      input: {
+        input_json_b64: readFileSync(inputPath).toString("base64"),
+        ...(auth ? { auth } : {}),
+      },
+    });
+    const settled = await settleRunpodJob(endpointId, apiKey, submitted, timeoutMs);
+    if (!settled.completed) {
+      return {
+        error: settled.timedOut ? "prover deadline exceeded" : "runpod prover job failed",
+        metadataPath: join(proofDir, "proof.json"),
+        stderr: "",
+        stdout: "",
+        status: 1,
+      };
+    }
+    const output = settled.output ?? {};
+    const journal = decodeRunpodBytes(output.journal_b64, "journal");
+    const seal = decodeRunpodBytes(output.seal_b64, "seal");
+    const imageId = typeof output.image_id === "string" ? output.image_id : "";
+    if (!imageId) throw new Error("runpod prover response is missing the guest image id");
+    writeRunpodProverArtifact(proofDir, {
+      journal,
+      seal,
+      imageId,
+      proverJobId: settled.jobId,
+    });
+    return { metadataPath: join(proofDir, "proof.json"), stderr: "", stdout: "", status: 0 };
+  } finally {
+    releaseSlot();
+  }
+}
+
+function decodeRunpodBytes(value: unknown, label: string): Buffer {
+  if (typeof value !== "string" || value === "") {
+    throw new Error(`runpod prover response is missing ${label} bytes`);
+  }
+  return Buffer.from(value, "base64");
+}
+
+interface RunpodJobResponse {
+  id?: string;
+  status?: string;
+  output?: Record<string, unknown>;
+}
+
+interface SettledRunpodJob {
+  completed: boolean;
+  timedOut: boolean;
+  jobId?: string;
+  output?: Record<string, unknown>;
+}
+
+async function runpodApi(
+  endpointId: string, apiKey: string,
+  method: "POST" | "GET", path: string, body?: unknown,
+): Promise<RunpodJobResponse> {
+  const response = await fetch(`https://api.runpod.ai/v2/${endpointId}/${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  if (!response.ok) {
+    // The response body can echo witness material; never include it in errors.
+    throw new Error(`runpod ${path} request failed with status ${response.status}`);
+  }
+  return await response.json() as RunpodJobResponse;
+}
+
+async function settleRunpodJob(
+  endpointId: string, apiKey: string, job: RunpodJobResponse, timeoutMs: number,
+): Promise<SettledRunpodJob> {
+  const deadline = Date.now() + timeoutMs;
+  let current = job;
+  for (;;) {
+    if (current.status === "COMPLETED" || current.status === "FAILED" ||
+        current.status === "CANCELLED" || current.status === "TIMED_OUT") {
+      return {
+        completed: current.status === "COMPLETED",
+        timedOut: false,
+        jobId: current.id,
+        output: current.output,
+      };
+    }
+    if (Date.now() >= deadline) {
+      return { completed: false, timedOut: true, jobId: current.id };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    current = await runpodApi(endpointId, apiKey, "GET", `status/${current.id ?? ""}`);
+  }
+}
+
+// Writes the same artifact contract the local prover emits: journal.bin, seal.bin, proof.json.
+function writeRunpodProverArtifact(
+  proofDir: string,
+  artifact: { journal: Buffer; seal: Buffer; imageId: string; proverJobId?: string },
+): void {
+  const journalPath = join(proofDir, "journal.bin");
+  const sealPath = join(proofDir, "seal.bin");
+  writeFileSync(journalPath, artifact.journal, { mode: 0o600 });
+  writeFileSync(sealPath, artifact.seal, { mode: 0o600 });
+  const metadata = {
+    image_id: artifact.imageId,
+    journal_digest: `0x${createHash("sha256").update(artifact.journal).digest("hex")}`,
+    journal_path: journalPath,
+    seal_digest: `0x${createHash("sha256").update(artifact.seal).digest("hex")}`,
+    seal_path: sealPath,
+    ...(artifact.proverJobId ? { prover_job_id: artifact.proverJobId } : {}),
+  };
+  writeFileSync(join(proofDir, "proof.json"), `${JSON.stringify(metadata, null, 2)}\n`, { mode: 0o600 });
+}
+
+export async function runLocalProver(
   root: string, inputPath: string, proofDir: string,
   runtime: { command?: { command: string; args: string[] }; timeoutMs?: number } = {},
 ): Promise<ProverRun> {
   const timeoutMs = runtime.timeoutMs ?? Number(process.env.PNLX_RISC0_PROVER_TIMEOUT_MS ?? 65 * 60_000);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error("invalid RISC0 prover deadline");
-  return runQueuedBoundlessProver(root, inputPath, proofDir, runtime, timeoutMs);
-}
-
-async function runQueuedBoundlessProver(
-  root: string, inputPath: string, proofDir: string,
-  runtime: { command?: { command: string; args: string[] } }, timeoutMs: number,
-): Promise<ProverRun> {
-  const requestPath = join(proofDir, "request.json");
-  let request = resumableBoundlessRequest(requestPath);
-  const releaseSubmission = request && boundlessSubmissionAcknowledged(requestPath)
-    ? () => {} : await acquireBoundlessSubmission();
+  const releaseSlot = await acquireProverSlot();
   try {
-    // A request may have become resumable while waiting for the submission turn.
-    request ??= resumableBoundlessRequest(requestPath);
-    if (request && boundlessSubmissionAcknowledged(requestPath)) releaseSubmission();
     return await new Promise((resolve) => {
       const metadataPath = join(proofDir, "proof.json");
-      const target = runtime.command ?? boundlessProverCommand(root, inputPath, proofDir);
+      const target = runtime.command ?? localProverCommand(root, inputPath, proofDir);
       const child = spawn(target.command, target.args, {
         cwd: root,
         detached: process.platform !== "win32",
         env: {
           ...process.env,
-          BOUNDLESS_REQUEST_EXPIRES_AT: request ? String(request.expiresAt) : undefined,
-          BOUNDLESS_REQUEST_ID: request?.requestId,
-          BOUNDLESS_IGNORE_PREFLIGHT: process.env.BOUNDLESS_IGNORE_PREFLIGHT ?? "1",
           PATH: risc0ToolPath(process.env.HOME || "", process.env.PATH),
           PNLX_EXPECTED_BATCH_MATCH_IMAGE_ID: RISC0_BATCH_MATCH_IMAGE_ID,
           RISC0_DEV_MODE: "0",
@@ -423,7 +543,6 @@ async function runQueuedBoundlessProver(
         error: "prover deadline exceeded", metadataPath, stderr, stdout, status: null,
       }), timeoutMs);
       const completionTimer = setInterval(() => {
-        if (boundlessSubmissionAcknowledged(requestPath)) releaseSubmission();
         if (risc0ProofMetadataReady(metadataPath)) finish({ metadataPath, stderr, stdout, status: 0 });
       }, 250);
       completionTimer.unref?.();
@@ -453,11 +572,11 @@ async function runQueuedBoundlessProver(
       child.on("close", (status) => finish({ metadataPath, stderr, stdout, status }));
     });
   } finally {
-    releaseSubmission();
+    releaseSlot();
   }
 }
 
-function boundlessProverCommand(
+function localProverCommand(
   root: string,
   inputPath: string,
   proofDir: string,
@@ -507,39 +626,6 @@ function prebuiltProverIsFresh(root: string, binary: string): boolean {
     if (stat.mtimeMs > builtAt) return false;
   }
   return true;
-}
-
-export function resumableBoundlessRequest(
-  requestPath: string,
-): { expiresAt: number; requestId: string } | undefined {
-  if (!existsSync(requestPath)) return undefined;
-  try {
-    const request = JSON.parse(readFileSync(requestPath, "utf8")) as {
-      expires_at?: unknown; request_id?: unknown; submitted?: unknown; request?: unknown;
-      max_price_usd_micro?: unknown;
-    };
-    if (
-      typeof request.expires_at !== "number" || !Number.isSafeInteger(request.expires_at) ||
-      request.expires_at <= 0 ||
-      typeof request.request_id !== "string" || !/^0x[0-9a-f]{1,64}$/i.test(request.request_id) ||
-      BigInt(request.request_id) === 0n ||
-      (request.submitted !== undefined && typeof request.submitted !== "boolean") ||
-      (request.submitted === false && (!request.request || typeof request.request !== "object" || Array.isArray(request.request)))
-    ) throw new Error("invalid Boundless request journal");
-    assertHex(request.request_id, "Boundless request id");
-    return { expiresAt: request.expires_at, requestId: request.request_id };
-  } catch {
-    throw new Error("invalid Boundless request journal; reconciliation required before another paid submission");
-  }
-}
-
-function boundlessSubmissionAcknowledged(requestPath: string): boolean {
-  try {
-    if (!resumableBoundlessRequest(requestPath)) return false;
-    return JSON.parse(readFileSync(requestPath, "utf8")).submitted !== false;
-  } catch {
-    return false;
-  }
 }
 
 export function risc0ProofMetadataReady(metadataPath: string): boolean {

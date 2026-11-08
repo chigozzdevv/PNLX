@@ -128,10 +128,10 @@ export class HealthController {
           url: this.env.matcherServiceUrl ? redactUrl(this.env.matcherServiceUrl) : "",
         },
         proofEngine: {
-          boundless: {
-            privateKeyConfigured: this.env.boundlessPrivateKeyConfigured,
-            ipfsStorageConfigured: this.env.pinataJwtConfigured,
-            rpcConfigured: this.env.boundlessRpcConfigured,
+          prover: {
+            backend: this.env.proverBackend,
+            runpodApiKeyConfigured: this.env.runpodApiKeyConfigured,
+            runpodEndpointConfigured: this.env.runpodEndpointConfigured,
           },
           devMode: this.env.risc0DevMode,
           provider: this.env.matcherProvider,
@@ -263,14 +263,15 @@ function matchingReadinessIssues(env: ServerEnv): string[] {
   if (!env.matcherServiceUrl) {
     issues.push("MATCHER_SERVICE_URL is required for private matcher service");
   }
-  if (!env.boundlessRpcConfigured) {
-    issues.push("BOUNDLESS_RPC_URL is required for RISC0 proving");
-  }
-  if (!env.boundlessPrivateKeyConfigured) {
-    issues.push("BOUNDLESS_PRIVATE_KEY is required for RISC0 proving");
-  }
-  if (!env.pinataJwtConfigured) {
-    issues.push("PINATA_JWT is required for durable Boundless proof artifacts");
+  if (env.proverBackend === "runpod") {
+    if (!env.runpodApiKeyConfigured) {
+      issues.push("RUNPOD_API_KEY is required for RunPod proving");
+    }
+    if (!env.runpodEndpointConfigured) {
+      issues.push("RUNPOD_ENDPOINT_ID is required for RunPod proving");
+    }
+  } else {
+    issues.push("local prover backend is intended for development only");
   }
   if (env.risc0DevMode) {
     issues.push("RISC0_DEV_MODE must be disabled for production proving");

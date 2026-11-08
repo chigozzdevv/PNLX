@@ -9,7 +9,7 @@ export interface ProofMeta {
   proofDigest: Hex;
   proofSystem?: "noir-ultrahonk" | "risc0-groth16";
   bytecodeHash?: Hex;
-  boundlessRequestId?: Hex;
+  proverJobId?: string;
   imageId?: Hex;
   journalDigest?: Hex;
   witnessHash?: Hex;

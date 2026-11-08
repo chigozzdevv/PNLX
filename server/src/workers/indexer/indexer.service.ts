@@ -170,7 +170,7 @@ export class IndexerService {
         const lifecycle = close ?? liquidation;
         return {
           batchId: position.batchId,
-          boundlessRequestId: settlement?.proof.boundlessRequestId,
+          proverJobId: settlement?.proof.proverJobId,
           closeCommitment: position.closeCommitment,
           liquidationRewardCommitment: position.liquidationRewardCommitment,
           marginOutputCommitment: position.marginOutputCommitment,
@@ -200,7 +200,7 @@ export class IndexerService {
   activitiesFor(ownerCommitment: Hex): OwnerActivitySnapshot[] {
     const orders = this.ordersFor(ownerCommitment).map((order) => ({
       batchId: order.batchId,
-      boundlessRequestId: undefined,
+      proverJobId: undefined,
       id: order.intentCommitment,
       kind: "order" as const,
       marketId: order.marketId,
@@ -213,7 +213,7 @@ export class IndexerService {
     const ownerPositions = this.positionsFor(ownerCommitment);
     const positions = ownerPositions.map((position) => ({
       batchId: position.batchId,
-      boundlessRequestId: position.boundlessRequestId,
+      proverJobId: position.proverJobId,
       id: position.positionCommitment,
       kind: "position" as const,
       marketId: position.marketId,

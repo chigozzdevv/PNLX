@@ -67,7 +67,7 @@ describe("logical owner orders", () => {
     expect(isOrderCapacityBlocked(source)).toBe(true);
     source.matching.reason = "batch-settlement: too many public items";
     expect(isOrderCapacityBlocked(source)).toBe(true);
-    source.matching.reason = "proving: Boundless request timed out";
+    source.matching.reason = "proving: prover request timed out";
     expect(isOrderCapacityBlocked(source)).toBe(false);
   });
 

@@ -150,7 +150,7 @@ describe("public and owner indexer", () => {
       status: "settled",
     }, [filled.intentCommitment, partial.intentCommitment]);
     const enrichedSettlement = store.updateSettlementTransactions(settlement.settlementDigest, {
-      boundlessRequestId: hashFields("boundless-request", [filled.intentCommitment]),
+      proverJobId: hashFields("prover-job", [filled.intentCommitment]),
       proofVerificationTxHash: hashFields("tx", ["proof-verification", filled.intentCommitment]),
       settlementTxHash: hashFields("tx", ["settlement", filled.intentCommitment]),
     });
@@ -285,7 +285,7 @@ describe("public and owner indexer", () => {
     });
     expect(positions.find((position) => position.sourceIntentCommitment === filled.intentCommitment))
       .toMatchObject({
-        boundlessRequestId: enrichedSettlement.proof.boundlessRequestId,
+        proverJobId: enrichedSettlement.proof.proverJobId,
         closeCommitment,
         marginOutputCommitment,
         newPositionCommitment,

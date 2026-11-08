@@ -9,9 +9,9 @@ export interface ServerEnv {
   batchExecutorIntervalMs: number;
   batchExecutorProofConcurrency: 1 | 2;
   batchExecutorPrefix: string;
-  boundlessPrivateKeyConfigured: boolean;
-  pinataJwtConfigured: boolean;
-  boundlessRpcConfigured: boolean;
+  proverBackend: "runpod" | "local";
+  runpodApiKeyConfigured: boolean;
+  runpodEndpointConfigured: boolean;
   assetCustodyRequired: boolean;
   collateralAsset: string;
   collateralAssetCode: string;
@@ -119,9 +119,13 @@ export function loadEnv(options: { validateRuntime?: boolean } = {}): ServerEnv 
     batchExecutorIntervalMs: Number(value("BATCH_EXECUTOR_INTERVAL_MS", "5000")),
     batchExecutorProofConcurrency: batchProofConcurrency(value("BATCH_EXECUTOR_PROOF_CONCURRENCY", "2")),
     batchExecutorPrefix: value("BATCH_EXECUTOR_PREFIX", "auto"),
-    boundlessPrivateKeyConfigured: Boolean(value("BOUNDLESS_PRIVATE_KEY", "")),
-    pinataJwtConfigured: Boolean(value("PINATA_JWT", "")),
-    boundlessRpcConfigured: Boolean(value("BOUNDLESS_RPC_URL", "")),
+    proverBackend: proverBackend(
+      value("PNLX_PROVER_BACKEND", ""),
+      Boolean(value("RUNPOD_API_KEY", "")),
+      Boolean(value("RUNPOD_ENDPOINT_ID", "")),
+    ),
+    runpodApiKeyConfigured: Boolean(value("RUNPOD_API_KEY", "")),
+    runpodEndpointConfigured: Boolean(value("RUNPOD_ENDPOINT_ID", "")),
     assetCustodyRequired: booleanValue("ASSET_CUSTODY_REQUIRED", persistentByDefault),
     collateralAsset: value("COLLATERAL_ASSET", ""),
     collateralAssetCode: value("COLLATERAL_ASSET_CODE", ""),
@@ -277,6 +281,14 @@ function optionalBigInt(key: string): bigint | undefined {
 function matcherProvider(value: string): ServerEnv["matcherProvider"] {
   if (value === "risc0") return value;
   throw new Error("MATCHER_PROVIDER must be risc0");
+}
+
+function proverBackend(
+  raw: string, apiKeyConfigured: boolean, endpointConfigured: boolean,
+): ServerEnv["proverBackend"] {
+  if (raw === "runpod" || raw === "local") return raw;
+  if (raw === "") return apiKeyConfigured && endpointConfigured ? "runpod" : "local";
+  throw new Error("PNLX_PROVER_BACKEND must be runpod or local");
 }
 
 function oraclePriceSource(value: string): "hermes" | "onchain-market" {

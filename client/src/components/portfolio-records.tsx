@@ -508,8 +508,8 @@ function ActivityDetails({
           <TransactionLink hash={item.txHash} />
         </DetailItem>
       ) : null}
-      {!lifecycle && item.boundlessRequestId ? (
-        <DetailItem label="Boundless request"><BoundlessLink requestId={item.boundlessRequestId} /></DetailItem>
+      {!lifecycle && item.proverJobId ? (
+        <DetailItem label="Prover job"><strong>{item.proverJobId}</strong></DetailItem>
       ) : null}
       {item.batchId ? (
         <DetailItem label="Opening batch"><strong>{item.batchId}</strong></DetailItem>
@@ -564,21 +564,6 @@ function TransactionLink({ hash }: { hash: Hex }) {
       title={hash}
     >
       <span>{shortAddress(hash)}</span>
-      <ExternalLink aria-hidden="true" size={13} strokeWidth={2} />
-    </a>
-  );
-}
-
-function BoundlessLink({ requestId }: { requestId: Hex }) {
-  return (
-    <a
-      className="portfolio-record-link"
-      href={`https://explorer.boundless.network/orders/${requestId}`}
-      rel="noreferrer"
-      target="_blank"
-      title={requestId}
-    >
-      <span>{shortAddress(requestId)}</span>
       <ExternalLink aria-hidden="true" size={13} strokeWidth={2} />
     </a>
   );

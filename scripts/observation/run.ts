@@ -15,19 +15,13 @@ export const MISSED_SLOT_MS = 2 * HOUR_MS;
 export const STALL_MS = 30 * MINUTE_MS;
 export const EMAIL_DEDUP_MS = DAY_MS;
 const MAX_WALLETS = 6;
-const CREDIT_RESERVE_WEI = 160_000_000_000_000n;
-const GAS_RESERVE_WEI = 30_000_000_000_000n;
-const REQUESTOR = "0x68f4482Fd6D407Aba396080BC8BCf1D3957d7483";
-const PROOF_MARKET = "0xfd152dadc5183870710fe54f939eae3ab9f0fe82";
 const ROOT = resolve(import.meta.dir, "../..");
 const STATE_DIRECTORY = resolve(ROOT, ".pnlx/observation");
 
 export interface RuntimeConfig { resendKey: string; from: string; to: string | string[]; stateKey: string; }
-export interface ProofBudget { at: number; chainId: number; creditWei: string; gasWei: string; }
 export interface HealthSample {
   at: number; apiOk: boolean; proverOk: boolean;
   markets: Array<{ marketId: string; maxLeverage: number }>;
-  budget?: ProofBudget;
 }
 export interface CampaignCycle {
   plan: ObservationCyclePlan;
@@ -329,12 +323,12 @@ export class ObservationRunner {
         matchedAt: iso(run?.phaseTimestamps?.proving), proofStartedAt: iso(run?.phaseTimestamps?.proving),
         proofCompletedAt: iso(run?.phaseTimestamps?.["batch-settlement"]),
         settledAt: iso(settledAt ?? opening.at),
-        proofJobId: position.snapshot.boundlessRequestId,
+        proofJobId: position.snapshot.proverJobId,
         timings: {
           apiSubmissionMs: value.timings.acceptedAt && value.timings.submissionStartedAt ? value.timings.acceptedAt - value.timings.submissionStartedAt : undefined,
           openingObservedMs: value.timings.openedObservedAt && value.timings.submissionStartedAt ? value.timings.openedObservedAt - value.timings.submissionStartedAt : undefined,
         },
-        balances: balances ? { ...balances, proofCreditETH: units(this.state.health.at(-1)?.budget?.creditWei, 18) } : undefined,
+        balances: balances ?? undefined,
       };
       await this.enqueueEmail(`${cycle.adapterId}/opened/${key}`, {
         ...common, kind: "opened", timestamp: iso(opening.at), holdUntil: iso(observationCloseDueAt(cycle.plan, opening.at)),
@@ -478,11 +472,9 @@ export class ObservationRunner {
     await this.sampleHealth();
     const latest = this.state.health.at(-1);
     const healthy = latest && now - latest.at < 2 * MINUTE_MS && latest.apiOk && latest.proverOk;
-    const enoughBudget = latest?.budget && BigInt(latest.budget.creditWei) >= CREDIT_RESERVE_WEI && BigInt(latest.budget.gasWei) >= GAS_RESERVE_WEI;
     const uncertain = unresolved(this.state);
     await this.updatePause(uncertain ? "An existing execution is stalled or uncertain. Existing positions continue to be observed and closed." :
-      !healthy ? "Readiness checks are unavailable. Existing positions retain priority." :
-      !enoughBudget ? "Proof credit or requestor gas is below the reserved closing budget. New opens are paused." : undefined);
+      !healthy ? "Readiness checks are unavailable. Existing positions retain priority." : undefined);
     for (const cycle of this.state.cycles.filter((entry) => entry.status === "planned")) {
       if (now >= this.state.plan.endsAt || now - cycle.plan.plannedOpenAt > MISSED_SLOT_MS) {
         cycle.status = "missed"; await this.save();
@@ -510,7 +502,7 @@ export class ObservationRunner {
     const preparing = this.state.cycles.find((cycle) => cycle.status === "active" &&
       (!protocolCycle(this.state, cycle) || ["preparing", "ready"].includes(protocolCycle(this.state, cycle)!.phase)));
     const preparingProtocol = preparing && protocolCycle(this.state, preparing);
-    if (preparing && healthy && enoughBudget && now < this.state.plan.endsAt &&
+    if (preparing && healthy && now < this.state.plan.endsAt &&
       (!preparingProtocol?.retryAfterAt || now >= preparingProtocol.retryAfterAt) && !unresolved(this.state, preparing)) {
       await this.advanceOpening(preparing, latest!); return;
     }
@@ -604,33 +596,17 @@ async function json(url: string, init?: RequestInit): Promise<any> {
   if (!response.ok) throw new Error("Read-only observation request failed");
   return response.json();
 }
-export async function readProofBudget(now = Date.now(), rpcUrl = process.env.BOUNDLESS_RPC_URL ?? "https://mainnet.base.org"): Promise<ProofBudget> {
-  async function rpc(method: string, params: unknown[]) {
-    const value = await json(rpcUrl, { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
-    if (value.error || typeof value.result !== "string" || !/^0x[0-9a-f]+$/i.test(value.result)) throw new Error("Proof budget RPC returned no usable result");
-    return value.result as string;
-  }
-  const chainId = Number(BigInt(await rpc("eth_chainId", [])));
-  if (chainId !== 8453) throw new Error("Proof budget RPC must be Base mainnet");
-  const [credit, gas] = await Promise.all([
-    rpc("eth_call", [{ to: PROOF_MARKET, data: `0x70a08231${REQUESTOR.slice(2).toLowerCase().padStart(64, "0")}` }, "latest"]),
-    rpc("eth_getBalance", [REQUESTOR, "latest"]),
-  ]);
-  return { at: now, chainId, creditWei: BigInt(credit).toString(), gasWei: BigInt(gas).toString() };
-}
 export async function readHealth(): Promise<HealthSample> {
   const at = Date.now();
   const results = await Promise.allSettled([
     json(`${OBSERVATION_API_URL}/health/live`), json("http://127.0.0.1:4101/health"),
-    json(`${OBSERVATION_API_URL}/markets`), readProofBudget(at),
+    json(`${OBSERVATION_API_URL}/markets`),
   ]);
-  const [api, prover, markets, budget] = results;
+  const [api, prover, markets] = results;
   return { at, apiOk: api.status === "fulfilled" && api.value.ok === true,
     proverOk: prover.status === "fulfilled" && prover.value.ok === true,
     markets: markets.status === "fulfilled" && Array.isArray(markets.value.markets) ? markets.value.markets.map((entry: any) =>
-      ({ marketId: String(entry.marketId), maxLeverage: Number(entry.maxLeverage) })).filter((entry: any) => Number.isFinite(entry.maxLeverage)) : [],
-    ...(budget.status === "fulfilled" ? { budget: budget.value } : {}) };
+      ({ marketId: String(entry.marketId), maxLeverage: Number(entry.maxLeverage) })).filter((entry: any) => Number.isFinite(entry.maxLeverage)) : [] };
 }
 function readRuntimeConfig(): RuntimeConfig {
   const filename = resolve(STATE_DIRECTORY, "runtime.json");

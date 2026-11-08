@@ -63,7 +63,7 @@ export interface OwnerOrderMatchingSnapshot {
 
 export interface OwnerPositionSnapshot {
   batchId: string;
-  boundlessRequestId?: Hex;
+  proverJobId?: string;
   closeCommitment?: Hex;
   liquidationRewardCommitment?: Hex;
   marginOutputCommitment?: Hex;
@@ -91,7 +91,7 @@ export type OwnerActivityKind = "account-event" | "order" | "position" | "positi
 
 export interface OwnerActivitySnapshot {
   batchId?: string;
-  boundlessRequestId?: Hex;
+  proverJobId?: string;
   dataCommitment?: Hex;
   id: Hex;
   kind: OwnerActivityKind;

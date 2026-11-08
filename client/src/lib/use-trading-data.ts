@@ -458,7 +458,7 @@ async function loadTradingData(session: WalletSession | null): Promise<TradingLi
 
       return {
         batchId: position.batchId,
-        boundlessRequestId: position.boundlessRequestId,
+        proverJobId: position.proverJobId,
         closePrice: null,
         collateral: collateral || undefined,
         entryFee: opening?.entryFee === undefined ? undefined : entryFee,

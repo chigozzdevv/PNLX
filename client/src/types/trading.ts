@@ -10,7 +10,7 @@ export interface ServerProofMeta {
   proofDigest: Hex;
   proofSystem?: "noir-ultrahonk" | "risc0-groth16";
   bytecodeHash?: Hex;
-  boundlessRequestId?: Hex;
+  proverJobId?: string;
   imageId?: Hex;
   journalDigest?: Hex;
   witnessHash?: Hex;
@@ -135,7 +135,7 @@ export interface ServerOwnerOrderSnapshot {
 
 export interface ServerOwnerPositionSnapshot {
   batchId: string;
-  boundlessRequestId?: Hex;
+  proverJobId?: string;
   closeCommitment?: Hex;
   liquidationRewardCommitment?: Hex;
   marginOutputCommitment?: Hex;
@@ -161,7 +161,7 @@ export interface ServerOwnerPositionSnapshot {
 
 export interface ServerOwnerActivitySnapshot {
   batchId?: string;
-  boundlessRequestId?: Hex;
+  proverJobId?: string;
   dataCommitment?: Hex;
   id: Hex;
   kind: "account-event" | "order" | "position" | "position-close" | "liquidation";
@@ -300,7 +300,7 @@ export interface PositionRow {
   closePrice: number | null;
   unrealizedPnl?: number;
   commitment?: Hex;
-  boundlessRequestId?: Hex;
+  proverJobId?: string;
   journalDigest?: Hex;
   proofDigest?: Hex;
   proofVerificationTxHash?: Hex;

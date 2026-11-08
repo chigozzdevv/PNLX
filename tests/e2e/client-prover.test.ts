@@ -13,7 +13,7 @@ function body(data: unknown): BodyInit {
 }
 
 describe("local client prover", () => {
-  test("serves the current RISC0 guest program for Boundless without stale caching", async () => {
+  test("serves the current RISC0 guest program without stale caching", async () => {
     const root = mkdtempSync(join(tmpdir(), "pnlx-risc0-program-"));
     const directory = join(
       root,

@@ -65,7 +65,8 @@ describe("combined position presentation", () => {
       for (const hash of [orders[index].submissionTxHash!, fill.proofVerificationTxHash!, fill.settlementTxHash!]) {
         expect(section).toContain(`href="https://stellar.expert/explorer/testnet/tx/${hash.slice(2)}"`);
       }
-      expect(section).toContain(`href="https://explorer.boundless.network/orders/${fill.boundlessRequestId}"`);
+      expect(section).toContain(`Prover job`);
+      expect(section).toContain(fill.proverJobId!);
       expect(section).toContain(fill.batchId);
       expect(section).not.toContain(positions[1 - index].settlementTxHash!);
       expect(section).not.toContain(fill.privateState!.positionNullifier);
@@ -107,7 +108,7 @@ function fill(index: number, sourceIntentCommitment: Hex, size: number, collater
     openedAt: 1_730_000_000_000 + index * 1_000, side: "long", size, sourceIntentCommitment,
     status: "open", time: "", unrealizedPnl: index === 1 ? 0.5 : 1.5,
     proofVerificationTxHash: hex(40 + index), settlementTxHash: hex(50 + index),
-    boundlessRequestId: hex(60 + index), proofSystem: index === 1 ? "risc0-groth16" : "noir-ultrahonk",
+    proverJobId: `job-${60 + index}`, proofSystem: index === 1 ? "risc0-groth16" : "noir-ultrahonk",
     privateState: {
       entryPrice: `${entryPrice * 100_000_000}`, fundingIndex: "0", margin: `${collateral * 10_000_000}`,
       positionNullifier: hex(70 + index), side: "long", size: `${size * 100_000_000}`, sourceIntentCommitment,

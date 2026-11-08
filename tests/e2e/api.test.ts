@@ -715,14 +715,14 @@ describe("server api", () => {
   test("reports RISC0 matcher readiness for private matcher service", async () => {
     const previousRequired = process.env.PRIVATE_MATCHING_REQUIRED;
     const previousMatcherUrl = process.env.MATCHER_SERVICE_URL;
-    const previousBoundlessRpc = process.env.BOUNDLESS_RPC_URL;
-    const previousBoundlessKey = process.env.BOUNDLESS_PRIVATE_KEY;
-    const previousPinataJwt = process.env.PINATA_JWT;
+    const previousBackend = process.env.PNLX_PROVER_BACKEND;
+    const previousRunpodKey = process.env.RUNPOD_API_KEY;
+    const previousRunpodEndpoint = process.env.RUNPOD_ENDPOINT_ID;
     process.env.PRIVATE_MATCHING_REQUIRED = "true";
     process.env.MATCHER_SERVICE_URL = "https://matcher.pnlx.local";
-    process.env.BOUNDLESS_RPC_URL = "https://boundless-rpc.pnlx.local";
-    process.env.BOUNDLESS_PRIVATE_KEY = "test-boundless-key";
-    process.env.PINATA_JWT = "test-pinata-jwt";
+    process.env.PNLX_PROVER_BACKEND = "runpod";
+    process.env.RUNPOD_API_KEY = "test-runpod-key";
+    process.env.RUNPOD_ENDPOINT_ID = "test-endpoint";
     try {
       const app = createApp();
       const healthResponse = await app.handle(new Request("http://pnlx.local/health"));
@@ -731,10 +731,10 @@ describe("server api", () => {
       const matching = health.matching as Record<string, unknown>;
       expect(matching.readyForPrivateMatching).toBe(true);
       expect(matching.proofEngine).toEqual({
-        boundless: {
-          ipfsStorageConfigured: true,
-          privateKeyConfigured: true,
-          rpcConfigured: true,
+        prover: {
+          backend: "runpod",
+          runpodApiKeyConfigured: true,
+          runpodEndpointConfigured: true,
         },
         devMode: false,
         provider: "risc0",
@@ -744,9 +744,9 @@ describe("server api", () => {
     } finally {
       restoreEnv("PRIVATE_MATCHING_REQUIRED", previousRequired);
       restoreEnv("MATCHER_SERVICE_URL", previousMatcherUrl);
-      restoreEnv("BOUNDLESS_RPC_URL", previousBoundlessRpc);
-      restoreEnv("BOUNDLESS_PRIVATE_KEY", previousBoundlessKey);
-      restoreEnv("PINATA_JWT", previousPinataJwt);
+      restoreEnv("PNLX_PROVER_BACKEND", previousBackend);
+      restoreEnv("RUNPOD_API_KEY", previousRunpodKey);
+      restoreEnv("RUNPOD_ENDPOINT_ID", previousRunpodEndpoint);
     }
   });
 

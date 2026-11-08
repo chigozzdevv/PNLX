@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -9,7 +9,9 @@ import {
   RISC0_GROTH16_SEAL_BYTES,
   RISC0_BATCH_MATCH_IMAGE_ID,
   assertRisc0DeploymentImageId,
-  resumableBoundlessRequest,
+  defaultProverRunner,
+  runLocalProver,
+  runRunpodProver,
   risc0ProofMetadataReady,
   validateRisc0Seal,
   createRisc0BatchSettlement,
@@ -116,34 +118,149 @@ describe("RISC0 Groth16 proof artifacts", () => {
     expect(risc0ProofMetadataReady(metadataPath)).toBe(true);
   });
 
-  test("retains expired Boundless requests for fulfillment recovery without a new payment", () => {
-    const proofDir = mkdtempSync(join(tmpdir(), "pnlx-risc0-request-"));
-    const requestPath = join(proofDir, "request.json");
-    const requestId = `0x${"12".repeat(32)}`;
-    const now = Math.floor(Date.now() / 1_000);
+  test("selects the prover backend from configuration", () => {
+    const saved = {
+      backend: process.env.PNLX_PROVER_BACKEND,
+      apiKey: process.env.RUNPOD_API_KEY,
+      endpoint: process.env.RUNPOD_ENDPOINT_ID,
+    };
+    try {
+      delete process.env.PNLX_PROVER_BACKEND;
+      delete process.env.RUNPOD_API_KEY;
+      delete process.env.RUNPOD_ENDPOINT_ID;
+      expect(defaultProverRunner()).toBe(runLocalProver);
 
-    writeFileSync(requestPath, JSON.stringify({ expires_at: now + 60, request_id: requestId }));
-    expect(resumableBoundlessRequest(requestPath)).toEqual({
-      expiresAt: now + 60,
-      requestId,
-    });
+      process.env.RUNPOD_API_KEY = "test-key";
+      process.env.RUNPOD_ENDPOINT_ID = "test-endpoint";
+      expect(defaultProverRunner().name).toContain("runRunpodProver");
 
-    writeFileSync(requestPath, JSON.stringify({ expires_at: now - 1, request_id: requestId }));
-    expect(resumableBoundlessRequest(requestPath)).toEqual({ expiresAt: now - 1, requestId });
-    rmSync(proofDir, { recursive: true, force: true });
+      process.env.PNLX_PROVER_BACKEND = "local";
+      expect(defaultProverRunner()).toBe(runLocalProver);
+
+      process.env.PNLX_PROVER_BACKEND = "unexpected";
+      expect(() => defaultProverRunner()).toThrow("PNLX_PROVER_BACKEND=unexpected is not supported");
+
+      delete process.env.RUNPOD_API_KEY;
+      process.env.PNLX_PROVER_BACKEND = "runpod";
+      expect(() => defaultProverRunner()).toThrow("RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID are required");
+    } finally {
+      for (const [key, value] of Object.entries({
+        PNLX_PROVER_BACKEND: saved.backend,
+        RUNPOD_API_KEY: saved.apiKey,
+        RUNPOD_ENDPOINT_ID: saved.endpoint,
+      })) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
-  test("a damaged or incomplete request journal cannot authorize another paid submission", () => {
-    const proofDir = mkdtempSync(join(tmpdir(), "pnlx-risc0-request-invalid-"));
-    const path = join(proofDir, "request.json");
-    try {
-      expect(resumableBoundlessRequest(path)).toBeUndefined();
-      for (const value of ["{", "null", "{}", JSON.stringify({ request_id: "0x0", expires_at: 10 }),
-        JSON.stringify({ request_id: "0x1234", expires_at: 10, submitted: false })]) {
-        writeFileSync(path, value);
-        expect(() => resumableBoundlessRequest(path)).toThrow("reconciliation required");
+  async function withRunpodEnv(work: () => Promise<void> | void): Promise<void> {
+    const saved = { apiKey: process.env.RUNPOD_API_KEY, endpoint: process.env.RUNPOD_ENDPOINT_ID };
+    process.env.RUNPOD_API_KEY = "test-key";
+    process.env.RUNPOD_ENDPOINT_ID = "test-endpoint";
+    try { await work(); }
+    finally {
+      if (saved.apiKey === undefined) delete process.env.RUNPOD_API_KEY;
+      else process.env.RUNPOD_API_KEY = saved.apiKey;
+      if (saved.endpoint === undefined) delete process.env.RUNPOD_ENDPOINT_ID;
+      else process.env.RUNPOD_ENDPOINT_ID = saved.endpoint;
+    }
+  }
+
+  test("the runpod prover writes the artifact contract from a completed job", async () => {
+    await withRunpodEnv(async () => {
+      const proofDir = mkdtempSync(join(tmpdir(), "pnlx-risc0-runpod-"));
+      writeFileSync(join(proofDir, "input.json"), "{}");
+      const journal = Buffer.from("batch journal bytes");
+      const seal = Buffer.alloc(RISC0_GROTH16_SEAL_BYTES);
+      seal.set(Buffer.from(SELECTOR, "hex"), 0);
+      seal[seal.length - 1] = 1;
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.endsWith("/runsync")) {
+          return new Response(JSON.stringify({ id: "job-1", status: "IN_PROGRESS" }), { status: 200 });
+        }
+        return new Response(JSON.stringify({
+          id: "job-1",
+          status: "COMPLETED",
+          output: {
+            journal_b64: journal.toString("base64"),
+            seal_b64: seal.toString("base64"),
+            image_id: RISC0_BATCH_MATCH_IMAGE_ID,
+          },
+        }), { status: 200 });
+      }) as typeof fetch;
+      try {
+        const result = await runRunpodProver(".", join(proofDir, "input.json"), proofDir);
+        expect(result.status).toBe(0);
+        const metadata = JSON.parse(readFileSync(join(proofDir, "proof.json"), "utf8"));
+        expect(metadata.image_id).toBe(RISC0_BATCH_MATCH_IMAGE_ID);
+        expect(metadata.seal_path).toBe(join(proofDir, "seal.bin"));
+        expect(metadata.journal_path).toBe(join(proofDir, "journal.bin"));
+        expect(metadata.prover_job_id).toBe("job-1");
+        expect(new Uint8Array(readFileSync(join(proofDir, "seal.bin")))).toEqual(new Uint8Array(seal));
+        expect(() => validateRisc0Seal(readFileSync(join(proofDir, "seal.bin")), SELECTOR)).not.toThrow();
+      } finally {
+        globalThis.fetch = originalFetch;
+        rmSync(proofDir, { recursive: true, force: true });
       }
-    } finally { rmSync(proofDir, { recursive: true, force: true }); }
+    });
+  });
+
+  test("a failed runpod job surfaces as a failed prover run", async () => {
+    await withRunpodEnv(async () => {
+      const proofDir = mkdtempSync(join(tmpdir(), "pnlx-risc0-runpod-failed-"));
+      writeFileSync(join(proofDir, "input.json"), "{}");
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async () => new Response(JSON.stringify({
+        id: "job-2", status: "FAILED",
+      }), { status: 200 })) as typeof fetch;
+      try {
+        const result = await runRunpodProver(".", join(proofDir, "input.json"), proofDir);
+        expect(result.status).toBe(1);
+        expect(result.error).toBe("runpod prover job failed");
+      } finally {
+        globalThis.fetch = originalFetch;
+        rmSync(proofDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("a runpod job that never completes honors the prover deadline", async () => {
+    await withRunpodEnv(async () => {
+      const proofDir = mkdtempSync(join(tmpdir(), "pnlx-risc0-runpod-deadline-"));
+      writeFileSync(join(proofDir, "input.json"), "{}");
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async () => new Response(JSON.stringify({
+        id: "job-3", status: "IN_QUEUE",
+      }), { status: 200 })) as typeof fetch;
+      try {
+        const result = await runRunpodProver(".", join(proofDir, "input.json"), proofDir, { timeoutMs: 1 });
+        expect(result.status).toBe(1);
+        expect(result.error).toBe("prover deadline exceeded");
+      } finally {
+        globalThis.fetch = originalFetch;
+        rmSync(proofDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("the runpod prover requires endpoint configuration", async () => {
+    const saved = { apiKey: process.env.RUNPOD_API_KEY, endpoint: process.env.RUNPOD_ENDPOINT_ID };
+    try {
+      delete process.env.RUNPOD_API_KEY;
+      delete process.env.RUNPOD_ENDPOINT_ID;
+      expect(() => runRunpodProver(".", "unused", "unused")).toThrow(
+        "RUNPOD_ENDPOINT_ID and RUNPOD_API_KEY are required",
+      );
+    } finally {
+      if (saved.apiKey === undefined) delete process.env.RUNPOD_API_KEY;
+      else process.env.RUNPOD_API_KEY = saved.apiKey;
+      if (saved.endpoint === undefined) delete process.env.RUNPOD_ENDPOINT_ID;
+      else process.env.RUNPOD_ENDPOINT_ID = saved.endpoint;
+    }
   });
 });
 
