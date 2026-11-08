@@ -1,7 +1,7 @@
 import base64
 import io
-import sys
-import unittest
+import json
+import sysimport unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -48,6 +48,37 @@ class HandlerDiagnosticsTest(unittest.TestCase):
         self.assertNotIn("error_trace", result)
         self.assertNotIn("synthetic fixture trace", log)
         self.assertNotIn("RUST_BACKTRACE", environment)
+
+    def test_successful_prover_returns_a_succinct_receipt_not_a_seal(self):
+        journal = b"batch journal bytes"
+        receipt = b'{"succinct":true}'
+        job_input = {
+            "input_json_b64": base64.b64encode(b"synthetic fixture").decode("ascii"),
+            "auth": "test-token",
+        }
+
+        def fake_prover(args, **kwargs):
+            out = Path(args[3])
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "journal.bin").write_bytes(journal)
+            (out / "receipt.json").write_bytes(receipt)
+            (out / "succinct.json").write_text(json.dumps({
+                "image_id": "0x" + "ab" * 32,
+                "journal_digest": "0x" + "bb" * 32,
+                "receipt_digest": "0x" + "cc" * 32,
+            }))
+            return CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+        with patch.object(handler, "AUTH_TOKEN", "test-token"):
+            with patch.object(handler.subprocess, "run", side_effect=fake_prover) as run:
+                result = handler.handler({"input": job_input})
+        self.assertEqual(run.call_args.args[0][1], "--prove-succinct")
+        self.assertEqual(result["image_id"], "0x" + "ab" * 32)
+        self.assertEqual(base64.b64decode(result["journal_b64"]), journal)
+        self.assertEqual(base64.b64decode(result["receipt_b64"]), receipt)
+        self.assertEqual(result["journal_digest"], "0x" + "bb" * 32)
+        self.assertEqual(result["receipt_digest"], "0x" + "cc" * 32)
+        self.assertNotIn("seal_b64", result)
 
 
 if __name__ == "__main__":

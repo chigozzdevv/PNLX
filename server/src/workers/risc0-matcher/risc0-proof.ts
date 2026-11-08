@@ -391,7 +391,7 @@ export function defaultProverRunner(): Risc0ProverRunner {
 
 export async function runRunpodProver(
   _root: string, inputPath: string, proofDir: string,
-  runtime: { timeoutMs?: number } = {},
+  runtime: { timeoutMs?: number; wrapTimeoutMs?: number; wrapCommand?: { command: string; args: string[] } } = {},
 ): Promise<ProverRun> {
   const timeoutMs = runtime.timeoutMs ?? Number(process.env.PNLX_RISC0_PROVER_TIMEOUT_MS ?? 65 * 60_000);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error("invalid RISC0 prover deadline");
@@ -433,16 +433,33 @@ export async function runRunpodProver(
         status: typeof output.exit_code === "number" && output.exit_code !== 0 ? output.exit_code : 1,
       };
     }
-    const journal = decodeRunpodBytes(output.journal_b64, "journal");
-    const seal = decodeRunpodBytes(output.seal_b64, "seal");
+    const receiptBytes = decodeRunpodBytes(output.receipt_b64, "receipt");
     const imageId = typeof output.image_id === "string" ? output.image_id : "";
     if (!imageId) throw new Error("runpod prover response is missing the guest image id");
-    writeRunpodProverArtifact(proofDir, {
-      journal,
-      seal,
-      imageId,
-      proverJobId: settled.jobId,
-    });
+    // The CUDA Groth16 wrap is broken upstream (risc0#3785); the worker returns
+    // the succinct receipt and this machine wraps it on CPU via the docker prover.
+    const receiptPath = join(proofDir, "receipt.json");
+    writeFileSync(receiptPath, receiptBytes, { mode: 0o600 });
+    const wrapTimeoutMs = runtime.wrapTimeoutMs ?? Number(process.env.PNLX_RISC0_WRAP_TIMEOUT_MS ?? 30 * 60_000);
+    if (!Number.isSafeInteger(wrapTimeoutMs) || wrapTimeoutMs <= 0) throw new Error("invalid RISC0 wrap deadline");
+    const wrapTarget = runtime.wrapCommand ?? localWrapCommand(_root, receiptPath, proofDir);
+    const wrap = await runProverProcess(_root, wrapTarget, proofDir, wrapTimeoutMs);
+    if (wrap.status !== 0) {
+      return {
+        error: wrap.error === "prover deadline exceeded" ? wrap.error : "groth16 wrap failed on the local CPU prover",
+        metadataPath: join(proofDir, "proof.json"),
+        stderr: "",
+        stdout: "",
+        status: 1,
+      };
+    }
+    // Keep the RunPod job id traceable on the final artifact contract.
+    if (settled.jobId) {
+      const metadataPath = join(proofDir, "proof.json");
+      const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as Record<string, unknown>;
+      metadata.prover_job_id = settled.jobId;
+      writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, { mode: 0o600 });
+    }
     return { metadataPath: join(proofDir, "proof.json"), stderr: "", stdout: "", status: 0 };
   } finally {
     releaseSlot();
@@ -511,24 +528,61 @@ async function settleRunpodJob(
   }
 }
 
-// Writes the same artifact contract the local prover emits: journal.bin, seal.bin, proof.json.
-function writeRunpodProverArtifact(
+// Spawns a local prover process (full prove, or --wrap of a succinct receipt)
+// with the shared deadline, artifact polling and process-group teardown.
+async function runProverProcess(
+  root: string,
+  target: { command: string; args: string[] },
   proofDir: string,
-  artifact: { journal: Buffer; seal: Buffer; imageId: string; proverJobId?: string },
-): void {
-  const journalPath = join(proofDir, "journal.bin");
-  const sealPath = join(proofDir, "seal.bin");
-  writeFileSync(journalPath, artifact.journal, { mode: 0o600 });
-  writeFileSync(sealPath, artifact.seal, { mode: 0o600 });
-  const metadata = {
-    image_id: artifact.imageId,
-    journal_digest: `0x${createHash("sha256").update(artifact.journal).digest("hex")}`,
-    journal_path: journalPath,
-    seal_digest: `0x${createHash("sha256").update(artifact.seal).digest("hex")}`,
-    seal_path: sealPath,
-    ...(artifact.proverJobId ? { prover_job_id: artifact.proverJobId } : {}),
-  };
-  writeFileSync(join(proofDir, "proof.json"), `${JSON.stringify(metadata, null, 2)}\n`, { mode: 0o600 });
+  timeoutMs: number,
+): Promise<ProverRun> {
+  return await new Promise((resolve) => {
+    const metadataPath = join(proofDir, "proof.json");
+    const child = spawn(target.command, target.args, {
+      cwd: root,
+      detached: process.platform !== "win32",
+      env: {
+        ...process.env,
+        PATH: risc0ToolPath(process.env.HOME || "", process.env.PATH),
+        PNLX_EXPECTED_BATCH_MATCH_IMAGE_ID: RISC0_BATCH_MATCH_IMAGE_ID,
+        RISC0_DEV_MODE: "0",
+      },
+    });
+    let stdout = "";
+    let stderr = "";
+    let resolved = false;
+    const deadline = setTimeout(() => finish({
+      error: "prover deadline exceeded", metadataPath, stderr, stdout, status: null,
+    }), timeoutMs);
+    const completionTimer = setInterval(() => {
+      if (risc0ProofMetadataReady(metadataPath)) finish({ metadataPath, stderr, stdout, status: 0 });
+    }, 250);
+    completionTimer.unref?.();
+
+    function finish(result: ProverRun): void {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(deadline);
+      clearInterval(completionTimer);
+      // Cargo can spawn the host binary; terminate the whole local process group.
+      if (child.exitCode === null && child.signalCode === null) {
+        try {
+          if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
+          else child.kill("SIGKILL");
+        } catch { child.kill("SIGKILL"); }
+      }
+      resolve(result);
+    }
+
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => { stdout = (stdout + chunk).slice(-16_384); });
+    child.stderr?.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-16_384); });
+    child.on("error", () => finish({
+      error: "prover process failed to start", metadataPath, stderr, stdout, status: null,
+    }));
+    child.on("close", (status) => finish({ metadataPath, stderr, stdout, status }));
+  });
 }
 
 export async function runLocalProver(
@@ -539,67 +593,20 @@ export async function runLocalProver(
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error("invalid RISC0 prover deadline");
   const releaseSlot = await acquireProverSlot();
   try {
-    return await new Promise((resolve) => {
-      const metadataPath = join(proofDir, "proof.json");
-      const target = runtime.command ?? localProverCommand(root, inputPath, proofDir);
-      const child = spawn(target.command, target.args, {
-        cwd: root,
-        detached: process.platform !== "win32",
-        env: {
-          ...process.env,
-          PATH: risc0ToolPath(process.env.HOME || "", process.env.PATH),
-          PNLX_EXPECTED_BATCH_MATCH_IMAGE_ID: RISC0_BATCH_MATCH_IMAGE_ID,
-          RISC0_DEV_MODE: "0",
-        },
-      });
-      let stdout = "";
-      let stderr = "";
-      let resolved = false;
-      const deadline = setTimeout(() => finish({
-        error: "prover deadline exceeded", metadataPath, stderr, stdout, status: null,
-      }), timeoutMs);
-      const completionTimer = setInterval(() => {
-        if (risc0ProofMetadataReady(metadataPath)) finish({ metadataPath, stderr, stdout, status: 0 });
-      }, 250);
-      completionTimer.unref?.();
-
-      function finish(result: ProverRun): void {
-        if (resolved) return;
-        resolved = true;
-        clearTimeout(deadline);
-        clearInterval(completionTimer);
-        // Cargo can spawn the host binary; terminate the whole local process group.
-        if (child.exitCode === null && child.signalCode === null) {
-          try {
-            if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
-            else child.kill("SIGKILL");
-          } catch { child.kill("SIGKILL"); }
-        }
-        resolve(result);
-      }
-
-      child.stdout?.setEncoding("utf8");
-      child.stderr?.setEncoding("utf8");
-      child.stdout?.on("data", (chunk: string) => { stdout = (stdout + chunk).slice(-16_384); });
-      child.stderr?.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-16_384); });
-      child.on("error", () => finish({
-        error: "prover process failed to start", metadataPath, stderr, stdout, status: null,
-      }));
-      child.on("close", (status) => finish({ metadataPath, stderr, stdout, status }));
-    });
+    const target = runtime.command ?? localProverCommand(root, inputPath, proofDir);
+    return await runProverProcess(root, target, proofDir, timeoutMs);
   } finally {
     releaseSlot();
   }
 }
 
-function localProverCommand(
+function localProverInvocation(
   root: string,
-  inputPath: string,
-  proofDir: string,
+  proverArgs: string[],
 ): { command: string; args: string[] } {
   const binary = join(root, "risc0/batch-match/target/release/pnlx-risc0-batch-match-prover");
   if (process.env.PNLX_RISC0_FORCE_CARGO_RUN !== "1" && prebuiltProverIsFresh(root, binary)) {
-    return { args: [inputPath, proofDir], command: binary };
+    return { args: proverArgs, command: binary };
   }
   return {
     args: [
@@ -608,11 +615,26 @@ function localProverCommand(
       "--manifest-path",
       join(root, "risc0/batch-match/host/Cargo.toml"),
       "--",
-      inputPath,
-      proofDir,
+      ...proverArgs,
     ],
     command: "cargo",
   };
+}
+
+function localProverCommand(
+  root: string,
+  inputPath: string,
+  proofDir: string,
+): { command: string; args: string[] } {
+  return localProverInvocation(root, [inputPath, proofDir]);
+}
+
+function localWrapCommand(
+  root: string,
+  receiptPath: string,
+  proofDir: string,
+): { command: string; args: string[] } {
+  return localProverInvocation(root, ["--wrap", receiptPath, proofDir]);
 }
 
 function prebuiltProverIsFresh(root: string, binary: string): boolean {

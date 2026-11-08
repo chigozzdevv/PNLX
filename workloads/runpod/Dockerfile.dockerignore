@@ -1,8 +1,8 @@
 # Build context whitelist for the RunPod worker image (only applies when
-# building with -f deploy/runpod/Dockerfile). Keeps the context tiny.
+# building with -f workloads/runpod/Dockerfile). Keeps the context tiny.
 *
 !risc0
-!deploy
+!workloads
 risc0/batch-match/target/debug
 risc0/batch-match/target/release
 risc0/batch-match/methods/guest/target

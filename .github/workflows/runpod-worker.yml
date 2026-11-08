@@ -5,10 +5,10 @@ on:
     branches:
       - main
     paths:
-      - deploy/runpod/**
+      - workloads/runpod/**
       - risc0/batch-match/**
-      - '!deploy/runpod/handler.py'
-      - '!deploy/runpod/tests/**'
+      - '!workloads/runpod/handler.py'
+      - '!workloads/runpod/tests/**'
   workflow_dispatch:
 
 permissions:
@@ -80,7 +80,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: deploy/runpod/Dockerfile
+          file: workloads/runpod/Dockerfile
           platforms: linux/amd64
           push: true
           tags: |

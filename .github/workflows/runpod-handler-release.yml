@@ -32,7 +32,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: deploy/runpod-handler/Dockerfile
+          file: workloads/runpod-handler/Dockerfile
           platforms: linux/amd64
           push: true
           build-args: BASE_IMAGE=${{ env.BASE_IMAGE }}

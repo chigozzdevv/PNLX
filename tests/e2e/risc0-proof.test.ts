@@ -168,11 +168,12 @@ describe("RISC0 Groth16 proof artifacts", () => {
     }
   }
 
-  test("the runpod prover writes the artifact contract from a completed job", async () => {
+  test("the runpod prover wraps the returned receipt into the artifact contract", async () => {
     await withRunpodEnv(async () => {
       const proofDir = mkdtempSync(join(tmpdir(), "pnlx-risc0-runpod-"));
       writeFileSync(join(proofDir, "input.json"), "{}");
       const journal = Buffer.from("batch journal bytes");
+      const receipt = Buffer.from(JSON.stringify({ succinct: true }));
       const seal = Buffer.alloc(RISC0_GROTH16_SEAL_BYTES);
       seal.set(Buffer.from(SELECTOR, "hex"), 0);
       seal[seal.length - 1] = 1;
@@ -187,20 +188,42 @@ describe("RISC0 Groth16 proof artifacts", () => {
           status: "COMPLETED",
           output: {
             journal_b64: journal.toString("base64"),
-            seal_b64: seal.toString("base64"),
+            receipt_b64: receipt.toString("base64"),
             image_id: RISC0_BATCH_MATCH_IMAGE_ID,
           },
         }), { status: 200 });
       }) as typeof fetch;
+      // The local CPU wrap is faked with a script that writes the same
+      // artifact contract the real --wrap mode emits.
+      const wrapScript = `
+        const fs = require("node:fs");
+        const dir = ${JSON.stringify(proofDir)};
+        const imageId = ${JSON.stringify(RISC0_BATCH_MATCH_IMAGE_ID)};
+        const journal = Buffer.from("wrapped journal bytes");
+        const seal = Buffer.alloc(260, 1);
+        Buffer.from("73c457ba", "hex").copy(seal);
+        fs.writeFileSync(dir + "/journal.bin", journal);
+        fs.writeFileSync(dir + "/seal.bin", seal);
+        const metadata = {
+          image_id: imageId,
+          journal_digest: "0x" + require("node:crypto").createHash("sha256").update(journal).digest("hex"),
+          journal_path: dir + "/journal.bin",
+          seal_digest: "0x" + require("node:crypto").createHash("sha256").update(seal).digest("hex"),
+          seal_path: dir + "/seal.bin",
+        };
+        fs.writeFileSync(dir + "/proof.json", JSON.stringify(metadata, null, 2) + "\\n");
+      `;
       try {
-        const result = await runRunpodProver(".", join(proofDir, "input.json"), proofDir);
+        const result = await runRunpodProver(".", join(proofDir, "input.json"), proofDir, {
+          wrapCommand: { command: process.execPath, args: ["-e", wrapScript] },
+        });
         expect(result.status).toBe(0);
         const metadata = JSON.parse(readFileSync(join(proofDir, "proof.json"), "utf8"));
         expect(metadata.image_id).toBe(RISC0_BATCH_MATCH_IMAGE_ID);
         expect(metadata.seal_path).toBe(join(proofDir, "seal.bin"));
         expect(metadata.journal_path).toBe(join(proofDir, "journal.bin"));
         expect(metadata.prover_job_id).toBe("job-1");
-        expect(new Uint8Array(readFileSync(join(proofDir, "seal.bin")))).toEqual(new Uint8Array(seal));
+        expect(new Uint8Array(readFileSync(join(proofDir, "receipt.json")))).toEqual(new Uint8Array(receipt));
         expect(() => validateRisc0Seal(readFileSync(join(proofDir, "seal.bin")), SELECTOR)).not.toThrow();
       } finally {
         globalThis.fetch = originalFetch;

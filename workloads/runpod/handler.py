@@ -1,7 +1,10 @@
-"""RunPod handler: proves one batch, returns the seal.
+"""RunPod handler: proves one batch to a succinct receipt on the GPU.
 
-Input: {"input_json_b64": ..., "auth": <PNLX_WORKER_AUTH_TOKEN when configured>, "include_error_trace": true for diagnostic requests}
-Output: {"image_id", "journal_b64", "seal_b64", "journal_digest", "seal_digest", "duration_ms"}
+The Groth16 wrap never runs here (CUDA wrap is broken upstream, risc0#3785);
+the caller wraps the returned receipt on x86 CPU.
+
+Input: {"input_json_b64": ..., "auth": <PNLX_WORKER_AUTH_TOKEN when configured>}
+Output: {"image_id", "journal_b64", "receipt_b64", "journal_digest", "receipt_digest", "duration_ms"}
 Full process output is returned only when include_error_trace is explicitly enabled; it can contain witness material.
 """
 
@@ -29,7 +32,7 @@ def safe_failure_code(stderr: str) -> str:
         return "IMAGE_ID_MISMATCH"
     if "execute batch-match guest preflight" in value or "guest preflight" in value:
         return "GUEST_PREFLIGHT_FAILED"
-    if "prove batch-match guest locally" in value or "groth16" in value:
+    if "prove batch-match guest" in value or "groth16" in value:
         return "GROTH16_PROVING_FAILED"
     if "parse prover input" in value or "invalid type" in value:
         return "INVALID_PROOF_INPUT"
@@ -105,7 +108,7 @@ def handler(job: dict) -> dict:
             stage = "prover"
             started = time.monotonic()
             completed = subprocess.run(
-                [PROVER, input_path, output_dir],
+                [PROVER, "--prove-succinct", input_path, output_dir],
                 capture_output=True,
                 text=True,
                 timeout=PROVER_TIMEOUT_SECONDS,
@@ -130,17 +133,17 @@ def handler(job: dict) -> dict:
             stage = "read_proof_output"
             with open(os.path.join(output_dir, "journal.bin"), "rb") as handle:
                 journal = handle.read()
-            with open(os.path.join(output_dir, "seal.bin"), "rb") as handle:
-                seal = handle.read()
-            with open(os.path.join(output_dir, "proof.json"), encoding="utf-8") as handle:
+            with open(os.path.join(output_dir, "receipt.json"), "rb") as handle:
+                receipt = handle.read()
+            with open(os.path.join(output_dir, "succinct.json"), encoding="utf-8") as handle:
                 metadata = json.load(handle)
 
             return {
                 "image_id": metadata["image_id"],
                 "journal_b64": base64.b64encode(journal).decode("ascii"),
-                "seal_b64": base64.b64encode(seal).decode("ascii"),
+                "receipt_b64": base64.b64encode(receipt).decode("ascii"),
                 "journal_digest": metadata["journal_digest"],
-                "seal_digest": metadata["seal_digest"],
+                "receipt_digest": metadata["receipt_digest"],
                 "duration_ms": duration_ms,
             }
     except subprocess.TimeoutExpired as error:

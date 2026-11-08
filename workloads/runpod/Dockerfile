@@ -50,7 +50,7 @@ COPY --from=builder /workspace/risc0/batch-match/target/release/pnlx-risc0-batch
      /usr/local/bin/pnlx-risc0-batch-match-prover
 COPY --from=builder /workspace/risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/riscv32im-risc0-zkvm-elf/docker/batch_match.bin \
      /risc0/batch-match.bin
-COPY deploy/runpod/handler.py /app/handler.py
+COPY workloads/runpod/handler.py /app/handler.py
 
 ENV PATH=/root/.risc0/bin:$PATH \
     RISC0_PROVER=local \

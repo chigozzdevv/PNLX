@@ -23,11 +23,23 @@ const MAX_SEGMENT_PO2: u32 = 24;
 #[clap(
     author,
     version,
-    about = "Prove a PNLX batch-match settlement locally with a RISC Zero Groth16 seal"
+    about = "Prove a PNLX batch-match settlement with a RISC Zero Groth16 seal"
 )]
 struct Args {
+    /// Full mode: ProofRequest JSON in; succinct mode: ProofRequest JSON in;
+    /// wrap mode: serialized succinct receipt JSON in.
     input_path: Option<PathBuf>,
     output_dir: Option<PathBuf>,
+
+    /// GPU-friendly mode: prove the succinct receipt only, skipping the
+    /// Groth16 wrap (the wrap runs separately on CPU; risc0#3785).
+    #[clap(long, conflicts_with = "wrap")]
+    prove_succinct: bool,
+
+    /// CPU mode: wrap an already-proven succinct receipt into the Groth16
+    /// seal via the docker prover.
+    #[clap(long)]
+    wrap: bool,
 
     #[clap(long)]
     print_image_id: bool,
@@ -46,6 +58,16 @@ struct ProofOutput {
     journal_path: String,
     seal_digest: String,
     seal_path: String,
+}
+
+#[derive(Serialize)]
+struct SuccinctOutput {
+    image_id: String,
+    journal_digest: String,
+    journal_path: String,
+    receipt_digest: String,
+    receipt_path: String,
+    cycles: u64,
 }
 
 struct GuestProgram {
@@ -128,6 +150,10 @@ fn run(args: Args, program: GuestProgram, input_path: PathBuf, output_dir: PathB
     fs::create_dir_all(&output_dir).context("create output directory")?;
     let _job_lock = lock_job(&output_dir)?;
 
+    if args.wrap {
+        return wrap_groth16(&program, &input_path, &output_dir);
+    }
+
     let input_bytes = fs::read(&input_path).context("read prover input")?;
     let request: ProofRequest =
         serde_json::from_slice(&input_bytes).context("parse prover input")?;
@@ -140,33 +166,87 @@ fn run(args: Args, program: GuestProgram, input_path: PathBuf, output_dir: PathB
     }
     tracing::info!("batch-match preflight completed in {cycles} cycles");
 
+    if args.prove_succinct {
+        return prove_succinct(&program, &request, &proved.journal, cycles, &output_dir);
+    }
+
     let receipt = prove_groth16(&program, &request)?;
     if receipt.journal.bytes != proved.journal {
         anyhow::bail!("prover journal does not match expected batch public input bytes");
     }
+    write_seal_output(&program, &receipt, &output_dir)
+}
 
-    let seal = encode_seal(&receipt).context("encode Groth16 on-chain seal")?;
-    validate_groth16_seal(&seal)?;
+// GPU-friendly mode: the succinct receipt is proven here (CUDA STARK) and the
+// Groth16 wrap runs separately on x86 CPU; the CUDA wrap is risc0#3785.
+fn prove_succinct(
+    program: &GuestProgram,
+    request: &ProofRequest,
+    expected_journal: &[u8],
+    cycles: u64,
+    output_dir: &PathBuf,
+) -> Result<()> {
+    let mut builder = ExecutorEnv::builder();
+    builder.write(request).context("encode zkVM proving input")?;
+    if let Some(po2) = configured_segment_po2()? {
+        builder.segment_limit_po2(po2);
+    }
+    let env = builder.build().context("build zkVM proving environment")?;
+    let started = Instant::now();
+    let info = default_prover()
+        .prove_with_opts(env, &program.bytes, &ProverOpts::succinct())
+        .context("prove batch-match guest succinctly")?;
+    let proving_elapsed = started.elapsed();
+    let receipt = info.receipt;
+    receipt
+        .verify(program.image_id)
+        .context("verify locally produced succinct receipt")?;
+    if receipt.journal.bytes != expected_journal {
+        anyhow::bail!("prover journal does not match expected batch public input bytes");
+    }
+
     let journal_path = output_dir.join("journal.bin");
-    let seal_path = output_dir.join("seal.bin");
-    let metadata_path = output_dir.join("proof.json");
-    write_atomic(&output_dir, "journal.bin", &proved.journal)?;
-    write_atomic(&output_dir, "seal.bin", &seal)?;
-
-    let output = ProofOutput {
+    let receipt_path = output_dir.join("receipt.json");
+    let receipt_bytes = serde_json::to_vec_pretty(&receipt)
+        .context("serialize succinct receipt")?;
+    write_atomic(&output_dir, "journal.bin", expected_journal)?;
+    write_atomic(&output_dir, "receipt.json", &receipt_bytes)?;
+    let output = SuccinctOutput {
         image_id: format!("0x{}", hex::encode(program.image_id.as_bytes())),
-        journal_digest: format!("0x{}", hex::encode(Sha256::digest(&proved.journal))),
+        journal_digest: format!("0x{}", hex::encode(Sha256::digest(expected_journal))),
         journal_path: journal_path.display().to_string(),
-        seal_digest: format!("0x{}", hex::encode(Sha256::digest(&seal))),
-        seal_path: seal_path.display().to_string(),
+        receipt_digest: format!("0x{}", hex::encode(Sha256::digest(&receipt_bytes))),
+        receipt_path: receipt_path.display().to_string(),
+        cycles,
     };
     write_atomic(
         &output_dir,
-        "proof.json",
+        "succinct.json",
         &serde_json::to_vec_pretty(&output)?,
     )?;
-    println!("{}", metadata_path.display());
+    println!("{}", receipt_path.display());
+    tracing::info!(
+        "batch-match succinct proof completed in {proving_elapsed:?} ({cycles} cycles)"
+    );
     Ok(())
+}
+
+// CPU mode: wrap the succinct receipt into the Groth16 seal via the docker
+// prover (the path upstream verified 10/10 while CUDA failed; risc0#3785/#3760).
+fn wrap_groth16(program: &GuestProgram, receipt_path: &PathBuf, output_dir: &PathBuf) -> Result<()> {
+    let receipt_bytes = fs::read(receipt_path).context("read succinct receipt")?;
+    let receipt: Receipt = serde_json::from_slice(&receipt_bytes)
+        .context("parse succinct receipt for wrapping")?;
+    let started = Instant::now();
+    let wrapped = default_prover()
+        .compress(&ProverOpts::groth16(), &receipt)
+        .context("wrap succinct receipt into Groth16")?;
+    let wrapping_elapsed = started.elapsed();
+    wrapped
+        .verify(program.image_id)
+        .context("verify wrapped Groth16 receipt")?;
+    tracing::info!("batch-match Groth16 wrap completed in {wrapping_elapsed:?}");
+    write_seal_output(program, &wrapped, output_dir)
 }
 
 fn prove_groth16(program: &GuestProgram, request: &ProofRequest) -> Result<Receipt> {
@@ -208,6 +288,32 @@ fn preflight(program: &[u8], request: &ProofRequest, expected_journal: &[u8]) ->
         anyhow::bail!("RISC0 guest needs {cycles} cycles but the request limit is {limit}");
     }
     Ok(cycles)
+}
+
+fn write_seal_output(program: &GuestProgram, receipt: &Receipt, output_dir: &PathBuf) -> Result<()> {
+    let seal = encode_seal(receipt).context("encode Groth16 on-chain seal")?;
+    validate_groth16_seal(&seal)?;
+    let journal_bytes = &receipt.journal.bytes;
+    let journal_path = output_dir.join("journal.bin");
+    let seal_path = output_dir.join("seal.bin");
+    let metadata_path = output_dir.join("proof.json");
+    write_atomic(output_dir, "journal.bin", journal_bytes)?;
+    write_atomic(output_dir, "seal.bin", &seal)?;
+
+    let output = ProofOutput {
+        image_id: format!("0x{}", hex::encode(program.image_id.as_bytes())),
+        journal_digest: format!("0x{}", hex::encode(Sha256::digest(journal_bytes))),
+        journal_path: journal_path.display().to_string(),
+        seal_digest: format!("0x{}", hex::encode(Sha256::digest(&seal))),
+        seal_path: seal_path.display().to_string(),
+    };
+    write_atomic(
+        output_dir,
+        "proof.json",
+        &serde_json::to_vec_pretty(&output)?,
+    )?;
+    println!("{}", metadata_path.display());
+    Ok(())
 }
 
 fn validate_groth16_seal(seal: &[u8]) -> Result<()> {

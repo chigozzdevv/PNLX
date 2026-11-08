@@ -23,3 +23,10 @@ circuits/**/target/
 circuits/**/proofs/
 circuits/**/witness.gz
 risc0/**/target/
+
+# Local-only artifacts (never commit)
+.zcode/
+output/
+tmp/
+__pycache__/
+*.pyc
