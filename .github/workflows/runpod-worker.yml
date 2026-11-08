@@ -8,6 +8,7 @@ on:
       - deploy/runpod/**
       - risc0/batch-match/**
       - '!deploy/runpod/handler.py'
+      - '!deploy/runpod/tests/**'
   workflow_dispatch:
 
 permissions:

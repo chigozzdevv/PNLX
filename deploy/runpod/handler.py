@@ -1,20 +1,18 @@
 """RunPod handler: proves one batch, returns the seal.
 
-Input: {"input_json_b64": ..., "auth": <PNLX_WORKER_AUTH_TOKEN when configured>}
+Input: {"input_json_b64": ..., "auth": <PNLX_WORKER_AUTH_TOKEN when configured>, "include_error_trace": true for diagnostic requests}
 Output: {"image_id", "journal_b64", "seal_b64", "journal_digest", "seal_digest", "duration_ms"}
-Failures return generic messages only; stderr can contain witness material.
+Full process output is returned only when include_error_trace is explicitly enabled; it can contain witness material.
 """
 
 import base64
-import hashlib
 import json
 import os
 import re
 import subprocess
 import tempfile
 import time
-
-import runpod
+import traceback
 
 PROVER = "/usr/local/bin/pnlx-risc0-batch-match-prover"
 PROVER_TIMEOUT_SECONDS = int(os.environ.get("PNLX_WORKER_TIMEOUT_SECONDS", "1740"))
@@ -40,7 +38,13 @@ def safe_failure_code(stderr: str) -> str:
     return "PROVER_PROCESS_FAILED"
 
 
-def report_failure(code: str, stage: str, message: str, **details: object) -> dict:
+def report_failure(
+    code: str,
+    stage: str,
+    message: str,
+    error_trace: str | None = None,
+    **details: object,
+) -> dict:
     result = {
         "status": code,
         "error_code": code,
@@ -49,7 +53,15 @@ def report_failure(code: str, stage: str, message: str, **details: object) -> di
         **details,
     }
     print(json.dumps({"event": "pnlx_worker_failure", **result}, separators=(",", ":")))
+    if error_trace is not None:
+        result["error_trace"] = error_trace
     return result
+
+
+def decode_output(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
 
 
 def check_auth(job_input: dict) -> None:
@@ -61,6 +73,7 @@ def check_auth(job_input: dict) -> None:
 
 def handler(job: dict) -> dict:
     job_input = job.get("input") or {}
+    include_error_trace = job_input.get("include_error_trace") is True
     try:
         check_auth(job_input)
     except RuntimeError:
@@ -86,6 +99,8 @@ def handler(job: dict) -> dict:
             environment = dict(os.environ)
             environment["RISC0_PROVER"] = "local"
             environment["RISC0_DEV_MODE"] = "0"
+            if include_error_trace:
+                environment["RUST_BACKTRACE"] = "full"
 
             stage = "prover"
             started = time.monotonic()
@@ -99,16 +114,17 @@ def handler(job: dict) -> dict:
             duration_ms = int((time.monotonic() - started) * 1000)
 
             if completed.returncode != 0:
+                process_trace = "\n".join(
+                    value for value in [completed.stdout, completed.stderr] if value
+                )
                 return report_failure(
                     safe_failure_code(completed.stderr),
                     "prover",
                     "prover execution failed",
+                    error_trace=process_trace if include_error_trace else None,
                     exit_code=completed.returncode,
                     duration_ms=duration_ms,
                     stderr_bytes=len(completed.stderr.encode("utf-8", errors="replace")),
-                    stderr_sha256=hashlib.sha256(
-                        completed.stderr.encode("utf-8", errors="replace")
-                    ).hexdigest(),
                 )
 
             stage = "read_proof_output"
@@ -127,12 +143,18 @@ def handler(job: dict) -> dict:
                 "seal_digest": metadata["seal_digest"],
                 "duration_ms": duration_ms,
             }
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as error:
         duration_ms = int((time.monotonic() - started) * 1000) if started is not None else 0
+        output = "\n".join(
+            value
+            for value in [decode_output(error.stdout), decode_output(error.stderr)]
+            if value
+        )
         return report_failure(
             "PROVER_TIMEOUT",
             stage,
             "prover deadline exceeded",
+            error_trace=output if include_error_trace else None,
             duration_ms=duration_ms,
         )
     except Exception:
@@ -141,8 +163,12 @@ def handler(job: dict) -> dict:
             "WORKER_ERROR",
             stage,
             "worker execution failed",
+            error_trace=traceback.format_exc() if include_error_trace else None,
             duration_ms=duration_ms,
         )
 
 
-runpod.serverless.start({"handler": handler})
+if __name__ == "__main__":
+    import runpod
+
+    runpod.serverless.start({"handler": handler})

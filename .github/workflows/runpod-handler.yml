@@ -1,0 +1,29 @@
+name: RunPod handler
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/runpod-handler.yml
+      - deploy/runpod/handler.py
+      - deploy/runpod/tests/**
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/runpod-handler.yml
+      - deploy/runpod/handler.py
+      - deploy/runpod/tests/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  handler:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Run handler checks
+        run: python3 -m unittest discover -s deploy/runpod/tests -p 'test_*.py' -v
