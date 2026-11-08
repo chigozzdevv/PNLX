@@ -11,6 +11,7 @@ import { FEE_CONFIG_HASH } from "@/shared/protocol/fee-config";
 import { matchTranscriptDigest } from "@/workers/batch-matcher/match-transcript";
 import { matchingPayloadCommitment } from "@/workers/batch-matcher/private-intent";
 import type { SettlementProof, SettlementProofInput } from "@/workers/proof-coordinator/proof-coordinator.model";
+import { consumeRunpodDiagnosticOnce, saveRunpodErrorTrace } from "./runpod-diagnostics";
 
 export const RISC0_BATCH_MATCH_CIRCUIT_ID = "batch-match";
 export const RISC0_GROTH16_SEAL_BYTES = 260;
@@ -251,7 +252,9 @@ export async function runRisc0Prover(
       });
       const result = await runProver(root, inputPath, proofDir);
       if (result.status !== 0) {
-        const reason = result.error === "prover deadline exceeded" ? result.error : "prover execution failed";
+        const reason = result.error === "prover deadline exceeded" || result.error?.startsWith("RunPod prover failed")
+          ? result.error
+          : "prover execution failed";
         // Child output can contain witness data or input URLs. Never send it to API errors/logs.
         throw new Error(`RISC0 Groth16 batch prover failed: ${reason} (status ${result.status ?? "unknown"})`);
       }
@@ -400,23 +403,36 @@ export async function runRunpodProver(
   const releaseSlot = await acquireProverSlot();
   try {
     const auth = process.env.PNLX_WORKER_AUTH_TOKEN;
+    const includeErrorTrace = consumeRunpodDiagnosticOnce();
     const submitted = await runpodApi(endpointId, apiKey, "POST", "runsync", {
       input: {
         input_json_b64: readFileSync(inputPath).toString("base64"),
         ...(auth ? { auth } : {}),
+        ...(includeErrorTrace ? { include_error_trace: true } : {}),
       },
     });
     const settled = await settleRunpodJob(endpointId, apiKey, submitted, timeoutMs);
-    if (!settled.completed) {
+    const output = settled.output ?? {};
+    const errorCode = typeof output.error_code === "string"
+      ? output.error_code
+      : typeof output.status === "string" && output.status !== "COMPLETED"
+        ? output.status
+        : undefined;
+    if (!settled.completed || errorCode) {
+      const trace = includeErrorTrace && typeof output.error_trace === "string"
+        ? output.error_trace
+        : "";
+      const tracePath = saveRunpodErrorTrace(proofDir, trace);
+      const stage = typeof output.stage === "string" ? ` at ${output.stage}` : "";
+      const code = errorCode ? ` (${errorCode})` : "";
       return {
-        error: settled.timedOut ? "prover deadline exceeded" : "runpod prover job failed",
+        error: `${settled.timedOut ? "prover deadline exceeded" : `RunPod prover failed${code}${stage}`}${tracePath ? "; diagnostic trace saved privately" : ""}`,
         metadataPath: join(proofDir, "proof.json"),
         stderr: "",
         stdout: "",
-        status: 1,
+        status: typeof output.exit_code === "number" && output.exit_code !== 0 ? output.exit_code : 1,
       };
     }
-    const output = settled.output ?? {};
     const journal = decodeRunpodBytes(output.journal_b64, "journal");
     const seal = decodeRunpodBytes(output.seal_b64, "seal");
     const imageId = typeof output.image_id === "string" ? output.image_id : "";
