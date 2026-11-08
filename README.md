@@ -132,12 +132,9 @@ Keep `NEXT_PUBLIC_PNLX_PROVER_URL=/api/prover` and the existing server-side `PNL
 
 ### 4.5 RunPod Proof Worker
 
-Batch proofs run on a RunPod Serverless GPU endpoint running `deploy/runpod/Dockerfile`. Build from the repository root after `cargo build --release --manifest-path risc0/batch-match/host/Cargo.toml` (the build produces the pinned guest ELF the image embeds):
+Batch proofs run on a RunPod Serverless GPU endpoint using `ghcr.io/chigozzdevv/pnlx-runpod-worker`. The `Publish RunPod worker` workflow builds the pinned guest and publishes `latest` and commit-specific image tags to GHCR when worker sources change on `main`.
 
-```sh
-docker build --platform linux/amd64 -f deploy/runpod/Dockerfile -t <registry>/<user>/pnlx-prover:<tag> .
-docker push <registry>/<user>/pnlx-prover:<tag>
-```
+Keep the GHCR package private. For its first publish, add a repository secret named `GHCR_BOOTSTRAP_TOKEN` using a GitHub classic token scoped only to `write:packages`. After the package exists, grant this repository Actions `Write` access to the package, remove the bootstrap secret, and revoke that token. Subsequent workflow publishes use `GITHUB_TOKEN`. Add a separate classic token with only `read:packages` to RunPod's container registry credentials.
 
 Create the endpoint with: RTX 4090 (Secure Cloud), FlashBoot on, workers min 0 / max 2, 1800 s execution timeout, and `PNLX_WORKER_AUTH_TOKEN` in the endpoint environment. Then set in `.env`:
 
