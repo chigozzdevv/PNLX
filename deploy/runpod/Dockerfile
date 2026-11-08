@@ -45,13 +45,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && pip3 install --no-cache-dir --break-system-packages runpod
 
+COPY --from=builder /root/.risc0 /root/.risc0
 COPY --from=builder /workspace/risc0/batch-match/target/release/pnlx-risc0-batch-match-prover \
      /usr/local/bin/pnlx-risc0-batch-match-prover
 COPY --from=builder /workspace/risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/riscv32im-risc0-zkvm-elf/docker/batch_match.bin \
      /risc0/batch-match.bin
 COPY deploy/runpod/handler.py /app/handler.py
 
-ENV RISC0_PROVER=local \
+ENV PATH=/root/.risc0/bin:$PATH \
+    RISC0_PROVER=local \
     RISC0_DEV_MODE=0 \
     RISC0_BATCH_MATCH_PROGRAM_PATH=/risc0/batch-match.bin
 WORKDIR /app
