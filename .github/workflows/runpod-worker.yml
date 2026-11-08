@@ -42,7 +42,15 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           cargo install rzup --version "${RZUP_VERSION}" --locked
-          rzup install rust "${RISC0_RUST_VERSION}"
+          for attempt in 1 2 3; do
+            if rzup install rust "${RISC0_RUST_VERSION}"; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep $((attempt * 15))
+            fi
+          done
+          exit 1
 
       - name: Cache RISC Zero build artifacts
         uses: Swatinem/rust-cache@v2
@@ -65,7 +73,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
-          password: ${{ secrets.GHCR_BOOTSTRAP_TOKEN || github.token }}
+          password: ${{ github.token }}
 
       - name: Build and publish image
         uses: docker/build-push-action@v6
