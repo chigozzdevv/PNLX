@@ -23,7 +23,6 @@ COPY risc0/batch-match/core /workspace/risc0/batch-match/core
 COPY risc0/batch-match/methods /workspace/risc0/batch-match/methods
 COPY risc0/batch-match/image-id.json risc0/batch-match/image-id.json
 
-# Pinned guest ELF, placed where risc0-build expects it (RISC0_SKIP_BUILD embeds it).
 RUN mkdir -p risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/riscv32im-risc0-zkvm-elf/docker
 COPY risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/riscv32im-risc0-zkvm-elf/docker/batch_match.bin \
      risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/riscv32im-risc0-zkvm-elf/docker/batch_match.bin
@@ -48,9 +47,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /workspace/risc0/batch-match/target/release/pnlx-risc0-batch-match-prover \
      /usr/local/bin/pnlx-risc0-batch-match-prover
+COPY --from=builder /workspace/risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/riscv32im-risc0-zkvm-elf/docker/batch_match.bin \
+     /risc0/batch-match.bin
 COPY deploy/runpod/handler.py /app/handler.py
 
 ENV RISC0_PROVER=local \
-    RISC0_DEV_MODE=0
+    RISC0_DEV_MODE=0 \
+    RISC0_BATCH_MATCH_PROGRAM_PATH=/risc0/batch-match.bin
 WORKDIR /app
 CMD ["python3", "/app/handler.py"]
