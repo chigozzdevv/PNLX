@@ -37,7 +37,7 @@ services:
       PNLX_PROVER_BACKEND: runpod
       PNLX_RISC0_WRAP_SOCKET: /run/pnlx-risc0-wrap/prover.sock
       BATCH_EXECUTOR_ENABLED: "true"
-      FUNDING_ENGINE_ENABLED: "true"
+      FUNDING_ENGINE_ENABLED: "false"
       FUNDING_IMPACT_MARGIN: "5000000000"
       FUNDING_MINIMUM_SAMPLES: "10"
       FUNDING_PREMIUM_MODE: impact-twap
