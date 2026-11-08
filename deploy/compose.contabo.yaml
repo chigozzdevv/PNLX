@@ -112,7 +112,6 @@ services:
     volumes:
       - /opt/pnlx/tools/.nargo:/root/.nargo:ro
       - /opt/pnlx/tools/.bb:/root/.bb:ro
-      - /opt/pnlx/app/risc0/batch-match/target/riscv-guest/pnlx-risc0-methods/guest/riscv32im-risc0-zkvm-elf/docker/batch_match.bin:/risc0/batch-match.bin:ro
       - app-state:/app/.pnlx
     networks:
       - pnlx-private
