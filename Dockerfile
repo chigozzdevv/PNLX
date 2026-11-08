@@ -1,3 +1,5 @@
+FROM oven/bun:1.3.9 AS bun
+
 FROM rust:1-bookworm
 
 RUN apt-get update \
@@ -10,10 +12,7 @@ RUN apt-get update \
     build-essential \
   && rm -rf /var/lib/apt/lists/*
 
-ENV BUN_INSTALL=/root/.bun
-ENV PATH="${BUN_INSTALL}/bin:${PATH}"
-
-RUN curl -fsSL https://bun.sh/install | bash
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 
 WORKDIR /app
 
