@@ -5,9 +5,9 @@ on:
     branches:
       - main
     paths:
-      - .github/workflows/runpod-worker.yml
       - deploy/runpod/**
       - risc0/batch-match/**
+      - '!deploy/runpod/handler.py'
   workflow_dispatch:
 
 permissions:
