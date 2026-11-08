@@ -1,6 +1,7 @@
 FROM oven/bun:1.3.9 AS bun
+FROM docker.io/stellar/stellar-cli:27.0.0 AS stellar-cli
 
-FROM rust:1-bookworm
+FROM rust:1-trixie
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -9,10 +10,17 @@ RUN apt-get update \
     git \
     pkg-config \
     libssl-dev \
+    libdbus-1-3 \
+    libudev1 \
+    libsystemd0 \
+    libcap2 \
+    libzstd1 \
+    nodejs \
     build-essential \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=stellar-cli /usr/local/bin/stellar /usr/local/bin/stellar
 
 WORKDIR /app
 
