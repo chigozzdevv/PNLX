@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { delimiter, join } from "node:path";
 import { hashFields } from "@pnlx/crypto";
 import type { ProofArtifact } from "@pnlx/proof-system";
@@ -252,7 +253,8 @@ export async function runRisc0Prover(
       });
       const result = await runProver(root, inputPath, proofDir);
       if (result.status !== 0) {
-        const reason = result.error === "prover deadline exceeded" || result.error?.startsWith("RunPod prover failed")
+        const reason = result.error === "prover deadline exceeded" ||
+            result.error?.startsWith("RunPod prover failed") || result.error?.startsWith("CPU wrap service failed")
           ? result.error
           : "prover execution failed";
         // Child output can contain witness data or input URLs. Never send it to API errors/logs.
@@ -434,24 +436,82 @@ export async function runRunpodProver(
       };
     }
     const receiptBytes = decodeRunpodBytes(output.receipt_b64, "receipt");
+    const journalBytes = decodeRunpodBytes(output.journal_b64, "journal");
     const imageId = typeof output.image_id === "string" ? output.image_id : "";
     if (!imageId) throw new Error("runpod prover response is missing the guest image id");
-    // The CUDA Groth16 wrap is broken upstream (risc0#3785); the worker returns
-    // the succinct receipt and this machine wraps it on CPU via the docker prover.
+    if (imageId.toLowerCase() !== RISC0_BATCH_MATCH_IMAGE_ID) {
+      throw new Error("runpod prover response image id mismatch");
+    }
+    const journalDigest = bufferDigest(journalBytes);
+    const receiptDigest = bufferDigest(receiptBytes);
+    if (typeof output.journal_digest !== "string" || output.journal_digest.toLowerCase() !== journalDigest) {
+      throw new Error("runpod prover response journal digest mismatch");
+    }
+    if (typeof output.receipt_digest !== "string" || output.receipt_digest.toLowerCase() !== receiptDigest) {
+      throw new Error("runpod prover response receipt digest mismatch");
+    }
     const receiptPath = join(proofDir, "receipt.json");
     writeFileSync(receiptPath, receiptBytes, { mode: 0o600 });
     const wrapTimeoutMs = runtime.wrapTimeoutMs ?? Number(process.env.PNLX_RISC0_WRAP_TIMEOUT_MS ?? 30 * 60_000);
     if (!Number.isSafeInteger(wrapTimeoutMs) || wrapTimeoutMs <= 0) throw new Error("invalid RISC0 wrap deadline");
-    const wrapTarget = runtime.wrapCommand ?? localWrapCommand(_root, receiptPath, proofDir);
-    const wrap = await runProverProcess(_root, wrapTarget, proofDir, wrapTimeoutMs);
-    if (wrap.status !== 0) {
-      return {
-        error: wrap.error === "prover deadline exceeded" ? wrap.error : "groth16 wrap failed on the local CPU prover",
-        metadataPath: join(proofDir, "proof.json"),
-        stderr: "",
-        stdout: "",
-        status: 1,
-      };
+    if (runtime.wrapCommand) {
+      const wrap = await runProverProcess(_root, runtime.wrapCommand, proofDir, wrapTimeoutMs);
+      if (wrap.status !== 0) {
+        return {
+          error: wrap.error === "prover deadline exceeded" ? wrap.error : "CPU wrap service failed",
+          metadataPath: join(proofDir, "proof.json"),
+          stderr: "",
+          stdout: "",
+          status: 1,
+        };
+      }
+    } else {
+      const socketPath = process.env.PNLX_RISC0_WRAP_SOCKET;
+      if (!socketPath) {
+        return {
+          error: "CPU wrap service failed: PNLX_RISC0_WRAP_SOCKET is required",
+          metadataPath: join(proofDir, "proof.json"),
+          stderr: "",
+          stdout: "",
+          status: 1,
+        };
+      }
+      try {
+        const wrapped = await requestCpuWrapService(socketPath, receiptBytes, imageId, wrapTimeoutMs);
+        if (wrapped.image_id.toLowerCase() !== RISC0_BATCH_MATCH_IMAGE_ID) {
+          throw new Error("wrapped image id mismatch");
+        }
+        const wrappedJournal = decodeRunpodBytes(wrapped.journal_b64, "wrapped journal");
+        const sealBytes = decodeRunpodBytes(wrapped.seal_b64, "Groth16 seal");
+        if (!wrappedJournal.equals(journalBytes)) throw new Error("wrapped journal does not match RunPod journal");
+        if (wrapped.journal_digest.toLowerCase() !== bufferDigest(wrappedJournal)) {
+          throw new Error("wrapped journal digest mismatch");
+        }
+        if (wrapped.seal_digest.toLowerCase() !== bufferDigest(sealBytes)) {
+          throw new Error("wrapped seal digest mismatch");
+        }
+        const journalPath = join(proofDir, "journal.bin");
+        const sealPath = join(proofDir, "seal.bin");
+        writeFileSync(journalPath, wrappedJournal, { mode: 0o600 });
+        writeFileSync(sealPath, sealBytes, { mode: 0o600 });
+        writeFileSync(join(proofDir, "proof.json"), `${JSON.stringify({
+          image_id: wrapped.image_id,
+          journal_digest: wrapped.journal_digest,
+          journal_path: journalPath,
+          seal_digest: wrapped.seal_digest,
+          seal_path: sealPath,
+        }, null, 2)}\n`, { mode: 0o600 });
+      } catch (error) {
+        return {
+          error: error instanceof Error && error.message === "prover deadline exceeded"
+            ? error.message
+            : `CPU wrap service failed${error instanceof Error ? `: ${error.message}` : ""}`,
+          metadataPath: join(proofDir, "proof.json"),
+          stderr: "",
+          stdout: "",
+          status: 1,
+        };
+      }
     }
     // Keep the RunPod job id traceable on the final artifact contract.
     if (settled.jobId) {
@@ -470,7 +530,81 @@ function decodeRunpodBytes(value: unknown, label: string): Buffer {
   if (typeof value !== "string" || value === "") {
     throw new Error(`runpod prover response is missing ${label} bytes`);
   }
-  return Buffer.from(value, "base64");
+  const bytes = Buffer.from(value, "base64");
+  if (!bytes.length || bytes.toString("base64") !== value) throw new Error(`runpod prover response has invalid ${label} bytes`);
+  return bytes;
+}
+
+function bufferDigest(value: Uint8Array): string {
+  return `0x${createHash("sha256").update(value).digest("hex")}`;
+}
+
+interface CpuWrapServiceResponse {
+  image_id: string;
+  journal_b64: string;
+  journal_digest: string;
+  seal_b64: string;
+  seal_digest: string;
+}
+
+function requestCpuWrapService(
+  socketPath: string,
+  receipt: Buffer,
+  imageId: string,
+  timeoutMs: number,
+): Promise<CpuWrapServiceResponse> {
+  const body = Buffer.from(JSON.stringify({ image_id: imageId, receipt_b64: receipt.toString("base64") }));
+  return new Promise((resolve, reject) => {
+    let responseBytes = 0;
+    const chunks: Buffer[] = [];
+    const request = httpRequest({
+      socketPath,
+      path: "/wrap",
+      method: "POST",
+      headers: {
+        "Content-Length": String(body.length),
+        "Content-Type": "application/json",
+      },
+    }, (response) => {
+      response.on("data", (chunk: Buffer) => {
+        responseBytes += chunk.length;
+        if (responseBytes > 128 * 1024 * 1024) {
+          request.destroy(new Error("CPU wrap service response is too large"));
+          return;
+        }
+        chunks.push(Buffer.from(chunk));
+      });
+      response.on("end", () => {
+        let payload: Record<string, unknown>;
+        try { payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>; }
+        catch { reject(new Error("CPU wrap service returned invalid JSON")); return; }
+        if (response.statusCode !== 200) {
+          const code = typeof payload.error_code === "string" ? payload.error_code : "REQUEST_FAILED";
+          reject(new Error(`CPU wrap service returned ${code}`));
+          return;
+        }
+        if (typeof payload.image_id !== "string" || typeof payload.journal_b64 !== "string" ||
+            typeof payload.journal_digest !== "string" || typeof payload.seal_b64 !== "string" ||
+            typeof payload.seal_digest !== "string") {
+          reject(new Error("CPU wrap service response is incomplete"));
+          return;
+        }
+        resolve({
+          image_id: payload.image_id,
+          journal_b64: payload.journal_b64,
+          journal_digest: payload.journal_digest,
+          seal_b64: payload.seal_b64,
+          seal_digest: payload.seal_digest,
+        });
+      });
+    });
+    request.setTimeout(timeoutMs + 60_000, () => request.destroy(new Error("prover deadline exceeded")));
+    request.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.message === "prover deadline exceeded") reject(error);
+      else reject(new Error(`CPU wrap service request failed${error.code ? ` (${error.code})` : ""}`));
+    });
+    request.end(body);
+  });
 }
 
 interface RunpodJobResponse {
@@ -627,14 +761,6 @@ function localProverCommand(
   proofDir: string,
 ): { command: string; args: string[] } {
   return localProverInvocation(root, [inputPath, proofDir]);
-}
-
-function localWrapCommand(
-  root: string,
-  receiptPath: string,
-  proofDir: string,
-): { command: string; args: string[] } {
-  return localProverInvocation(root, ["--wrap", receiptPath, proofDir]);
 }
 
 function prebuiltProverIsFresh(root: string, binary: string): boolean {

@@ -1,7 +1,8 @@
 import base64
 import io
 import json
-import sysimport unittest
+import sys
+import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from subprocess import CompletedProcess

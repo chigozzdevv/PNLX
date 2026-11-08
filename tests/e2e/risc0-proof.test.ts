@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 import { hashFields } from "@pnlx/crypto";
 import { BatchMatcherService } from "@/workers/batch-matcher/batch-matcher.service";
@@ -188,18 +189,20 @@ describe("RISC0 Groth16 proof artifacts", () => {
           status: "COMPLETED",
           output: {
             journal_b64: journal.toString("base64"),
+            journal_digest: `0x${createHash("sha256").update(journal).digest("hex")}`,
             receipt_b64: receipt.toString("base64"),
+            receipt_digest: `0x${createHash("sha256").update(receipt).digest("hex")}`,
             image_id: RISC0_BATCH_MATCH_IMAGE_ID,
           },
         }), { status: 200 });
-      }) as typeof fetch;
+      }) as unknown as typeof fetch;
       // The local CPU wrap is faked with a script that writes the same
       // artifact contract the real --wrap mode emits.
       const wrapScript = `
         const fs = require("node:fs");
         const dir = ${JSON.stringify(proofDir)};
         const imageId = ${JSON.stringify(RISC0_BATCH_MATCH_IMAGE_ID)};
-        const journal = Buffer.from("wrapped journal bytes");
+        const journal = Buffer.from(${JSON.stringify(journal.toString("base64"))}, "base64");
         const seal = Buffer.alloc(260, 1);
         Buffer.from("73c457ba", "hex").copy(seal);
         fs.writeFileSync(dir + "/journal.bin", journal);
@@ -239,7 +242,7 @@ describe("RISC0 Groth16 proof artifacts", () => {
       const originalFetch = globalThis.fetch;
       globalThis.fetch = (async () => new Response(JSON.stringify({
         id: "job-2", status: "FAILED",
-      }), { status: 200 })) as typeof fetch;
+      }), { status: 200 })) as unknown as typeof fetch;
       try {
         const result = await runRunpodProver(".", join(proofDir, "input.json"), proofDir);
         expect(result.status).toBe(1);
@@ -258,7 +261,7 @@ describe("RISC0 Groth16 proof artifacts", () => {
       const originalFetch = globalThis.fetch;
       globalThis.fetch = (async () => new Response(JSON.stringify({
         id: "job-3", status: "IN_QUEUE",
-      }), { status: 200 })) as typeof fetch;
+      }), { status: 200 })) as unknown as typeof fetch;
       try {
         const result = await runRunpodProver(".", join(proofDir, "input.json"), proofDir, { timeoutMs: 1 });
         expect(result.status).toBe(1);

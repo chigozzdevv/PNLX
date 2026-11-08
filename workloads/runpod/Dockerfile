@@ -13,7 +13,7 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
 
 # rzup provides the prebuilt Groth16 prover library linked by risc0-groth16-sys.
-RUN curl -L https://risczero.com/install | bash && /root/.risc0/bin/rzup install risc0-groth16 --version 0.1.0
+RUN curl -L https://risczero.com/install | bash && /root/.risc0/bin/rzup install risc0-groth16 0.1.0
 
 WORKDIR /workspace
 COPY risc0/batch-match/Cargo.lock risc0/batch-match/Cargo.lock

@@ -34,6 +34,7 @@ services:
       MATCHER_SERVICE_URL: http://matcher:4103
       PNLX_PROVER_URL: http://prover:4101
       PNLX_PROVER_BACKEND: runpod
+      PNLX_RISC0_WRAP_SOCKET: /run/pnlx-risc0-wrap/prover.sock
       BATCH_EXECUTOR_ENABLED: "true"
       FUNDING_ENGINE_ENABLED: "true"
       FUNDING_IMPACT_MARGIN: "5000000000"
@@ -55,6 +56,8 @@ services:
       pnlx-edge:
         aliases:
           - pnlx-api
+    volumes:
+      - /run/pnlx-risc0-wrap:/run/pnlx-risc0-wrap
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4000/health >/dev/null"]
       interval: 15s

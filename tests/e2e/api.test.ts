@@ -2066,10 +2066,11 @@ describe("server api", () => {
         headers: { "content-type": "application/json" },
       }),
     );
-    expect(staleRoot.status).toBe(500);
+    expect(staleRoot.status).toBe(409);
     expect(await staleRoot.json()).toEqual({
       error: "intent margin root is not current",
-      });
+      code: "STALE_MARGIN_ROOT",
+    });
   });
 
   test("rejects prove-and-submit private intents with stale margin roots", async () => {
@@ -2105,9 +2106,10 @@ describe("server api", () => {
       },
     );
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(409);
     expect(await response.json()).toEqual({
       error: "intent margin root is not current",
+      code: "STALE_MARGIN_ROOT",
     });
   });
 

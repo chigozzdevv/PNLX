@@ -1,0 +1,24 @@
+[Unit]
+Description=PNLX RISC Zero CPU Groth16 wrapper
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/ubuntu/PNLX
+Environment=PNLX_RISC0_PROJECT_ROOT=/home/ubuntu/PNLX
+Environment=PNLX_RISC0_PROVER_BIN=/home/ubuntu/PNLX/risc0/batch-match/target/release/pnlx-risc0-batch-match-prover
+Environment=PNLX_RISC0_WRAP_SOCKET=/run/pnlx-risc0-wrap/prover.sock
+Environment=PNLX_RISC0_WRAP_ROOT=/var/lib/pnlx-risc0-wrap
+Environment=PNLX_RISC0_WRAP_TIMEOUT_SECONDS=1740
+ExecStart=/usr/bin/python3 /home/ubuntu/PNLX/workloads/vps/prover-wrap-service.py
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=pnlx-risc0-wrap
+RuntimeDirectoryMode=0750
+StateDirectory=pnlx-risc0-wrap
+StateDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target

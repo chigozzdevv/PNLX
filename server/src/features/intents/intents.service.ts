@@ -63,6 +63,7 @@ export class IntentsService {
           input.validity.marginRoot,
           input.validity.noteNullifier,
         );
+        this.assertCurrentMarginRoot(input.validity.marginRoot, historicalMarginRootVerified);
         store.recordProof(input.validity.proof);
         pending = { intentCommitment: input.validity.intentCommitment, createdAt: Date.now(),
           intent: input.intent, validity: input.validity, prepared: this.executor.prepareIntent({
@@ -215,7 +216,8 @@ export class IntentsService {
   async proveAndSubmitDurable(input: ProveAndSubmitIntentInput, authenticated?: string): Promise<ProveAndSubmitIntentResult> {
     assertAuthenticatedAccount(authenticated, input.intent.owner, "owner");
     this.syncSecureNotes();
-    await this.verifyOnchainMarginRoot(input.marginRoot, input.intent.noteNullifier);
+    const historicalMarginRootVerified = await this.verifyOnchainMarginRoot(input.marginRoot, input.intent.noteNullifier);
+    this.assertCurrentMarginRoot(input.marginRoot, historicalMarginRootVerified);
     const validity = this.prover.proveIntentValidityAsync
       ? await this.prover.proveIntentValidityAsync(input) : this.prover.proveIntentValidity(input);
     return { intent: await this.submitDurable({ intent: input.intent, validity }, authenticated), validity };
@@ -349,5 +351,11 @@ export class IntentsService {
       throw new Error("intent note nullifier is already spent");
     }
     return true;
+  }
+
+  private assertCurrentMarginRoot(root: Hex, historicalMarginRootVerified: boolean): void {
+    if (!historicalMarginRootVerified && root !== this.executor.store.marginMembershipRoot()) {
+      throw new StaleMarginRootError();
+    }
   }
 }

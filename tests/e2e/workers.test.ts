@@ -687,6 +687,8 @@ describe("support workers", () => {
       enabled: true,
       secureNoteSnapshot: (commitments: Hex[]) => ({ commitments,
         root: executor.store.marginMembershipRoot() }),
+      isSecureNoteRootKnownAsync: async () => true,
+      isSecureNullifierSpentAsync: async () => false,
       isIntentRegisteredAsync: async () => false,
       submitIntent() {
         return { relays: [unsubmittedRelay("intent", "submit")] };
