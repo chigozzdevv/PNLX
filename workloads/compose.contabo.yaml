@@ -27,6 +27,7 @@ services:
       - /opt/pnlx/.env
     environment:
       NODE_ENV: production
+      PNLX_API_HOST: 0.0.0.0
       PORT: "4000"
       MONGODB_URI: mongodb://mongo:27017/pnlx_fees_20260924
       MONGODB_DATABASE: pnlx_fees_20260924
@@ -84,6 +85,7 @@ services:
       MATCHER_PORT: "4103"
       PRIVATE_MATCHING_REQUIRED: "true"
       PNLX_PROVER_BACKEND: runpod
+      PNLX_RISC0_WRAP_SOCKET: /run/pnlx-risc0-wrap/prover.sock
       BATCH_EXECUTOR_ENABLED: "true"
       PROTOCOL_ADMIN_REQUIRED: "true"
     command: ["bun", "server/src/matcher-server.ts"]
@@ -94,6 +96,7 @@ services:
       - pnlx-private
     volumes:
       - app-state:/app/.pnlx
+      - /run/pnlx-risc0-wrap:/run/pnlx-risc0-wrap
     mem_limit: 1g
     cpus: 1.0
 
