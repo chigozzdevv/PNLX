@@ -220,7 +220,7 @@ describe("RISC0 Groth16 proof artifacts", () => {
       try {
         const result = await runRunpodProver(".", join(proofDir, "input.json"), proofDir);
         expect(result.status).toBe(1);
-        expect(result.error).toBe("runpod prover job failed");
+        expect(result.error).toBe("RunPod prover failed");
       } finally {
         globalThis.fetch = originalFetch;
         rmSync(proofDir, { recursive: true, force: true });
