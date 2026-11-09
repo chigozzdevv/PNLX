@@ -652,7 +652,7 @@ function runCommandAsync(command: string[], timeoutMs: number): Promise<CommandR
       {
         encoding: "utf8",
         killSignal: "SIGKILL",
-        maxBuffer: 600_000,
+        maxBuffer: 4_000_000,
         timeout: timeoutMs + 2_000,
       },
       (error, stdout, stderr) => {
@@ -785,15 +785,62 @@ function redactSignedXdrCommand(command: string[]): string[] {
 }
 
 function formatStellarFailure(output: CommandResult): string {
-  const text = commandOutput(output).trim();
+  const text = commandOutput(output).replace(/\x1b\[[0-9;]*m/g, "").trim();
   if (text.includes("Contract, #13") || text.includes("TrustlineMissingError")) {
     return "USDC trustline is missing for this wallet";
   }
   const reason = text.match(/transaction submission failed:\s*([^\n\r]+)/i)?.[1]?.trim() ??
     text.match(/transaction simulation failed:\s*([^\n\r]+)/i)?.[1]?.trim() ??
     text.match(/error:\s*([^\n\r]+)/i)?.[1]?.trim();
-  if (reason) return reason;
+  const diagnostics = [...new Set([...text.matchAll(/Error\((Contract|WasmVm|Storage|Context|Auth|Budget|Events|Object),\s*#?(\d+)\)/gi)]
+    .map((match) => `${match[1]}#${match[2]}`))];
+  diagnostics.push(...decodeStellarDiagnosticEvents(text));
+  const errorResultXdr = text.match(/error[_ ]?result[_ ]?xdr["'\s:=]+([A-Za-z0-9+/=]{12,})/i)?.[1];
+  if (errorResultXdr) diagnostics.push(`errorResultXdr=${errorResultXdr}`);
+  if (reason) return diagnostics.length ? `${reason}; Soroban diagnostic: ${diagnostics.join(", ")}` : reason;
   return text || String(output.status ?? "unknown stellar cli failure");
+}
+
+function decodeStellarDiagnosticEvents(text: string): string[] {
+  const diagnostics = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    const eventLog = line.match(/soroban_cli::log::event:\s*\d+:\s*(?:[A-Za-z0-9+/=]+\s+)?(\{.*\})\s*$/i)?.[1];
+    if (!eventLog) continue;
+    try {
+      const record = JSON.parse(eventLog) as {
+        event?: { contract_id?: unknown; type?: unknown; body?: { v0?: { topics?: unknown; data?: unknown } } };
+        in_successful_contract_call?: unknown;
+      };
+      const event = record.event;
+      if (event?.type !== "diagnostic" || record.in_successful_contract_call !== false) continue;
+      const topics = Array.isArray(event.body?.v0?.topics)
+        ? event.body.v0.topics.flatMap((topic) => {
+          if (!topic || typeof topic !== "object") return [];
+          const value = (topic as Record<string, unknown>).symbol;
+          return typeof value === "string" ? [value.slice(0, 80)] : [];
+        })
+        : [];
+      const contractId = typeof event.contract_id === "string" ? event.contract_id : "unknown";
+      const details = topics.filter((topic) => /error|panic|trap|fail/i.test(topic));
+      diagnostics.add(`failed call contract=${contractId}${details.length ? ` event=${details.join("/")}` : topics.length ? ` event=${topics.join("/")}` : ""}`);
+    } catch {}
+  }
+
+  const events = [...new Set([...text.matchAll(/soroban_cli::assembled:\s*\d+:\s*["']([A-Za-z0-9+/=]+)["']/gi)]
+    .map((match) => match[1]))];
+  for (const event of events) {
+    const decoded = spawnSync("stellar", ["xdr", "decode", "--type", "DiagnosticEvent", "--input", "single-base64", event], {
+      encoding: "utf8",
+      maxBuffer: 65_536,
+      timeout: 5_000,
+    });
+    if (decoded.status !== 0) continue;
+    const trap = decoded.stdout.match(/VM call trapped:\s*([A-Za-z][A-Za-z0-9_]*)/i)?.[1];
+    if (trap) diagnostics.add(`VM trap=${trap}`);
+    const validation = decoded.stdout.match(/BinaryReaderErrorInner[\s\S]*?message:\s*"([^"\\]+)"/i)?.[1];
+    if (validation) diagnostics.add(`Wasm validation=${validation.slice(0, 160)}`);
+  }
+  return [...diagnostics];
 }
 
 function parseTxHash(...outputs: string[]): `0x${string}` | undefined {

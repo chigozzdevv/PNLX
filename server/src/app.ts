@@ -41,6 +41,7 @@ import type { BatchExecutorService } from "@/workers/batch-executor/batch-execut
 import { createMatcher } from "@/workers/matcher/matcher.worker";
 import { RemoteMatcherClient } from "@/workers/matcher/remote/matcher.service";
 import { MakerLiquidityService } from "@/workers/maker-liquidity/maker-liquidity.service";
+import { RemoteIntentValidityProver } from "@/workers/prover/intent-prover";
 import { createFundingEngine } from "@/workers/funding-engine/funding-engine.worker";
 import type { FundingEngineService } from "@/workers/funding-engine/funding-engine.service";
 import { OracleService } from "@/workers/oracle/oracle.service";
@@ -153,6 +154,9 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
       })
     : createMatcher(executor);
   const vaultContractId = deployment?.contracts["liquidity-vault"];
+  const makerIntentProver = env.proverServiceUrl
+    ? new RemoteIntentValidityProver(env.proverServiceUrl, (input) => prover.registerProofArtifact(input))
+    : undefined;
   const makerLiquidity = new MakerLiquidityService(
     executor,
     prover,
@@ -185,6 +189,8 @@ function buildAppRuntime(env: ReturnType<typeof loadEnv>, executor: ExecutorServ
           vault: vaultContractId,
         }
       : undefined,
+    undefined,
+    makerIntentProver ? (input) => makerIntentProver.prove(input) : undefined,
   );
   const markets = new MarketsService(executor, oracle, env, onchain, undefined, fundingEngine);
   const batchExecutor = createBatchExecutor(

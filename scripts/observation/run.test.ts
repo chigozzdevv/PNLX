@@ -42,8 +42,7 @@ function harness(state = createCampaign({ runId: "test-campaign", seed: "test-se
   };
   let chainTime: number | undefined = START - 10 * MINUTE_MS;
   const health = (): HealthSample => ({ at: now, apiOk: true, proverOk: true,
-    markets: [{ marketId: "xlm-usd-perp", maxLeverage: 2 }],
-    budget: { at: now, chainId: 8453, creditWei: "10000000000000000", gasWei: "1000000000000000" } });
+    markets: [{ marketId: "xlm-usd-perp", maxLeverage: 2 }] });
   const services: RunnerServices = {
     now: () => now, from: "PNLX <test@example.com>", to: "owner@example.com",
     persist: async (value) => { checkpoints.push(structuredClone(value)); },
@@ -126,9 +125,9 @@ describe("one-time observation runner", () => {
     for (const leverage of [1, 2, 3, 5, 8]) expect(day.filter((cycle) => cycle.plan.leverage === leverage)).toHaveLength(4);
   });
 
-  test("confirmed due closes precede new funding even with an exhausted proof budget", async () => {
+  test("confirmed due closes precede readiness failures", async () => {
     const h = harness(); const active = attachActive(h);
-    h.services.health = async () => ({ ...h.health(), budget: { at: START, chainId: 8453, creditWei: "0", gasWei: "0" } });
+    h.services.health = async () => ({ ...h.health(), apiOk: false, proverOk: false });
     await h.runner().tick();
     expect(h.actions).toContain("prepare-close");
     expect(h.actions).toContain("submit-close");
@@ -467,13 +466,13 @@ describe("one-time observation runner", () => {
     });
   }
 
-  for (const unavailable of ["health", "budget"] as const) {
-    test(`saved preparation recovery still requires ${unavailable}`, async () => {
+  for (const unavailable of ["api", "prover"] as const) {
+    test(`saved preparation recovery still requires ${unavailable} readiness`, async () => {
       const h = harness(); const { cycle, data } = attachActive(h, 0, "preparing");
       delete data.cycles[cycle.adapterId]; cycle.fundingChecked = true; cycle.failureAlertedAt = START - MINUTE_MS;
       data.deposits[cycle.depositId] = { id: cycle.depositId, amount: "1000000000", commitment: "0x9", phase: "ready", createdAt: START - MINUTE_MS };
-      h.services.health = async () => unavailable === "health" ? { ...h.health(), apiOk: false } :
-        { ...h.health(), budget: { at: START, chainId: 8453, creditWei: "0", gasWei: "0" } };
+      h.services.health = async () => unavailable === "api" ? { ...h.health(), apiOk: false } :
+        { ...h.health(), proverOk: false };
       await h.runner().tick();
       expect(h.actions).toEqual([]); expect(cycle.failureAlertedAt).toBeDefined();
     });

@@ -30,6 +30,7 @@ import {
 import type { ServerEnv } from "@/config/env";
 import type { ExecutorService } from "@/workers/executor/executor.service";
 import type { OnchainRelay } from "@/workers/onchain/onchain.model";
+import type { IntentValidityProofInput } from "@/workers/prover/prover.model";
 import type { ProverService } from "@/workers/prover/prover.service";
 
 const ZERO_HEX = "0x0" as Hex;
@@ -95,6 +96,7 @@ export class MakerLiquidityService {
   private readonly orders:OrdersService;
   private readonly confirmedCancelledMakerOrders = new Set<Hex>();
   private noteOperation: Promise<unknown> = Promise.resolve();
+  private readonly proveIntentValidityAsync: (input: IntentValidityProofInput) => Promise<IntentValidityRecord>;
   constructor(
     private readonly executor: ExecutorService,
     private readonly prover: ProverService,
@@ -108,7 +110,10 @@ export class MakerLiquidityService {
       vault: string;
     },
     private readonly claimNote:typeof claimMakerNote=claimMakerNote,
+    proveIntentValidityAsync?: (input: IntentValidityProofInput) => Promise<IntentValidityRecord>,
   ) {
+    this.proveIntentValidityAsync = proveIntentValidityAsync ??
+      ((input) => this.prover.proveIntentValidityAsync(input));
     this.intents=new IntentsService(executor,prover,onchain,env);
     this.orders=new OrdersService(executor,prover,onchain,env);
   }
@@ -386,7 +391,7 @@ export class MakerLiquidityService {
       return this.executor.store.orderLifecycle.get(intentCommitment)?.status==="open"?local:undefined;
     }
     const pending=this.executor.store.pendingIntentSubmissions.get(intentCommitment);
-    const validity = pending?.validity ?? await this.prover.proveIntentValidityAsync({
+    const validity = pending?.validity ?? await this.proveIntentValidityAsync({
       intent,
       assetDigest: input.note.assetDigest,
       blinding: input.note.blinding,

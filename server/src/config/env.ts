@@ -10,6 +10,7 @@ export interface ServerEnv {
   batchExecutorProofConcurrency: 1 | 2;
   batchExecutorPrefix: string;
   proverBackend: "runpod" | "local";
+  proverServiceUrl: string;
   runpodApiKeyConfigured: boolean;
   runpodEndpointConfigured: boolean;
   assetCustodyRequired: boolean;
@@ -124,6 +125,7 @@ export function loadEnv(options: { validateRuntime?: boolean } = {}): ServerEnv 
       Boolean(value("RUNPOD_API_KEY", "")),
       Boolean(value("RUNPOD_ENDPOINT_ID", "")),
     ),
+    proverServiceUrl: value("PNLX_PROVER_URL", ""),
     runpodApiKeyConfigured: Boolean(value("RUNPOD_API_KEY", "")),
     runpodEndpointConfigured: Boolean(value("RUNPOD_ENDPOINT_ID", "")),
     assetCustodyRequired: booleanValue("ASSET_CUSTODY_REQUIRED", persistentByDefault),

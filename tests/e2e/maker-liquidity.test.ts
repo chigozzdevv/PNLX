@@ -429,6 +429,7 @@ function orphanedMakerFixture(sourceStatus: "cancelled" | "filled" | "partially-
   const wallet = "GCB7PYWNYIRTSLTHGPX6OCIP256PPX2Q5TZOZSNCVRIWZJI7MU5COC7J";
   const makerNote = { ...note, walletAddress: wallet, ownerCommitment: ownerCommitment(wallet), status: "locked" as const,
     lockedByIntentCommitment: fieldHex(301n), sourceIntentCommitment: fieldHex(302n) };
+  type ReapedMakerNote = Omit<typeof makerNote, "status"> & { status: "locked" | "available" };
   const store = new ProtocolStore();
   store.orderLifecycle.set(makerNote.sourceIntentCommitment, { intentCommitment: makerNote.sourceIntentCommitment,
     batchId: "source", marketId: "xlm-usd-perp", ownerCommitment: fieldHex(303n), status: sourceStatus,
@@ -453,7 +454,7 @@ function orphanedMakerFixture(sourceStatus: "cancelled" | "filled" | "partially-
   const service = new MakerLiquidityService(new ExecutorService({}, store), {} as never, onchain as never,
     { intentRegistryOnchainRequired: true });
   return { store, fences: () => fences,
-    reap: () => Reflect.get(service, "reapOrphanedMakerIntents").call(service, [makerNote]) as Promise<{changed: boolean; notes: typeof makerNote[]}> };
+    reap: () => Reflect.get(service, "reapOrphanedMakerIntents").call(service, [makerNote]) as Promise<{changed: boolean; notes: ReapedMakerNote[]}> };
 }
 
 test("settlement replay preserves an existing child note in either store order", () => {

@@ -396,7 +396,7 @@ export class ObservationRunner {
     const previouslyPaused = Boolean(this.state.pausedReason);
     this.state.pausedReason = reason; this.state.pauseTransitions += 1; await this.save();
     if (reason || previouslyPaused) await this.enqueueEmail(`pause-transition-${this.state.pauseTransitions}`, {
-      kind: reason ? "paused" : "resumed", message: reason ?? "Confirmed reconciliation and budget checks now allow scheduled opens again.",
+      kind: reason ? "paused" : "resumed", message: reason ?? "Confirmed reconciliation and readiness checks now allow scheduled opens again.",
     });
   }
   async tick(): Promise<void> {
@@ -408,7 +408,7 @@ export class ObservationRunner {
     const now = this.services.now();
     this.state.lastTickAt = now; await this.save();
     const active = this.state.cycles.filter((cycle) => cycle.status === "active");
-    // Observe due/closing work first, regardless of budget or new-open failures.
+    // Observe due/closing work first, regardless of readiness or new-open failures.
     active.sort((a, b) => this.closePriority(a, now) - this.closePriority(b, now));
     for (const cycle of active) {
       const saved = protocolCycle(this.state, cycle);
