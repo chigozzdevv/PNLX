@@ -64,6 +64,8 @@ services:
       - app-state:/app/.pnlx
       - /run/pnlx-risc0-wrap:/run/pnlx-risc0-wrap
       - /opt/pnlx/app/deployments:/app/deployments:ro
+      - /opt/pnlx/tools/.nargo:/root/.nargo
+      - /opt/pnlx/tools/.bb:/root/.bb/bin
       - /opt/pnlx/stellar-config:/config:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4000/health >/dev/null"]
@@ -118,6 +120,8 @@ services:
       - app-state:/app/.pnlx
       - /run/pnlx-risc0-wrap:/run/pnlx-risc0-wrap
       - /opt/pnlx/app/deployments:/app/deployments:ro
+      - /opt/pnlx/tools/.nargo:/root/.nargo:ro
+      - /opt/pnlx/tools/.bb:/root/.bb/bin:ro
       - /opt/pnlx/stellar-config:/config:ro
     mem_limit: 1g
     cpus: 1.0
