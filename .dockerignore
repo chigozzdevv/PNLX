@@ -7,5 +7,6 @@ client/node_modules
 server/node_modules
 packages/*/node_modules
 contracts/target
+risc0/**/target
 deployments
 .env

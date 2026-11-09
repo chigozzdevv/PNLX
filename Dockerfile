@@ -1,5 +1,5 @@
 FROM oven/bun:1.3.9 AS bun
-FROM docker.io/stellar/stellar-cli:27.0.0 AS stellar-cli
+FROM docker.io/stellar/stellar-cli:28.0.0 AS stellar-cli
 
 FROM rust:1-trixie
 
@@ -8,6 +8,7 @@ RUN apt-get update \
     ca-certificates \
     curl \
     git \
+    jq \
     pkg-config \
     libssl-dev \
     libdbus-1-3 \

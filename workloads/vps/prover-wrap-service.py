@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 SOCKET_PATH = Path(os.environ.get("PNLX_RISC0_WRAP_SOCKET", "/run/pnlx-risc0-wrap/prover.sock"))
-PROJECT_ROOT = Path(os.environ.get("PNLX_RISC0_PROJECT_ROOT", "/home/ubuntu/PNLX"))
+PROJECT_ROOT = Path(os.environ.get("PNLX_RISC0_PROJECT_ROOT", "/opt/pnlx/app"))
 PROVER = Path(os.environ.get(
     "PNLX_RISC0_PROVER_BIN",
     str(PROJECT_ROOT / "risc0/batch-match/target/release/pnlx-risc0-batch-match-prover"),
