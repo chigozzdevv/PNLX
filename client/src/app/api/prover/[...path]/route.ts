@@ -1,5 +1,11 @@
 import type { NextRequest } from "next/server";
 
+// ZK proofs routinely take longer than the platform default (10s). Without this the
+// hosting function is killed mid-proof and the client sees a stalled submission.
+// Vercel clamps to the plan maximum (60s Hobby, 300s Pro, 900s Enterprise).
+export const maxDuration = 300;
+export const dynamic = "force-dynamic";
+
 const DEFAULT_PNLX_PROVER_URL = "http://127.0.0.1:4101";
 
 type RouteContext = {

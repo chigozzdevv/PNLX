@@ -482,9 +482,14 @@ async function provePreparedFragments(plans: PreparedCustodyFragment[]): Promise
 async function checkPreparedInput(plan: PreparedCustodyFragment): Promise<void> {
   assertPreparedReservation(plan);
   const { note } = plan.input.allocation;
+  // Both calls are reads of the same note over the same session, so they can be issued
+  // together; overlapping them removes a full round trip from every submission.
+  const spendStatus = pnlxPost<{ notes: Array<{ commitment: Hex; known: boolean; spent: boolean; activeIntentCommitment?: Hex }> }>(
+    "/notes/recovery-status", { notes: [{ commitment: note.commitment, nullifier: note.noteNullifier }] }, plan.input.session.token);
   let current: MarginMembershipResponse["note"];
   try { current = await freshMarginMembership(note.commitment, plan.input.session.token); }
   catch (error) {
+    void spendStatus.catch(() => undefined);
     if (note.runtimeScope === currentPrivateMarginNoteRuntimeScope()) plan.noteUnavailable = isRecoverablePrivateMarginNoteError(error);
     throw error;
   }
@@ -492,8 +497,7 @@ async function checkPreparedInput(plan: PreparedCustodyFragment): Promise<void> 
   if (current.membershipProof.root !== plan.input.membership.membershipProof.root) {
     throw new Error("Private collateral changed while proving; refresh and retry the order");
   }
-  const status = await pnlxPost<{ notes: Array<{ commitment: Hex; known: boolean; spent: boolean; activeIntentCommitment?: Hex }> }>(
-    "/notes/recovery-status", { notes: [{ commitment: note.commitment, nullifier: note.noteNullifier }] }, plan.input.session.token);
+  const status = await spendStatus;
   assertPreparedReservation(plan);
   const own = status.notes?.find((value) => value.commitment.toLowerCase() === note.commitment.toLowerCase());
   if (!own || typeof own.known !== "boolean" || typeof own.spent !== "boolean") throw new Error("Private margin spend status is unavailable");
